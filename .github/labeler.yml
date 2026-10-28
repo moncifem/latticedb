@@ -1,17 +1,75 @@
-"area: abi": ["crates/lattice-abi/**"]
-"area: seams": ["crates/lattice-seams/**", "crates/lattice-sys/**"]
-"area: sim": ["crates/lattice-sim/**"]
-"area: core": ["crates/lattice-core/**"]
-"area: lsl": ["crates/lattice-lsl/**"]
-"area: evalkit": ["crates/lattice-evalkit/**"]
-"area: testkit": ["crates/lattice-testkit/**"]
-"area: bench": ["crates/lattice-bench/**", "benches/**"]
-"area: cli": ["crates/lattice-cli/**"]
-"area: xtask": ["xtask/**", "layers.toml", "tools/**"]
-"area: web": ["web/**"]
-"area: formats": ["formats/**"]
-"area: fuzz": ["fuzz/**"]
-"area: tla": ["tla/**"]
-"type: docs": ["docs/**", "*.md"]
-"type: ci": [".github/**", ".devcontainer/**", ".githooks/**"]
-"format-change": ["formats/**"]
+"area: abi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-abi/**"
+"area: seams":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-seams/**"
+          - "crates/lattice-sys/**"
+"area: sim":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-sim/**"
+"area: core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-core/**"
+"area: lsl":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-lsl/**"
+"area: evalkit":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-evalkit/**"
+"area: testkit":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-testkit/**"
+"area: bench":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-bench/**"
+          - "benches/**"
+"area: cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/lattice-cli/**"
+"area: xtask":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "xtask/**"
+          - "layers.toml"
+          - "tools/**"
+"area: web":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "web/**"
+"area: formats":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "formats/**"
+"area: fuzz":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "fuzz/**"
+"area: tla":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tla/**"
+"type: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "*.md"
+"type: ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - ".devcontainer/**"
+          - ".githooks/**"
+"format-change":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "formats/**"
