@@ -1,0 +1,4 @@
+name = "ci-ubuntu"
+cpu = "GitHub-hosted ubuntu-latest runner (shared virtual CPU, varies by host)"
+memory_gb = 16
+storage = "runner local disk"
