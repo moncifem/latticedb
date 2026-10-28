@@ -3,4 +3,13 @@ exclude_re = [
     # A buffer shorter than a record header always fails the field reads below the guard, so the
     # guard is redundant with them.
     "replace match guard e <= buf.len\\(\\) with true in decode_record",
+    # The operands of these `|` never share a set bit (a shifted field and the bits below it), so `^`
+    # gives the same result.
+    "replace \\| with \\^ in Id<T>::from_parts",
+    "replace \\| with \\^ in Id<T>::parse",
+    # With either precision or recall at zero the F1 formula is zero anyway, so testing the sum or the
+    # product against zero cannot change the result.
+    "replace \\+ with \\* in prf",
+    # `Silent` already returns an empty list, so replacing its body with one changes nothing.
+    "replace <impl Provider for Silent>::predict -> Vec<String> with vec!\\[\\]",
 ]

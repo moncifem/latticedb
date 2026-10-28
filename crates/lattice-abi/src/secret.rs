@@ -127,4 +127,26 @@ mod tests {
             "secret leaked into tracing output: {out}"
         );
     }
+
+    #[test]
+    fn the_placeholders_are_exact() {
+        let s = Secret::new(vec![1u8, 2, 3]);
+        assert_eq!(format!("{s:?}"), "Secret(<redacted>)");
+        assert_eq!(format!("{s}"), "<redacted>");
+    }
+
+    #[test]
+    fn dropping_wipes_the_value() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        struct Probe(Rc<Cell<u32>>);
+        impl Zeroize for Probe {
+            fn zeroize(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let wiped = Rc::new(Cell::new(0));
+        drop(Secret::new(Probe(wiped.clone())));
+        assert_eq!(wiped.get(), 1);
+    }
 }

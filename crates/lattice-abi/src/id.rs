@@ -178,3 +178,43 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+
+    enum Thing {}
+
+    fn hash_of(id: Id<Thing>) -> u64 {
+        let mut h = DefaultHasher::new();
+        id.hash(&mut h);
+        h.finish()
+    }
+
+    #[test]
+    fn from_parts_puts_each_field_in_its_place() {
+        let id = Id::<Thing>::from_parts(0x0102_0304_0506, 0x1111_2222_3333_4444, 0xAABB_CCDD);
+        let expected =
+            (0x0102_0304_0506u128 << 80) | (0xCCDDu128 << 64) | 0x1111_2222_3333_4444u128;
+        assert_eq!(id.raw(), expected);
+        assert_eq!(id.timestamp_ms(), 0x0102_0304_0506);
+        // Bits above 48 in the timestamp and above 16 in r2 are dropped.
+        let masked = Id::<Thing>::from_parts(0xFFFF_0102_0304_0506, 0, 0xFFFF_0000);
+        assert_eq!(masked.raw(), 0x0102_0304_0506u128 << 80);
+    }
+
+    #[test]
+    fn equality_hash_and_debug_follow_the_value() {
+        let a = Id::<Thing>::from_raw(1);
+        let b = Id::<Thing>::from_raw(2);
+        assert_eq!(a, Id::<Thing>::from_raw(1));
+        assert_ne!(a, b);
+        assert_eq!(hash_of(a), hash_of(Id::<Thing>::from_raw(1)));
+        assert_ne!(hash_of(a), hash_of(b));
+        assert_eq!(format!("{a:?}"), "Id(00000000000000000000000001)");
+        assert_eq!(Id::<Thing>::from_raw(0).raw(), 0);
+        assert_eq!(a.raw(), 1);
+        assert_eq!(b.timestamp_ms(), 0);
+    }
+}
