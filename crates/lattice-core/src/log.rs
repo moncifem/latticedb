@@ -391,6 +391,13 @@ impl<I: Io> Log<I> {
             .filter_map(|n| first_lsn_of(&n))
             .collect();
         firsts.sort_unstable();
+        // Nothing is ever deleted from the head of the log, so the first segment starts at lsn 1.
+        // If everything up to the durable LSN is claimed, the history must start there.
+        if self.durable_lsn >= 1 && firsts.first() != Some(&1) {
+            return Err(LogError::Corrupt(
+                "the first segment is missing: the log does not start at lsn 1".into(),
+            ));
+        }
         let mut out = Vec::new();
         // The last LSN decoded from any segment scanned so far; everything up to the durable LSN
         // must be reachable, in order, or the log is damaged and the reader must say so.
@@ -401,6 +408,11 @@ impl<I: Io> Log<I> {
                 continue;
             }
             let data = self.io.read(&seg_name(&self.dir, *first))?;
+            if check_header(&data) != HeaderCheck::Ok {
+                return Err(LogError::Corrupt(format!(
+                    "segment {first} has an invalid header"
+                )));
+            }
             let mut off = SEGMENT_HEADER_LEN;
             while off < data.len() && out.len() < max {
                 let Decoded::Record(r, next) = decode_record(&data, off) else {

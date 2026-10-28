@@ -75,6 +75,21 @@ fn a_transaction_from_another_kernel_with_the_same_owner_is_refused() {
 }
 
 #[test]
+fn a_transaction_with_the_same_id_and_lsn_but_other_content_is_refused() {
+    let (disk_a, clock) = fresh();
+    let (disk_b, _) = fresh();
+    let mut a = kernel(&disk_a, &clock);
+    let mut b = kernel(&disk_b, &clock);
+    // Same seed, so the same first id: log different payloads at the same LSN and leave both in
+    // flight. Owner, id and LSN all match; only the content differs.
+    let x = logged(&mut a, 1);
+    let y = logged(&mut b, 2);
+    assert_eq!(x.id(), y.id());
+    assert!(matches!(b.sync(vec![x]), Err(TxnError::ForeignTransaction)));
+    assert!(b.sync(vec![y]).is_ok());
+}
+
+#[test]
 fn a_checkpoint_is_refused_while_a_change_set_is_in_flight() {
     let (disk, clock) = fresh();
     let mut k = kernel(&disk, &clock);
@@ -171,4 +186,32 @@ fn a_checkpoint_claiming_the_last_lsn_is_reported_not_a_panic() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn a_log_with_its_first_segment_deleted_cannot_be_read() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    for i in 0..8 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 40])).unwrap();
+    }
+    let mut io = disk.clone();
+    let mut segs: Vec<String> = io
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .collect();
+    segs.sort();
+    assert!(
+        segs.len() > 1,
+        "the small segment limit should have rotated"
+    );
+    io.remove(&format!("wal/{}", segs[0])).unwrap();
+    assert!(k.read_from(1, 100).is_err());
+    for s in &segs[1..] {
+        io.remove(&format!("wal/{s}")).unwrap();
+    }
+    assert!(k.read_from(1, 100).is_err());
 }
