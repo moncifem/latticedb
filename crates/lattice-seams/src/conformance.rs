@@ -41,3 +41,66 @@ pub fn run<I: Io>(io: &mut I) {
     io.lock("conf/LOCK").expect("lock after unlock");
     io.unlock("conf/LOCK");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// An `Io` that forgets every append, which the suite must refuse.
+    #[derive(Default)]
+    struct Forgetful(BTreeMap<String, Vec<u8>>);
+
+    impl Io for Forgetful {
+        fn exists(&self, path: &str) -> bool {
+            self.0.contains_key(path)
+        }
+        fn len(&self, path: &str) -> Result<u64, IoError> {
+            self.0
+                .get(path)
+                .map(|v| v.len() as u64)
+                .ok_or_else(|| IoError::NotFound(path.into()))
+        }
+        fn read(&self, path: &str) -> Result<Vec<u8>, IoError> {
+            self.0
+                .get(path)
+                .cloned()
+                .ok_or_else(|| IoError::NotFound(path.into()))
+        }
+        fn append(&mut self, path: &str, _data: &[u8]) -> Result<(), IoError> {
+            self.0.entry(path.to_string()).or_default();
+            Ok(())
+        }
+        fn truncate(&mut self, _path: &str, _len: u64) -> Result<(), IoError> {
+            Ok(())
+        }
+        fn sync(&mut self, _path: &str) -> Result<(), IoError> {
+            Ok(())
+        }
+        fn sync_dir(&mut self, _dir: &str) -> Result<(), IoError> {
+            Ok(())
+        }
+        fn list(&self, _dir: &str) -> Result<Vec<String>, IoError> {
+            Ok(Vec::new())
+        }
+        fn remove(&mut self, path: &str) -> Result<(), IoError> {
+            self.0
+                .remove(path)
+                .map(|_| ())
+                .ok_or_else(|| IoError::NotFound(path.into()))
+        }
+        fn create_dir_all(&mut self, _dir: &str) -> Result<(), IoError> {
+            Ok(())
+        }
+        fn lock(&mut self, _path: &str) -> Result<(), IoError> {
+            Ok(())
+        }
+        fn unlock(&mut self, _path: &str) {}
+    }
+
+    #[test]
+    #[should_panic]
+    fn the_suite_rejects_an_io_that_loses_data() {
+        run(&mut Forgetful::default());
+    }
+}

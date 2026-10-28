@@ -12,4 +12,11 @@ exclude_re = [
     "replace \\+ with \\* in prf",
     # `Silent` already returns an empty list, so replacing its body with one changes nothing.
     "replace <impl Provider for Silent>::predict -> Vec<String> with vec!\\[\\]",
+    # `below(1_000_000) < ppm` against `<=` differs only when the draw is exactly zero and ppm is zero:
+    # one chance in a million, not something a test can pin.
+    "replace < with <= in SeededRng::chance_ppm",
+    # A full device cannot be provoked portably from a test.
+    "delete match arm std::io::ErrorKind::StorageFull in map",
+    # `clean()` is `Self::default()`, so replacing its body with the default changes nothing.
+    "replace FaultProfile::clean -> Self with Default::default\\(\\)",
 ]

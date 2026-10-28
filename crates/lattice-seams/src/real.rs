@@ -191,4 +191,28 @@ mod tests {
     fn system_clock_is_after_2020() {
         assert!(SystemClock.now_ms() > 1_577_836_800_000);
     }
+
+    #[test]
+    fn the_spawner_runs_the_task() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        ThreadSpawner.spawn(Box::new(move || {
+            tx.send(7u8).unwrap();
+        }));
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(7));
+    }
+
+    #[test]
+    fn missing_paths_are_reported_by_exists_sync_and_sync_dir() {
+        let dir = std::env::temp_dir().join(format!("lattice-seams-miss-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut io = StdIo::new(&dir);
+        assert!(!io.exists("nope"));
+        assert_eq!(io.sync("nope"), Err(IoError::NotFound("nope".into())));
+        assert_eq!(io.sync_dir("nodir"), Err(IoError::NotFound("nodir".into())));
+        io.append("here", b"x").unwrap();
+        assert!(io.exists("here"));
+        assert!(io.sync("here").is_ok());
+        assert!(io.sync_dir("").is_ok());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }
