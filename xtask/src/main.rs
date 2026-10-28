@@ -92,6 +92,20 @@ fn setup() -> Result<(), String> {
     Ok(())
 }
 
+/// The two simulation-heavy tests take minutes in a debug build and exercise nothing that depends on
+/// the operating system. The full gate runs them on one platform; nightly runs them in release.
+const SLOW_TESTS: [&str; 2] = [
+    "the_clean_build_trips_no_checker_over_the_same_budget",
+    "every_planted_bug_is_detected_by_the_expected_invariant",
+];
+
+/// Tests only, without the slow simulation tests: what the other platforms run on a pull request.
+fn test_portable() -> Result<(), String> {
+    let mut args = vec!["test", "--workspace", "--", "--skip", SLOW_TESTS[0]];
+    args.extend(["--skip", SLOW_TESTS[1]]);
+    run("cargo", &args)
+}
+
 fn ci() -> Result<(), String> {
     run("cargo", &["fmt", "--all", "--", "--check"])?;
     run(
@@ -262,6 +276,7 @@ fn dispatch(args: &[String]) -> Result<(), String> {
             ],
         ),
         "test" => run("cargo", &["test", "--workspace"]),
+        "test-portable" => test_portable(),
         "deny" => deny(),
         "docs" => docs(),
         "setup" => setup(),
@@ -298,7 +313,7 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         "fuzz" | "eval" | "doctor" | "release" | "gen" | "gate" => not_implemented(cmd),
         "help" | "--help" | "-h" => {
             println!(
-                "commands: ci fmt lint test deny docs setup commit-lint lint-conventions \
+                "commands: ci fmt lint test test-portable deny docs setup commit-lint lint-conventions \
                  check-layers check-unsafe check-allow check-format-corpus check-config-formats \
                  check-links check-quarantine backlog adr rfc traceability \
                  sim fuzz bench eval scorecard doctor release gate"

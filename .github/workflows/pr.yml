@@ -7,13 +7,22 @@ permissions:
   contents: read
 env:
   CI: "true"
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   gate:
     name: gate (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        include:
+          # One platform runs the whole gate. The others run the portable tests, because formatting,
+          # lint, licence and document checks and the minutes-long simulation tests do not depend on
+          # the operating system.
+          - { os: ubuntu-latest, command: "cargo xtask ci", cases: "10000" }
+          - { os: ubuntu-24.04-arm, command: "cargo xtask test-portable", cases: "256" }
+          - { os: macos-latest, command: "cargo xtask test-portable", cases: "256" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -22,12 +31,13 @@ jobs:
           toolchain: 1.99.1
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+      - if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
         with:
           tool: cargo-deny
-      - run: cargo xtask ci
+      - run: ${{ matrix.command }}
         env:
-          PROPTEST_CASES: "10000"
+          PROPTEST_CASES: ${{ matrix.cases }}
   secrets:
     name: secret-scan
     runs-on: ubuntu-latest
