@@ -23,7 +23,7 @@ are exercised.
 | HLC exhaustion regressed; drift bound only on `observe` | Fixed: exhaustion is an error; the doc now says only `observe` enforces drift |
 | Harness blind spots: crashes only between steps, 19 percent of runs cut short and uncounted, one rot event disabled checks for the rest of a run, truncate modelled as durable, writes all-or-nothing, trace hash too coarse, oracle checked payloads only, no in-doubt retries | Fixed: power cuts inside durability protocols (including recovery), a terminal recovery on a fault-free disk for every run, censored runs counted and capped by quotas, rot exempts only data that existed when it struck, unsynced truncate and partial appends modelled, trace hashes all data, whole-envelope oracle, in-doubt and in-batch duplicate workloads |
 | Evalkit: interval estimated a different statistic than the point estimate; dataset hash collision; gate accepted NaN, empty or inconsistent evidence; nDCG ignored omitted judgments; report escaping | Fixed (tests for each, including the exact collision found) |
-| `Commit.tla` assumes the disputed guarantees | Not extended. Header now states its limits; TLC has never been run here |
+| `Commit.tla` assumes the disputed guarantees | Not extended. Header states its limits. It did not parse until it was first run through TLC; it now passes |
 | Hash chain cannot see suffix deletion | Fixed: `verify_with_head`; the limitation is documented |
 | "Parser never panics" claim | Corrected: input and nesting are bounded and property-tested |
 
@@ -62,7 +62,7 @@ no verdict): they are reported, capped by a quota test, and not counted as passe
 | E1-8 | Eval gate self-test, byte-identical reports, reproducible intervals | Met |
 | E1-9 | Benchmark baselines and regression gate | Not met |
 | E1-10 | Format ADR accepted, corpus read in CI | Met for the WAL and change set |
-| E1-11 | TLC passes four models | Not met: `Commit.tla` unrun and limited; others missing |
+| E1-11 | TLC passes four models | Met for the abstractions: Commit, Hlc, Fence, SetConvergence pass TLC, and Fence and Hlc were shown to fail when the protection is removed. Each header states what it does not model; run nightly by `tla/check-all.sh` |
 | E1-12 | Runtime ADR with benchmark data | Not met: ADR 0008 defers it |
 | E1-13 | Unsafe discipline, Miri, loom | Partial: zero `unsafe` anywhere; nothing for Miri or loom yet |
 | E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3, I7, I10, I11 and I14 belong to later phases |
