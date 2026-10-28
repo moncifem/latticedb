@@ -72,3 +72,7 @@ allow = ["lattice-abi"]
 [crate.xtask]
 layer = 9
 allow = []
+
+[crate.lattice-bench]
+layer = 8
+allow = ["lattice-abi", "lattice-seams", "lattice-sim", "lattice-lsl", "lattice-core"]

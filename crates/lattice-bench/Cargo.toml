@@ -1,0 +1,19 @@
+[package]
+name = "lattice-bench"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Benchmarks with stored baselines and a regression gate."
+
+[dependencies]
+lattice-abi = { path = "../lattice-abi" }
+lattice-seams = { path = "../lattice-seams" }
+lattice-sim = { path = "../lattice-sim" }
+lattice-lsl = { path = "../lattice-lsl" }
+lattice-core = { path = "../lattice-core" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

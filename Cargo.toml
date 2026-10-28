@@ -17,6 +17,7 @@ members = [
     "crates/lattice-cli",
     "crates/lattice-testkit",
     "crates/lattice-evalkit",
+    "crates/lattice-bench",
     "crates/latticed",
     "xtask",
 ]

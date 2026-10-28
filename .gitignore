@@ -6,3 +6,4 @@
 /fuzz/artifacts
 /fuzz/corpus
 /backlog/P*.md
+/benches/baselines/local

@@ -154,6 +154,22 @@ fn sim(args: &[&str]) -> Result<(), String> {
     run("cargo", &a)
 }
 
+/// Benchmarks: `cargo xtask bench [--profile NAME] [--tolerance F] [--write-baseline]`.
+fn bench(args: &[&str]) -> Result<(), String> {
+    let mut a: Vec<&str> = vec![
+        "run",
+        "-q",
+        "-p",
+        "lattice-bench",
+        "--release",
+        "--bin",
+        "bench_runner",
+        "--",
+    ];
+    a.extend_from_slice(args);
+    run("cargo", &a)
+}
+
 fn not_implemented(name: &str) -> Result<(), String> {
     Err(format!("`{name}` is not implemented in this phase"))
 }
@@ -207,7 +223,8 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         },
         "traceability" => checks::traceability(),
         "sim" => sim(&rest),
-        "fuzz" | "bench" | "eval" | "scorecard" | "doctor" | "release" | "gen" | "gate" => {
+        "bench" => bench(&rest),
+        "fuzz" | "eval" | "scorecard" | "doctor" | "release" | "gen" | "gate" => {
             not_implemented(cmd)
         }
         "help" | "--help" | "-h" => {

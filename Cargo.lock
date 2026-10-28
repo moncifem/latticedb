@@ -230,6 +230,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lattice-bench"
+version = "0.0.0"
+dependencies = [
+ "lattice-abi",
+ "lattice-core",
+ "lattice-lsl",
+ "lattice-seams",
+ "lattice-sim",
+ "serde_json",
+]
+
+[[package]]
 name = "lattice-cli"
 version = "0.0.0"
 dependencies = [
