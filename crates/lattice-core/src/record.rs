@@ -173,6 +173,41 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    #[test]
+    fn the_payload_limit_and_record_type_values_are_part_of_the_format() {
+        assert_eq!(MAX_PAYLOAD, 16_777_216);
+        for (v, t) in [
+            (1, RecordType::ChangeSet),
+            (2, RecordType::TurnBegin),
+            (3, RecordType::Checkpoint),
+        ] {
+            assert_eq!(RecordType::from_u8(v), Some(t));
+            assert_eq!(t as u8, v);
+        }
+        assert_eq!(RecordType::from_u8(0), None);
+        assert_eq!(RecordType::from_u8(4), None);
+    }
+
+    #[test]
+    fn a_length_at_the_limit_is_incomplete_and_one_over_is_corrupt() {
+        let header = |len: u32| {
+            let mut b = Vec::new();
+            b.extend_from_slice(&len.to_le_bytes());
+            b.extend_from_slice(&[0; 4]);
+            b.extend_from_slice(&1u64.to_le_bytes());
+            b.push(1);
+            b
+        };
+        assert_eq!(
+            decode_record(&header(MAX_PAYLOAD as u32), 0),
+            Decoded::Incomplete
+        );
+        assert_eq!(
+            decode_record(&header(MAX_PAYLOAD as u32 + 1), 0),
+            Decoded::Corrupt
+        );
+    }
+
     proptest! {
         #[test]
         fn encode_decode_round_trips(lsn in 1u64.., rtype in any::<u8>(), payload in proptest::collection::vec(any::<u8>(), 0..200)) {

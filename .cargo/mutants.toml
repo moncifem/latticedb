@@ -1,0 +1,6 @@
+# Mutants that cannot change behaviour. Each entry says why.
+exclude_re = [
+    # A buffer shorter than a record header always fails the field reads below the guard, so the
+    # guard is redundant with them.
+    "replace match guard e <= buf.len\\(\\) with true in decode_record",
+]

@@ -191,6 +191,33 @@ mod tests {
     }
 
     #[test]
+    fn inv_i4_the_counter_restarts_when_the_wall_clock_moves_on() {
+        let mut c = HlcClock::new(1);
+        let a = c.tick(10).unwrap();
+        let b = c.tick(10).unwrap();
+        assert_eq!((a.wall_ms, a.counter, b.counter), (10, 0, 1));
+        let d = c.tick(11).unwrap();
+        assert_eq!((d.wall_ms, d.counter), (11, 0));
+        assert_eq!(c.last(), d);
+    }
+
+    #[test]
+    fn a_remote_timestamp_exactly_at_the_drift_bound_is_accepted() {
+        let mut c = HlcClock::new(1);
+        let at_bound = Hlc {
+            wall_ms: 150,
+            counter: 0,
+            node: 2,
+        };
+        assert!(c.observe(at_bound, 100, 50).is_ok());
+        let past = Hlc {
+            wall_ms: 151,
+            ..at_bound
+        };
+        assert!(c.observe(past, 100, 50).is_err());
+    }
+
+    #[test]
     fn inv_i4_counter_exhaustion_moves_wall_forward() {
         let mut c = HlcClock::restore(
             1,

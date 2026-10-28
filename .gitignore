@@ -7,3 +7,4 @@
 /fuzz/corpus
 /backlog/P*.md
 /benches/baselines/local
+/mutants.out*/

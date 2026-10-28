@@ -315,6 +315,35 @@ mod tests {
     }
 
     #[test]
+    fn checkpoints_round_trip_and_reject_other_lengths() {
+        let c = Checkpoint {
+            through_lsn: 7,
+            change_sets: 5,
+            state_crc: 0xDEAD_BEEF,
+        };
+        let bytes = encode_checkpoint(c);
+        assert_eq!(bytes.len(), 20);
+        assert_eq!(decode_checkpoint(&bytes), Ok(c));
+        assert!(decode_checkpoint(&bytes[..19]).is_err());
+        let mut longer = bytes;
+        longer.push(0);
+        assert!(decode_checkpoint(&longer).is_err());
+    }
+
+    #[test]
+    fn the_state_summary_depends_on_ids_and_turns() {
+        let id = |n: u128| ChangeSetId::from_raw(n);
+        let ids: BTreeSet<ChangeSetId> = [id(1), id(2)].into();
+        let turns: BTreeMap<u64, u64> = [(1, 3)].into();
+        let base = state_crc(&ids, &turns);
+        assert_eq!(base, state_crc(&ids, &turns));
+        assert_ne!(base, state_crc(&[id(1)].into(), &turns));
+        assert_ne!(base, state_crc(&ids, &[(1, 4)].into()));
+        assert_ne!(base, state_crc(&ids, &BTreeMap::new()));
+        assert!(![0, 1].contains(&base));
+    }
+
+    #[test]
     fn turn_begin_round_trips() {
         let t = TurnRef {
             session: 3,
