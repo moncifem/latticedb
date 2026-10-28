@@ -1,0 +1,9 @@
+{
+  "commit_batch_of_16_cpu_per_item": 1450.1,
+  "commit_single_cpu": 1510.4,
+  "hlc_tick": 0.9,
+  "lsl_parse_and_check": 3972.5,
+  "orset_merge_500": 50429.0,
+  "record_encode_decode_100b": 542.7,
+  "recovery_open_per_record": 1265.2
+}
