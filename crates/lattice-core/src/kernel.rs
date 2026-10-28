@@ -508,15 +508,25 @@ mod tests {
         fn exit(&self, _: &Id) {}
     }
 
+    /// Spans are recorded by one process-wide subscriber. A subscriber scoped to this test would
+    /// race with the other tests: a callsite first hit by a thread with no subscriber is cached as
+    /// disabled for every thread.
+    fn recorded_spans() -> &'static Spans {
+        static SPANS: std::sync::OnceLock<Spans> = std::sync::OnceLock::new();
+        SPANS.get_or_init(|| {
+            let spans = Spans::default();
+            // Fails only if a global subscriber already exists, and then it is that one that records.
+            let _ = tracing::subscriber::set_global_default(spans.clone());
+            spans
+        })
+    }
+
     #[test]
     fn the_write_path_span_carries_the_transaction_id() {
-        let spans = Spans::default();
-        let id = tracing::subscriber::with_default(spans.clone(), || {
-            let mut k = kernel(std::rc::Rc::new(SimClock::new(1_000)));
-            let id = k.new_id();
-            k.commit(ChangeSet::new(id, vec![1])).unwrap();
-            id
-        });
+        let spans = recorded_spans();
+        let mut k = kernel(std::rc::Rc::new(SimClock::new(1_000)));
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![1])).unwrap();
         let seen = spans.0.lock().unwrap().join(";");
         assert!(seen.contains(&format!("txn_id={id}")), "{seen}");
     }
