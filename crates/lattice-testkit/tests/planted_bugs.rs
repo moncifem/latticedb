@@ -11,7 +11,10 @@ fn expected(bug: Bug) -> &'static [&'static str] {
         | Bug::AckBeforeSync
         | Bug::RecoveryDropsLastRecord
         | Bug::CrcSkipsPayload => &["I1"],
-        Bug::NoDedupe | Bug::DedupeNotRebuilt => &["I6"],
+        Bug::DedupeNotRebuilt => &["I6"],
+        // The in-flight check turns a duplicate in one batch into a failed commit, so the scrub (I9)
+        // finds the duplicated id in the log before the acknowledgement check (I6) sees anything.
+        Bug::NoDedupe => &["I9"],
         Bug::HlcRegress | Bug::HlcCounterStuck => &["I4"],
         Bug::AcceptTornTail | Bug::LsnReusedAfterRecovery | Bug::RotateWithoutDirSync => {
             &["I1", "I2", "I9", "RECOVERY"]
