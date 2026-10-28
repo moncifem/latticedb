@@ -18,6 +18,10 @@ store, searchable by text, meaning and time. Agents work in it as teammates with
 
 Phase-by-phase status is in [`docs/gates`](docs/gates). It lists what is missing as well as what is done.
 
+Follow the work: the [roadmap board](https://github.com/users/moncifem/projects/1),
+[milestones](https://github.com/moncifem/latticedb/milestones) (one per phase),
+[open work](https://github.com/moncifem/latticedb/issues) and [releases](https://github.com/moncifem/latticedb/releases).
+
 ## Install
 
 Nightly builds of `main` are the only published packages so far: archives for Linux (x86_64, arm64)
