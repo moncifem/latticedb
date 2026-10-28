@@ -48,11 +48,13 @@ pub enum Bug {
     DurableLsnOvershoot,
     /// The hybrid logical clock does not advance its counter within one millisecond (causal order).
     HlcCounterStuck,
+    /// A checkpoint is written while change sets are logged but not applied (recovery then rejects the log).
+    CheckpointIgnoresInFlight,
 }
 
 impl Bug {
     /// Every defect, for the detection suite.
-    pub const ALL: [Bug; 20] = [
+    pub const ALL: [Bug; 21] = [
         Bug::SkipFsync,
         Bug::NoDedupe,
         Bug::HlcRegress,
@@ -73,6 +75,7 @@ impl Bug {
         Bug::RotateHeaderNotSynced,
         Bug::DurableLsnOvershoot,
         Bug::HlcCounterStuck,
+        Bug::CheckpointIgnoresInFlight,
     ];
 }
 

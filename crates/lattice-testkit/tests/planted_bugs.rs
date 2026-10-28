@@ -16,6 +16,7 @@ fn expected(bug: Bug) -> &'static [&'static str] {
         // finds the duplicated id in the log before the acknowledgement check (I6) sees anything.
         Bug::NoDedupe => &["I9"],
         Bug::HlcRegress | Bug::HlcCounterStuck => &["I4"],
+        Bug::CheckpointIgnoresInFlight => &["I9", "RECOVERY"],
         Bug::AcceptTornTail | Bug::LsnReusedAfterRecovery | Bug::RotateWithoutDirSync => {
             &["I1", "I2", "I9", "RECOVERY"]
         }

@@ -40,7 +40,7 @@ are exercised.
 | CRDTs | LWW register and OR-set, merge laws and convergence property tests |
 | LSL v0 | Parser (bounded), checker, validator, compat checker, formatter |
 | Evalkit | Hash-checked datasets (BLAKE3, framed), P/R/F1 with a same-statistic bootstrap, ECE, nDCG, validated gate, escaped reports, mutation-based drift generator, gate self-test |
-| Testing the tests | **20 planted bugs**, all caught under the expected invariant (most at seed 0); zero violations on the clean build. Adding them exposed two blind spots, now closed: the simulator did not model dirty pages dropped after a failed fsync, and nothing compared the kernel's durable LSN or derived state with the log during a run (invariant I9) |
+| Testing the tests | **21 planted bugs**, all caught under the expected invariant (most at seed 0); zero violations on the clean build. Adding them exposed two blind spots, now closed: the simulator did not model dirty pages dropped after a failed fsync, and nothing compared the kernel's durable LSN or derived state with the log during a run (invariant I9). The workload also drives the manual transaction lifecycle (log, checkpoint attempt, sync, apply), added after an independent review found the harness never did |
 
 Measured on the strengthened harness: `cargo xtask sim --seeds 10000 --steps 150` ran **50,000**
 scenarios (5 profiles x 10,000 seeds) with **0 violations**, 1,899,450 recoveries and **832,021 power cuts
@@ -55,7 +55,7 @@ the harness before the kernel fixes in PR 61; the nightly run is the current evi
 |---|---|---|
 | E1-1 | 10,000 seeds reproduce identical trace hashes | Partial: 60 seeds x 5 profiles checked in CI |
 | E1-2 | 1,000,000 seeds per night for 7 nights | Not met: 50,000 runs once; nightly wired, no history |
-| E1-3 | At least 20 planted bugs, 95 percent detected, no false alarms | Met: 20 bugs, all detected, no false alarms |
+| E1-3 | At least 20 planted bugs, 95 percent detected, no false alarms | Met: 21 bugs, all detected, no false alarms |
 | E1-4 | Recovery correct at every fsync boundary in 100 scenarios | Partial: `power_cut_sweep` cuts the power at every mutating storage operation of one fixed workload, and the simulator cuts power at random inside protocols; 100 distinct exhaustive scenarios are not reached |
 | E1-5 | CRDT laws at 10,000 cases (PR) and 1,000,000 (nightly) | Partial: default 256 cases; no text CRDT |
 | E1-6 | 24 hours of fuzzing per target | Not met: five targets exist (`changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `wal_record`); nightly runs each for 10 minutes |

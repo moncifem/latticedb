@@ -11,7 +11,7 @@ use crate::invariants::{Expected, LogView, Oracle, Violation, check_all};
 use lattice_abi::{Classify, ErrorClass};
 use lattice_core::changeset::{ChangeSet, ChangeSetId, TurnRef};
 use lattice_core::scrub::Issue;
-use lattice_core::{Config, Kernel, LogError, Receipt, TxnError};
+use lattice_core::{AllowAll, Config, Kernel, LogError, PrepareOutcome, Receipt, TxnError};
 use lattice_seams::{Clock, Io, IoError, Rng};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
 use std::cell::RefCell;
@@ -300,6 +300,7 @@ pub fn run(seed: u64, profile: FaultProfile, steps: usize, segment_limit: u64) -
                 // A failure leaves the log poisoned or the record absent; neither affects the oracle.
                 let _ = k.checkpoint();
             }
+            82..=87 => lifecycle(&mut w, k),
             _ => kernel = None, // crash: all in-memory state is lost, the disk survives
         }
     }
@@ -393,6 +394,57 @@ fn commit_new(w: &mut World, k: &mut K) {
     let results = k.commit_batch(batch);
     for (id, r) in ids.into_iter().zip(results.iter()) {
         record(w, id, r);
+    }
+    check_derived_state(w, k);
+}
+
+/// Drives the public transaction states by hand instead of through `commit_batch`: log several
+/// change sets, try a checkpoint while they are in flight (which must be refused), make them durable
+/// and apply them one at a time.
+fn lifecycle(w: &mut World, k: &mut K) {
+    let n = 1 + w.rng.below(3) as usize;
+    let mut logged = Vec::new();
+    for _ in 0..n {
+        let cs = fresh_cs(w, k, None);
+        let id = cs.id;
+        let step = k
+            .begin(cs)
+            .validate(&AllowAll)
+            .and_then(|t| t.authorize(&AllowAll))
+            .and_then(|t| k.prepare(t))
+            .and_then(|o| match o {
+                PrepareOutcome::Ready(t) => k.log(t).map(Some),
+                PrepareOutcome::Duplicate(_) => Ok(None),
+            });
+        match step {
+            Ok(Some(t)) => logged.push((id, t)),
+            Ok(None) => record(w, id, &Ok(Receipt::Duplicate)),
+            Err(e) => record(w, id, &Err(e)),
+        }
+    }
+    if !logged.is_empty() && w.rng.below(2) == 0 && k.checkpoint().is_ok() {
+        violation(
+            w,
+            "I9",
+            "a checkpoint was accepted with change sets in flight".into(),
+        );
+    }
+    let (ids, txns): (Vec<ChangeSetId>, Vec<_>) = logged.into_iter().unzip();
+    match k.sync(txns) {
+        Ok(durable) => {
+            for (id, t) in ids.into_iter().zip(durable) {
+                let outcome = k.apply(t).map(|a| k.publish(a));
+                record(w, id, &outcome);
+            }
+        }
+        Err(e) => {
+            for id in ids {
+                record(w, id, &Err(e.clone()));
+            }
+        }
+    }
+    if w.rng.below(3) == 0 {
+        let _ = k.checkpoint();
     }
     check_derived_state(w, k);
 }

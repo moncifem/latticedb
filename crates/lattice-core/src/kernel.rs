@@ -434,7 +434,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// not yet applied: its record would sit under the checkpoint without being counted in it, and
     /// recovery would reject the log.
     pub fn checkpoint(&mut self) -> Result<u64, TxnError> {
-        if !self.in_flight.is_empty() {
+        if !self.in_flight.is_empty() && !bugs::active(Bug::CheckpointIgnoresInFlight) {
             return Err(TxnError::Invalid(
                 "checkpoint with change sets in flight".into(),
             ));

@@ -23,7 +23,7 @@ Not published. This is the version under development; the first published build 
 - Results ledger stored in Lattice's own log, `lattice ledger show` and `cargo xtask scorecard`.
 - Schema language (LSL): parser, checker, `lattice lsl check|fmt|compat`, reversible migration lenses.
 - CRDT building blocks with convergence tests over a faulty network.
-- 20 planted bugs the simulator must detect; mutation testing of the core crates.
+- 21 planted bugs the simulator must detect; mutation testing of the core crates.
 - TLA+ models for commit, hybrid logical clock, turn fencing and set convergence.
 - Fuzz targets for the decoders, the schema parser and log recovery.
 - Release pipeline: nightly pre-release, tagged releases, archives for Linux x86_64 and arm64 and
