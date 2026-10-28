@@ -5,7 +5,25 @@ their measured status live in [phase-1.md](phase-1.md); this page holds what a r
 
 ## Decision
 
-No-go to Phase 2 until the open criteria below close. Waiting items need calendar time, not work.
+The gate is **open**: the criteria below are not closed, and the gate is not signed.
+
+### Waiver: Phase 2 work may start before the gate is signed
+
+Granted by the project owner on 2026-10-28. Reason: the open criteria need calendar time (seven nightly
+runs, fuzz hours), not engineering effort, and waiting would leave about a week idle.
+
+Conditions, all of which stand until the gate is signed:
+
+- Phase 2 work happens on branches and lands on `main` only with the same checks as any other change.
+- A failing Phase 1 nightly, weekly or gate job takes priority over Phase 2 work and is fixed first.
+- Nothing in Phase 2 may weaken a Phase 1 check, loosen a threshold or edit the Phase 1 gate rows to
+  make them look better.
+- No Phase 2 release (tag) before the Phase 1 gate is signed. Nightly pre-releases continue.
+- Phase 2 exit criteria are not claimed before the Phase 1 gate is signed.
+- If a Phase 1 criterion is found to be unmet in a way that invalidates Phase 2 work, Phase 2 stops
+  until it is fixed.
+
+Waiting items need calendar time, not work.
 
 | Open criterion | What closes it | Needs |
 |---|---|---|
