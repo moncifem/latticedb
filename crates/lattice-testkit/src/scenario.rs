@@ -402,6 +402,24 @@ fn check_derived_state(w: &mut World, k: &K) {
     if k.is_poisoned() {
         return;
     }
+    // A reader sees exactly the durable prefix: contiguous LSNs from 1 up to the durable LSN.
+    if let Ok((records, _)) = k.read_from(1, usize::MAX) {
+        let contiguous = records
+            .iter()
+            .enumerate()
+            .all(|(i, r)| r.lsn == i as u64 + 1);
+        if !contiguous || records.len() as u64 != k.durable_lsn() {
+            violation(
+                w,
+                "I2",
+                format!(
+                    "a reader saw {} records but the durable LSN is {}",
+                    records.len(),
+                    k.durable_lsn()
+                ),
+            );
+        }
+    }
     if let Ok(report) = k.scrub() {
         for issue in &report.issues {
             if let Issue::DerivedStateMismatch { what } = issue {

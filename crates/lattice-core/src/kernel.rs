@@ -429,6 +429,14 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         Ok(lsn)
     }
 
+    /// Reads up to `max` durable records from `from_lsn` and the cursor to continue from. Readers
+    /// see only acknowledged records, in LSN order, and never block or change the writer.
+    pub fn read_from(&self, from_lsn: u64, max: usize) -> Result<(Vec<Record>, u64), LogError> {
+        let records = self.log.read_from(from_lsn, max)?;
+        let next = records.last().map_or(from_lsn, |r| r.lsn + 1);
+        Ok((records, next))
+    }
+
     /// Counters and latency histograms for this kernel instance.
     pub fn metrics(&self) -> &Metrics {
         &self.metrics

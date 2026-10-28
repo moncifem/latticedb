@@ -378,6 +378,46 @@ impl<I: Io> Log<I> {
         self.poisoned
     }
 
+    /// Reads up to `max` durable records starting at `from_lsn`, in LSN order.
+    ///
+    /// Only records at or below the durable LSN are returned, so a reader never sees a record that
+    /// has been queued or written but not yet acknowledged, and never a partial one. Reading does
+    /// not touch the writer's state.
+    pub fn read_from(&self, from_lsn: u64, max: usize) -> Result<Vec<Record>, LogError> {
+        let mut firsts: Vec<u64> = self
+            .io
+            .list(&self.dir)?
+            .into_iter()
+            .filter_map(|n| first_lsn_of(&n))
+            .collect();
+        firsts.sort_unstable();
+        let mut out = Vec::new();
+        for (i, first) in firsts.iter().enumerate() {
+            let next_first = firsts.get(i + 1).copied().unwrap_or(u64::MAX);
+            if next_first <= from_lsn || *first > self.durable_lsn {
+                continue;
+            }
+            let data = self.io.read(&seg_name(&self.dir, *first))?;
+            let mut off = SEGMENT_HEADER_LEN;
+            while off < data.len() && out.len() < max {
+                let Decoded::Record(r, next) = decode_record(&data, off) else {
+                    break;
+                };
+                if r.lsn > self.durable_lsn {
+                    return Ok(out);
+                }
+                if r.lsn >= from_lsn {
+                    out.push(r);
+                }
+                off = next;
+            }
+            if out.len() >= max {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     /// The directory this log lives in.
     pub fn dir(&self) -> &str {
         &self.dir
@@ -393,6 +433,42 @@ impl<I: Io> Log<I> {
 mod tests {
     use super::*;
     use crate::record::encode_record;
+
+    fn log_with(n: u64, limit: u64) -> Log<lattice_sim::SimIo> {
+        let io = lattice_sim::SimIo::new(1, lattice_sim::FaultProfile::clean());
+        let (mut log, _, _) = Log::open(io, "wal", limit).unwrap();
+        for i in 0..n {
+            log.append(1, &[i as u8; 30]).unwrap();
+        }
+        log
+    }
+
+    #[test]
+    fn readers_see_only_durable_records_across_segments() {
+        let mut log = log_with(6, 120);
+        // Nothing is durable yet: the records are only queued.
+        assert!(log.read_from(1, 100).unwrap().is_empty());
+        log.sync().unwrap();
+        let all = log.read_from(1, 100).unwrap();
+        assert_eq!(
+            all.iter().map(|r| r.lsn).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5, 6]
+        );
+        assert_eq!(
+            log.read_from(4, 2)
+                .unwrap()
+                .iter()
+                .map(|r| r.lsn)
+                .collect::<Vec<_>>(),
+            [4, 5]
+        );
+        // A record queued after the sync stays invisible until it is durable.
+        log.append(1, b"late").unwrap();
+        assert_eq!(log.read_from(7, 10).unwrap().len(), 0);
+        log.sync().unwrap();
+        assert_eq!(log.read_from(7, 10).unwrap().len(), 1);
+        assert!(log.read_from(8, 10).unwrap().is_empty());
+    }
 
     #[test]
     fn an_embedded_record_inside_a_payload_makes_recovery_refuse_rather_than_lose_data() {
