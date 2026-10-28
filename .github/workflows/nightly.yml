@@ -71,7 +71,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: nightly, components: miri }
       - name: miri on the deterministic core (few property cases; the interpreter is slow)
-        run: cargo miri test -p lattice-abi -p lattice-core --lib
+        run: cargo +nightly miri test -p lattice-abi -p lattice-core --lib
         env:
           PROPTEST_CASES: "4"
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-disable-isolation"
