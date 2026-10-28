@@ -101,7 +101,7 @@ fn ledger_check<I: Io>(io: I) -> Result<(String, bool), String> {
     let clean = |e: &&ledger::LedgerEntry| {
         json_u64(&e.json, "runs").is_some_and(|r| r > 0) && json_u64(&e.json, "failing") == Some(0)
     };
-    let streak = sims.iter().rev().take_while(clean).count();
+    let streak = sims.iter().rev().take_while(|e| clean(e)).count();
     let mut out = format!(
         "latest simulation run: {runs} runs, {failing} failing, {incomplete} unverified\n\
          {streak} clean simulation run(s) in a row\n"
