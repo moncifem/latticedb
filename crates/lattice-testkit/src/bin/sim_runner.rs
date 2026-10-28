@@ -1,8 +1,11 @@
 //! `cargo xtask sim` front end: runs seeded crash-and-recover scenarios and reports violations.
 //!
-//! Usage: `sim-runner [--seeds N] [--steps N] [--from SEED] [--seed SEED --profile NAME]`
+//! Usage: `sim-runner [--seeds N] [--steps N] [--from SEED] [--seed SEED --profile NAME] [--ledger DIR]`
+//!
+//! `--ledger` appends the run summary to the results ledger in DIR, which must already exist.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use lattice_seams::{OsRng, StdIo, SystemClock};
 use lattice_testkit::scenario::{profiles, run};
 use std::process::ExitCode;
 
@@ -25,6 +28,7 @@ fn main() -> ExitCode {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
     let only_profile = arg(&args, "--profile");
+    let ledger = arg(&args, "--ledger");
     let single = arg(&args, "--seed").and_then(|v| v.parse::<u64>().ok());
 
     let range: Vec<u64> = match single {
@@ -66,6 +70,18 @@ fn main() -> ExitCode {
         "total: {runs} runs, {failures} failing, {cut_short} cut short, {incomplete} incomplete; \
          {recoveries} recoveries, {cuts} power cuts inside durability protocols"
     );
+    if let Some(dir) = ledger {
+        let json = format!(
+            "{{\"runs\":{runs},\"failing\":{failures},\"cut_short\":{cut_short},\"incomplete\":{incomplete},\"recoveries\":{recoveries},\"power_cuts\":{cuts},\"seeds\":{},\"steps\":{steps}}}",
+            range.len()
+        );
+        if let Err(e) =
+            lattice_core::ledger::append(StdIo::new(dir), SystemClock, OsRng, "sim", &json)
+        {
+            eprintln!("could not record the run in the ledger: {e:?}");
+            return ExitCode::from(2);
+        }
+    }
     if failures == 0 {
         ExitCode::SUCCESS
     } else {

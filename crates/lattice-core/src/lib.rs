@@ -29,6 +29,7 @@ pub mod crc;
 pub mod crdt;
 pub mod hlc;
 pub mod kernel;
+pub mod ledger;
 pub mod log;
 pub mod metrics;
 pub mod record;
