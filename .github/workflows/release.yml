@@ -7,6 +7,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Two releases (or a release and a rehearsal) never publish at the same time.
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -32,6 +36,8 @@ jobs:
           grep -q "^## \[$version\]" CHANGELOG.md \
             || { echo "CHANGELOG.md has no section for $version" >&2; exit 1; }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-deny }
       - name: the release commit passes the full gate
         run: cargo xtask ci
         env: { CI: "true" }

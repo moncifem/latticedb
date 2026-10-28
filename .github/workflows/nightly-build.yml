@@ -6,6 +6,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# The nightly release and image tag are replaced in place, so two runs must never overlap.
+concurrency:
+  group: publish-nightly
+  cancel-in-progress: false
 jobs:
   changed:
     runs-on: ubuntu-latest
@@ -35,6 +39,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: 1.99.1 }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-deny }
       - run: cargo xtask ci
         env: { CI: "true" }
   package:
