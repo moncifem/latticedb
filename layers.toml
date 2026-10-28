@@ -55,7 +55,7 @@ allow = ["lattice-abi", "lattice-lsl"]
 
 [crate.lattice-cli]
 layer = 7
-allow = ["lattice-abi", "lattice-sdk", "lattice-core", "lattice-seams"]
+allow = ["lattice-abi", "lattice-sdk", "lattice-core", "lattice-seams", "lattice-lsl"]
 
 [crate.latticed]
 layer = 7

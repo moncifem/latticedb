@@ -4,6 +4,7 @@
 //!
 //! `lattice doctor [--dir DATA_DIR] [--wal NAME]` verifies a data directory without modifying it.
 //! `lattice ledger show [--dir DIR]` lists the runs recorded in a results ledger.
+//! `lattice lsl check FILE`, `lsl fmt FILE [--write|--check]` and `lsl compat OLD NEW` work on schemas.
 #![forbid(unsafe_code)]
 #![allow(
     clippy::disallowed_methods,
@@ -18,6 +19,8 @@ use lattice_seams::{Io, OsRng, StdIo, SystemClock};
 use std::process::ExitCode;
 
 /// Scrubs the log in `wal` and returns the report text and whether the log is healthy.
+mod lsl;
+
 fn doctor<I: Io>(io: &I, wal: &str) -> (String, bool) {
     let report = match scrub(io, wal) {
         Ok(r) => r,
@@ -71,6 +74,59 @@ fn ledger_show<I: Io>(io: I) -> Result<String, String> {
     Ok(out)
 }
 
+fn read_file(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+}
+
+fn lsl_command(args: &[String]) -> ExitCode {
+    let files: Vec<&String> = args
+        .iter()
+        .skip(1)
+        .filter(|a| !a.starts_with("--"))
+        .collect();
+    let flag = |f: &str| args.iter().any(|a| a == f);
+    let result: Result<(String, bool), String> =
+        match (args.first().map(String::as_str), files.as_slice()) {
+            (Some("check"), [file]) => read_file(file)
+                .and_then(|s| lsl::check_text(&s))
+                .map(|t| (t, true)),
+            (Some("fmt"), [file]) => read_file(file).and_then(|src| {
+                let out = lsl::format_text(&src)?;
+                if flag("--write") {
+                    std::fs::write(file.as_str(), &out).map_err(|e| format!("{file}: {e}"))?;
+                    Ok((String::new(), true))
+                } else if flag("--check") {
+                    Ok((String::new(), out == src))
+                } else {
+                    Ok((out, true))
+                }
+            }),
+            (Some("compat"), [old, new]) => {
+                read_file(old).and_then(|o| read_file(new).and_then(|n| lsl::compat_text(&o, &n)))
+            }
+            _ => {
+                eprintln!(
+                    "usage: lattice lsl check FILE | fmt FILE [--write|--check] | compat OLD NEW"
+                );
+                return ExitCode::from(2);
+            }
+        };
+    match result {
+        Ok((text, ok)) => {
+            print!("{text}");
+            if ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -98,9 +154,13 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("lsl") => lsl_command(args.get(1..).unwrap_or_default()),
         _ => {
             eprintln!("usage: lattice doctor [--dir DATA_DIR] [--wal NAME]");
             eprintln!("       lattice ledger show [--dir DIR]");
+            eprintln!(
+                "       lattice lsl check FILE | fmt FILE [--write|--check] | compat OLD NEW"
+            );
             ExitCode::from(2)
         }
     }

@@ -12,6 +12,7 @@ lattice-abi = { path = "../lattice-abi" }
 lattice-sdk = { path = "../lattice-sdk" }
 lattice-core = { path = "../lattice-core" }
 lattice-seams = { path = "../lattice-seams" }
+lattice-lsl = { path = "../lattice-lsl" }
 
 [dev-dependencies]
 lattice-sim = { path = "../lattice-sim" }
