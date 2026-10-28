@@ -12,6 +12,8 @@ pub mod mvcc;
 pub mod rowops;
 #[cfg(feature = "row")]
 pub mod store;
+#[cfg(feature = "row")]
+pub mod typed;
 
 /// Layer marker used by the layer check. Do not remove.
 pub const LAYER: u8 = 4;
