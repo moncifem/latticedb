@@ -1,0 +1,8 @@
+# BA is the business analyst role in diagrams; abd and ba appear in test fixtures.
+[default.extend-words]
+BA = "BA"
+ba = "ba"
+abd = "abd"
+
+[files]
+extend-exclude = ["Cargo.lock", "fuzz/Cargo.lock", "LICENSE"]
