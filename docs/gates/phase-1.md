@@ -67,7 +67,7 @@ the harness before the kernel fixes in PR 61; the nightly run is the current evi
 | E1-12 | Runtime ADR with benchmark data | Partial: ADR 0011 accepted with criteria written first and commit-path data from macOS (fsync is 92 to 98 percent of commit time; batching gave 55 times the throughput). The weekly job collects the same on Linux. The `UringIo` prototype of P1-62 is not built, because it cannot be built or measured on the development machine |
 | E1-13 | Unsafe discipline, Miri, loom | Partial: zero `unsafe` anywhere; Miri runs the abi and core unit tests nightly (66 tests pass, locally and in CI); no loom because there is no shared-memory concurrency yet |
 | E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3, I7, I10, I11 and I14 belong to later phases |
-| E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs; no thresholds or trends yet |
+| E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs, then `lattice ledger check` fails when the latest simulation run has violations, no runs or mostly unverified runs and reports the streak of clean runs; no trend over time yet |
 | E1-16 | Gate review package | Not met |
 
 ## Not built

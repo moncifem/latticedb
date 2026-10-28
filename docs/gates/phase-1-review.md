@@ -12,10 +12,10 @@ No-go to Phase 2 until the open criteria below close. Waiting items need calenda
 | E1-2 seven nights at 1,000,000 seeds | seven consecutive green nightly runs | time |
 | E1-6 24 hours of fuzzing per target | cumulative fuzz time per target, kept as a corpus across nights | time, a persisted corpus |
 | E1-9 benchmark baselines | a baseline recorded on the CI runner class, not a laptop | decision on runner hardware |
-| E1-12 runtime ADR with data | io_uring versus blocking I/O numbers from Linux hardware | Linux benchmark host |
-| E1-13 loom | loom model of the commit pipeline hand-off | work |
+| E1-12 runtime ADR with data | ADR 0011 is accepted with macOS data; the Linux numbers come from the weekly job and must be read into the ADR | one weekly run |
+| E1-13 loom | not applicable today: the kernel and pipeline are single-threaded, so there is no shared-memory hand-off to model; a loom test is required with the first threaded runtime component | waiver, owner core maintainers, expiry at the first threaded component |
 | E1-14 traceability | I3, I7, I10, I11, I14 belong to later phases and are waived with an owner and expiry | waiver |
-| E1-15 scorecard | thresholds and trend over the ledger | work |
+| E1-15 scorecard | thresholds exist (`lattice ledger check`); a trend over the ledger remains | work |
 
 Signatures: two maintainers sign when the table is empty or every row has a waiver. Not signed.
 
