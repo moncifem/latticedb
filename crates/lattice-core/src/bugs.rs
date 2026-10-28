@@ -50,10 +50,26 @@ pub enum Bug {
     HlcCounterStuck,
     /// A checkpoint is written while change sets are logged but not applied (recovery then rejects the log).
     CheckpointIgnoresInFlight,
+    /// The row engine does not check write-write conflicts at commit (lost update).
+    RowConflictCheckSkipped,
+    /// The row engine's conflict check is off by one LSN and misses a write right after the snapshot.
+    RowConflictOffByOne,
+    /// The row engine publishes only the first write of a change set (partial visibility, I3).
+    RowPartialPublish,
+    /// A transaction's reads follow the newest commit instead of its snapshot (non-repeatable read).
+    RowReadsMovingSnapshot,
 }
 
 impl Bug {
-    /// Every defect, for the detection suite.
+    /// The row engine's defects, checked by the row simulation in `lattice-engines`.
+    pub const ROW: [Bug; 4] = [
+        Bug::RowConflictCheckSkipped,
+        Bug::RowConflictOffByOne,
+        Bug::RowPartialPublish,
+        Bug::RowReadsMovingSnapshot,
+    ];
+
+    /// Every kernel-level defect, for the detection suite in `lattice-testkit`.
     pub const ALL: [Bug; 21] = [
         Bug::SkipFsync,
         Bug::NoDedupe,

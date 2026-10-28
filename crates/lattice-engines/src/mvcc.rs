@@ -8,6 +8,7 @@
 //! This is the in-memory core. Persistence, indexes and SQL sit on top of it in later work packages.
 
 use lattice_core::ChangeSetId;
+use lattice_core::bugs::{self, Bug};
 use std::collections::BTreeMap;
 use std::ops::RangeBounds;
 
@@ -91,7 +92,13 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
                 applied: self.applied,
             });
         }
-        for (key, value) in writes {
+        // Planted bug: publish only the first write of a change set.
+        let keep = if bugs::active(Bug::RowPartialPublish) {
+            1
+        } else {
+            usize::MAX
+        };
+        for (key, value) in writes.into_iter().take(keep) {
             let versions = self.rows.entry(key).or_default();
             match versions.last_mut() {
                 Some(last) if last.lsn == lsn => last.value = value,
@@ -163,6 +170,7 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
     pub fn get<'a>(&'a self, table: &'a Table<K, V>, key: &K) -> Option<&'a V> {
         match self.writes.get(key) {
             Some(own) => own.as_ref(),
+            None if bugs::active(Bug::RowReadsMovingSnapshot) => table.get(table.snapshot(), key),
             None => table.get(self.snapshot, key),
         }
     }
@@ -180,9 +188,17 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
     /// Checks the conflict rule without committing: fails if another change set wrote any row this
     /// transaction wrote after its snapshot (first committer wins).
     pub fn check(&self, table: &Table<K, V>) -> Result<(), MvccError> {
+        if bugs::active(Bug::RowConflictCheckSkipped) {
+            return Ok(());
+        }
+        let horizon = if bugs::active(Bug::RowConflictOffByOne) {
+            self.snapshot.as_of.saturating_add(1)
+        } else {
+            self.snapshot.as_of
+        };
         for key in self.writes.keys() {
             if let Some(newer) = table.newest_lsn(key)
-                && newer > self.snapshot.as_of
+                && newer > horizon
             {
                 return Err(MvccError::Conflict { newer_lsn: newer });
             }
@@ -208,13 +224,7 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
         lsn: u64,
         cs: ChangeSetId,
     ) -> Result<(), MvccError> {
-        for key in self.writes.keys() {
-            if let Some(newer) = table.newest_lsn(key)
-                && newer > self.snapshot.as_of
-            {
-                return Err(MvccError::Conflict { newer_lsn: newer });
-            }
-        }
+        self.check(table)?;
         table.apply(lsn, cs, self.writes.into_iter().collect())
     }
 }
