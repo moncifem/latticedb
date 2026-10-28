@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "row")]
+pub mod catalog;
+#[cfg(feature = "row")]
 pub mod mvcc;
 #[cfg(feature = "row")]
 pub mod rowops;
