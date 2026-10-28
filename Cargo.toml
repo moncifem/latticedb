@@ -53,5 +53,12 @@ debug = "line-tables-only"
 lto = "thin"
 codegen-units = 1
 
+# Simulated storage and invariant scans run in ordinary cargo tests. Optimize the workspace
+# code as well as its dependencies, while preserving the debug safety checks.
+[profile.test]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
 [profile.dev.package."*"]
 opt-level = 1

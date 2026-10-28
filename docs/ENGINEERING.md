@@ -386,3 +386,19 @@ stateDiagram-v2
 - **Conformance claims are expensive**: say "Postgres wire compatible with a documented subset" and test exactly that subset.
 - **Evals can mislead**: mutation-based labels flatter detection of easy drift; keep real, consented samples and track override rates in production.
 - **Crate choices are hypotheses** (`madsim` vs `turmoil`, `proptest` state machines, `io_uring` runtime, wasmtime component model); pick in the spikes.
+
+
+## Fast test builds without lower coverage
+
+`cargo test` uses an `opt-level = 1` test profile for workspace code as well as dependencies.
+Debug assertions and integer overflow checks remain enabled. Property-test case counts, simulated
+seed budgets, planted-bug detection and nightly volume are unchanged. The release profile used by
+nightly simulations and benchmarks is independent.
+
+When CI slows down, compare setup/compile time with per-test timings before adding tools or runners.
+The previous successful Ubuntu gate spent 96.81 seconds in `clean_build` and 152.14 seconds in
+`planted_bugs` (run 40782222040); its formatting and Clippy steps took only a few seconds.
+
+On the same development machine, the unchanged default-case test groups took 42.84 to 6.32 seconds
+(`clean_build`) and 92.38 to 13.14 seconds (`planted_bugs`) after optimizing workspace test code.
+These local results predict a reduction in CI runtime; runner timings must be measured separately.

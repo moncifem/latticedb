@@ -7,6 +7,11 @@ between minor versions; format changes are called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- Optimize test builds of workspace crates so the deterministic simulator runs faster in every
+  platform gate, retaining debug assertions, overflow checks, test cases and seed budgets.
+
 ### Fixed
 
 - Keep CLI test process launches separate from in-process ledger writes, preventing inherited WAL
