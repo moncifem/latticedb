@@ -18,6 +18,7 @@ pub mod ast;
 pub mod check;
 pub mod compat;
 pub mod format;
+pub mod lens;
 pub mod parser;
 pub mod validate;
 
