@@ -12,3 +12,4 @@
 | [0008](0008-sync-kernel-and-runtime.md) | ADR 0008: Synchronous kernel behind seams; runtime decision deferred | accepted |
 | [0009](0009-benchmarks-crate.md) | ADR 0009: Benchmarks live in their own crate and may read the wall clock | accepted |
 | [0010](0010-text-crdt-spike.md) | ADR 0010: Text CRDT: own spike behind a trait, decision revisited in Phase 3 | accepted |
+| [0011](0011-engine-runtime.md) | ADR 0011: Engine runtime | accepted |

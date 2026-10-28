@@ -25,3 +25,16 @@ jobs:
           name: mutants
           path: target/mutants/mutants.out
           if-no-files-found: ignore
+  io-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: commit path on the runner's disk
+        run: cargo run -q --release -p lattice-bench --bin io_probe -- --commits 2000 | tee io-probe.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: io-probe
+          path: io-probe.txt
