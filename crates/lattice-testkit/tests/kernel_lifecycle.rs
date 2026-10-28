@@ -328,3 +328,61 @@ fn a_full_disk_refuses_commits_without_losing_or_inventing_acknowledged_ones() {
     }
     assert!(scrub(&disk, "wal").unwrap().is_clean());
 }
+
+#[test]
+fn streaming_recovery_sees_the_same_records_as_collecting_recovery() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    k.begin_turn(TurnRef {
+        session: 3,
+        turn: 1,
+    })
+    .unwrap();
+    for i in 0..9 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 30])).unwrap();
+    }
+    k.checkpoint().unwrap();
+    drop(k);
+    // A torn tail on the newest segment must be repaired the same way by both.
+    let mut io = disk.clone();
+    let newest = io
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .max()
+        .unwrap();
+    io.append(&format!("wal/{newest}"), &[0xCD; 7]).unwrap();
+
+    let mut streamed = Vec::new();
+    let (k1, report1, cp1) = Kernel::open_streaming(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(1),
+        &config(),
+        |r| streamed.push(r),
+    )
+    .unwrap();
+    drop(k1);
+    let (_, rec) = Kernel::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(1),
+        &config(),
+    )
+    .unwrap();
+    assert_eq!(streamed.len(), rec.records.len());
+    assert!(
+        streamed
+            .iter()
+            .zip(&rec.records)
+            .all(|(a, b)| a.lsn == b.lsn && a.rtype == b.rtype && a.payload == b.payload)
+    );
+    assert_eq!(
+        cp1.map(|c| c.change_sets),
+        rec.checkpoint.map(|c| c.change_sets)
+    );
+    assert_eq!(report1.records, rec.report.records);
+    assert!(streamed.windows(2).all(|w| w[1].lsn == w[0].lsn + 1));
+}

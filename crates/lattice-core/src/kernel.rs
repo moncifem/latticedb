@@ -100,50 +100,53 @@ fn corrupt(msg: String) -> TxnError {
 }
 
 impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
-    /// Opens (and recovers) the kernel. A CRC-valid record of a known type that does not decode is
-    /// corruption, not something to skip: skipping would silently lose a fence or a dedupe entry.
-    pub fn open(
+    /// Opens (and recovers) the kernel and returns every valid record. A CRC-valid record of a known
+    /// type that does not decode is corruption, not something to skip: skipping would silently lose a
+    /// fence or a dedupe entry. This keeps the whole log in memory; [`Kernel::open_streaming`] does not.
+    pub fn open(io: I, clock: C, rng: R, config: &Config) -> Result<(Self, Recovery), TxnError> {
+        let mut records = Vec::new();
+        let (kernel, report, checkpoint) =
+            Self::open_streaming(io, clock, rng, config, |r| records.push(r))?;
+        Ok((
+            kernel,
+            Recovery {
+                records,
+                report,
+                checkpoint,
+            },
+        ))
+    }
+
+    /// Opens the kernel and hands each valid record to `visit` in LSN order instead of collecting
+    /// them, so recovery memory is bounded by one segment plus the kernel's own state. Engines use it
+    /// to rebuild their state from the log. If the open fails, discard whatever `visit` saw.
+    pub fn open_streaming(
         io: I,
         clock: C,
         mut rng: R,
         config: &Config,
-    ) -> Result<(Self, Recovery), TxnError> {
-        let (log, records, report) = Log::open(io, &config.dir, config.segment_limit)?;
+        mut visit: impl FnMut(Record),
+    ) -> Result<(Self, RecoveryReport, Option<Checkpoint>), TxnError> {
         let mut seen = BTreeSet::new();
         let mut turns: BTreeMap<u64, u64> = BTreeMap::new();
         let mut highest = Hlc::default();
         let mut latest_checkpoint = None;
-        for r in &records {
-            match RecordType::from_u8(r.rtype) {
-                Some(RecordType::ChangeSet) => {
-                    let cs = ChangeSet::decode(&r.payload)
-                        .map_err(|e| corrupt(format!("change set at lsn {}: {e}", r.lsn)))?;
-                    seen.insert(cs.id);
-                    highest = highest.max(cs.hlc);
-                }
-                Some(RecordType::TurnBegin) => {
-                    let t = decode_turn_begin(&r.payload)
-                        .map_err(|e| corrupt(format!("turn begin at lsn {}: {e}", r.lsn)))?;
-                    let cur = turns.entry(t.session).or_insert(0);
-                    *cur = (*cur).max(t.turn);
-                }
-                Some(RecordType::Checkpoint) => {
-                    let c = decode_checkpoint(&r.payload)
-                        .map_err(|e| corrupt(format!("checkpoint at lsn {}: {e}", r.lsn)))?;
-                    if c.through_lsn.checked_add(1) != Some(r.lsn)
-                        || c.change_sets != seen.len() as u64
-                        || c.state_crc != state_crc(&seen, &turns)
-                    {
-                        return Err(corrupt(format!(
-                            "checkpoint at lsn {} disagrees with the records before it",
-                            r.lsn
-                        )));
-                    }
-                    latest_checkpoint = Some(c);
-                }
-                // Unknown record types are preserved as opaque records and have no kernel state.
-                _ => {}
+        let mut failure: Option<TxnError> = None;
+        let (log, report) = Log::open_streaming(io, &config.dir, config.segment_limit, |r| {
+            if failure.is_none() {
+                failure = Self::rebuild_step(
+                    &r,
+                    &mut seen,
+                    &mut turns,
+                    &mut highest,
+                    &mut latest_checkpoint,
+                )
+                .err();
             }
+            visit(r);
+        })?;
+        if let Some(e) = failure {
+            return Err(e);
         }
         if bugs::active(Bug::DedupeNotRebuilt) {
             seen.clear();
@@ -163,14 +166,48 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             turns,
             metrics: Metrics::default(),
         };
-        Ok((
-            kernel,
-            Recovery {
-                records,
-                report,
-                checkpoint: latest_checkpoint,
-            },
-        ))
+        Ok((kernel, report, latest_checkpoint))
+    }
+
+    /// Folds one recovered record into the kernel's rebuilt state.
+    fn rebuild_step(
+        r: &Record,
+        seen: &mut BTreeSet<ChangeSetId>,
+        turns: &mut BTreeMap<u64, u64>,
+        highest: &mut Hlc,
+        latest_checkpoint: &mut Option<Checkpoint>,
+    ) -> Result<(), TxnError> {
+        match RecordType::from_u8(r.rtype) {
+            Some(RecordType::ChangeSet) => {
+                let cs = ChangeSet::decode(&r.payload)
+                    .map_err(|e| corrupt(format!("change set at lsn {}: {e}", r.lsn)))?;
+                seen.insert(cs.id);
+                *highest = (*highest).max(cs.hlc);
+            }
+            Some(RecordType::TurnBegin) => {
+                let t = decode_turn_begin(&r.payload)
+                    .map_err(|e| corrupt(format!("turn begin at lsn {}: {e}", r.lsn)))?;
+                let cur = turns.entry(t.session).or_insert(0);
+                *cur = (*cur).max(t.turn);
+            }
+            Some(RecordType::Checkpoint) => {
+                let c = decode_checkpoint(&r.payload)
+                    .map_err(|e| corrupt(format!("checkpoint at lsn {}: {e}", r.lsn)))?;
+                if c.through_lsn.checked_add(1) != Some(r.lsn)
+                    || c.change_sets != seen.len() as u64
+                    || c.state_crc != state_crc(seen, turns)
+                {
+                    return Err(corrupt(format!(
+                        "checkpoint at lsn {} disagrees with the records before it",
+                        r.lsn
+                    )));
+                }
+                *latest_checkpoint = Some(c);
+            }
+            // Unknown record types are preserved as opaque records and have no kernel state.
+            _ => {}
+        }
+        Ok(())
     }
 
     /// A fresh, unique change set id from the clock and random seams.

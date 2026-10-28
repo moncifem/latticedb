@@ -128,7 +128,6 @@ fn ensure_dir<I: Io>(io: &mut I, dir: &str) -> Result<(), IoError> {
 }
 
 struct Recovered {
-    records: Vec<Record>,
     report: RecoveryReport,
     current: String,
     current_len: u64,
@@ -136,7 +135,13 @@ struct Recovered {
     durable_lsn: u64,
 }
 
-fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
+/// Scans the log, repairs a torn tail and hands every valid record to `sink` in LSN order, one at a
+/// time, so recovery memory is bounded by one segment rather than by the whole log.
+fn recover<I: Io>(
+    io: &mut I,
+    dir: &str,
+    sink: &mut dyn FnMut(Record),
+) -> Result<Recovered, LogError> {
     let mut names: Vec<(u64, String)> = io
         .list(dir)?
         .into_iter()
@@ -150,7 +155,6 @@ fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
         io.sync(&name)?;
         io.sync_dir(dir)?;
         return Ok(Recovered {
-            records: Vec::new(),
             report,
             current: name,
             current_len: SEGMENT_HEADER_LEN as u64,
@@ -158,7 +162,9 @@ fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
             durable_lsn: 0,
         });
     }
-    let mut records: Vec<Record> = Vec::new();
+    // One record is held back so the last one can still be dropped by the planted recovery bug.
+    let mut pending: Option<Record> = None;
+    let mut count: u64 = 0;
     let mut expected: u64 = 1;
     let mut current = String::new();
     let mut current_len = 0u64;
@@ -201,7 +207,10 @@ fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
             match decode_record(&data, off) {
                 Decoded::Record(r, next) if r.lsn == expected => {
                     expected += 1;
-                    records.push(r);
+                    if let Some(prev) = pending.replace(r) {
+                        sink(prev);
+                        count += 1;
+                    }
                     off = next;
                 }
                 _ => {
@@ -236,7 +245,7 @@ fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
         report.segments += 1;
     }
     if bugs::active(Bug::RecoveryDropsLastRecord)
-        && let Some(last) = records.pop()
+        && let Some(last) = pending.take()
     {
         let cut = current_len.saturating_sub((RECORD_HEADER_LEN + last.payload.len()) as u64);
         io.truncate(&current, cut)?;
@@ -252,7 +261,11 @@ fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
         }
         io.sync_dir(dir)?;
     }
-    report.records = records.len() as u64;
+    if let Some(last) = pending.take() {
+        sink(last);
+        count += 1;
+    }
+    report.records = count;
     let last_lsn = expected - 1;
     let next_lsn = if bugs::active(Bug::LsnReusedAfterRecovery) && last_lsn > 0 {
         last_lsn
@@ -260,7 +273,6 @@ fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
         expected
     };
     Ok(Recovered {
-        records,
         report,
         current,
         current_len,
@@ -271,16 +283,32 @@ fn recover<I: Io>(io: &mut I, dir: &str) -> Result<Recovered, LogError> {
 
 impl<I: Io> Log<I> {
     /// Opens the log in `dir`, repairing a torn tail, and returns it with every valid record.
-    /// Fails if another writer holds the log.
+    /// Fails if another writer holds the log. This keeps every record in memory; use
+    /// [`Log::open_streaming`] when the log can be large.
     pub fn open(
-        mut io: I,
+        io: I,
         dir: &str,
         segment_limit: u64,
     ) -> Result<(Self, Vec<Record>, RecoveryReport), LogError> {
+        let mut records = Vec::new();
+        let (log, report) = Self::open_streaming(io, dir, segment_limit, |r| records.push(r))?;
+        Ok((log, records, report))
+    }
+
+    /// Like [`Log::open`], but hands each valid record to `visit` in LSN order instead of collecting
+    /// them, so recovery memory is bounded by one segment. `visit` also sees records of a log that
+    /// then turns out to be damaged beyond repair; in that case the open fails and they must be
+    /// discarded.
+    pub fn open_streaming(
+        mut io: I,
+        dir: &str,
+        segment_limit: u64,
+        mut visit: impl FnMut(Record),
+    ) -> Result<(Self, RecoveryReport), LogError> {
         ensure_dir(&mut io, dir)?;
         let lock_path = format!("{dir}/LOCK");
         io.lock(&lock_path)?;
-        match recover(&mut io, dir) {
+        match recover(&mut io, dir, &mut visit) {
             Ok(r) => {
                 let log = Self {
                     io,
@@ -294,7 +322,7 @@ impl<I: Io> Log<I> {
                     buffer: Vec::new(),
                     poisoned: false,
                 };
-                Ok((log, r.records, r.report))
+                Ok((log, r.report))
             }
             Err(e) => {
                 io.unlock(&lock_path);
