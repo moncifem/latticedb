@@ -42,7 +42,8 @@ impl LogView {
                     Ok(t) => v.turn_begins.push((r.lsn, t)),
                     Err(_) => v.undecodable += 1,
                 },
-                _ => v.undecodable += 1,
+                Some(RecordType::Checkpoint) => {}
+                Some(_) | None => v.undecodable += 1,
             }
         }
         v

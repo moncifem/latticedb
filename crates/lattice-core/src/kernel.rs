@@ -7,7 +7,10 @@
 //! id reservation made after it was prepared.
 
 use crate::bugs::{self, Bug};
-use crate::changeset::{ChangeSet, ChangeSetId, TurnRef, decode_turn_begin, encode_turn_begin};
+use crate::changeset::{
+    ChangeSet, ChangeSetId, Checkpoint, TurnRef, decode_checkpoint, decode_turn_begin,
+    encode_checkpoint, encode_turn_begin, state_crc,
+};
 use crate::hlc::HlcClock;
 use crate::log::{Log, LogError, RecoveryReport};
 use crate::metrics::{Metrics, names};
@@ -61,6 +64,8 @@ pub struct Recovery {
     pub records: Vec<Record>,
     /// What the log repair did.
     pub report: RecoveryReport,
+    /// The newest checkpoint found; it has been checked against the records before it.
+    pub checkpoint: Option<Checkpoint>,
 }
 
 /// The database kernel for one node.
@@ -104,6 +109,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         let mut seen = BTreeSet::new();
         let mut turns: BTreeMap<u64, u64> = BTreeMap::new();
         let mut highest = Hlc::default();
+        let mut latest_checkpoint = None;
         for r in &records {
             match RecordType::from_u8(r.rtype) {
                 Some(RecordType::ChangeSet) => {
@@ -117,6 +123,20 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
                         .map_err(|e| corrupt(format!("turn begin at lsn {}: {e}", r.lsn)))?;
                     let cur = turns.entry(t.session).or_insert(0);
                     *cur = (*cur).max(t.turn);
+                }
+                Some(RecordType::Checkpoint) => {
+                    let c = decode_checkpoint(&r.payload)
+                        .map_err(|e| corrupt(format!("checkpoint at lsn {}: {e}", r.lsn)))?;
+                    if c.through_lsn + 1 != r.lsn
+                        || c.change_sets != seen.len() as u64
+                        || c.state_crc != state_crc(&seen, &turns)
+                    {
+                        return Err(corrupt(format!(
+                            "checkpoint at lsn {} disagrees with the records before it",
+                            r.lsn
+                        )));
+                    }
+                    latest_checkpoint = Some(c);
                 }
                 // Unknown record types are preserved as opaque records and have no kernel state.
                 _ => {}
@@ -140,7 +160,14 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             turns,
             metrics: Metrics::default(),
         };
-        Ok((kernel, Recovery { records, report }))
+        Ok((
+            kernel,
+            Recovery {
+                records,
+                report,
+                checkpoint: latest_checkpoint,
+            },
+        ))
     }
 
     /// A fresh, unique change set id from the clock and random seams.
@@ -386,6 +413,20 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         self.log.sync()?;
         self.turns.insert(turn.session, turn.turn);
         Ok(())
+    }
+
+    /// Writes a checkpoint record summarising the state so far and returns its LSN.
+    pub fn checkpoint(&mut self) -> Result<u64, TxnError> {
+        let cp = Checkpoint {
+            through_lsn: self.log.next_lsn() - 1,
+            change_sets: self.seen.len() as u64,
+            state_crc: state_crc(&self.seen, &self.turns),
+        };
+        let lsn = self
+            .log
+            .append(RecordType::Checkpoint as u8, &encode_checkpoint(cp))?;
+        self.log.sync()?;
+        Ok(lsn)
     }
 
     /// Counters and latency histograms for this kernel instance.

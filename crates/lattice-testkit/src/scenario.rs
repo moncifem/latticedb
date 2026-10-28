@@ -295,7 +295,11 @@ pub fn run(seed: u64, profile: FaultProfile, steps: usize, segment_limit: u64) -
             58..=62 => duplicate_batch(&mut w, k),
             63..=68 => begin_turn(&mut w, k),
             69..=75 => stale_write(&mut w, k),
-            76..=81 => skew_clock(&mut w),
+            76..=79 => skew_clock(&mut w),
+            80..=81 => {
+                // A failure leaves the log poisoned or the record absent; neither affects the oracle.
+                let _ = k.checkpoint();
+            }
             _ => kernel = None, // crash: all in-memory state is lost, the disk survives
         }
     }

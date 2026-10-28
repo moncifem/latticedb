@@ -21,7 +21,13 @@ payload length u32 | crc32c u32 | lsn u64 | type u8 | payload (length bytes)
   the length (4 bytes), the lsn (8), the type (1) and the payload. The crc field itself is not covered.
 * LSNs start at 1 and increase by exactly 1 across records and across segments.
 * Maximum payload is 16 MiB; a larger length is corruption.
-* Record types: `1` ChangeSet, `2` TurnBegin. Readers keep unknown types as opaque records.
+* Record types: `1` ChangeSet, `2` TurnBegin, `3` Checkpoint. Readers keep unknown types as opaque
+  records, so adding a type does not break older readers.
+* Checkpoint payload, 20 bytes little endian: `through_lsn` u64 (the LSN just before the checkpoint),
+  `change_sets` u64 (change sets committed so far), `state_crc` u32 (CRC32C over the committed ids in
+  ascending order, each 16 bytes, then the turn table in ascending session order, each entry
+  `session` u64 and `turn` u64). A reader that understands checkpoints recomputes these from the
+  records before it and refuses the log when they differ. It still reads the whole log.
 
 ## Recovery rule
 

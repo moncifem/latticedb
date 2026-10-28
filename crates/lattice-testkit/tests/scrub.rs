@@ -256,3 +256,47 @@ fn inv_i2_a_log_cut_inside_a_record_shows_whole_change_sets_only() {
         d.append(seg, &bytes).unwrap();
     }
 }
+
+#[test]
+fn a_checkpoint_is_found_on_recovery_and_a_wrong_one_is_refused() {
+    use lattice_core::Log;
+    use lattice_core::changeset::{Checkpoint, encode_checkpoint};
+    use lattice_core::record::RecordType;
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    fill(&mut k, 3);
+    let lsn = k.checkpoint().unwrap();
+    assert_eq!(lsn, 4);
+    drop(k);
+    let config = Config {
+        dir: "wal".into(),
+        segment_limit: 400,
+        node: 1,
+    };
+    let open = |d: &SharedIo| {
+        Kernel::open(
+            d.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(8),
+            &config,
+        )
+    };
+    let (k, rec) = open(&disk).unwrap();
+    assert_eq!(rec.checkpoint.map(|c| c.change_sets), Some(3));
+    drop(k);
+    assert!(scrub(&disk, "wal").unwrap().is_clean());
+
+    // A checkpoint that claims one change set too many means the log lost something.
+    let (mut log, _, _) = Log::open(disk.clone(), "wal", 400).unwrap();
+    let wrong = Checkpoint {
+        through_lsn: 4,
+        change_sets: 4,
+        state_crc: 0,
+    };
+    log.append(RecordType::Checkpoint as u8, &encode_checkpoint(wrong))
+        .unwrap();
+    log.sync().unwrap();
+    drop(log);
+    assert!(open(&disk).is_err());
+    assert!(!scrub(&disk, "wal").unwrap().is_clean());
+}

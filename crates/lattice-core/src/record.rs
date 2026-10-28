@@ -23,6 +23,8 @@ pub enum RecordType {
     ChangeSet = 1,
     /// A new turn begins for a session, fencing earlier turns.
     TurnBegin = 2,
+    /// A summary of the kernel state at this point in the log.
+    Checkpoint = 3,
 }
 
 impl RecordType {
@@ -31,6 +33,7 @@ impl RecordType {
         match v {
             1 => Some(Self::ChangeSet),
             2 => Some(Self::TurnBegin),
+            3 => Some(Self::Checkpoint),
             _ => None,
         }
     }

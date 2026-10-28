@@ -5,7 +5,9 @@
 //! The scrubber never writes, takes no lock, and reports every problem it can find instead of
 //! stopping at the first.
 
-use crate::changeset::{ChangeSet, ChangeSetId, TurnRef, decode_turn_begin};
+use crate::changeset::{
+    ChangeSet, ChangeSetId, TurnRef, decode_checkpoint, decode_turn_begin, state_crc,
+};
 use crate::record::{
     Decoded, HeaderCheck, Record, RecordType, SEGMENT_HEADER_LEN, check_header, decode_record,
 };
@@ -219,6 +221,22 @@ fn check_records(records: &[Record], report: &mut ScrubReport) {
                 Err(e) => report.issues.push(Issue::Undecodable {
                     lsn: r.lsn,
                     what: format!("turn begin: {e}"),
+                }),
+            },
+            Some(RecordType::Checkpoint) => match decode_checkpoint(&r.payload) {
+                Ok(c) => {
+                    if c.through_lsn + 1 != r.lsn
+                        || c.change_sets != seen.len() as u64
+                        || c.state_crc != state_crc(&seen, &turns)
+                    {
+                        report.issues.push(Issue::DerivedStateMismatch {
+                            what: format!("checkpoint at lsn {} disagrees with the log", r.lsn),
+                        });
+                    }
+                }
+                Err(e) => report.issues.push(Issue::Undecodable {
+                    lsn: r.lsn,
+                    what: format!("checkpoint: {e}"),
                 }),
             },
             _ => {}

@@ -2,6 +2,7 @@
 
 use crate::record::{u32_at, u64_at};
 use lattice_abi::{Hlc, Id};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Marker for change set ids.
 #[derive(Debug, Clone, Copy)]
@@ -193,6 +194,56 @@ pub fn decode_turn_begin(buf: &[u8]) -> Result<TurnRef, DecodeError> {
     Ok(TurnRef {
         session: u64_at(buf, 0).ok_or(DecodeError::Truncated)?,
         turn: u64_at(buf, 8).ok_or(DecodeError::Truncated)?,
+    })
+}
+
+/// Payload of a `Checkpoint` record: what the kernel state was just before it.
+///
+/// Recovery recomputes the same summary from the records before the checkpoint and refuses the
+/// log when they differ, which catches a log that lost or reordered records without breaking the
+/// chain of checksums. Recovery still reads the whole log; skipping the prefix needs a state
+/// snapshot, which a later phase adds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// LSN of the last record the summary covers.
+    pub through_lsn: u64,
+    /// Change sets committed up to there.
+    pub change_sets: u64,
+    /// CRC32C over the sorted committed ids and the per-session turns.
+    pub state_crc: u32,
+}
+
+/// CRC32C of the committed ids (sorted) followed by the turn table (sorted by session).
+pub fn state_crc(ids: &BTreeSet<ChangeSetId>, turns: &BTreeMap<u64, u64>) -> u32 {
+    let mut bytes = Vec::with_capacity(ids.len() * 16 + turns.len() * 16);
+    for id in ids {
+        bytes.extend_from_slice(&id.to_bytes());
+    }
+    for (session, turn) in turns {
+        bytes.extend_from_slice(&session.to_le_bytes());
+        bytes.extend_from_slice(&turn.to_le_bytes());
+    }
+    crate::crc::crc32c(&bytes)
+}
+
+/// Encodes a checkpoint payload (20 bytes, little endian).
+pub fn encode_checkpoint(c: Checkpoint) -> Vec<u8> {
+    let mut o = Vec::with_capacity(20);
+    o.extend_from_slice(&c.through_lsn.to_le_bytes());
+    o.extend_from_slice(&c.change_sets.to_le_bytes());
+    o.extend_from_slice(&c.state_crc.to_le_bytes());
+    o
+}
+
+/// Decodes a checkpoint payload.
+pub fn decode_checkpoint(buf: &[u8]) -> Result<Checkpoint, DecodeError> {
+    if buf.len() != 20 {
+        return Err(DecodeError::Invalid("checkpoint length"));
+    }
+    Ok(Checkpoint {
+        through_lsn: u64_at(buf, 0).ok_or(DecodeError::Truncated)?,
+        change_sets: u64_at(buf, 8).ok_or(DecodeError::Truncated)?,
+        state_crc: u32_at(buf, 16).ok_or(DecodeError::Truncated)?,
     })
 }
 
