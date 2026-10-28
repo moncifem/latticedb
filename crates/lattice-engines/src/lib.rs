@@ -5,6 +5,7 @@
 
 #[cfg(feature = "row")]
 pub mod catalog;
+pub mod index;
 #[cfg(feature = "row")]
 pub mod mvcc;
 #[cfg(feature = "row")]

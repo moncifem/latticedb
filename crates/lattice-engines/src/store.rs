@@ -7,6 +7,7 @@
 //! in one call, so every reader sees all of the change set or none of it. Recovery replays the log's
 //! row change sets through the same apply, so a restart reproduces exactly the acknowledged state.
 
+use crate::index::{IndexDef, Indexes};
 use crate::mvcc::{MvccError, Snapshot, Table, Tx};
 use crate::rowops::{self, RowKey, RowOpsError};
 use lattice_abi::{Classify, ErrorClass};
@@ -39,6 +40,8 @@ pub enum RowError {
     Stale,
     /// The log holds a row change set this code cannot read.
     Corrupt(String),
+    /// The index definitions cannot identify their entries unambiguously.
+    InvalidIndexes(String),
     /// The writes do not fit the payload format.
     Encode(RowOpsError),
 }
@@ -53,6 +56,7 @@ impl fmt::Display for RowError {
             RowError::InDoubt(e) => write!(f, "commit outcome unknown: {e}"),
             RowError::Stale => write!(f, "store is stale after an ambiguous failure; reopen it"),
             RowError::Corrupt(why) => write!(f, "row data corrupt: {why}"),
+            RowError::InvalidIndexes(why) => write!(f, "invalid index definitions: {why}"),
             RowError::Encode(e) => write!(f, "cannot encode writes: {e:?}"),
         }
     }
@@ -64,7 +68,7 @@ impl Classify for RowError {
             RowError::Conflict { .. } | RowError::Stale => ErrorClass::Retryable,
             RowError::Rejected(e) | RowError::InDoubt(e) => e.class(),
             RowError::Corrupt(_) => ErrorClass::Fatal,
-            RowError::Encode(_) => ErrorClass::Rejected,
+            RowError::Encode(_) | RowError::InvalidIndexes(_) => ErrorClass::Rejected,
         }
     }
 }
@@ -73,6 +77,7 @@ impl Classify for RowError {
 pub struct RowStore<I: Io, C: Clock, R: Rng> {
     kernel: Kernel<I, C, R>,
     table: Table<RowKey, Vec<u8>>,
+    indexes: Indexes,
     stale: bool,
 }
 
@@ -80,7 +85,24 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     /// Opens the log and rebuilds the rows from every row change set in it, streaming, so recovery
     /// memory is the row state itself and one log segment.
     pub fn open(io: I, clock: C, rng: R, config: &Config) -> Result<Self, RowError> {
+        Self::open_with_indexes(io, clock, rng, config, Vec::new())
+    }
+
+    /// Opens the store with indexes derived from the row history. Index definitions must be
+    /// deterministic and use distinct ids, and must be supplied again on every reopen.
+    pub fn open_with_indexes(
+        io: I,
+        clock: C,
+        rng: R,
+        config: &Config,
+        index_defs: Vec<IndexDef>,
+    ) -> Result<Self, RowError> {
+        let mut ids = std::collections::BTreeSet::new();
+        if index_defs.iter().any(|def| !ids.insert(def.id)) {
+            return Err(RowError::InvalidIndexes("duplicate index id".into()));
+        }
         let mut table: Table<RowKey, Vec<u8>> = Table::new();
+        let mut indexes = Indexes::new(index_defs);
         let mut failure: Option<RowError> = None;
         let (kernel, _, _) = Kernel::open_streaming(io, clock, rng, config, |r| {
             if failure.is_some() || RecordType::from_u8(r.rtype) != Some(RecordType::ChangeSet) {
@@ -104,7 +126,11 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                     if bugs::active(Bug::RowRecoveryDropsDeletes) {
                         writes.retain(|(_, value)| value.is_some());
                     }
-                    if let Err(e) = table.apply(r.lsn, cs.id, writes) {
+                    let changes = indexes.changes_for(&table, &writes);
+                    if let Err(e) = table
+                        .apply(r.lsn, cs.id, writes)
+                        .and_then(|()| indexes.apply(r.lsn, cs.id, changes))
+                    {
                         failure = Some(RowError::Corrupt(format!("lsn {}: {e:?}", r.lsn)));
                     }
                 }
@@ -122,6 +148,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
             None => Ok(Self {
                 kernel,
                 table,
+                indexes,
                 stale: false,
             }),
         }
@@ -174,6 +201,36 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
             .collect()
     }
 
+    /// Primary keys whose extracted index key equals `key` at `snap`, in primary-key order.
+    pub fn lookup_at(&self, snap: Snapshot, index: u32, key: &[u8]) -> Vec<Vec<u8>> {
+        self.indexes.lookup(snap, index, key)
+    }
+
+    /// Rebuilds expected index entries from the rows at `snap` and reports any difference (I9).
+    pub fn check_indexes_at(&self, snap: Snapshot) -> Result<(), String> {
+        let live = self.indexes.live_entries(snap);
+        let expected = self.indexes.expected_entries(&self.table, snap);
+        if live == expected {
+            Ok(())
+        } else {
+            Err(format!(
+                "indexes differ from the rows: {} stale or extra, {} missing",
+                live.iter()
+                    .filter(|(key, value)| expected.get(*key) != Some(*value))
+                    .count(),
+                expected
+                    .iter()
+                    .filter(|(key, value)| live.get(*key) != Some(*value))
+                    .count()
+            ))
+        }
+    }
+
+    /// Checks index consistency at the current snapshot (I9).
+    pub fn check_indexes(&self) -> Result<(), String> {
+        self.check_indexes_at(self.snapshot())
+    }
+
     /// The commit LSN of the newest change set applied.
     pub fn applied_lsn(&self) -> u64 {
         self.table.applied_lsn()
@@ -204,8 +261,10 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 } else {
                     writes
                 };
+                let changes = self.indexes.changes_for(&self.table, &writes);
                 self.table
                     .apply(lsn, id, writes)
+                    .and_then(|()| self.indexes.apply(lsn, id, changes))
                     .map_err(|e| RowError::Corrupt(format!("apply after commit: {e:?}")))?;
                 Ok(lsn)
             }

@@ -56,14 +56,17 @@ pub enum Bug {
     RowPartialApply,
     /// Row recovery drops deletions, so deleted rows come back after a restart (durability).
     RowRecoveryDropsDeletes,
+    /// An index keeps the entry for a row's previous value after an update or deletion.
+    RowIndexStaleEntries,
 }
 
 impl Bug {
     /// Defects in the row store, detected by the row simulation rather than the log simulation.
-    pub const ROW: [Bug; 3] = [
+    pub const ROW: [Bug; 4] = [
         Bug::RowConflictCheckSkipped,
         Bug::RowPartialApply,
         Bug::RowRecoveryDropsDeletes,
+        Bug::RowIndexStaleEntries,
     ];
 
     /// Every defect, for the detection suite.

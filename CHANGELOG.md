@@ -7,6 +7,11 @@ between minor versions; format changes are called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- Secondary index primitives derived from row writes, rebuilt during recovery and readable at old
+  snapshots, with consistency checks and a planted stale-index defect to verify the checker.
+
 ### Changed
 
 - Optimize test builds of workspace crates so the deterministic simulator runs faster in every

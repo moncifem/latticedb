@@ -4,8 +4,8 @@ An open source database for software teams. Work items, documents, specs and des
 store, searchable by text, meaning and time. Agents work in it as teammates with scoped permissions.
 
 > **Status: pre-alpha.** There is no server to run yet. What exists is the storage kernel and the
-> test machinery around it; Phase 1 (foundations) is built and its gate is open, waiting on evidence
-> that needs time. Do not use it for data you care about.
+> test machinery around it. The Phase 1 gate is open; Phase 2 storage work has started under a
+> [documented waiver](docs/gates/phase-1-review.md). Do not use it for data you care about.
 
 ## What works today
 
@@ -13,6 +13,8 @@ store, searchable by text, meaning and time. Agents work in it as teammates with
   ([format](formats/wal-v1.md)).
 - A deterministic simulator that injects crashes, torn writes, disk errors and bit rot, and checks the
   kernel's invariants after every recovery.
+- An embedded row store with snapshot reads, write conflicts, a versioned catalog and secondary
+  index primitives rebuilt from the log.
 - A verifier for data directories (`lattice doctor`) and a results ledger kept in Lattice's own log
   (`lattice ledger show`, `lattice ledger check`).
 - A schema language parser and checker (LSL), conflict-free data types and a benchmark suite with a

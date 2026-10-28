@@ -10,6 +10,7 @@
 
 use lattice_core::Config;
 use lattice_core::bugs::{self, Bug};
+use lattice_engines::index::IndexDef;
 use lattice_engines::mvcc::Snapshot;
 use lattice_engines::store::{RowError, RowStore};
 use lattice_seams::Rng;
@@ -33,11 +34,18 @@ fn config() -> Config {
 }
 
 fn open(disk: &SharedIo, clock: &Rc<SimClock>, seed: u64) -> Store {
-    RowStore::open(
+    RowStore::open_with_indexes(
         disk.clone(),
         SharedClock(clock.clone()),
         SeededRng::new(seed),
         &config(),
+        (0..TABLES)
+            .map(|table| IndexDef {
+                id: table,
+                table,
+                extract: |value| value.first().map(|v| vec![*v]),
+            })
+            .collect(),
     )
     .unwrap()
 }
@@ -85,6 +93,30 @@ fn stage(store: &Store, writes: &[Write]) -> lattice_engines::store::RowTx {
 
 /// What the store shows for every key at `snap`, compared with the model; the first difference.
 fn compare(store: &Store, snap: Snapshot, model: &Rows) -> Option<String> {
+    if let Err(why) = store.check_indexes_at(snap) {
+        return Some(format!("I9 at snapshot {}: {why}", snap.as_of));
+    }
+    for table in 0..TABLES {
+        for value in model
+            .values()
+            .filter_map(|v| v.first())
+            .copied()
+            .chain([0, 249])
+        {
+            let expected: Vec<Vec<u8>> = model
+                .iter()
+                .filter(|((t, _), v)| *t == table && v.first() == Some(&value))
+                .map(|((_, key), _)| key.clone())
+                .collect();
+            let got = store.lookup_at(snap, table, &[value]);
+            if got != expected {
+                return Some(format!(
+                    "I9 at snapshot {}: index {table} value {value}, got {got:?}, expected {expected:?}",
+                    snap.as_of
+                ));
+            }
+        }
+    }
     for table in 0..TABLES {
         for key in 0..KEYS {
             let want = model.get(&(table, vec![key]));

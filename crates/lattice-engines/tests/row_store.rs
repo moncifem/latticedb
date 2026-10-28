@@ -8,6 +8,7 @@
 )]
 
 use lattice_core::Config;
+use lattice_engines::index::IndexDef;
 use lattice_engines::store::{RowError, RowStore};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
 use lattice_testkit::scenario::{SharedClock, SharedIo};
@@ -31,11 +32,18 @@ fn fresh() -> (SharedIo, Rc<SimClock>) {
 }
 
 fn open(disk: &SharedIo, clock: &Rc<SimClock>, seed: u64) -> Result<Store, RowError> {
-    RowStore::open(
+    RowStore::open_with_indexes(
         disk.clone(),
         SharedClock(clock.clone()),
         SeededRng::new(seed),
         &config(),
+        (1..=3)
+            .map(|table| IndexDef {
+                id: table,
+                table,
+                extract: |v| Some(v.to_vec()),
+            })
+            .collect(),
     )
 }
 
@@ -220,7 +228,20 @@ fn a_change_set_is_all_in_the_rows_or_not_at_all_across_crashes() {
         disk.set_profile(FaultProfile::clean());
         let s = open(&disk, &clock, seed + 9000).unwrap();
         let snap = s.snapshot();
+        s.check_indexes().unwrap();
         for n in attempted {
+            for table in 1..=3 {
+                let expected = if s.get_at(snap, table, &n.to_le_bytes()).is_some() {
+                    vec![n.to_le_bytes().to_vec()]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(
+                    s.lookup_at(snap, table, &[n as u8; 5]),
+                    expected,
+                    "seed {seed}: index {table}"
+                );
+            }
             let present: Vec<bool> = (1..=3u32)
                 .map(|t| s.get_at(snap, t, &n.to_le_bytes()).is_some())
                 .collect();
@@ -235,4 +256,64 @@ fn a_change_set_is_all_in_the_rows_or_not_at_all_across_crashes() {
             }
         }
     }
+}
+
+#[test]
+fn index_snapshots_preserve_updates_deletes_and_zero_byte_keys_after_recovery() {
+    let (disk, clock) = fresh();
+    let mut store = open(&disk, &clock, 1).unwrap();
+    let mut tx = store.begin();
+    for (key, value) in [
+        (vec![0], vec![]),
+        (vec![0, 0], vec![0]),
+        (vec![1], vec![0]),
+        (vec![255], vec![0, 0]),
+    ] {
+        tx.put((1, key), value);
+    }
+    store.commit(tx).unwrap();
+    let old = store.snapshot();
+    let mut tx = store.begin();
+    tx.put((1, vec![0, 0]), vec![255]);
+    tx.delete((1, vec![1]));
+    store.commit(tx).unwrap();
+    let current = store.snapshot();
+    for reopen in 0..2 {
+        assert_eq!(store.lookup_at(old, 1, &[]), vec![vec![0]]);
+        assert_eq!(store.lookup_at(old, 1, &[0]), vec![vec![0, 0], vec![1]]);
+        assert_eq!(store.lookup_at(old, 1, &[0, 0]), vec![vec![255]]);
+        assert!(store.lookup_at(current, 1, &[0]).is_empty());
+        assert_eq!(store.lookup_at(current, 1, &[255]), vec![vec![0, 0]]);
+        store.check_indexes_at(old).unwrap();
+        store.check_indexes_at(current).unwrap();
+        drop(store);
+        store = open(&disk, &clock, reopen + 100).unwrap();
+    }
+}
+
+#[test]
+fn duplicate_index_ids_are_rejected_before_opening_the_log() {
+    use lattice_abi::{Classify, ErrorClass};
+    use lattice_seams::Io;
+    let (disk, clock) = fresh();
+    let duplicate = IndexDef {
+        id: 1,
+        table: 1,
+        extract: |v| Some(v.to_vec()),
+    };
+    let result = RowStore::open_with_indexes(
+        disk.clone(),
+        SharedClock(clock),
+        SeededRng::new(1),
+        &config(),
+        vec![duplicate, duplicate],
+    );
+    let error = match result {
+        Err(e) => e,
+        Ok(_) => panic!("duplicate index ids were accepted"),
+    };
+    assert!(matches!(error, RowError::InvalidIndexes(_)));
+    assert_eq!(error.class(), ErrorClass::Rejected);
+    assert!(!disk.exists("wal"));
+    assert!(open(&disk, &Rc::new(SimClock::new(1_000)), 2).is_ok());
 }
