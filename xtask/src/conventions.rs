@@ -45,7 +45,15 @@ pub fn commit_problems(message: &str, scopes: &[String]) -> Vec<String> {
 
 fn allowed_scopes() -> Result<Vec<String>, String> {
     let layers = parse_layers(&read(&repo_root().join("layers.toml"))?)?;
+    // Both `lattice-core` and the shorter `core` are accepted as a scope.
     let mut v: Vec<String> = layers.crates.keys().cloned().collect();
+    v.extend(
+        layers
+            .crates
+            .keys()
+            .filter_map(|k| k.strip_prefix("lattice-"))
+            .map(String::from),
+    );
     v.extend(EXTRA_SCOPES.iter().map(|s| (*s).to_string()));
     Ok(v)
 }
@@ -142,6 +150,7 @@ mod tests {
         assert!(!commit_problems("added stuff", &scopes()).is_empty());
         assert!(!commit_problems("wip(lattice-core): x", &scopes()).is_empty());
         assert!(!commit_problems("feat(nope): x", &scopes()).is_empty());
+        assert!(commit_problems("feat(core): short crate scope", &["core".to_string()]).is_empty());
         assert!(!commit_problems("feat(docs): ", &scopes()).is_empty());
     }
 
