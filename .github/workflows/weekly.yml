@@ -67,7 +67,9 @@ jobs:
         with: { toolchain: 1.99.1 }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: commit path on the runner's disk
-        run: cargo run -q --release -p lattice-bench --bin io_probe -- --commits 2000 | tee io-probe.txt
+        run: |
+          set -o pipefail
+          cargo run -q --release -p lattice-bench --bin io_probe -- --commits 2000 | tee io-probe.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: io-probe

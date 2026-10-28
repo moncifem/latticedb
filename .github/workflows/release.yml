@@ -47,3 +47,4 @@ jobs:
       version: ${{ needs.verify.outputs.version }}
       channel: release
       publish: ${{ github.ref_type == 'tag' }}
+      ref: ${{ github.sha }}
