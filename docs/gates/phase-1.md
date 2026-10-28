@@ -58,7 +58,7 @@ no verdict): they are reported, capped by a quota test, and not counted as passe
 | E1-4 | Recovery correct at every fsync boundary in 100 scenarios | Partial: random power cuts inside protocols, not an exhaustive sweep |
 | E1-5 | CRDT laws at 10,000 cases (PR) and 1,000,000 (nightly) | Partial: default 256 cases; no text CRDT |
 | E1-6 | 24 hours of fuzzing per target | Not met: no fuzz targets (decoders and parser covered by property tests) |
-| E1-7 | Mutation score at least 80 percent | Not met |
+| E1-7 | Mutation score at least 80 percent | Met for the modules covered: hlc, record, changeset, crc, txn, scrub, lsl, log and kernel have no surviving mutants (log and kernel: 198 detected of 198 viable, 53 of them as hangs; 39 unviable). One equivalent mutant is recorded in `.cargo/mutants.toml`. Not yet run on the remaining crates |
 | E1-8 | Eval gate self-test, byte-identical reports, reproducible intervals | Met |
 | E1-9 | Benchmark baselines and regression gate | Not met |
 | E1-10 | Format ADR accepted, corpus read in CI | Met for the WAL and change set |
