@@ -36,8 +36,18 @@ macOS arm64, local SSD, 2,000 commits per row (`sync_all`, which issues a full f
 | 16 | 4,661 | 215 | 96% |
 | 64 | 15,611 | 64 | 92% |
 
-The weekly workflow runs the same probe on Linux and keeps the output as an artifact; those numbers
-are the ones to read against C2 for Linux. A `UringIo` prototype was not built: it cannot be built or
+The weekly workflow runs the same probe on Linux. First run, GitHub-hosted ubuntu runner, 2,000
+commits per row:
+
+| Batch | Commits per second | Microseconds per commit | Share of time in fsync |
+|---|---|---|---|
+| 1 | 3,478 | 288 | 95% |
+| 4 | 13,890 | 72 | 94% |
+| 16 | 43,901 | 23 | 90% |
+| 64 | 127,721 | 7.8 | 78% |
+
+A shared virtual disk is not NVMe, so these numbers read against C2 only loosely: the non-fsync share
+at batch 64 is 22%, under the 30% trigger below. A `UringIo` prototype was not built: it cannot be built or
 measured on the development machine, and the data above does not yet justify it.
 
 ## Decision

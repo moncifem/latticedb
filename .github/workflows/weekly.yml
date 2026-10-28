@@ -41,6 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
         with: { tool: cargo-mutants }
+      - run: mkdir -p target
       - name: mutation testing of crates whose tests live in other crates (a surviving mutant fails the run)
         run: >
           cargo mutants -p lattice-core -p lattice-lsl --test-workspace=true
