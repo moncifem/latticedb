@@ -66,10 +66,10 @@ fn main() -> ExitCode {
     {
         Ok(b) => b,
         Err(e) => {
-            println!(
-                "no usable baseline for profile `{profile}` ({e}); nothing to compare. Record one with --write-baseline."
+            eprintln!(
+                "no usable baseline for profile `{profile}` ({e}). Record one with --write-baseline."
             );
-            return ExitCode::SUCCESS;
+            return ExitCode::from(2);
         }
     };
     match compare(&baseline, &current, tolerance) {

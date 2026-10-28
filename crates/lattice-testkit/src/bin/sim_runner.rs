@@ -31,10 +31,21 @@ fn main() -> ExitCode {
     let ledger = arg(&args, "--ledger");
     let single = arg(&args, "--seed").and_then(|v| v.parse::<u64>().ok());
 
+    if only_profile
+        .as_deref()
+        .is_some_and(|p| !profiles().iter().any(|(name, _)| *name == p))
+    {
+        eprintln!("unknown profile: {}", only_profile.unwrap_or_default());
+        return ExitCode::from(2);
+    }
     let range: Vec<u64> = match single {
         Some(s) => vec![s],
         None => (from..from + seeds).collect(),
     };
+    if range.is_empty() {
+        eprintln!("nothing to run: --seeds must be at least 1");
+        return ExitCode::from(2);
+    }
     let (mut runs, mut failures, mut cut_short, mut incomplete, mut cuts, mut recoveries) =
         (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
     for (name, profile) in profiles() {
@@ -57,6 +68,11 @@ fn main() -> ExitCode {
                 );
                 println!("  reproduce: cargo xtask sim --seed {seed} --profile {name}");
             }
+        }
+        // A run that could not be verified is not evidence; too many of them fail the profile.
+        if p_inc * 2 > range.len() as u64 {
+            println!("profile {name}: more than half of the runs were not verified");
+            p_fail += 1;
         }
         failures += p_fail;
         cut_short += p_cut;

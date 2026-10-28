@@ -14,7 +14,7 @@ store, searchable by text, meaning and time. Agents work in it as teammates with
   kernel's invariants after every recovery.
 - A verifier for data directories: `lattice doctor`.
 - A schema language parser and checker (LSL), conflict-free data types and a benchmark suite with a
-  regression gate.
+  regression gate (baselines are per machine).
 
 Phase-by-phase status is in [`docs/gates`](docs/gates). It lists what is missing as well as what is done.
 

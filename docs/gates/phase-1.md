@@ -46,7 +46,8 @@ Measured on the strengthened harness: `cargo xtask sim --seeds 10000 --steps 150
 scenarios (5 profiles x 10,000 seeds) with **0 violations**, 1,899,450 recoveries and **832,021 power cuts
 inside durability protocols**. 159 workloads were cut short by faults (all still verified by the terminal
 check) and 1,767 runs, all in the bit-rot profile, were **incomplete** (recovery refused a rotted log, so
-no verdict): they are reported, capped by a quota test, and not counted as passes.
+no verdict): they are reported, capped by a quota test, and not counted as passes. This was measured on
+the harness before the kernel fixes in PR 61; the nightly run is the current evidence.
 
 ## Exit criteria against the spec
 
@@ -55,18 +56,18 @@ no verdict): they are reported, capped by a quota test, and not counted as passe
 | E1-1 | 10,000 seeds reproduce identical trace hashes | Partial: 60 seeds x 5 profiles checked in CI |
 | E1-2 | 1,000,000 seeds per night for 7 nights | Not met: 50,000 runs once; nightly wired, no history |
 | E1-3 | At least 20 planted bugs, 95 percent detected, no false alarms | Met: 20 bugs, all detected, no false alarms |
-| E1-4 | Recovery correct at every fsync boundary in 100 scenarios | Partial: random power cuts inside protocols, not an exhaustive sweep |
+| E1-4 | Recovery correct at every fsync boundary in 100 scenarios | Partial: `power_cut_sweep` cuts the power at every mutating storage operation of one fixed workload, and the simulator cuts power at random inside protocols; 100 distinct exhaustive scenarios are not reached |
 | E1-5 | CRDT laws at 10,000 cases (PR) and 1,000,000 (nightly) | Partial: default 256 cases; no text CRDT |
-| E1-6 | 24 hours of fuzzing per target | Not met: no fuzz targets (decoders and parser covered by property tests) |
+| E1-6 | 24 hours of fuzzing per target | Not met: five targets exist (`changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `wal_record`); nightly runs each for 10 minutes |
 | E1-7 | Mutation score at least 80 percent | Met for the modules covered: hlc, record, changeset, crc, txn, scrub, lsl, log and kernel have no surviving mutants (log and kernel: 198 detected of 198 viable, 53 of them as hangs; 39 unviable). One equivalent mutant is recorded in `.cargo/mutants.toml`. Not yet run on the remaining crates |
 | E1-8 | Eval gate self-test, byte-identical reports, reproducible intervals | Met |
-| E1-9 | Benchmark baselines and regression gate | Not met |
+| E1-9 | Benchmark baselines and regression gate | Partial: the gate fails when the baseline is missing; the stored baseline is for the author's machine (`local`) and CI does not run the gate, because a baseline is only comparable on the machine that recorded it |
 | E1-10 | Format ADR accepted, corpus read in CI | Met for the WAL and change set |
 | E1-11 | TLC passes four models | Met for the abstractions: Commit, Hlc, Fence, SetConvergence pass TLC, and Fence and Hlc were shown to fail when the protection is removed. Each header states what it does not model; run nightly by `tla/check-all.sh` |
 | E1-12 | Runtime ADR with benchmark data | Not met: ADR 0008 defers it |
 | E1-13 | Unsafe discipline, Miri, loom | Partial: zero `unsafe` anywhere; nothing for Miri or loom yet |
 | E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3, I7, I10, I11 and I14 belong to later phases |
-| E1-15 | Scorecard from a results ledger | Not met |
+| E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs; no thresholds or trends yet |
 | E1-16 | Gate review package | Not met |
 
 ## Not built

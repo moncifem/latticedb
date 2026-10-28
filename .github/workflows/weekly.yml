@@ -5,18 +5,23 @@ on:
 permissions:
   contents: read
 jobs:
-  conformance:
+  mutation:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: echo "Later phases add sqllogictest, driver matrix, s3-tests, OpenID conformance (scaffold)"
-  chaos-soak:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: echo "Phase 10 adds chaos and soak runs (scaffold)"
-  upgrade-matrix:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: echo "Phase 12 adds the upgrade matrix and freeze-corpus reads across versions (scaffold)"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-mutants }
+      - name: mutation testing of the core crates (a surviving mutant fails the run)
+        run: >
+          cargo mutants -p lattice-core -p lattice-lsl --test-workspace=true
+          --timeout 120 --no-shuffle -j 2 --output target/mutants
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mutants
+          path: target/mutants/mutants.out
+          if-no-files-found: ignore
