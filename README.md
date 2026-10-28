@@ -4,7 +4,8 @@ An open source database for software teams. Work items, documents, specs and des
 store, searchable by text, meaning and time. Agents work in it as teammates with scoped permissions.
 
 > **Status: pre-alpha.** There is no server to run yet. What exists is the storage kernel and the
-> test machinery around it. Do not use it for data you care about.
+> test machinery around it; Phase 1 (foundations) is built and its gate is open, waiting on evidence
+> that needs time. Do not use it for data you care about.
 
 ## What works today
 
@@ -12,9 +13,15 @@ store, searchable by text, meaning and time. Agents work in it as teammates with
   ([format](formats/wal-v1.md)).
 - A deterministic simulator that injects crashes, torn writes, disk errors and bit rot, and checks the
   kernel's invariants after every recovery.
-- A verifier for data directories: `lattice doctor`.
+- A verifier for data directories (`lattice doctor`) and a results ledger kept in Lattice's own log
+  (`lattice ledger show`, `lattice ledger check`).
 - A schema language parser and checker (LSL), conflict-free data types and a benchmark suite with a
-  regression gate (baselines are per machine).
+  regression gate.
+
+How it is checked: the simulator replays seeded crashes and faults (a million seeds per profile each
+night), 21 planted bugs prove it can fail, mutation testing covers the core crates, TLA+ models run in
+TLC, and the unit tests run under Miri and AddressSanitizer. The decoders and the log recovery path are
+fuzzed.
 
 Phase-by-phase status is in [`docs/gates`](docs/gates). It lists what is missing as well as what is done.
 
@@ -43,6 +50,7 @@ You need a recent stable Rust toolchain (pinned in `rust-toolchain.toml`).
 cargo xtask ci                      # the checks every pull request must pass
 cargo xtask sim --seeds 1000        # run the crash simulator
 cargo run -p lattice-cli -- doctor --dir path/to/data
+cargo run -p lattice-cli -- ledger check --dir target/ledger   # thresholds over recorded runs
 cargo run -p lattice-cli -- lsl compat old.lsl new.lsl   # is a schema change safe for existing data?
 ```
 
