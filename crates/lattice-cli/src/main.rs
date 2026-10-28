@@ -130,6 +130,10 @@ fn lsl_command(args: &[String]) -> ExitCode {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("--version" | "-V" | "version") => {
+            println!("lattice {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         Some("doctor") => {
             let dir = arg(&args, "--dir").unwrap_or_else(|| ".".into());
             let wal = arg(&args, "--wal").unwrap_or_else(|| "wal".into());

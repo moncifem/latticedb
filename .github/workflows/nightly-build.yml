@@ -1,0 +1,49 @@
+name: nightly-build
+# Publishes the "nightly" pre-release and the :nightly image from main, once a day, only when main
+# has moved since the last one and passes the full gate.
+on:
+  schedule: [{ cron: "0 4 * * *" }]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  changed:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.c.outputs.build }}
+    steps:
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh release view nightly --repo "${{ github.repository }}" --json targetCommitish --jq .targetCommitish 2>/dev/null || true)
+          head=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$last" = "$head" ] && [ "${{ github.event_name }}" = schedule ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+  gate:
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { ref: main }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo xtask ci
+        env: { CI: "true" }
+  package:
+    needs: gate
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/package.yml
+    with:
+      version: nightly
+      channel: nightly
+      publish: true

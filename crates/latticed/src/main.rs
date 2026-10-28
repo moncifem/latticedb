@@ -9,5 +9,12 @@
 )]
 
 fn main() {
+    if std::env::args()
+        .nth(1)
+        .is_some_and(|a| a == "--version" || a == "-V")
+    {
+        println!("latticed {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     println!("latticed: Phase 0 skeleton (layer 7)");
 }

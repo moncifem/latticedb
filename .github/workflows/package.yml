@@ -1,0 +1,190 @@
+name: package
+# Builds the release archives and the container image. Called by the nightly channel and by tagged
+# releases; with publish=false it only builds, which is how a release is rehearsed.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Archive and image version label, such as 0.1.0-alpha.1 or nightly"
+        required: true
+        type: string
+      channel:
+        description: "nightly, or release"
+        required: true
+        type: string
+      publish:
+        required: true
+        type: boolean
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  binaries:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, arch: amd64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, arch: arm64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, arch: macos-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: build
+        run: cargo build --release --locked -p lattice-cli -p latticed
+      - name: smoke test the built binaries
+        run: |
+          target/release/lattice --version
+          target/release/latticed --version
+      - name: stage and archive
+        env:
+          NAME: lattice-${{ inputs.version }}-${{ matrix.target }}
+        run: |
+          mkdir -p "dist/$NAME" bin-out
+          cp target/release/lattice target/release/latticed LICENSE NOTICE README.md "dist/$NAME/"
+          tar -czf "dist/$NAME.tar.gz" -C dist "$NAME"
+          mkdir -p "bin-out/${{ matrix.arch }}"
+          cp target/release/lattice target/release/latticed "bin-out/${{ matrix.arch }}/"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bin-${{ matrix.arch }}
+          path: bin-out/${{ matrix.arch }}
+          if-no-files-found: error
+
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-cyclonedx }
+      - name: generate
+        run: |
+          cargo cyclonedx --format json
+          mkdir -p sbom
+          cp crates/latticed/latticed.cdx.json crates/lattice-cli/lattice-cli.cdx.json sbom/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: sbom/*.json
+          if-no-files-found: error
+
+  release:
+    if: inputs.publish
+    needs: [binaries, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "{archive-*,sbom}"
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        working-directory: dist
+        run: sha256sum -- *.tar.gz *.json > SHA256SUMS
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: dist/*.tar.gz
+      - name: release notes
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$CHANNEL" = nightly ]; then
+            {
+              echo "Automated build of \`main\` at ${SHA}. Unsupported; the format may change without notice."
+              echo
+              echo "Verify a download with \`gh attestation verify <file> --repo ${{ github.repository }}\`."
+            } > notes.md
+          else
+            awk -v v="$VERSION" '
+              $0 ~ "^## \\[" v "\\]" { on = 1; next }
+              on && /^## \[/ { exit }
+              on { print }
+            ' CHANGELOG.md > notes.md
+            test -s notes.md || { echo "CHANGELOG.md has no section for $VERSION" >&2; exit 1; }
+          fi
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$CHANNEL" = nightly ]; then
+            gh release delete nightly --cleanup-tag --yes || true
+            gh release create nightly dist/* --target "$GITHUB_SHA" --prerelease \
+              --title "Nightly build" --notes-file notes.md
+          else
+            flag=""
+            case "$VERSION" in *-*) flag="--prerelease" ;; esac
+            gh release create "$TAG" dist/* --verify-tag $flag \
+              --title "Lattice $VERSION" --notes-file notes.md
+          fi
+
+  image:
+    if: inputs.publish
+    needs: [binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "bin-{amd64,arm64}"
+          path: bin
+      - name: layout the build context
+        run: |
+          mv bin/bin-amd64 bin/amd64
+          mv bin/bin-arm64 bin/arm64
+          chmod +x bin/*/*
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=nightly,enable=${{ inputs.channel == 'nightly' }}
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.channel == 'release' }}
+            type=raw,value=latest,enable=${{ inputs.channel == 'release' && !contains(inputs.version, '-') }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+      - id: push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

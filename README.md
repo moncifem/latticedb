@@ -18,6 +18,19 @@ store, searchable by text, meaning and time. Agents work in it as teammates with
 
 Phase-by-phase status is in [`docs/gates`](docs/gates). It lists what is missing as well as what is done.
 
+## Install
+
+Nightly builds of `main` are the only published packages so far: archives for Linux (x86_64, arm64)
+and macOS (arm64) on the [releases page](https://github.com/moncifem/latticedb/releases/tag/nightly),
+and a container image.
+
+```bash
+docker run --rm ghcr.io/moncifem/latticedb:nightly --version
+```
+
+Archives carry checksums, an SBOM and a build provenance attestation. How releases are cut and
+verified: [`docs/releasing.md`](docs/releasing.md). Changes: [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Try it
 
 You need a recent stable Rust toolchain (pinned in `rust-toolchain.toml`).

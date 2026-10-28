@@ -23,9 +23,11 @@ members = [
 ]
 
 [workspace.package]
+version = "0.1.0-alpha.0"
 edition = "2024"
 rust-version = "1.99.1"
 license = "Apache-2.0"
+repository = "https://github.com/moncifem/latticedb"
 
 [workspace.dependencies]
 toml = "1.1.8"

@@ -206,7 +206,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "lattice-abi"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "proptest",
  "subtle",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-api"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-bench"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-cli"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-core"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "blake3",
  "lattice-abi",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-engines"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-evalkit"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "blake3",
  "lattice-abi",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-identity"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-intel"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-lsl"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "proptest",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-packs"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-sdk"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-lsl",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-seams"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "getrandom",
  "lattice-abi",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-service"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-sim"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-seams",
@@ -365,11 +365,11 @@ dependencies = [
 
 [[package]]
 name = "lattice-sys"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 
 [[package]]
 name = "lattice-testkit"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "latticed"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-api",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0-alpha.0"
 dependencies = [
  "serde_json",
  "toml",
