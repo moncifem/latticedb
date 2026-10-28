@@ -26,6 +26,7 @@ You need a recent stable Rust toolchain (pinned in `rust-toolchain.toml`).
 cargo xtask ci                      # the checks every pull request must pass
 cargo xtask sim --seeds 1000        # run the crash simulator
 cargo run -p lattice-cli -- doctor --dir path/to/data
+cargo run -p lattice-cli -- lsl compat old.lsl new.lsl   # is a schema change safe for existing data?
 ```
 
 ## How it is built
