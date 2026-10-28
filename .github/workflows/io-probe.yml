@@ -22,3 +22,46 @@ jobs:
         with:
           name: io-probe
           path: io-probe.txt
+
+  runtime-spike:
+    # An explicit, bounded experiment: no scheduled run until its evidence is reviewed.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1, components: clippy }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with: { shared-key: runtime-spike }
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-deny }
+      - name: runner I/O context
+        run: |
+          uname -a
+          lscpu
+          df -T "$RUNNER_TEMP"
+          sysctl kernel.io_uring_disabled || true
+      - name: feature-on lint and structural checks
+        run: |
+          cargo clippy -p lattice-sys -p lattice-seams -p lattice-bench --features lattice-bench/runtime-spike --all-targets -- -D warnings
+          cargo xtask check-layers
+          cargo xtask check-unsafe
+          cargo xtask check-allow
+          cargo deny --all-features check --hide-inclusion-graph
+      - name: compare portable, tokio and io_uring with the real kernel
+        run: |
+          set -o pipefail
+          cargo run --release -p lattice-bench --features runtime-spike --bin runtime_probe -- \
+            --dir "$RUNNER_TEMP/lattice-runtime-probe" --commits 2000 --read-passes 20 \
+            --output runtime-probe.json 2>&1 | tee runtime-probe.txt
+      - name: feature-on completion error test
+        run: cargo test -p lattice-sys --features uring
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: runtime-spike
+          path: |
+            runtime-probe.json
+            runtime-probe.txt
+          if-no-files-found: ignore

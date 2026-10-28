@@ -19,6 +19,10 @@
 
 pub mod conformance;
 mod real;
+#[cfg(all(feature = "uring", target_os = "linux"))]
+mod uring;
+#[cfg(all(feature = "uring", target_os = "linux"))]
+pub use uring::UringIo;
 
 pub use real::{OsRng, StdIo, SystemClock, ThreadSpawner};
 

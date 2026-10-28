@@ -13,5 +13,10 @@ lattice-abi = { path = "../lattice-abi" }
 lattice-sys = { path = "../lattice-sys" }
 thiserror = "2.0.21"
 
+[features]
+default = []
+# Experimental adapter, never selected by the production composition root.
+uring = ["lattice-sys/uring"]
+
 [lints]
 workspace = true

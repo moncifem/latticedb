@@ -5,3 +5,7 @@
 
 /// Layer marker used by the layer check. Do not remove.
 pub const LAYER: u8 = 0;
+
+/// Synchronous ownership boundary around Linux io_uring requests, for the opt-in runtime spike.
+#[cfg(all(feature = "uring", target_os = "linux"))]
+pub mod uring;

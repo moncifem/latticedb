@@ -15,5 +15,17 @@ lattice-lsl = { path = "../lattice-lsl" }
 lattice-core = { path = "../lattice-core" }
 serde_json.workspace = true
 
+[features]
+default = []
+runtime-spike = ["dep:tokio", "lattice-seams/uring"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio = { version = "1", optional = true, default-features = false, features = ["rt", "fs", "io-util"] }
+
+[[bin]]
+name = "runtime_probe"
+path = "src/bin/runtime_probe.rs"
+required-features = ["runtime-spike"]
+
 [lints]
 workspace = true

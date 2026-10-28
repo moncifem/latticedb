@@ -9,6 +9,13 @@ description = "The only crate allowed to contain unsafe code (io_uring, mmap wra
 
 [dependencies]
 
+[features]
+default = []
+uring = ["dep:io-uring"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { version = "0.7", optional = true }
+
 # lattice-sys cannot inherit the workspace table (it must not forbid unsafe), so the shared
 # discipline is repeated here. Keep in sync with [workspace.lints].
 [lints.rust]
