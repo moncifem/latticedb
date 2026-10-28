@@ -71,7 +71,6 @@ no verdict): they are reported, capped by a quota test, and not counted as passe
 
 ## Not built
 
-Reader API and checkpoints, commit pipeline with bounded queues, text CRDT, simulated convergence,
-migration lenses and the `lsc` CLI, scrubber and `lattice doctor`, observability (`tracing`, metrics,
-`Secret<T>`), fuzz targets, benchmarks, mutation testing, TLA+ models beyond the limited commit model,
-runtime spike, results ledger, scorecard and north-star pending specs.
+Reader API with snapshot cursors and checkpoints, mutation testing, TLA+ models beyond the limited
+commit model (TLC has not been run), the runtime spike, the north-star pending specs, long fuzz runs
+(24 hours per target), the nightly simulation volume, and the final gate review.

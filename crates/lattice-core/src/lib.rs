@@ -32,6 +32,7 @@ pub mod kernel;
 pub mod ledger;
 pub mod log;
 pub mod metrics;
+pub mod pipeline;
 pub mod record;
 pub mod scrub;
 pub mod txn;
