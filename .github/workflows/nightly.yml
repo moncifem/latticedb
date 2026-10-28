@@ -37,8 +37,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: planted-bug detection and determinism self-check
         run: cargo test -p lattice-testkit --release
-      - name: determinism at gate volume (10,000 seeds per profile, each run twice)
-        run: cargo test -p lattice-testkit --release --test clean_build -- --ignored
+      - name: gate-volume tests (determinism over 10,000 seeds per profile; 100 exhaustively swept workloads)
+        run: cargo test -p lattice-testkit --release --test clean_build --test power_cut_sweep -- --ignored
       - name: property tests at 1,000,000 cases (CRDT laws, codecs, clock)
         run: cargo test -p lattice-core -p lattice-abi -p lattice-lsl --release
         env:
