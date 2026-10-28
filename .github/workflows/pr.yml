@@ -26,6 +26,8 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo xtask ci
+        env:
+          PROPTEST_CASES: "10000"
   secrets:
     name: secret-scan
     runs-on: ubuntu-latest

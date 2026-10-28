@@ -158,8 +158,9 @@ mod tests {
         }
 
         #[test]
-        fn later_timestamps_sort_later(a in 0u64..(1 << 47), b in 0u64..(1 << 47), r in any::<u64>()) {
-            prop_assume!(a < b);
+        fn later_timestamps_sort_later(a in 0u64..((1 << 47) - 1), gap in 1u64..(1 << 47), r in any::<u64>()) {
+            let b = a + gap.min((1 << 47) - 1 - a);
+            prop_assert!(a < b);
             prop_assert!(Id::<Thing>::from_parts(a, r, r) < Id::<Thing>::from_parts(b, 0, 0));
         }
     }

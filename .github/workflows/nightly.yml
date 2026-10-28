@@ -18,6 +18,10 @@ jobs:
         run: cargo xtask sim --seeds 200000 --steps 150
       - name: planted-bug detection and determinism self-check
         run: cargo test -p lattice-testkit --release
+      - name: property tests at 1,000,000 cases (CRDT laws, codecs, clock)
+        run: cargo test -p lattice-core -p lattice-abi -p lattice-lsl --release
+        env:
+          PROPTEST_CASES: "1000000"
   fuzz:
     strategy:
       fail-fast: false
