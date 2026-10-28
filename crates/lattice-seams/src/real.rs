@@ -215,4 +215,14 @@ mod tests {
         assert!(io.sync_dir("").is_ok());
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn a_full_device_maps_to_no_space_and_a_missing_file_to_not_found() {
+        let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+        assert_eq!(map("x", full), IoError::NoSpace);
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(map("x", missing), IoError::NotFound("x".into()));
+        let other = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(matches!(map("x", other), IoError::Other(m) if m.starts_with("x: ")));
+    }
 }

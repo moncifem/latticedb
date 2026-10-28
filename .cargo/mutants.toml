@@ -7,21 +7,18 @@ exclude_re = [
     # gives the same result.
     "replace \\| with \\^ in Id<T>::from_parts",
     "replace \\| with \\^ in Id<T>::parse",
-    # With either precision or recall at zero the F1 formula is zero anyway, so testing the sum or the
-    # product against zero cannot change the result.
-    "replace \\+ with \\* in prf",
     # `Silent` already returns an empty list, so replacing its body with one changes nothing.
     "replace <impl Provider for Silent>::predict -> Vec<String> with vec!\\[\\]",
-    # `below(1_000_000) < ppm` against `<=` differs only when the draw is exactly zero and ppm is zero:
-    # one chance in a million, not something a test can pin.
-    "replace < with <= in SeededRng::chance_ppm",
-    # A full device cannot be provoked portably from a test.
-    "delete match arm std::io::ErrorKind::StorageFull in map",
     # `clean()` is `Self::default()`, so replacing its body with the default changes nothing.
     "replace FaultProfile::clean -> Self with Default::default\\(\\)",
+    # In `prf`, F1 is zero whenever either precision or recall is zero, so testing "both are zero" or
+    # "either is zero" before the formula gives the same number. The denominator is not excluded:
+    # replacing its `+` gives F1 = 2 for a perfect result and is caught.
+    "replace && with \\|\\| in prf",
 ]
 
-# The benchmark bodies only choose iteration counts and time loops; their output is a timing, which
-# varies by machine, so no test can pin it. A separate test checks that every benchmark reports a
-# positive, finite time.
+# The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
+# by machine, so no test can pin it. This also means a change to what a benchmark measures goes
+# unnoticed by mutation testing; the nightly gate against a recorded baseline is what watches that. A
+# separate test checks that every benchmark reports a positive, finite time.
 exclude_globs = ["crates/lattice-bench/src/suite.rs"]

@@ -12,8 +12,8 @@ ADR 0008 kept the kernel synchronous and deferred the runtime choice to measurem
 
 ## Decision criteria
 
-Written down before the decision was drawn from the data (the macOS numbers were collected first; the
-Linux numbers are not in yet and the revisit triggers are stated against them):
+Written down before the decision was drawn from the data (the macOS numbers were collected first, then the Linux
+numbers from the weekly workflow, which the revisit triggers are stated against):
 
 - C1. Commit latency and throughput at batch sizes 1 to 64 on a real disk, with the fraction of time
   spent in fsync.

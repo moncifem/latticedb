@@ -29,7 +29,7 @@ pub fn prf(pairs: &[(Vec<String>, Vec<String>)]) -> Prf {
     }
     let precision = ratio(tp, got_n);
     let recall = ratio(tp, exp_n);
-    let f1 = if precision + recall == 0.0 {
+    let f1 = if precision == 0.0 && recall == 0.0 {
         0.0
     } else {
         2.0 * precision * recall / (precision + recall)

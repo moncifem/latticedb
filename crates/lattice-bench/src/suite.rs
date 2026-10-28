@@ -6,8 +6,9 @@ use lattice_core::crdt::{Crdt, OrSet};
 use lattice_core::record::{decode_record, encode_record};
 use lattice_core::{Config, HlcClock, Kernel};
 use lattice_lsl::{check::check, parser::parse};
-use lattice_seams::{Clock, Rng};
+use lattice_seams::{Clock, Io, IoError, Rng};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::rc::Rc;
@@ -36,6 +37,59 @@ fn time(rounds: usize, iters: u64, mut op: impl FnMut()) -> f64 {
 }
 
 const SCHEMA: &str = "enum P { low, medium, high }\nfacet E { n: int in 0..=100 optional  p: P }\ntype Epic { title: text max 120 }\ntype Story = E { title: text max 200  epic: ref<Epic> optional  acceptance: list<text> max 20 }\n";
+
+/// A simulated disk that outlives the kernel using it, so a benchmark can reopen a populated disk.
+struct SharedSim(Rc<RefCell<SimIo>>);
+
+impl Io for SharedSim {
+    fn exists(&self, path: &str) -> bool {
+        self.0.borrow().exists(path)
+    }
+    fn len(&self, path: &str) -> Result<u64, IoError> {
+        self.0.borrow().len(path)
+    }
+    fn read(&self, path: &str) -> Result<Vec<u8>, IoError> {
+        self.0.borrow().read(path)
+    }
+    fn append(&mut self, path: &str, data: &[u8]) -> Result<(), IoError> {
+        self.0.borrow_mut().append(path, data)
+    }
+    fn truncate(&mut self, path: &str, len: u64) -> Result<(), IoError> {
+        self.0.borrow_mut().truncate(path, len)
+    }
+    fn sync(&mut self, path: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().sync(path)
+    }
+    fn sync_dir(&mut self, dir: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().sync_dir(dir)
+    }
+    fn list(&self, dir: &str) -> Result<Vec<String>, IoError> {
+        self.0.borrow().list(dir)
+    }
+    fn remove(&mut self, path: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().remove(path)
+    }
+    fn create_dir_all(&mut self, dir: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().create_dir_all(dir)
+    }
+    fn lock(&mut self, path: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().lock(path)
+    }
+    fn unlock(&mut self, path: &str) {
+        self.0.borrow_mut().unlock(path);
+    }
+}
+
+fn open_on<I: Io>(io: I) -> Kernel<I, Clk, SeededRng> {
+    Kernel::open(
+        io,
+        Clk(Rc::new(SimClock::new(1))),
+        SeededRng::new(1),
+        &Config::default(),
+    )
+    .map(|(k, _)| k)
+    .unwrap_or_else(|e| unreachable!("fresh simulated disk must open: {e}"))
+}
 
 fn open_kernel() -> Kernel<SimIo, Clk, SeededRng> {
     let io = SimIo::new(1, FaultProfile::clean());
@@ -137,32 +191,40 @@ pub fn run_all(scale: u64) -> BTreeMap<String, f64> {
         }) / 16.0,
     );
 
-    // Recovery cost grows with the log until checkpoints exist; track it per record.
+    // Recovery cost grows with the log until checkpoints exist; track it per record. Each round writes
+    // a populated disk (not timed) and times only the reopen that has to read it back.
     let records = 2_000u64;
-    let mut seed = open_kernel();
-    for _ in 0..records {
-        let id = seed.new_id();
-        let _ = seed.commit(ChangeSet::new(id, vec![1; 100]));
-    }
-    out.insert(
-        "recovery_open_per_record".to_string(),
-        time(5, 3 * s, || {
-            let io = SimIo::new(1, FaultProfile::clean());
-            let mut k = Kernel::open(
+    let mut samples: Vec<f64> = (0..5 * 3 * s)
+        .map(|_| {
+            let disk = Rc::new(RefCell::new(SimIo::new(1, FaultProfile::clean())));
+            let mut seed = open_on(SharedSim(disk.clone()));
+            for _ in 0..records {
+                let id = seed.new_id();
+                let _ = seed.commit(ChangeSet::new(id, vec![1; 100]));
+            }
+            drop(seed);
+            let io = SharedSim(disk.clone());
+            let start = Instant::now();
+            let reopened = Kernel::open(
                 io,
                 Clk(Rc::new(SimClock::new(1))),
                 SeededRng::new(1),
                 &Config::default(),
             )
-            .map(|(k, _)| k);
-            if let Ok(k) = k.as_mut() {
-                for _ in 0..records {
-                    let id = k.new_id();
-                    let _ = k.commit(ChangeSet::new(id, vec![1; 100]));
-                }
-            }
-            black_box(k.is_ok());
-        }) / records as f64,
+            .map(|(k, rec)| (k, rec.records.len()));
+            assert!(
+                reopened.as_ref().is_ok_and(|(_, n)| *n as u64 == records),
+                "recovery must read every record back"
+            );
+            let ns = start.elapsed().as_nanos() as f64;
+            black_box(reopened.is_ok());
+            ns / records as f64
+        })
+        .collect();
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    out.insert(
+        "recovery_open_per_record".to_string(),
+        samples.get(samples.len() / 2).copied().unwrap_or(f64::NAN),
     );
     out
 }

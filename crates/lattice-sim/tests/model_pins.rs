@@ -423,3 +423,12 @@ fn switching_reordering_off_leaves_the_random_stream_to_drops_and_duplicates() {
         ]
     );
 }
+
+#[test]
+fn a_zero_rate_never_fires_even_when_the_draw_is_zero() {
+    // The first draw below one million for this seed is exactly zero.
+    let mut rng = SeededRng::new(1_147_169);
+    assert!(!rng.chance_ppm(0));
+    let mut rng = SeededRng::new(1_147_169);
+    assert!(rng.chance_ppm(1));
+}
