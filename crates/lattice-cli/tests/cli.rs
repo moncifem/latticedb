@@ -191,3 +191,68 @@ fn lsl_with_the_wrong_arguments_prints_usage_and_exits_two() {
     assert_eq!(code(&lattice(&["lsl", "compat", "only-one"])), 2);
     assert_eq!(code(&lattice(&["lsl", "wibble", "x"])), 2);
 }
+
+fn sim_entry(dir: &Path, runs: u64, failing: u64, incomplete: u64) {
+    let json = format!(
+        "{{\"runs\":{runs},\"failing\":{failing},\"cut_short\":0,\"incomplete\":{incomplete}}}"
+    );
+    ledger::append(StdIo::new(dir), SystemClock, OsRng, "sim", &json).unwrap();
+}
+
+#[test]
+fn ledger_check_passes_a_clean_latest_run_and_fails_each_kind_of_bad_one() {
+    let check = |dir: &Path| lattice(&["ledger", "check", "--dir", dir.to_str().unwrap()]);
+
+    let dir = workdir("check-ok");
+    sim_entry(&dir, 10, 0, 0);
+    sim_entry(&dir, 10, 0, 5); // exactly half unverified is still acceptable
+    let o = check(&dir);
+    assert_eq!(code(&o), 0, "{}", out(&o));
+    assert!(
+        out(&o).contains("2 clean simulation run(s) in a row"),
+        "{}",
+        out(&o)
+    );
+
+    let dir = workdir("check-violations");
+    sim_entry(&dir, 10, 1, 0);
+    let o = check(&dir);
+    assert_eq!(code(&o), 1);
+    assert!(out(&o).contains("the latest run has violations"));
+
+    let dir = workdir("check-empty-run");
+    sim_entry(&dir, 0, 0, 0);
+    let o = check(&dir);
+    assert_eq!(code(&o), 1);
+    assert!(out(&o).contains("verified nothing"));
+    assert!(
+        out(&o).contains("0 clean simulation run(s) in a row"),
+        "{}",
+        out(&o)
+    );
+
+    let dir = workdir("check-unverified");
+    sim_entry(&dir, 10, 0, 6);
+    let o = check(&dir);
+    assert_eq!(code(&o), 1);
+    assert!(out(&o).contains("more than half"));
+
+    // A failing run breaks the streak that ends at the latest clean one.
+    let dir = workdir("check-streak");
+    sim_entry(&dir, 10, 0, 0);
+    sim_entry(&dir, 10, 2, 0);
+    sim_entry(&dir, 10, 0, 0);
+    sim_entry(&dir, 10, 0, 0);
+    let o = check(&dir);
+    assert_eq!(code(&o), 0);
+    assert!(
+        out(&o).contains("2 clean simulation run(s) in a row"),
+        "{}",
+        out(&o)
+    );
+
+    let dir = workdir("check-none");
+    let o = check(&dir);
+    assert_eq!(code(&o), 1);
+    assert!(out(&o).contains("no simulation run in the ledger"));
+}
