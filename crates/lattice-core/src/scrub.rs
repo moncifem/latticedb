@@ -155,9 +155,10 @@ pub fn scrub<I: Io>(io: &I, dir: &str) -> Result<ScrubReport, IoError> {
                     off = next;
                 }
                 _ => {
-                    let later = (off + 1..data.len()).any(|o| {
-                        matches!(decode_record(&data, o), Decoded::Record(r, _) if r.lsn >= expected_lsn)
-                    });
+                    // The same bounded, plausibility-filtered scan recovery uses, so a damaged tail full of
+                    // look-alike headers cannot make a scrub quadratic.
+                    let later =
+                        crate::log::valid_record_after(&data, off, expected_lsn.saturating_sub(1));
                     if idx == last && !later {
                         report.issues.push(Issue::TornTail {
                             segment: name.clone(),

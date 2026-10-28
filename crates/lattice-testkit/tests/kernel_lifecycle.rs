@@ -172,3 +172,184 @@ fn a_checkpoint_claiming_the_last_lsn_is_reported_not_a_panic() {
         .is_err()
     );
 }
+
+#[test]
+fn colliding_owner_id_and_lsn_with_different_bytes_is_still_refused() {
+    // Same seed, same clock: both kernels draw the same owner and the same first id.
+    let (disk_a, clock) = fresh();
+    let (disk_b, _) = fresh();
+    let mut a = kernel(&disk_a, &clock);
+    let mut b = kernel(&disk_b, &clock);
+    let ida = a.new_id();
+    let idb = b.new_id();
+    assert_eq!(ida, idb, "the setup must collide");
+    let step = |k: &mut K, id, payload: u8| {
+        let t = k
+            .begin(ChangeSet::new(id, vec![payload]))
+            .validate(&AllowAll)
+            .unwrap()
+            .authorize(&AllowAll)
+            .unwrap();
+        match k.prepare(t).unwrap() {
+            PrepareOutcome::Ready(t) => k.log(t).unwrap(),
+            PrepareOutcome::Duplicate(_) => panic!("duplicate"),
+        }
+    };
+    let ta = step(&mut a, ida, 1);
+    let _tb = step(&mut b, idb, 2); // B still has its own transaction in flight
+    assert!(matches!(
+        b.sync(vec![ta]),
+        Err(TxnError::ForeignTransaction)
+    ));
+}
+
+#[test]
+fn settle_recovers_the_reservation_of_a_dropped_transaction() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    let id = k.new_id();
+    let t = k
+        .begin(ChangeSet::new(id, vec![9]))
+        .validate(&AllowAll)
+        .unwrap()
+        .authorize(&AllowAll)
+        .unwrap();
+    let PrepareOutcome::Ready(t) = k.prepare(t).unwrap() else {
+        panic!("duplicate")
+    };
+    drop(k.log(t).unwrap()); // the caller loses the transaction
+    let again = ChangeSet::new(id, vec![9]);
+    assert!(matches!(
+        k.commit(again.clone()),
+        Err(TxnError::InFlight(_))
+    ));
+    assert!(matches!(k.checkpoint(), Err(TxnError::Invalid(_))));
+    assert_eq!(k.settle().unwrap(), 1);
+    // The record is in the log, so the id now counts as committed.
+    assert!(matches!(
+        k.commit(again),
+        Ok(lattice_core::Receipt::Duplicate)
+    ));
+    k.checkpoint().unwrap();
+    assert_eq!(k.settle().unwrap(), 0);
+}
+
+#[test]
+fn a_dropped_valid_transaction_next_to_a_foreign_one_is_settled_not_leaked() {
+    let (disk_a, clock) = fresh();
+    let (disk_b, _) = fresh();
+    let mut a = kernel(&disk_a, &clock);
+    let mut b = kernel(&disk_b, &clock);
+    let valid = logged(&mut a, 1);
+    let foreign = logged(&mut b, 2);
+    assert!(a.sync(vec![valid, foreign]).is_err());
+    assert_eq!(a.settle().unwrap(), 1);
+    a.checkpoint().unwrap();
+}
+
+#[test]
+fn reading_notices_a_missing_first_segment_or_a_damaged_header() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    for i in 0..12 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 40])).unwrap();
+    }
+    let mut segs: Vec<String> = disk
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .collect();
+    segs.sort();
+    assert!(segs.len() > 2);
+    assert!(k.read_from(1, 100).is_ok());
+
+    // A damaged header on the first segment.
+    let first = format!("wal/{}", segs[0]);
+    let mut bytes = disk.read(&first).unwrap();
+    bytes[0] ^= 0xFF;
+    let mut io = disk.clone();
+    io.truncate(&first, 0).unwrap();
+    io.append(&first, &bytes).unwrap();
+    io.sync(&first).unwrap();
+    assert!(k.read_from(1, 100).is_err());
+    bytes[0] ^= 0xFF;
+    io.truncate(&first, 0).unwrap();
+    io.append(&first, &bytes).unwrap();
+    io.sync(&first).unwrap();
+    assert!(k.read_from(1, 100).is_ok());
+
+    // The first segment vanishes while the log is open: the rest must not read as the whole log.
+    io.remove(&first).unwrap();
+    assert!(k.read_from(1, 100).is_err());
+}
+
+#[test]
+fn a_scrub_of_a_tail_full_of_look_alike_headers_terminates() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    let id = k.new_id();
+    k.commit(ChangeSet::new(id, vec![1; 40])).unwrap();
+    drop(k);
+    let seg = "wal/00000000000000000001.seg";
+    let mut io = disk.clone();
+    // 2 MiB of a pattern that looks like a header with a 65,536-byte length at every position.
+    let junk: Vec<u8> = [0u8, 0, 1, 0]
+        .iter()
+        .copied()
+        .cycle()
+        .take(2 << 20)
+        .collect();
+    io.append(seg, &junk).unwrap();
+    // The previous scan decoded at every byte and took minutes here; completing is the assertion.
+    let report = scrub(&disk, "wal").unwrap();
+    assert!(!report.issues.is_empty());
+}
+
+#[test]
+fn a_full_disk_refuses_commits_without_losing_or_inventing_acknowledged_ones() {
+    let profile = FaultProfile {
+        disk_full_after: Some(1500),
+        ..FaultProfile::clean()
+    };
+    let disk = SharedIo::new(SimIo::new(1, profile));
+    let clock = Rc::new(SimClock::new(1_000));
+    let mut k = kernel(&disk, &clock);
+    let (mut acked, mut refused) = (Vec::new(), 0);
+    for _ in 0..200 {
+        let id = k.new_id();
+        match k.commit(ChangeSet::new(id, vec![7; 60])) {
+            Ok(_) => acked.push(id),
+            Err(_) => refused += 1,
+        }
+        if k.is_poisoned() {
+            break;
+        }
+    }
+    assert!(
+        !acked.is_empty() && refused > 0,
+        "the disk never filled: {}",
+        acked.len()
+    );
+    drop(k);
+    // Whatever the kernel acknowledged is there after a restart, with no space problem now.
+    disk.set_profile(FaultProfile::clean());
+    let (_, rec) = Kernel::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(1),
+        &config(),
+    )
+    .unwrap();
+    let on_disk: Vec<_> = rec
+        .records
+        .iter()
+        .filter_map(|r| ChangeSet::decode(&r.payload).ok())
+        .map(|c| c.id)
+        .collect();
+    for id in &acked {
+        assert!(on_disk.contains(id), "an acknowledged change set vanished");
+    }
+    assert!(scrub(&disk, "wal").unwrap().is_clean());
+}

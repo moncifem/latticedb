@@ -90,7 +90,7 @@ fn first_lsn_of(name: &str) -> Option<u64> {
 /// hold records) and a length that fits before its checksum is computed, which bounds the work.
 /// The scan is conservative: an opaque payload that happens to embed a valid record makes recovery
 /// refuse, never silently lose data (see ADR 0007).
-fn valid_record_after(data: &[u8], from: usize, min_lsn: u64) -> bool {
+pub(crate) fn valid_record_after(data: &[u8], from: usize, min_lsn: u64) -> bool {
     let max_gap = (data.len() / RECORD_HEADER_LEN) as u64 + 1;
     let mut off = from + 1;
     while off + RECORD_HEADER_LEN <= data.len() {
@@ -391,6 +391,14 @@ impl<I: Io> Log<I> {
             .filter_map(|n| first_lsn_of(&n))
             .collect();
         firsts.sort_unstable();
+        // Segments are never removed, so a log with durable records starts at LSN 1. A missing
+        // first segment (or none at all) would otherwise read as a shorter, apparently whole log.
+        if self.durable_lsn > 0 && firsts.first() != Some(&1) {
+            return Err(LogError::Corrupt(format!(
+                "the log has durable records up to lsn {} but no segment starting at lsn 1",
+                self.durable_lsn
+            )));
+        }
         let mut out = Vec::new();
         // The last LSN decoded from any segment scanned so far; everything up to the durable LSN
         // must be reachable, in order, or the log is damaged and the reader must say so.
@@ -401,6 +409,11 @@ impl<I: Io> Log<I> {
                 continue;
             }
             let data = self.io.read(&seg_name(&self.dir, *first))?;
+            if check_header(&data) != HeaderCheck::Ok {
+                return Err(LogError::Corrupt(format!(
+                    "segment {first} has a damaged header"
+                )));
+            }
             let mut off = SEGMENT_HEADER_LEN;
             while off < data.len() && out.len() < max {
                 let Decoded::Record(r, next) = decode_record(&data, off) else {

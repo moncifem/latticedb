@@ -11,6 +11,7 @@ use crate::changeset::{
     ChangeSet, ChangeSetId, Checkpoint, TurnRef, decode_checkpoint, decode_turn_begin,
     encode_checkpoint, encode_turn_begin, state_crc,
 };
+use crate::crc::crc32c;
 use crate::hlc::HlcClock;
 use crate::log::{Log, LogError, RecoveryReport};
 use crate::metrics::{Metrics, names};
@@ -77,8 +78,9 @@ pub struct Kernel<I: Io, C: Clock, R: Rng> {
     /// Distinguishes this instance (and this recovery generation) from every other kernel.
     owner: u64,
     seen: BTreeSet<ChangeSetId>,
-    /// Logged but not yet applied change sets, with the LSN they were logged at.
-    in_flight: BTreeMap<ChangeSetId, u64>,
+    /// Logged but not yet applied change sets, with the LSN they were logged at and the checksum of the
+    /// record that was appended.
+    in_flight: BTreeMap<ChangeSetId, (u64, u32)>,
     turns: BTreeMap<u64, u64>,
     metrics: Metrics,
 }
@@ -193,10 +195,16 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         }
     }
 
-    /// The owner token comes from the injected RNG, so two kernels given the same seed share it.
-    /// A transaction must therefore also be one this kernel logged, at the LSN it claims.
-    fn check_logged_here(&self, id: &ChangeSetId, lsn: u64) -> Result<(), TxnError> {
-        if self.in_flight.get(id) == Some(&lsn) {
+    /// The owner token comes from the injected RNG, so two kernels given the same seed share it. A
+    /// transaction must therefore also be one this kernel logged: same id, same LSN and the same
+    /// record bytes. Two kernels that logged different bytes under a colliding id and LSN cannot be
+    /// confused; if the bytes are identical the transaction is the same change set.
+    fn check_logged_here(&self, cs: &ChangeSet, lsn: u64) -> Result<(), TxnError> {
+        let sum = cs
+            .encode()
+            .map(|b| crc32c(&b))
+            .map_err(|_| TxnError::ForeignTransaction)?;
+        if self.in_flight.get(&cs.id) == Some(&(lsn, sum)) {
             Ok(())
         } else {
             Err(TxnError::ForeignTransaction)
@@ -257,7 +265,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         cs.hlc = self.hlc.tick(self.clock.now_ms())?;
         let encoded = cs.encode()?;
         let lsn = self.log.append(RecordType::ChangeSet as u8, &encoded)?;
-        self.in_flight.insert(cs.id, lsn);
+        self.in_flight.insert(cs.id, (lsn, crc32c(&encoded)));
         Ok(txn.logged(cs, lsn))
     }
 
@@ -266,7 +274,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     pub fn sync(&mut self, txns: Vec<Txn<Logged>>) -> Result<Vec<Txn<Durable>>, TxnError> {
         for t in &txns {
             self.check_owner(t.owner)?;
-            self.check_logged_here(&t.cs.id, t.lsn)?;
+            self.check_logged_here(&t.cs, t.lsn)?;
         }
         let durable = self.log.sync()?;
         let mut out = Vec::with_capacity(txns.len());
@@ -282,7 +290,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// Reflects a durable change set in memory.
     pub fn apply(&mut self, txn: Txn<Durable>) -> Result<Txn<Applied>, TxnError> {
         self.check_owner(txn.owner)?;
-        self.check_logged_here(&txn.cs.id, txn.lsn)?;
+        self.check_logged_here(&txn.cs, txn.lsn)?;
         if txn.lsn > self.log.durable_lsn() {
             return Err(TxnError::NotDurable(txn.lsn));
         }
@@ -428,6 +436,25 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         Ok(())
     }
 
+    /// Settles change sets that were logged but whose transaction values were dropped before `apply`.
+    /// Their records are in the log, so after a sync they are durable and must count as committed:
+    /// this makes the log durable and moves every in-flight id into the committed set. Transactions
+    /// still held by a caller can no longer be applied afterwards. Returns how many were settled.
+    pub fn settle(&mut self) -> Result<usize, TxnError> {
+        let durable = self.log.sync()?;
+        let settled: Vec<ChangeSetId> = self
+            .in_flight
+            .iter()
+            .filter(|(_, (lsn, _))| *lsn <= durable)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &settled {
+            self.in_flight.remove(id);
+            self.seen.insert(*id);
+        }
+        Ok(settled.len())
+    }
+
     /// Writes a checkpoint record summarising the state so far and returns its LSN.
     ///
     /// A checkpoint summarises applied state, so it is refused while any change set is logged but
@@ -436,7 +463,8 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     pub fn checkpoint(&mut self) -> Result<u64, TxnError> {
         if !self.in_flight.is_empty() && !bugs::active(Bug::CheckpointIgnoresInFlight) {
             return Err(TxnError::Invalid(
-                "checkpoint with change sets in flight".into(),
+                "checkpoint with change sets in flight (finish them, or call settle for dropped ones)"
+                    .into(),
             ));
         }
         let cp = Checkpoint {
