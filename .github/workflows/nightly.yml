@@ -8,16 +8,39 @@ env:
   CI: "true"
 jobs:
   sim:
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [clean, crash-heavy, disk-faulty, hostile, everything]
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: simulation, ${{ matrix.profile }}, 250,000 seeds (1,000,000 per profile across the shards)
+        # The seed window moves every day, so a night never repeats the one before.
+        run: |
+          day=$(( $(date -u +%s) / 86400 ))
+          from=$(( day * 1000000 + ${{ matrix.shard }} * 250000 ))
+          echo "seeds $from to $(( from + 249999 ))"
+          cargo run -q --release -p lattice-testkit --bin sim_runner -- \
+            --seeds 250000 --steps 150 --from "$from" --profile ${{ matrix.profile }}
+  determinism-and-planted-bugs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: 1.99.1 }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: simulation, all fault profiles (200,000 seeds each)
-        run: cargo xtask sim --seeds 200000 --steps 150
       - name: planted-bug detection and determinism self-check
         run: cargo test -p lattice-testkit --release
+      - name: property tests at 1,000,000 cases (CRDT laws, codecs, clock)
+        run: cargo test -p lattice-core -p lattice-abi -p lattice-lsl --release
+        env:
+          PROPTEST_CASES: "1000000"
   fuzz:
     strategy:
       fail-fast: false
