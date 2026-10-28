@@ -66,6 +66,10 @@ impl SharedIo {
     pub fn rot_events(&self) -> u64 {
         self.0.borrow().rot_events()
     }
+    /// Appends refused for lack of space so far.
+    pub fn no_space_events(&self) -> u64 {
+        self.0.borrow().no_space_events()
+    }
     /// Trace fingerprint.
     pub fn trace_hash(&self) -> u64 {
         self.0.borrow().trace_hash()
@@ -145,6 +149,8 @@ pub struct Outcome {
     pub acked: usize,
     /// Power cuts that landed inside a durability protocol.
     pub power_cuts: u64,
+    /// Appends the simulated disk refused because it was full.
+    pub no_space: u64,
     /// The random workload stopped early because injected faults kept recovery from completing.
     /// The terminal check still ran, so this is lost workload, not a lost verdict.
     pub cut_short: bool,
@@ -319,6 +325,7 @@ pub fn run(seed: u64, profile: FaultProfile, steps: usize, segment_limit: u64) -
         recoveries: w.recoveries,
         acked: w.oracle.acked.len(),
         power_cuts: disk.power_cuts(),
+        no_space: disk.no_space_events(),
         cut_short,
         incomplete,
     }

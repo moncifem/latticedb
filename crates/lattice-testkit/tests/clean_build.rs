@@ -70,6 +70,24 @@ fn coverage_quotas_hold_and_censored_runs_are_counted() {
     }
 }
 
+/// The full-disk profiles must actually fill the disk in ordinary runs; limits larger than anything a
+/// workload writes would make the ENOSPC paths look covered while never running.
+#[test]
+fn the_full_disk_profiles_hit_a_full_disk() {
+    for (name, profile) in profiles() {
+        if profile.disk_full_after.is_none() {
+            continue;
+        }
+        let refused: u64 = (0..200)
+            .map(|seed| run(seed, profile, 150, 2048).no_space)
+            .sum();
+        assert!(
+            refused > 20,
+            "profile {name}: only {refused} appends met a full disk"
+        );
+    }
+}
+
 #[test]
 fn determinism_same_seed_same_trace() {
     for (name, profile) in profiles() {

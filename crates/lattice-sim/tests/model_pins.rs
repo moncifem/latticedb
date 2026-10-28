@@ -27,13 +27,13 @@ fn the_profiles_are_what_their_names_say() {
     let d = FaultProfile::disk_faulty();
     assert!(!d.torn_writes && !d.garbage_tail && !d.lose_unsynced_dirs);
     assert_eq!((d.sync_error_ppm, d.append_error_ppm), (20_000, 20_000));
-    assert_eq!(d.disk_full_after, Some(512 * 1024));
+    assert_eq!(d.disk_full_after, Some(24 * 1024));
     assert_eq!(d.bit_rot_ppm, 0);
 
     let e = FaultProfile::everything();
     assert!(e.torn_writes && e.garbage_tail && e.lose_unsynced_dirs);
     assert_eq!((e.sync_error_ppm, e.append_error_ppm), (15_000, 15_000));
-    assert_eq!(e.disk_full_after, Some(1024 * 1024));
+    assert_eq!(e.disk_full_after, Some(16 * 1024));
     assert_eq!(e.bit_rot_ppm, 5_000);
 
     let t = e.without_transient_faults();

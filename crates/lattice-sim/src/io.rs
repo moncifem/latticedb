@@ -50,7 +50,7 @@ impl FaultProfile {
         Self {
             sync_error_ppm: 20_000,
             append_error_ppm: 20_000,
-            disk_full_after: Some(512 * 1024),
+            disk_full_after: Some(24 * 1024),
             ..Self::default()
         }
     }
@@ -63,7 +63,7 @@ impl FaultProfile {
             lose_unsynced_dirs: true,
             sync_error_ppm: 15_000,
             append_error_ppm: 15_000,
-            disk_full_after: Some(1024 * 1024),
+            disk_full_after: Some(16 * 1024),
             bit_rot_ppm: 5_000,
         }
     }
@@ -124,6 +124,7 @@ pub struct SimIo {
     profile: FaultProfile,
     trace: TraceHash,
     rot_events: u64,
+    no_space_events: u64,
     power_cut_after: Option<u64>,
     powered_off: bool,
     power_cuts: u64,
@@ -146,6 +147,7 @@ impl SimIo {
             profile,
             trace: TraceHash::default(),
             rot_events: 0,
+            no_space_events: 0,
             power_cut_after: None,
             powered_off: false,
             power_cuts: 0,
@@ -161,6 +163,11 @@ impl SimIo {
     /// How many bits bit rot has flipped so far. Durability can only be promised while this is 0.
     pub fn rot_events(&self) -> u64 {
         self.rot_events
+    }
+
+    /// How many appends were refused because the simulated disk was full.
+    pub fn no_space_events(&self) -> u64 {
+        self.no_space_events
     }
 
     /// How many power cuts hit in the middle of an operation sequence.
@@ -373,6 +380,7 @@ impl Io for SimIo {
             && self.used_bytes() + data.len() > limit
         {
             self.trace.write(b"!full");
+            self.no_space_events += 1;
             return Err(IoError::NoSpace);
         }
         self.files
