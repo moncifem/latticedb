@@ -177,6 +177,29 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
         self.writes.insert(key, None);
     }
 
+    /// Checks the conflict rule without committing: fails if another change set wrote any row this
+    /// transaction wrote after its snapshot (first committer wins).
+    pub fn check(&self, table: &Table<K, V>) -> Result<(), MvccError> {
+        for key in self.writes.keys() {
+            if let Some(newer) = table.newest_lsn(key)
+                && newer > self.snapshot.as_of
+            {
+                return Err(MvccError::Conflict { newer_lsn: newer });
+            }
+        }
+        Ok(())
+    }
+
+    /// The buffered writes in key order; `None` is a deletion.
+    pub fn into_writes(self) -> Vec<(K, Option<V>)> {
+        self.writes.into_iter().collect()
+    }
+
+    /// Whether the transaction has written nothing.
+    pub fn is_read_only(&self) -> bool {
+        self.writes.is_empty()
+    }
+
     /// Commits at `lsn` for change set `cs`. Fails, changing nothing, if another change set wrote
     /// any row this transaction wrote after its snapshot (first committer wins).
     pub fn commit(
