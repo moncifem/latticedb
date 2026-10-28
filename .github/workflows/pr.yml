@@ -40,7 +40,7 @@ jobs:
           PROPTEST_CASES: ${{ matrix.cases }}
   gate-macos:
     # Not part of the pull request gate: macOS runners queue for minutes. It runs on every push to
-    # main, so a macOS-only failure is caught right after the merge, and nightly covers it too.
+    # main, so a macOS-only failure is caught right after the merge.
     name: gate (macos-latest)
     if: github.event_name == 'push'
     runs-on: macos-latest
