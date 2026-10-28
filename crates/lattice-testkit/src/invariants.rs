@@ -197,7 +197,8 @@ impl Invariant for NoDuplicateIds {
     }
 }
 
-/// I12: no write from a turn is recorded after a newer turn of its session began.
+/// I12: a write is recorded only while its turn is the current turn of its session: not after a newer
+/// turn began, and not for a turn (or a session) that has not begun.
 pub struct TurnsFenced;
 impl Invariant for TurnsFenced {
     fn id(&self) -> &'static str {
@@ -207,15 +208,20 @@ impl Invariant for TurnsFenced {
         let mut out = Vec::new();
         for (lsn, cs) in &view.change_sets {
             let Some(t) = cs.turn else { continue };
-            let superseded = view
+            // The turn a write belongs to must be the session's current turn when it is recorded:
+            // not superseded by a newer one, and not one that has not begun.
+            let current = view
                 .turn_begins
                 .iter()
-                .any(|(bl, b)| b.session == t.session && b.turn > t.turn && bl < lsn);
+                .filter(|(bl, b)| b.session == t.session && bl < lsn)
+                .map(|(_, b)| b.turn)
+                .max();
+            let superseded = current != Some(t.turn);
             if superseded {
                 out.push(v(
                     "I12",
                     format!(
-                        "{} from turn {} was recorded after a newer turn began",
+                        "{} from turn {} was recorded outside its session's current turn",
                         cs.id, t.turn
                     ),
                 ));
@@ -335,6 +341,43 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(check_all(&fenced, &Oracle::default())[0].invariant, "I12");
+    }
+
+    #[test]
+    fn a_write_for_a_turn_that_never_began_or_has_not_begun_yet_is_flagged() {
+        let turn = |session, turn| TurnRef { session, turn };
+        let begin = |lsn, t| (lsn, t);
+        let view = |begins, write_turn| LogView {
+            turn_begins: begins,
+            change_sets: vec![(5, cs(5, 1, Some(write_turn)))],
+            ..Default::default()
+        };
+        // No turn ever began for the session.
+        assert!(!check_all(&view(vec![], turn(1, 1)), &Oracle::default()).is_empty());
+        // The turn exists, but a later one is the current one... and a future turn is not current.
+        assert!(
+            !check_all(
+                &view(vec![begin(1, turn(1, 1))], turn(1, 2)),
+                &Oracle::default()
+            )
+            .is_empty()
+        );
+        // A begin that comes after the write does not count.
+        assert!(
+            !check_all(
+                &view(vec![begin(9, turn(1, 1))], turn(1, 1)),
+                &Oracle::default()
+            )
+            .is_empty()
+        );
+        // The current turn is fine.
+        assert!(
+            check_all(
+                &view(vec![begin(1, turn(1, 1))], turn(1, 1)),
+                &Oracle::default()
+            )
+            .is_empty()
+        );
     }
 
     #[test]

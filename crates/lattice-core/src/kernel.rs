@@ -431,6 +431,25 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         Ok(())
     }
 
+    /// Settles change sets that were logged but whose transaction values were dropped before `apply`.
+    /// Their records are in the log, so after a sync they are durable and must count as committed:
+    /// this makes the log durable and moves every in-flight id into the committed set. Transactions
+    /// still held by a caller can no longer be applied afterwards. Returns how many were settled.
+    pub fn settle(&mut self) -> Result<usize, TxnError> {
+        let durable = self.log.sync()?;
+        let settled: Vec<ChangeSetId> = self
+            .in_flight
+            .iter()
+            .filter(|(_, (lsn, _))| *lsn <= durable)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &settled {
+            self.in_flight.remove(id);
+            self.seen.insert(*id);
+        }
+        Ok(settled.len())
+    }
+
     /// Writes a checkpoint record summarising the state so far and returns its LSN.
     ///
     /// A checkpoint summarises applied state, so it is refused while any change set is logged but
@@ -439,7 +458,8 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     pub fn checkpoint(&mut self) -> Result<u64, TxnError> {
         if !self.in_flight.is_empty() && !bugs::active(Bug::CheckpointIgnoresInFlight) {
             return Err(TxnError::Invalid(
-                "checkpoint with change sets in flight".into(),
+                "checkpoint with change sets in flight (finish them, or call settle for dropped ones)"
+                    .into(),
             ));
         }
         let cp = Checkpoint {

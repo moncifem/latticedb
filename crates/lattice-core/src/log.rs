@@ -90,7 +90,7 @@ fn first_lsn_of(name: &str) -> Option<u64> {
 /// hold records) and a length that fits before its checksum is computed, which bounds the work.
 /// The scan is conservative: an opaque payload that happens to embed a valid record makes recovery
 /// refuse, never silently lose data (see ADR 0007).
-fn valid_record_after(data: &[u8], from: usize, min_lsn: u64) -> bool {
+pub(crate) fn valid_record_after(data: &[u8], from: usize, min_lsn: u64) -> bool {
     let max_gap = (data.len() / RECORD_HEADER_LEN) as u64 + 1;
     let mut off = from + 1;
     while off + RECORD_HEADER_LEN <= data.len() {

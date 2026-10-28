@@ -429,6 +429,24 @@ fn lifecycle(w: &mut World, k: &mut K) {
             "a checkpoint was accepted with change sets in flight".into(),
         );
     }
+    // Sometimes the caller loses its transactions after logging them. The records are in the log, so
+    // the ids are in doubt until the kernel settles them; they must then block nothing.
+    if !logged.is_empty() && w.rng.below(4) == 0 {
+        for (id, _) in &logged {
+            w.in_doubt.insert(*id);
+        }
+        drop(logged);
+        let _ = k.settle();
+        if k.checkpoint().is_err() && !k.is_poisoned() {
+            violation(
+                w,
+                "I9",
+                "a checkpoint was refused after every in-flight change set was settled".into(),
+            );
+        }
+        check_derived_state(w, k);
+        return;
+    }
     let (ids, txns): (Vec<ChangeSetId>, Vec<_>) = logged.into_iter().unzip();
     match k.sync(txns) {
         Ok(durable) => {
