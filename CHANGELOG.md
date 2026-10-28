@@ -33,7 +33,10 @@ Not published. This is the version under development; the first published build 
 
 - Transactions from another kernel could be promoted when kernels shared an RNG seed.
 - A checkpoint taken with an unapplied change set made recovery reject the log.
-- `read_from` returned a short history instead of an error when the log was damaged.
+- `read_from` returned a short history instead of an error when the log was damaged, or when its leading segment was missing.
+- A kernel with the same seed and first id could still take another kernel's transaction; in-flight transactions are now matched by id, position and content checksum.
+- `lattice ledger check` read a fractional count as its integer prefix and could overflow on a huge one.
+- Nightly could publish a different commit than the one it tested; one resolved commit is now used throughout, and the container image waits for the release.
 
 [Unreleased]: https://github.com/moncifem/latticedb/compare/v0.1.0-alpha.1...HEAD
 [0.1.0-alpha.0]: https://github.com/moncifem/latticedb/commits/main
