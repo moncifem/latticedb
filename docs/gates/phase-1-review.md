@@ -21,8 +21,20 @@ Signatures: two maintainers sign when the table is empty or every row has a waiv
 
 ## Waivers
 
-None granted. Proposed: E1-14 for I3, I7, I10, I11, I14, owner core maintainers, expiry at the gate of
-the phase that introduces each invariant.
+None granted yet; a maintainer grants them when signing. Proposed for E1-14, because the invariant is
+about a component that does not exist until the named phase. Each waiver expires at that phase's gate,
+where the invariant needs its checker in the simulator and a row in the traceability matrix.
+
+| Invariant | Why it cannot be checked now | Owner | Expires at the gate of |
+|---|---|---|---|
+| I3 snapshot isolation | needs engines with snapshots (MVCC) | core maintainers | Phase 2 |
+| I7 no policy bypass | needs the policy layer and its read and write paths | identity and policy maintainers | Phase 4 |
+| I10 shredding | needs entity keys and derived data | identity and policy maintainers | Phase 4 (blob content at Phase 5) |
+| I11 blob integrity | needs the blob engine | engines maintainers | Phase 5 |
+| I14 time answers are exact | needs the temporal index to compare with a log scan | engines maintainers | Phase 7 |
+
+I5, I8 and I13 have named tests today but no simulator checker; they are listed in the traceability
+matrix and are not waived.
 
 ## North-star re-run
 
