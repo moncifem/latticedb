@@ -10,8 +10,8 @@ use lattice_testkit::scenario::{profiles, run};
 /// fault profile; all engines join in phase 2.
 #[test]
 fn ns1_crash_safety_at_the_log_level() {
-    let (mut runs, mut unverified) = (0u32, 0u32);
     for (name, profile) in profiles() {
+        let mut unverified = 0u32;
         for seed in 0..40 {
             let out = run(seed, profile, 120, 2048);
             assert!(
@@ -19,14 +19,14 @@ fn ns1_crash_safety_at_the_log_level() {
                 "profile {name} seed {seed}: {:?}",
                 out.violations.first()
             );
-            runs += 1;
             unverified += u32::from(out.incomplete);
         }
+        // Per profile, so one profile cannot hide behind the others.
+        assert!(
+            unverified * 2 < 40,
+            "profile {name}: {unverified} of 40 runs were not verified"
+        );
     }
-    assert!(
-        unverified * 2 < runs,
-        "{unverified} of {runs} runs were not verified"
-    );
 }
 
 #[test]

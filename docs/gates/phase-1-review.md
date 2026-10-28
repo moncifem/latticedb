@@ -37,7 +37,7 @@ the phase that introduces each invariant.
 |---|---|
 | R2 simulation discipline | Mitigations held: 21 planted bugs detected, determinism checked at 10,000 seeds per profile. An independent review still found two kernel bugs the simulator could not reach because the workload did not drive the manual transaction lifecycle; the workload now does. Early signal stays: any bug found outside the simulator |
 | R8 performance | Baselines exist only per machine. Raised to high until a baseline exists on the CI runner class |
-| R13 (new) evidence that waits on time | Seven-night and 24-hour criteria cannot be met by effort. Mitigation: start the clocks early, keep results in the ledger |
+| R13 (new) evidence that waits on time | Seven-night and 24-hour criteria cannot be met by effort. Mitigation: start the clocks early (nightly and weekly jobs run now). Results are kept as workflow runs and a persisted fuzz corpus; recording nightly runs in the ledger is not done yet |
 | R14 (new) recovery memory | `Log::open` returns every record in memory, so recovery memory grows with the log. Mitigation: streaming recovery in Phase 2 before engines depend on it |
 | R15 (new) release pipeline drift | Third-party actions are pinned by hash and bumped by Dependabot. Mitigation: re-run the nightly build after every action bump |
 

@@ -14,7 +14,7 @@ Not published. This is the version under development; the first published build 
 
 ### Added
 
-- Deterministic simulation with storage and network fault injection, and invariant checkers I1 to I14.
+- Deterministic simulation with storage and network fault injection, and simulator checks for the invariants that apply at the log level (I1, I2, I4, I6, I9, I12). The rest (I3, I5, I7, I8, I10, I11, I13, I14) have tests or belong to later phases; see the traceability matrix.
 - Write-ahead log (format v1) with group commit, segment rotation, torn-tail recovery and a bounded
   commit pipeline with backpressure.
 - Kernel with typestate transactions, change set dedupe, turn fencing, hybrid logical clock

@@ -474,8 +474,20 @@ fn check_derived_state(w: &mut World, k: &K) {
     }
     if let Ok(report) = k.scrub() {
         for issue in &report.issues {
-            if let Issue::DerivedStateMismatch { what } = issue {
-                violation(w, "I9", what.clone());
+            // Logical findings are violations wherever they show up. Physical damage (torn or rotted
+            // segments) is injected on purpose by the fault profiles, so it is not one here.
+            match issue {
+                Issue::DerivedStateMismatch { what } => violation(w, "I9", what.clone()),
+                Issue::DuplicateId { .. } => {
+                    violation(w, "I9", format!("scrub found {issue:?} during a run"));
+                }
+                Issue::HlcNotIncreasing { .. } => {
+                    violation(w, "I4", format!("scrub found {issue:?} during a run"));
+                }
+                Issue::FencedWriteLogged { .. } => {
+                    violation(w, "I12", format!("scrub found {issue:?} during a run"));
+                }
+                _ => {}
             }
         }
     }
