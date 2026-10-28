@@ -17,7 +17,7 @@ jobs:
         with: { tool: cargo-mutants }
       - name: mutation testing of the core crates (a surviving mutant fails the run)
         run: >
-          cargo mutants -p lattice-core -p lattice-lsl --test-workspace=true
+          cargo mutants -p lattice-core -p lattice-lsl -p lattice-abi -p lattice-evalkit --test-workspace=true
           --timeout 120 --no-shuffle -j 2 --output target/mutants
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
