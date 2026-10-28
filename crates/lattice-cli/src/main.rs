@@ -109,6 +109,37 @@ impl SimRun {
     }
 }
 
+/// The last seven readable simulation runs: how many violations they hold in total, and a warning
+/// when the unverified share of the latest run is well above that of the runs before it.
+fn trend(sims: &[Option<SimRun>]) -> String {
+    let recent: Vec<&SimRun> = sims
+        .iter()
+        .rev()
+        .filter_map(Option::as_ref)
+        .take(7)
+        .collect();
+    let runs: u64 = recent.iter().map(|r| r.runs).sum();
+    let failing: u64 = recent.iter().map(|r| r.failing).sum();
+    let mut out = format!(
+        "last {} run(s): {runs} scenarios, {failing} violation(s) in total\n",
+        recent.len()
+    );
+    if let Some((latest, earlier)) = recent.split_first() {
+        let share = |rs: &[&SimRun]| {
+            let total: u64 = rs.iter().map(|r| r.runs).sum();
+            let inc: u64 = rs.iter().map(|r| r.incomplete).sum();
+            (total > 0).then(|| inc as f64 / total as f64)
+        };
+        if let (Some(now), Some(before)) = (share(&[latest]), share(earlier))
+            && now > 0.1
+            && now > 2.0 * before
+        {
+            out.push_str("WARN: the unverified share is rising\n");
+        }
+    }
+    out
+}
+
 /// Scorecard thresholds over the ledger: the latest simulation run must pass them, and the report
 /// says how many recent runs in a row passed every threshold.
 fn ledger_check<I: Io>(io: I) -> Result<(String, bool), String> {
@@ -134,6 +165,7 @@ fn ledger_check<I: Io>(io: I) -> Result<(String, bool), String> {
          {streak} clean simulation run(s) in a row\n",
         latest.runs, latest.failing, latest.incomplete
     );
+    out.push_str(&trend(&sims));
     let failures = latest.failures();
     for f in &failures {
         out.push_str(&format!("FAIL: {f}\n"));
@@ -349,6 +381,29 @@ mod tests {
             let (text, ok) = ledger_check(ledger_with(&[bad])).unwrap();
             assert!(!ok, "{bad}: {text}");
         }
+    }
+
+    #[test]
+    fn ledger_check_reports_the_trend_and_warns_when_unverified_runs_rise() {
+        let steady = ledger_with(&[
+            "{\"runs\":100,\"failing\":0,\"incomplete\":5}",
+            "{\"runs\":100,\"failing\":0,\"incomplete\":5}",
+        ]);
+        let (text, ok) = ledger_check(steady).unwrap();
+        assert!(
+            ok && text.contains("last 2 run(s): 200 scenarios, 0 violation(s)"),
+            "{text}"
+        );
+        assert!(!text.contains("WARN"), "{text}");
+        let rising = ledger_with(&[
+            "{\"runs\":100,\"failing\":0,\"incomplete\":2}",
+            "{\"runs\":100,\"failing\":0,\"incomplete\":30}",
+        ]);
+        let (text, ok) = ledger_check(rising).unwrap();
+        assert!(
+            ok && text.contains("WARN: the unverified share is rising"),
+            "{text}"
+        );
     }
 
     #[test]
