@@ -50,9 +50,22 @@ pub enum Bug {
     HlcCounterStuck,
     /// A checkpoint is written while change sets are logged but not applied (recovery then rejects the log).
     CheckpointIgnoresInFlight,
+    /// The row store commits without checking for a newer write to the same row (lost update).
+    RowConflictCheckSkipped,
+    /// The row store applies only the first write of a change set in memory (partial visibility).
+    RowPartialApply,
+    /// Row recovery drops deletions, so deleted rows come back after a restart (durability).
+    RowRecoveryDropsDeletes,
 }
 
 impl Bug {
+    /// Defects in the row store, detected by the row simulation rather than the log simulation.
+    pub const ROW: [Bug; 3] = [
+        Bug::RowConflictCheckSkipped,
+        Bug::RowPartialApply,
+        Bug::RowRecoveryDropsDeletes,
+    ];
+
     /// Every defect, for the detection suite.
     pub const ALL: [Bug; 21] = [
         Bug::SkipFsync,

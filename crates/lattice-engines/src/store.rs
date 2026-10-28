@@ -10,6 +10,7 @@
 use crate::mvcc::{MvccError, Snapshot, Table, Tx};
 use crate::rowops::{self, RowKey, RowOpsError};
 use lattice_abi::{Classify, ErrorClass};
+use lattice_core::bugs::{self, Bug};
 use lattice_core::changeset::ChangeSet;
 use lattice_core::record::RecordType;
 use lattice_core::{Config, Kernel, Receipt, TxnError};
@@ -99,7 +100,10 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 return; // another engine's change set
             }
             match rowops::decode(&cs.payload) {
-                Ok(writes) => {
+                Ok(mut writes) => {
+                    if bugs::active(Bug::RowRecoveryDropsDeletes) {
+                        writes.retain(|(_, value)| value.is_some());
+                    }
                     if let Err(e) = table.apply(r.lsn, cs.id, writes) {
                         failure = Some(RowError::Corrupt(format!("lsn {}: {e:?}", r.lsn)));
                     }
@@ -184,15 +188,22 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         if tx.is_read_only() {
             return Ok(tx.snapshot().as_of);
         }
-        tx.check(&self.table).map_err(|e| match e {
-            MvccError::Conflict { newer_lsn } => RowError::Conflict { newer_lsn },
-            MvccError::OutOfOrder { .. } => RowError::Stale,
-        })?;
+        if !bugs::active(Bug::RowConflictCheckSkipped) {
+            tx.check(&self.table).map_err(|e| match e {
+                MvccError::Conflict { newer_lsn } => RowError::Conflict { newer_lsn },
+                MvccError::OutOfOrder { .. } => RowError::Stale,
+            })?;
+        }
         let writes = tx.into_writes();
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {
             Ok(Receipt::Recorded { lsn, .. }) => {
+                let writes: Vec<_> = if bugs::active(Bug::RowPartialApply) {
+                    writes.into_iter().take(1).collect()
+                } else {
+                    writes
+                };
                 self.table
                     .apply(lsn, id, writes)
                     .map_err(|e| RowError::Corrupt(format!("apply after commit: {e:?}")))?;
