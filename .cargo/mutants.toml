@@ -20,3 +20,8 @@ exclude_re = [
     # `clean()` is `Self::default()`, so replacing its body with the default changes nothing.
     "replace FaultProfile::clean -> Self with Default::default\\(\\)",
 ]
+
+# The benchmark bodies only choose iteration counts and time loops; their output is a timing, which
+# varies by machine, so no test can pin it. A separate test checks that every benchmark reports a
+# positive, finite time.
+exclude_globs = ["crates/lattice-bench/src/suite.rs"]

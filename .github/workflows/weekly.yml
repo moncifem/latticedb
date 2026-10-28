@@ -41,15 +41,23 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
         with: { tool: cargo-mutants }
-      - name: mutation testing of the core crates (a surviving mutant fails the run)
+      - name: mutation testing of crates whose tests live in other crates (a surviving mutant fails the run)
         run: >
-          cargo mutants -p lattice-core -p lattice-lsl -p lattice-abi -p lattice-evalkit -p lattice-sim -p lattice-seams --test-workspace=true
+          cargo mutants -p lattice-core -p lattice-lsl --test-workspace=true
           --timeout 120 --no-shuffle -j 2 --output target/mutants
+      - if: always()
+        name: mutation testing of crates with their own tests (a surviving mutant fails the run)
+        run: >
+          cargo mutants -p lattice-abi -p lattice-evalkit -p lattice-sim -p lattice-seams
+          -p lattice-cli -p lattice-bench -p lattice-sdk --test-workspace=false
+          --timeout 120 --no-shuffle -j 2 --output target/mutants-crates
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: mutants
-          path: target/mutants/mutants.out
+          path: |
+            target/mutants/mutants.out
+            target/mutants-crates/mutants.out
           if-no-files-found: ignore
   io-probe:
     runs-on: ubuntu-latest
