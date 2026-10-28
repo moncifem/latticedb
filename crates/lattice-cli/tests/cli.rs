@@ -196,7 +196,19 @@ fn sim_entry(dir: &Path, runs: u64, failing: u64, incomplete: u64) {
     let json = format!(
         "{{\"runs\":{runs},\"failing\":{failing},\"cut_short\":0,\"incomplete\":{incomplete}}}"
     );
-    ledger::append(StdIo::new(dir), SystemClock, OsRng, "sim", &json).unwrap();
+    // Tests run in parallel threads of one process. While another thread forks to start the binary,
+    // the child briefly shares this process's open files, so a lock that was just released can still
+    // look held. That is a property of flock and fork, not of the ledger: retry for a moment.
+    for _ in 0..200 {
+        match ledger::append(StdIo::new(dir), SystemClock, OsRng, "sim", &json) {
+            Ok(_) => return,
+            Err(e) if format!("{e:?}").contains("locked by another writer") => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => panic!("cannot append to the ledger: {e:?}"),
+        }
+    }
+    panic!("the ledger stayed locked");
 }
 
 #[test]
