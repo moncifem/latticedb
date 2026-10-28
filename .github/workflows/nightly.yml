@@ -84,9 +84,9 @@ jobs:
         with: { toolchain: nightly, components: rust-src }
       - name: AddressSanitizer (memory errors and leaks) over the unit and simulator tests
         run: >
-          cargo test -p lattice-abi -p lattice-core -p lattice-sim --lib
+          cargo +nightly test -p lattice-abi -p lattice-core -p lattice-sim --lib
           --target x86_64-unknown-linux-gnu -Zbuild-std &&
-          cargo test -p lattice-testkit --test scrub --test kernel_lifecycle --test power_cut_sweep
+          cargo +nightly test -p lattice-testkit --test scrub --test kernel_lifecycle --test power_cut_sweep
           --test convergence --test fuzz_lite --target x86_64-unknown-linux-gnu -Zbuild-std
         env:
           RUSTFLAGS: "-Zsanitizer=address"
