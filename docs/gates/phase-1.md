@@ -71,6 +71,9 @@ no verdict): they are reported, capped by a quota test, and not counted as passe
 
 ## Not built
 
-Reader API with snapshot cursors and checkpoints, mutation testing, TLA+ models beyond the limited
-commit model (TLC has not been run), the runtime spike, the north-star pending specs, long fuzz runs
-(24 hours per target), the nightly simulation volume, and the final gate review.
+Snapshot cursors over derived state and checkpoint-based recovery start (both need engine state from
+phase 2), mutation testing of the remaining crates, the runtime spike, long fuzz runs (24 hours per
+target), the nightly simulation volume, and the final gate review.
+
+North-star scenarios: NS1 runs at the log level in `crates/lattice-testkit/tests/north_star.rs`; NS2 to
+NS8 exist there as pending specs with their owning phase and are listed by `cargo xtask scorecard`.

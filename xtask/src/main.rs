@@ -172,7 +172,42 @@ fn scorecard(args: &[&str]) -> Result<(), String> {
             "--dir",
             dir,
         ],
-    )
+    )?;
+    let mut pending = Vec::new();
+    collect_pending(&repo_root().join("crates"), &mut pending);
+    pending.sort();
+    println!("pending specs ({}):", pending.len());
+    for p in &pending {
+        println!("  {p}");
+    }
+    Ok(())
+}
+
+/// Tests marked `#[ignore = "phase N: ..."]` are specifications waiting for a later phase.
+fn collect_pending(dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_pending(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in text.lines() {
+                if let Some(rest) = line.trim().strip_prefix("#[ignore = \"phase ") {
+                    out.push(
+                        rest.trim_end_matches(")]")
+                            .trim_end_matches(']')
+                            .trim_end_matches('"')
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn bench(args: &[&str]) -> Result<(), String> {
