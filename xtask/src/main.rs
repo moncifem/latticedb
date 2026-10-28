@@ -155,6 +155,26 @@ fn sim(args: &[&str]) -> Result<(), String> {
 }
 
 /// Benchmarks: `cargo xtask bench [--profile NAME] [--tolerance F] [--write-baseline]`.
+/// Prints the runs recorded in a results ledger (default `target/ledger`). Record runs with
+/// `cargo xtask sim --ledger target/ledger`; the directory must exist.
+fn scorecard(args: &[&str]) -> Result<(), String> {
+    let dir = args.first().copied().unwrap_or("target/ledger");
+    run(
+        "cargo",
+        &[
+            "run",
+            "-q",
+            "-p",
+            "lattice-cli",
+            "--",
+            "ledger",
+            "show",
+            "--dir",
+            dir,
+        ],
+    )
+}
+
 fn bench(args: &[&str]) -> Result<(), String> {
     let mut a: Vec<&str> = vec![
         "run",
@@ -224,9 +244,8 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         "traceability" => checks::traceability(),
         "sim" => sim(&rest),
         "bench" => bench(&rest),
-        "fuzz" | "eval" | "scorecard" | "doctor" | "release" | "gen" | "gate" => {
-            not_implemented(cmd)
-        }
+        "scorecard" => scorecard(&rest),
+        "fuzz" | "eval" | "doctor" | "release" | "gen" | "gate" => not_implemented(cmd),
         "help" | "--help" | "-h" => {
             println!(
                 "commands: ci fmt lint test deny docs setup commit-lint lint-conventions \

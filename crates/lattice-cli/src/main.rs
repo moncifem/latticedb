@@ -3,6 +3,7 @@
 //! Layer L7. Must not: contain server logic.
 //!
 //! `lattice doctor [--dir DATA_DIR] [--wal NAME]` verifies a data directory without modifying it.
+//! `lattice ledger show [--dir DIR]` lists the runs recorded in a results ledger.
 #![forbid(unsafe_code)]
 #![allow(
     clippy::disallowed_methods,
@@ -11,8 +12,9 @@
     clippy::print_stderr
 )]
 
+use lattice_core::ledger;
 use lattice_core::scrub::{Issue, scrub};
-use lattice_seams::{Io, StdIo};
+use lattice_seams::{Io, OsRng, StdIo, SystemClock};
 use std::process::ExitCode;
 
 /// Scrubs the log in `wal` and returns the report text and whether the log is healthy.
@@ -56,6 +58,19 @@ fn arg(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+fn ledger_show<I: Io>(io: I) -> Result<String, String> {
+    let entries = ledger::read(io, SystemClock, OsRng).map_err(|e| format!("{e:?}"))?;
+    let mut out = String::new();
+    for e in &entries {
+        out.push_str(&format!(
+            "{:>6}  {:>13}  {:<6} {}\n",
+            e.lsn, e.recorded_ms, e.kind, e.json
+        ));
+    }
+    out.push_str(&format!("{} entries\n", entries.len()));
+    Ok(out)
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -70,8 +85,22 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         }
+        Some("ledger") if args.get(1).map(String::as_str) == Some("show") => {
+            let dir = arg(&args, "--dir").unwrap_or_else(|| ".".into());
+            match ledger_show(StdIo::new(dir)) {
+                Ok(text) => {
+                    print!("{text}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("cannot read the ledger: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         _ => {
             eprintln!("usage: lattice doctor [--dir DATA_DIR] [--wal NAME]");
+            eprintln!("       lattice ledger show [--dir DIR]");
             ExitCode::from(2)
         }
     }
@@ -98,6 +127,22 @@ mod tests {
         }
         drop(k);
         disk
+    }
+
+    #[test]
+    fn ledger_show_lists_recorded_runs() {
+        let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
+        let clock = SharedClock(Rc::new(SimClock::new(7)));
+        for n in 1..=2u64 {
+            let json = format!("{{\"runs\":{n}}}");
+            ledger::append(disk.clone(), clock.clone(), SeededRng::new(n), "sim", &json).unwrap();
+        }
+        let text = ledger_show(disk).unwrap();
+        assert!(
+            text.contains("{\"runs\":1}") && text.contains("{\"runs\":2}"),
+            "{text}"
+        );
+        assert!(text.ends_with("2 entries\n"), "{text}");
     }
 
     #[test]
