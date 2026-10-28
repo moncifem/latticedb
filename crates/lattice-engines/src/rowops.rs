@@ -157,6 +157,13 @@ mod tests {
         }
 
         #[test]
+        fn arbitrary_bytes_never_panic_and_a_success_re_encodes_identically(bytes in proptest::collection::vec(any::<u8>(), 0..200)) {
+            if let Ok(ws) = decode(&bytes) {
+                prop_assert_eq!(encode(&ws).unwrap(), bytes);
+            }
+        }
+
+        #[test]
         fn every_truncation_is_an_error(ws in proptest::collection::vec(write(), 1..5)) {
             let bytes = encode(&ws).unwrap();
             for cut in 0..bytes.len() {
