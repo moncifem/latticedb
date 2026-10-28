@@ -23,4 +23,7 @@ Spec == Init /\ [][Next]_vars
 
 NeverGoesBack == \A i, j \in 1..Len(log) : i < j => log[i] <= log[j]
 NothingFromTheFuture == \A i \in 1..Len(log) : log[i] <= cur
+
+\* The fencing rule itself: whatever is accepted carries the turn that is current at that moment.
+AcceptOnlyCurrent == [][ Len(log') > Len(log) => log'[Len(log')] = cur ]_vars
 ====

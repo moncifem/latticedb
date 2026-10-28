@@ -15,7 +15,7 @@ Init == pt = 0 /\ l = 0 /\ c = 0 /\ issued = 0
 \* The physical clock moves anywhere in range, including backwards.
 Wall == pt' \in 0..MaxP /\ UNCHANGED <<l, c, issued>>
 
-Tick == /\ issued < 6
+Tick == /\ issued < 8
         /\ IF pt > l
               THEN l' = pt /\ c' = 0
               ELSE /\ c < MaxC /\ l' = l /\ c' = c + 1
@@ -24,6 +24,9 @@ Tick == /\ issued < 6
 Next == Wall \/ Tick
 Spec == Init /\ [][Next]_vars
 
-\* Every tick strictly advances the clock pair.
+CounterBounded == c <= MaxC
+
+\* Every tick strictly advances the clock pair. At MaxC with a stalled physical clock the tick is refused,
+\* so no timestamp is issued rather than a repeated one.
 StrictlyIncreasing == [][ (issued' = issued + 1) => Gt(l', c', l, c) ]_vars
 ====
