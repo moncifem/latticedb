@@ -1,12 +1,15 @@
 # SQL subset
 
-Status: draft (Phase 2, requirement P2-09). The subset is **declared**: what is listed here is
-supported and tested; everything else fails with a stable error, never with a wrong answer. Adding to
-the subset is a documented change with tests in the same pull request. The Phase 2 conformance suite
-(`sqllogictest`, differential tests against PostgreSQL on the constructs below) is generated from this
-file.
+Status: draft (Phase 2, requirement P2-09). This is the **target** SQL subset, declared before
+implementation. The SQL parser, planner, executor, PostgreSQL wire server and conformance suites are
+not implemented yet. The constructs below describe the intended contract, not commands available today.
 
-Reachable by PostgreSQL wire v3 clients (P2-11). Behaviour of transactions is specified in
+Once implemented, each accepted construct must be tested; everything outside the subset must fail
+with a stable error, never with a wrong answer. Adding to the subset requires a documented change
+with tests in the same pull request. The planned conformance suites are `sqllogictest` and differential
+tests against PostgreSQL.
+
+The intended front door is PostgreSQL wire v3 (P2-11). Transaction behaviour is specified in
 [`formats/isolation.md`](../formats/isolation.md).
 
 ## Principles

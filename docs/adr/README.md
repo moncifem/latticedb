@@ -14,3 +14,4 @@
 | [0010](0010-text-crdt-spike.md) | ADR 0010: Text CRDT: own spike behind a trait, decision revisited in Phase 3 | accepted |
 | [0011](0011-engine-runtime.md) | ADR 0011: Engine runtime | accepted |
 | [0012](0012-row-write-payload.md) | ADR 0012: Row writes travel in the change set payload | accepted |
+| [0013](0013-sql-planner-and-executor.md) | ADR 0013: SQL planner and executor | proposed |
