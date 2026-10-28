@@ -27,10 +27,12 @@ Tagged values (overflow only): a tag byte (0 bool, 1 int, 2 text, 3 bytes, 4 lis
 Rules:
 
 - A required column must be present; an optional one is simply absent.
-- Fields that the schema version in use has no column for are written to the overflow area and read back
-  unchanged, so a row written by a newer schema survives a round trip through an older reader.
-- An overflow field must not repeat a column name. Padding bits in the bitmap must be zero, so one row has
-  exactly one encoding.
+- Fields unknown to the encoding layout are written to the overflow area and read back unchanged.
+  Decoding requires the same layout that wrote the row. The codec version is not a schema version;
+  dispatch by persisted layout version and schema migration are not implemented yet.
+- Overflow fields and tagged object fields are ordered by name, with no duplicates. An overflow field
+  must not repeat a column name. Non-canonical field ordering is rejected. Padding bits in the bitmap must be zero, so one row has
+  exactly one encoding. Typed and tagged values both enforce the 16-level nesting limit.
 - Decoders check every length against the remaining bytes and reject trailing bytes, an unknown version,
   an enum index outside the variant list and invalid UTF-8.
 - Value constraints (ranges, `max`, enum membership beyond the index) are checked by schema validation,

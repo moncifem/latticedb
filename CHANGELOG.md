@@ -9,6 +9,9 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Typed-row layouts and a canonical codec with an overflow area for fields unknown to the encoding
+  layout. Decoding requires the original layout; catalog integration and schema migration remain open.
+
 - Secondary index primitives derived from row writes, rebuilt during recovery and readable at old
   snapshots, with consistency checks and a planted stale-index defect to verify the checker.
 

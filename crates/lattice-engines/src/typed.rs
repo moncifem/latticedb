@@ -1,9 +1,9 @@
 //! Typed rows: a schema type becomes a physical table with one column per field, never a generic
 //! attribute and value table, plus an overflow area for fields this schema version does not know.
 //!
-//! The overflow area is what lets a newer writer's extra fields survive a round trip through an older
-//! reader, which is how online schema change stays lossless. Row values are the byte values the row
-//! store keeps; this module is the codec between a schema-less [`Value`] and those bytes.
+//! Fields unknown to the encoding layout survive a round trip in the overflow area. Decoding must
+//! use the layout that wrote the row; schema-version dispatch and online migration are future work.
+//! This module is the codec between a schema-less [`Value`] and row-store bytes.
 //!
 //! Layout (little endian): a version byte, a presence bitmap with one bit per column, then the cell of
 //! every present column in column order, then the overflow: a `u32` count and, per extra field, a `u16`
@@ -128,7 +128,16 @@ fn put_len(out: &mut Vec<u8>, n: usize) -> Result<(), TypedError> {
     Ok(())
 }
 
-fn put_cell(out: &mut Vec<u8>, ty: &ColType, v: &Value, name: &str) -> Result<(), TypedError> {
+fn put_cell(
+    out: &mut Vec<u8>,
+    ty: &ColType,
+    v: &Value,
+    name: &str,
+    depth: usize,
+) -> Result<(), TypedError> {
+    if depth > MAX_DEPTH {
+        return Err(TypedError::TooDeep);
+    }
     let bad = || TypedError::Mismatch(name.to_string());
     match (ty, v) {
         (ColType::Bool, Value::Bool(b)) => out.push(u8::from(*b)),
@@ -155,7 +164,7 @@ fn put_cell(out: &mut Vec<u8>, ty: &ColType, v: &Value, name: &str) -> Result<()
         (ColType::List(inner), Value::List(items)) => {
             put_len(out, items.len())?;
             for item in items {
-                put_cell(out, inner, item, name)?;
+                put_cell(out, inner, item, name, depth + 1)?;
             }
         }
         _ => return Err(bad()),
@@ -236,7 +245,7 @@ pub fn encode_row(layout: &TableLayout, value: &Value) -> Result<Vec<u8>, TypedE
                 if let Some(byte) = bitmap.get_mut(i / 8) {
                     *byte |= 1 << (i % 8);
                 }
-                put_cell(&mut cells, &col.ty, v, &col.name)?;
+                put_cell(&mut cells, &col.ty, v, &col.name, 0)?;
             }
             None if col.nullable => {}
             None => return Err(TypedError::Missing(col.name.clone())),
@@ -371,8 +380,13 @@ fn get_tagged(r: &mut Reader<'_>, depth: usize) -> Result<Value, TypedError> {
         7 => {
             let n = r.u32()?;
             let mut map = BTreeMap::new();
+            let mut previous: Option<String> = None;
             for _ in 0..n {
                 let k = r.name()?;
+                if previous.as_ref().is_some_and(|last| last >= &k) {
+                    return Err(TypedError::Corrupt);
+                }
+                previous = Some(k.clone());
                 if map.insert(k, get_tagged(r, depth + 1)?).is_some() {
                     return Err(TypedError::Corrupt);
                 }
@@ -406,12 +420,18 @@ pub fn decode_row(layout: &TableLayout, bytes: &[u8]) -> Result<Value, TypedErro
         return Err(TypedError::Corrupt);
     }
     let extras = r.u32()?;
+    let mut previous: Option<String> = None;
     for _ in 0..extras {
         let k = r.name()?;
-        let v = get_tagged(&mut r, 0)?;
-        if layout.columns.iter().any(|c| c.name == k) || map.insert(k.clone(), v).is_some() {
+        if layout.columns.iter().any(|c| c.name == k) || map.contains_key(&k) {
             return Err(TypedError::OverflowClash(k));
         }
+        if previous.as_ref().is_some_and(|last| last > &k) {
+            return Err(TypedError::Corrupt);
+        }
+        previous = Some(k.clone());
+        let v = get_tagged(&mut r, 0)?;
+        map.insert(k, v);
     }
     if !r.rest.is_empty() {
         return Err(TypedError::Trailing);
@@ -590,5 +610,51 @@ mod tests {
                 prop_assert_eq!(encode_row(&l, &v).unwrap(), bytes);
             }
         }
+    }
+
+    #[test]
+    fn noncanonical_overflow_and_nested_object_order_is_rejected() {
+        let layout = TableLayout {
+            type_name: "T".into(),
+            columns: vec![],
+        };
+        let mut reversed = vec![VERSION];
+        put_len(&mut reversed, 2).unwrap();
+        for name in ["b", "a"] {
+            put_name(&mut reversed, name).unwrap();
+            put_tagged(&mut reversed, &Value::Bool(true), 0).unwrap();
+        }
+        assert_eq!(decode_row(&layout, &reversed), Err(TypedError::Corrupt));
+
+        let mut nested = vec![VERSION];
+        put_len(&mut nested, 1).unwrap();
+        put_name(&mut nested, "extra").unwrap();
+        nested.push(7); // tagged object
+        put_len(&mut nested, 2).unwrap();
+        for name in ["b", "a"] {
+            put_name(&mut nested, name).unwrap();
+            put_tagged(&mut nested, &Value::Bool(true), 1).unwrap();
+        }
+        assert_eq!(decode_row(&layout, &nested), Err(TypedError::Corrupt));
+    }
+
+    #[test]
+    fn typed_list_encoding_enforces_the_decoder_depth_limit() {
+        let mut ty = ColType::Bool;
+        let mut value = Value::Bool(true);
+        for _ in 0..=MAX_DEPTH {
+            ty = ColType::List(Box::new(ty));
+            value = Value::List(vec![value]);
+        }
+        let layout = TableLayout {
+            type_name: "T".into(),
+            columns: vec![Column {
+                name: "nested".into(),
+                ty,
+                nullable: false,
+            }],
+        };
+        let row = Value::Object(BTreeMap::from([("nested".into(), value)]));
+        assert_eq!(encode_row(&layout, &row), Err(TypedError::TooDeep));
     }
 }

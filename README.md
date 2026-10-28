@@ -17,7 +17,7 @@ store, searchable by text, meaning and time. Agents work in it as teammates with
   index primitives rebuilt from the log.
 - A verifier for data directories (`lattice doctor`) and a results ledger kept in Lattice's own log
   (`lattice ledger show`, `lattice ledger check`).
-- A schema language parser and checker (LSL), conflict-free data types and a benchmark suite with a
+- A schema language parser and checker (LSL), a typed-row codec (not yet wired to the catalog), conflict-free data types and a benchmark suite with a
   regression gate.
 
 How it is checked: the simulator replays seeded crashes and faults (a million seeds per profile each
