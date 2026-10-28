@@ -410,6 +410,11 @@ impl Io for SimIo {
         self.gate("sync")?;
         if self.rng.chance_ppm(self.profile.sync_error_ppm) {
             self.trace.write(b"!err");
+            // After a failed fsync the kernel may mark the dirty pages clean, so the unsynced bytes
+            // are gone and a later fsync reports success without them.
+            if let Some(f) = self.files.get_mut(path) {
+                f.pending.clear();
+            }
             return Err(IoError::Other("injected fsync error".into()));
         }
         let f = self

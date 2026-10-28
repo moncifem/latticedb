@@ -12,13 +12,17 @@ fn expected(bug: Bug) -> &'static [&'static str] {
         | Bug::RecoveryDropsLastRecord
         | Bug::CrcSkipsPayload => &["I1"],
         Bug::NoDedupe | Bug::DedupeNotRebuilt => &["I6"],
-        Bug::HlcRegress => &["I4"],
+        Bug::HlcRegress | Bug::HlcCounterStuck => &["I4"],
         Bug::AcceptTornTail | Bug::LsnReusedAfterRecovery | Bug::RotateWithoutDirSync => {
-            &["I1", "I2", "RECOVERY"]
+            &["I1", "I2", "I9", "RECOVERY"]
         }
         Bug::FenceIgnored | Bug::FenceNotRebuilt => &["I12"],
         Bug::NoParentDirSync => &["I1", "I2", "RECOVERY"],
         Bug::SkipRecoverySync => &["I1"],
+        Bug::FsyncFailureNotPoisoning
+        | Bug::FsyncErrorSwallowed
+        | Bug::RotateHeaderNotSynced
+        | Bug::DurableLsnOvershoot => &["I1", "I2", "I9", "RECOVERY"],
         Bug::BatchDuplicateAckedEarly => &["I6"],
         _ => &[],
     }

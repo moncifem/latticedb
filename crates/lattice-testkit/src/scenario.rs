@@ -10,6 +10,7 @@
 use crate::invariants::{Expected, LogView, Oracle, Violation, check_all};
 use lattice_abi::{Classify, ErrorClass};
 use lattice_core::changeset::{ChangeSet, ChangeSetId, TurnRef};
+use lattice_core::scrub::Issue;
 use lattice_core::{Config, Kernel, LogError, Receipt, TxnError};
 use lattice_seams::{Clock, Io, IoError, Rng};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
@@ -388,6 +389,21 @@ fn commit_new(w: &mut World, k: &mut K) {
     let results = k.commit_batch(batch);
     for (id, r) in ids.into_iter().zip(results.iter()) {
         record(w, id, r);
+    }
+    check_derived_state(w, k);
+}
+
+/// I9: what the kernel holds in memory must equal a rebuild from the log it wrote.
+fn check_derived_state(w: &mut World, k: &K) {
+    if k.is_poisoned() {
+        return;
+    }
+    if let Ok(report) = k.scrub() {
+        for issue in &report.issues {
+            if let Issue::DerivedStateMismatch { what } = issue {
+                violation(w, "I9", what.clone());
+            }
+        }
     }
 }
 

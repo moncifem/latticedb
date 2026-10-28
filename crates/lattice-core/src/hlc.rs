@@ -100,7 +100,8 @@ impl HlcClock {
         } else {
             now_ms.max(self.last.wall_ms)
         };
-        let floor = (wall == self.last.wall_ms).then_some(self.last.counter);
+        let floor = (wall == self.last.wall_ms && !bugs::active(Bug::HlcCounterStuck))
+            .then_some(self.last.counter);
         self.next_from(wall, floor)
     }
 

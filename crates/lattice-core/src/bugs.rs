@@ -38,11 +38,21 @@ pub enum Bug {
     SkipRecoverySync,
     /// A repeated id inside a batch is acknowledged whatever happens to its first occurrence.
     BatchDuplicateAckedEarly,
+    /// A failed fsync does not poison the log, so a later successful one vouches for lost data.
+    FsyncFailureNotPoisoning,
+    /// A failed fsync is swallowed and the batch is acknowledged (durability).
+    FsyncErrorSwallowed,
+    /// A new segment's header is not synced when the log rotates (durability).
+    RotateHeaderNotSynced,
+    /// The durable LSN runs one ahead of what was written (ordering).
+    DurableLsnOvershoot,
+    /// The hybrid logical clock does not advance its counter within one millisecond (causal order).
+    HlcCounterStuck,
 }
 
 impl Bug {
     /// Every defect, for the detection suite.
-    pub const ALL: [Bug; 15] = [
+    pub const ALL: [Bug; 20] = [
         Bug::SkipFsync,
         Bug::NoDedupe,
         Bug::HlcRegress,
@@ -58,6 +68,11 @@ impl Bug {
         Bug::NoParentDirSync,
         Bug::SkipRecoverySync,
         Bug::BatchDuplicateAckedEarly,
+        Bug::FsyncFailureNotPoisoning,
+        Bug::FsyncErrorSwallowed,
+        Bug::RotateHeaderNotSynced,
+        Bug::DurableLsnOvershoot,
+        Bug::HlcCounterStuck,
     ];
 }
 
@@ -67,11 +82,11 @@ mod imp {
     use std::cell::Cell;
 
     thread_local! {
-        static MASK: Cell<u16> = const { Cell::new(0) };
+        static MASK: Cell<u32> = const { Cell::new(0) };
     }
 
-    fn bit(b: Bug) -> u16 {
-        1 << (b as u16)
+    fn bit(b: Bug) -> u32 {
+        1 << (b as u32)
     }
 
     /// Switches a defect on for the current thread.

@@ -413,6 +413,18 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
                     what: "turn fences in memory differ from the log".into(),
                 });
         }
+        // LSNs run 1, 2, 3 ... without gaps, so nothing can be durable beyond the record count.
+        if self.durable_lsn() > report.records as u64 {
+            report
+                .issues
+                .push(crate::scrub::Issue::DerivedStateMismatch {
+                    what: format!(
+                        "durable LSN {} is beyond the {} records in the log",
+                        self.durable_lsn(),
+                        report.records
+                    ),
+                });
+        }
         Ok(report)
     }
 

@@ -335,12 +335,13 @@ impl<I: Io> Log<I> {
         }
         if !bugs::active(Bug::SkipFsync)
             && let Err(e) = self.io.sync(&self.current)
+            && !bugs::active(Bug::FsyncErrorSwallowed)
         {
-            self.poisoned = true;
+            self.poisoned = !bugs::active(Bug::FsyncFailureNotPoisoning);
             return Err(e.into());
         }
         self.current_len += batch.len() as u64;
-        self.durable_lsn = self.next_lsn - 1;
+        self.durable_lsn = self.next_lsn - 1 + u64::from(bugs::active(Bug::DurableLsnOvershoot));
         if self.current_len >= self.segment_limit && self.rotate().is_err() {
             // The batch is durable and may be acknowledged; the log just cannot take more.
             self.poisoned = true;
@@ -351,7 +352,9 @@ impl<I: Io> Log<I> {
     fn rotate(&mut self) -> Result<(), LogError> {
         let name = seg_name(&self.dir, self.next_lsn);
         self.io.append(&name, &segment_header())?;
-        self.io.sync(&name)?;
+        if !bugs::active(Bug::RotateHeaderNotSynced) {
+            self.io.sync(&name)?;
+        }
         if !bugs::active(Bug::RotateWithoutDirSync) {
             self.io.sync_dir(&self.dir)?;
         }
