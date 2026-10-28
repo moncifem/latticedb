@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_valid_value_and_optional_fields() {
+    fn inv_i8_accepts_a_valid_value_and_optional_fields() {
         let mut f = good();
         assert!(validate(&schema(), "Story", &obj(&f)).is_ok());
         f.push(("pts", Value::Int(10)));
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_each_kind_of_violation_with_a_path() {
+    fn inv_i8_rejects_each_kind_of_violation_with_a_path() {
         let c = schema();
         let with = |k: &str, v: Value| {
             let mut f: Vec<(&str, Value)> = good().into_iter().filter(|(n, _)| *n != k).collect();

@@ -49,7 +49,7 @@ fn fill(k: &mut K, n: usize) {
 }
 
 #[test]
-fn a_healthy_log_is_clean_and_the_kernel_agrees_with_a_rebuild() {
+fn inv_i9_a_healthy_log_is_clean_and_the_kernel_agrees_with_a_rebuild() {
     let (disk, clock) = fresh();
     let mut k = kernel(&disk, &clock);
     k.begin_turn(TurnRef {
@@ -218,4 +218,41 @@ fn each_planted_invariant_bug_shows_up_in_the_scrub() {
                 .any(|i| matches!(i, Issue::DerivedStateMismatch { .. }))
         );
     });
+}
+
+/// At the log level, a change set is all there or not there: cutting the log inside the last
+/// record leaves the earlier ones whole and the cut one absent, never half of it.
+#[test]
+fn inv_i2_a_log_cut_inside_a_record_shows_whole_change_sets_only() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    fill(&mut k, 3);
+    drop(k);
+    let seg = "wal/00000000000000000001.seg";
+    let bytes = disk.read(seg).unwrap();
+    for cut in 1..30 {
+        let mut d = disk.clone();
+        d.truncate(seg, (bytes.len() - cut) as u64).unwrap();
+        let (_, rec) = Kernel::open(
+            d.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(6),
+            &Config {
+                dir: "wal".into(),
+                segment_limit: 400,
+                node: 1,
+            },
+        )
+        .unwrap();
+        let sets: Vec<_> = rec
+            .records
+            .iter()
+            .filter_map(|r| ChangeSet::decode(&r.payload).ok())
+            .collect();
+        assert_eq!(sets.len(), 2, "cut of {cut} bytes");
+        assert!(sets.iter().all(|c| c.payload == vec![1; 40]));
+        // Restore the full log for the next cut.
+        d.truncate(seg, 0).unwrap();
+        d.append(seg, &bytes).unwrap();
+    }
 }

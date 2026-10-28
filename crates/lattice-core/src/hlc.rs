@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn counter_exhaustion_moves_wall_forward() {
+    fn inv_i4_counter_exhaustion_moves_wall_forward() {
         let mut c = HlcClock::restore(
             1,
             Hlc {
@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn exhaustion_is_an_error_not_a_regression() {
+    fn inv_i4_exhaustion_is_an_error_not_a_regression() {
         let top = Hlc {
             wall_ms: u64::MAX,
             counter: u32::MAX,
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_continues_after_the_highest_timestamp() {
+    fn inv_i4_restore_continues_after_the_highest_timestamp() {
         let mut c = HlcClock::restore(
             1,
             Hlc {

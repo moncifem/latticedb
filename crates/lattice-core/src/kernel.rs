@@ -483,6 +483,44 @@ mod tests {
         assert_eq!(m.histogram(names::COMMIT_LATENCY_SECONDS).unwrap().count, 3);
     }
 
+    #[test]
+    fn inv_i6_a_resubmitted_id_is_a_duplicate_and_writes_nothing() {
+        let mut k = kernel(std::rc::Rc::new(SimClock::new(1_000)));
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![1])).unwrap();
+        let lsn = k.durable_lsn();
+        for _ in 0..3 {
+            assert_eq!(
+                k.commit(ChangeSet::new(id, vec![9])),
+                Ok(Receipt::Duplicate)
+            );
+        }
+        assert_eq!(k.durable_lsn(), lsn);
+    }
+
+    #[test]
+    fn inv_i12_a_superseded_turn_is_fenced_and_writes_nothing() {
+        let mut k = kernel(std::rc::Rc::new(SimClock::new(1_000)));
+        let turn = |n| TurnRef {
+            session: 4,
+            turn: n,
+        };
+        k.begin_turn(turn(1)).unwrap();
+        k.begin_turn(turn(2)).unwrap();
+        let lsn = k.durable_lsn();
+        let stale = ChangeSet {
+            turn: Some(turn(1)),
+            ..ChangeSet::new(k.new_id(), vec![1])
+        };
+        assert!(matches!(k.commit(stale), Err(TxnError::Fenced { .. })));
+        assert_eq!(k.durable_lsn(), lsn);
+        let current = ChangeSet {
+            turn: Some(turn(2)),
+            ..ChangeSet::new(k.new_id(), vec![1])
+        };
+        assert!(matches!(k.commit(current), Ok(Receipt::Recorded { .. })));
+    }
+
     /// Records the fields of every span so a test can see what the write path attaches.
     #[derive(Clone, Default)]
     struct Spans(Arc<Mutex<Vec<String>>>);

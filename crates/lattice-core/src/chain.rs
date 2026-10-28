@@ -94,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn suffix_deletion_is_only_caught_with_a_trusted_head() {
+    fn inv_i13_suffix_deletion_is_only_caught_with_a_trusted_head() {
         let mut c = Chain::new();
         let links: Vec<Link> = [b"a".as_slice(), b"b", b"c"]
             .iter()

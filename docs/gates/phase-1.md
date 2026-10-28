@@ -65,7 +65,7 @@ no verdict): they are reported, capped by a quota test, and not counted as passe
 | E1-11 | TLC passes four models | Not met: `Commit.tla` unrun and limited; others missing |
 | E1-12 | Runtime ADR with benchmark data | Not met: ADR 0008 defers it |
 | E1-13 | Unsafe discipline, Miri, loom | Partial: zero `unsafe` anywhere; nothing for Miri or loom yet |
-| E1-14 | Traceability matrix complete | Partial |
+| E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3, I7, I10, I11 and I14 belong to later phases |
 | E1-15 | Scorecard from a results ledger | Not met |
 | E1-16 | Gate review package | Not met |
 
