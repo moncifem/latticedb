@@ -1,0 +1,24 @@
+name: Work package
+description: A planned piece of work from a phase of the spec (maintainers)
+labels: ["type: feature"]
+body:
+  - type: input
+    id: phase
+    attributes:
+      label: Phase and work package
+      placeholder: "Phase 2, WP3"
+    validations:
+      required: true
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Requirements
+      description: A checklist of requirement ids with their verification method
+      value: "- [ ] P?-?? ..."
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: The evidence that closes this (tests, evals, benchmarks, a demo)

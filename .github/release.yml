@@ -1,0 +1,16 @@
+changelog:
+  exclude:
+    labels: ["dependencies"]
+  categories:
+    - title: Features
+      labels: ["type: feature"]
+    - title: Fixes
+      labels: ["type: bug"]
+    - title: Tests and evaluation
+      labels: ["type: test"]
+    - title: Documentation
+      labels: ["type: docs"]
+    - title: Build and CI
+      labels: ["type: ci"]
+    - title: Other changes
+      labels: ["*"]

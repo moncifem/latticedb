@@ -1,0 +1,26 @@
+name: Feature or improvement
+description: Propose a capability or a change
+labels: ["type: feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or impossible today, and for whom
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+  - type: input
+    id: requirement
+    attributes:
+      label: Related requirement ids
+      description: For example P2-05. See docs/spec.
+  - type: checkboxes
+    id: format
+    attributes:
+      label: Compatibility
+      options:
+        - label: This changes an on-disk or wire format (needs an RFC and an ADR)

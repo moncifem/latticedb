@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/moncifem/latticedb/discussions
+    about: Ask in Discussions rather than opening an issue.
+  - name: Report a vulnerability
+    url: https://github.com/moncifem/latticedb/security/advisories/new
+    about: Please report security problems privately, never as a public issue.

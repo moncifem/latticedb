@@ -1,0 +1,25 @@
+name: Bug report
+description: Something behaves differently from the spec or from what you expect
+labels: ["type: bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you saw. For simulation failures include the seed and profile.
+    validations:
+      required: true
+  - type: input
+    id: repro
+    attributes:
+      label: Reproduction
+      description: A command, for example `cargo xtask sim --seed 42 --profile hostile`
+  - type: dropdown
+    id: invariant
+    attributes:
+      label: Invariant affected, if any
+      options: ["None or unknown", "I1 durability", "I2 atomicity", "I3 isolation", "I4 causal order", "I5 convergence", "I6 idempotency", "I7 no policy bypass", "I8 schema soundness", "I9 derived equals log", "I10 shredding", "I11 blob integrity", "I12 fencing", "I13 audit chain", "I14 exact time answers"]
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
