@@ -75,6 +75,22 @@ jobs:
         env:
           PROPTEST_CASES: "4"
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-disable-isolation"
+  asan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: nightly, components: rust-src }
+      - name: AddressSanitizer (memory errors and leaks) over the unit and simulator tests
+        run: >
+          cargo test -p lattice-abi -p lattice-core -p lattice-sim --lib
+          --target x86_64-unknown-linux-gnu -Zbuild-std &&
+          cargo test -p lattice-testkit --test scrub --test kernel_lifecycle --test power_cut_sweep
+          --test convergence --test fuzz_lite --target x86_64-unknown-linux-gnu -Zbuild-std
+        env:
+          RUSTFLAGS: "-Zsanitizer=address"
+          PROPTEST_CASES: "200"
   config-formats:
     runs-on: ubuntu-latest
     steps:
