@@ -246,6 +246,7 @@ dependencies = [
  "lattice-abi",
  "lattice-lsl",
  "lattice-seams",
+ "lattice-sim",
  "proptest",
  "thiserror",
  "tracing",

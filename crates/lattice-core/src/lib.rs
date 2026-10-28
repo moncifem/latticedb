@@ -30,6 +30,7 @@ pub mod crdt;
 pub mod hlc;
 pub mod kernel;
 pub mod log;
+pub mod metrics;
 pub mod record;
 pub mod txn;
 

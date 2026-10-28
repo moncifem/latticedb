@@ -24,4 +24,5 @@ planted-bugs = []
 workspace = true
 
 [dev-dependencies]
+lattice-sim = { path = "../lattice-sim" }
 proptest = "1.12.0"

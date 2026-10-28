@@ -10,6 +10,7 @@ use crate::bugs::{self, Bug};
 use crate::changeset::{ChangeSet, ChangeSetId, TurnRef, decode_turn_begin, encode_turn_begin};
 use crate::hlc::HlcClock;
 use crate::log::{Log, LogError, RecoveryReport};
+use crate::metrics::{Metrics, names};
 use crate::record::{Record, RecordType};
 use crate::txn::{
     AllowAll, Applied, Authorized, Durable, Logged, Open, PrepareOutcome, Prepared, Txn, TxnError,
@@ -73,6 +74,7 @@ pub struct Kernel<I: Io, C: Clock, R: Rng> {
     seen: BTreeSet<ChangeSetId>,
     in_flight: BTreeSet<ChangeSetId>,
     turns: BTreeMap<u64, u64>,
+    metrics: Metrics,
 }
 
 fn set(
@@ -136,6 +138,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             seen,
             in_flight: BTreeSet::new(),
             turns,
+            metrics: Metrics::default(),
         };
         Ok((kernel, Recovery { records, report }))
     }
@@ -202,6 +205,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         if self.log.is_poisoned() {
             return Err(TxnError::Log(LogError::Poisoned));
         }
+        let _span = tracing::debug_span!("log", txn_id = %txn.cs.id).entered();
         let mut cs = txn.cs.clone();
         if !bugs::active(Bug::NoDedupe) {
             if self.seen.contains(&cs.id) {
@@ -267,6 +271,22 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// failure fails every change set that had been queued. A repeated id inside the batch gets the
     /// same outcome as its first occurrence (so it is never acknowledged ahead of it).
     pub fn commit_batch(&mut self, batch: Vec<ChangeSet>) -> Vec<Result<Receipt, TxnError>> {
+        let started = self.clock.now_ms();
+        let results = self.commit_batch_inner(batch);
+        let elapsed_ms = self.clock.now_ms().saturating_sub(started);
+        self.metrics
+            .observe(names::COMMIT_LATENCY_SECONDS, elapsed_ms as f64 / 1000.0);
+        for r in &results {
+            match r {
+                Ok(Receipt::Recorded { .. }) => self.metrics.incr(names::COMMIT_TOTAL),
+                Ok(Receipt::Duplicate) => self.metrics.incr(names::COMMIT_DUPLICATE_TOTAL),
+                Err(_) => self.metrics.incr(names::COMMIT_ERROR_TOTAL),
+            }
+        }
+        results
+    }
+
+    fn commit_batch_inner(&mut self, batch: Vec<ChangeSet>) -> Vec<Result<Receipt, TxnError>> {
         let n = batch.len();
         if self.log.is_poisoned() {
             return (0..n)
@@ -368,6 +388,11 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         Ok(())
     }
 
+    /// Counters and latency histograms for this kernel instance.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
+
     /// Whether this id has been committed.
     pub fn contains(&self, id: &ChangeSetId) -> bool {
         self.seen.contains(id)
@@ -381,5 +406,95 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// Highest durable LSN.
     pub fn durable_lsn(&self) -> u64 {
         self.log.durable_lsn()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    struct Clk(std::rc::Rc<SimClock>);
+    impl Clock for Clk {
+        fn now_ms(&self) -> u64 {
+            self.0.now_ms()
+        }
+    }
+
+    fn kernel(clock: std::rc::Rc<SimClock>) -> Kernel<SimIo, Clk, SeededRng> {
+        let io = SimIo::new(1, FaultProfile::clean());
+        Kernel::open(io, Clk(clock), SeededRng::new(1), &Config::default())
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn commit_metrics_count_outcomes() {
+        let clock = std::rc::Rc::new(SimClock::new(1_000));
+        let mut k = kernel(clock);
+        let id = k.new_id();
+        assert!(matches!(
+            k.commit(ChangeSet::new(id, vec![1])),
+            Ok(Receipt::Recorded { .. })
+        ));
+        assert_eq!(
+            k.commit(ChangeSet::new(id, vec![1])),
+            Ok(Receipt::Duplicate)
+        );
+        let turn = ChangeSet {
+            turn: Some(TurnRef {
+                session: 9,
+                turn: 1,
+            }),
+            ..ChangeSet::new(k.new_id(), vec![])
+        };
+        assert!(k.commit(turn).is_err());
+        let m = k.metrics();
+        assert_eq!(m.counter(names::COMMIT_TOTAL), 1);
+        assert_eq!(m.counter(names::COMMIT_DUPLICATE_TOTAL), 1);
+        assert_eq!(m.counter(names::COMMIT_ERROR_TOTAL), 1);
+        assert_eq!(m.histogram(names::COMMIT_LATENCY_SECONDS).unwrap().count, 3);
+    }
+
+    /// Records the fields of every span so a test can see what the write path attaches.
+    #[derive(Clone, Default)]
+    struct Spans(Arc<Mutex<Vec<String>>>);
+    impl Visit for Spans {
+        fn record_debug(&mut self, f: &Field, v: &dyn std::fmt::Debug) {
+            if let Ok(mut g) = self.0.lock() {
+                g.push(format!("{}={v:?}", f.name()));
+            }
+        }
+    }
+    impl Subscriber for Spans {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, a: &Attributes<'_>) -> Id {
+            a.record(&mut self.clone());
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {}
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+
+    #[test]
+    fn the_write_path_span_carries_the_transaction_id() {
+        let spans = Spans::default();
+        let id = tracing::subscriber::with_default(spans.clone(), || {
+            let mut k = kernel(std::rc::Rc::new(SimClock::new(1_000)));
+            let id = k.new_id();
+            k.commit(ChangeSet::new(id, vec![1])).unwrap();
+            id
+        });
+        let seen = spans.0.lock().unwrap().join(";");
+        assert!(seen.contains(&format!("txn_id={id}")), "{seen}");
     }
 }
