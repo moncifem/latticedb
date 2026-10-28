@@ -17,12 +17,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # One platform runs the whole gate. The others run the portable tests, because formatting,
-          # lint, licence and document checks and the minutes-long simulation tests do not depend on
-          # the operating system.
+          # One platform runs the whole gate. ARM runs the portable tests, because formatting, lint,
+          # licence and document checks and the minutes-long simulation tests do not depend on the
+          # operating system. macOS runs after a merge (see `gate-macos`): its runners queue for
+          # minutes, so it does not hold up pull requests.
           - { os: ubuntu-latest, command: "cargo xtask ci", cases: "10000" }
           - { os: ubuntu-24.04-arm, command: "cargo xtask test-portable", cases: "256" }
-          - { os: macos-latest, command: "cargo xtask test-portable", cases: "256" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +38,20 @@ jobs:
       - run: ${{ matrix.command }}
         env:
           PROPTEST_CASES: ${{ matrix.cases }}
+  gate-macos:
+    # Not part of the pull request gate: macOS runners queue for minutes. It runs on every push to
+    # main, so a macOS-only failure is caught right after the merge, and nightly covers it too.
+    name: gate (macos-latest)
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo xtask test-portable
   secrets:
     name: secret-scan
     runs-on: ubuntu-latest
