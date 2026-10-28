@@ -3,5 +3,8 @@
 //! Layer L4. Must not: Bypass lattice-core transactions.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "row")]
+pub mod mvcc;
+
 /// Layer marker used by the layer check. Do not remove.
 pub const LAYER: u8 = 4;

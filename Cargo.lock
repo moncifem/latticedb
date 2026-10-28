@@ -277,6 +277,7 @@ dependencies = [
  "lattice-core",
  "lattice-lsl",
  "lattice-seams",
+ "proptest",
 ]
 
 [[package]]
