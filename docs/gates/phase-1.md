@@ -54,7 +54,7 @@ the harness before the kernel fixes in PR 61; the nightly run is the current evi
 | # | Criterion | Status |
 |---|---|---|
 | E1-1 | 10,000 seeds reproduce identical trace hashes | Met: `determinism_at_gate_volume` ran 10,000 seeds x 5 profiles, each twice, with identical traces (210 s in release); nightly repeats it and pull requests check 60 seeds per profile |
-| E1-2 | 1,000,000 seeds per night for 7 nights | Not met yet: nightly runs 1,000,000 seeds per profile (5 profiles x 4 shards of 250,000, a new seed window each day) and fails on any violation; the seven-night history starts with the first run after this lands |
+| E1-2 | 1,000,000 seeds per night for 7 nights | Not met yet: nightly runs 1,000,000 seeds per profile (5 profiles x 4 shards of 250,000, a new seed window each day) and fails on any violation; night 1 of 7 passed (manual run, 2026-10-28: 20 shards, no violations); the scheduled runs continue the count |
 | E1-3 | At least 20 planted bugs, 95 percent detected, no false alarms | Met: 21 bugs, all detected, no false alarms |
 | E1-4 | Recovery correct at every fsync boundary in 100 scenarios | Partial: `power_cut_sweep` cuts the power at every mutating storage operation of one fixed workload, and the simulator cuts power at random inside protocols; 100 distinct exhaustive scenarios are not reached |
 | E1-5 | CRDT laws at 10,000 cases (PR) and 1,000,000 (nightly) | Met: pull requests run every property test at 10,000 cases (`PROPTEST_CASES`), nightly runs the core, abi and lsl crates at 1,000,000. The text sequence CRDT (`Rga`) is a spike with convergence tests over a faulty network |

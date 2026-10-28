@@ -173,6 +173,21 @@ fn scorecard(args: &[&str]) -> Result<(), String> {
             dir,
         ],
     )?;
+    println!("thresholds:");
+    run(
+        "cargo",
+        &[
+            "run",
+            "-q",
+            "-p",
+            "lattice-cli",
+            "--",
+            "ledger",
+            "check",
+            "--dir",
+            dir,
+        ],
+    )?;
     let mut pending = Vec::new();
     collect_pending(&repo_root().join("crates"), &mut pending);
     pending.sort();

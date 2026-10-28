@@ -74,6 +74,54 @@ fn ledger_show<I: Io>(io: I) -> Result<String, String> {
     Ok(out)
 }
 
+/// Reads `"key":N` from the flat JSON the runners write.
+fn json_u64(json: &str, key: &str) -> Option<u64> {
+    let marker = format!("\"{key}\":");
+    let rest = json.get(json.find(&marker)? + marker.len()..)?;
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest.get(..end)?.parse().ok()
+}
+
+/// Scorecard thresholds over the ledger: the latest simulation run must have verified runs and no
+/// violations, and mostly verified runs. Also reports how many recent runs in a row were clean.
+fn ledger_check<I: Io>(io: I) -> Result<(String, bool), String> {
+    let entries = ledger::read(io, SystemClock, OsRng).map_err(|e| format!("{e:?}"))?;
+    let sims: Vec<&ledger::LedgerEntry> = entries.iter().filter(|e| e.kind == "sim").collect();
+    let Some(latest) = sims.last() else {
+        return Ok(("no simulation run in the ledger\n".into(), false));
+    };
+    let field = |k: &str| json_u64(&latest.json, k);
+    let (Some(runs), Some(failing), Some(incomplete)) =
+        (field("runs"), field("failing"), field("incomplete"))
+    else {
+        return Ok(("the latest simulation entry is unreadable\n".into(), false));
+    };
+    let clean = |e: &&ledger::LedgerEntry| {
+        json_u64(&e.json, "runs").is_some_and(|r| r > 0) && json_u64(&e.json, "failing") == Some(0)
+    };
+    let streak = sims.iter().rev().take_while(clean).count();
+    let mut out = format!(
+        "latest simulation run: {runs} runs, {failing} failing, {incomplete} unverified\n\
+         {streak} clean simulation run(s) in a row\n"
+    );
+    let mut ok = true;
+    if runs == 0 {
+        out.push_str("FAIL: the latest run verified nothing\n");
+        ok = false;
+    }
+    if failing > 0 {
+        out.push_str("FAIL: the latest run has violations\n");
+        ok = false;
+    }
+    if incomplete * 2 > runs {
+        out.push_str("FAIL: more than half of the latest run was not verified\n");
+        ok = false;
+    }
+    Ok((out, ok))
+}
+
 fn read_file(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
@@ -158,10 +206,28 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("ledger") if args.get(1).map(String::as_str) == Some("check") => {
+            let dir = arg(&args, "--dir").unwrap_or_else(|| ".".into());
+            match ledger_check(StdIo::new(dir)) {
+                Ok((text, ok)) => {
+                    print!("{text}");
+                    if ok {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("cannot read the ledger: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Some("lsl") => lsl_command(args.get(1..).unwrap_or_default()),
         _ => {
             eprintln!("usage: lattice doctor [--dir DATA_DIR] [--wal NAME]");
             eprintln!("       lattice ledger show [--dir DIR]");
+            eprintln!("       lattice ledger check [--dir DIR]");
             eprintln!(
                 "       lattice lsl check FILE | fmt FILE [--write|--check] | compat OLD NEW"
             );
@@ -207,6 +273,50 @@ mod tests {
             "{text}"
         );
         assert!(text.ends_with("2 entries\n"), "{text}");
+    }
+
+    fn ledger_with(entries: &[&str]) -> SharedIo {
+        let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
+        let clock = SharedClock(Rc::new(SimClock::new(7)));
+        for (n, json) in entries.iter().enumerate() {
+            ledger::append(
+                disk.clone(),
+                clock.clone(),
+                SeededRng::new(n as u64 + 1),
+                "sim",
+                json,
+            )
+            .unwrap();
+        }
+        disk
+    }
+
+    #[test]
+    fn ledger_check_passes_a_clean_latest_run_and_counts_the_streak() {
+        let disk = ledger_with(&[
+            "{\"runs\":10,\"failing\":1,\"incomplete\":0}",
+            "{\"runs\":10,\"failing\":0,\"incomplete\":1}",
+            "{\"runs\":10,\"failing\":0,\"incomplete\":2}",
+        ]);
+        let (text, ok) = ledger_check(disk).unwrap();
+        assert!(
+            ok && text.contains("2 clean simulation run(s) in a row"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn ledger_check_fails_on_violations_nothing_run_or_mostly_unverified() {
+        for bad in [
+            "{\"runs\":10,\"failing\":1,\"incomplete\":0}",
+            "{\"runs\":0,\"failing\":0,\"incomplete\":0}",
+            "{\"runs\":10,\"failing\":0,\"incomplete\":6}",
+            "{\"nonsense\":true}",
+        ] {
+            let (text, ok) = ledger_check(ledger_with(&[bad])).unwrap();
+            assert!(!ok, "{bad}: {text}");
+        }
+        assert!(!ledger_check(ledger_with(&[])).unwrap().1);
     }
 
     #[test]
