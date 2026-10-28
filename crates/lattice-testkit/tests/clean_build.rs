@@ -104,3 +104,20 @@ fn determinism_same_seed_same_trace() {
         .collect();
     assert!(hashes.len() > 30, "seeds barely differ: {}", hashes.len());
 }
+
+/// The gate's volume: 10,000 seeds per profile, each run twice, with identical traces. Slow, so it
+/// runs nightly in release (`cargo test -p lattice-testkit --release -- --ignored`).
+#[test]
+#[ignore = "volume: 10,000 seeds per profile; run nightly with --ignored"]
+fn determinism_at_gate_volume() {
+    for (name, profile) in profiles() {
+        for seed in 0..10_000 {
+            let a = run(seed, profile, 100, 1024);
+            let b = run(seed, profile, 100, 1024);
+            assert_eq!(
+                a.trace_hash, b.trace_hash,
+                "profile {name} seed {seed} is not deterministic"
+            );
+        }
+    }
+}
