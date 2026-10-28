@@ -393,6 +393,29 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         &self.metrics
     }
 
+    /// Verifies the log on disk and checks that this kernel's in-memory state (committed ids and
+    /// turn fences) equals a rebuild from the log. Read-only. A mismatch is invariant I9 failing.
+    pub fn scrub(&self) -> Result<crate::scrub::ScrubReport, LogError> {
+        let mut report = crate::scrub::scrub(self.log.io(), self.log.dir())?;
+        if report.rebuilt_ids != self.seen {
+            let extra = self.seen.difference(&report.rebuilt_ids).count();
+            let missing = report.rebuilt_ids.difference(&self.seen).count();
+            report.issues.push(crate::scrub::Issue::DerivedStateMismatch {
+                what: format!(
+                    "{extra} committed ids in memory are not in the log, {missing} ids in the log are not in memory"
+                ),
+            });
+        }
+        if report.rebuilt_turns != self.turns {
+            report
+                .issues
+                .push(crate::scrub::Issue::DerivedStateMismatch {
+                    what: "turn fences in memory differ from the log".into(),
+                });
+        }
+        Ok(report)
+    }
+
     /// Whether this id has been committed.
     pub fn contains(&self, id: &ChangeSetId) -> bool {
         self.seen.contains(id)

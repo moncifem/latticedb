@@ -11,6 +11,11 @@ description = "Admin and scripting command line tool."
 lattice-abi = { path = "../lattice-abi" }
 lattice-sdk = { path = "../lattice-sdk" }
 lattice-core = { path = "../lattice-core" }
+lattice-seams = { path = "../lattice-seams" }
+
+[dev-dependencies]
+lattice-sim = { path = "../lattice-sim" }
+lattice-testkit = { path = "../lattice-testkit" }
 
 [lints]
 workspace = true

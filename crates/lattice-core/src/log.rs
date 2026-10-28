@@ -375,6 +375,11 @@ impl<I: Io> Log<I> {
         self.poisoned
     }
 
+    /// The directory this log lives in.
+    pub fn dir(&self) -> &str {
+        &self.dir
+    }
+
     /// Shared access to the storage, for tests.
     pub fn io(&self) -> &I {
         &self.io

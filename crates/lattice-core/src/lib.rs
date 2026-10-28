@@ -32,6 +32,7 @@ pub mod kernel;
 pub mod log;
 pub mod metrics;
 pub mod record;
+pub mod scrub;
 pub mod txn;
 
 pub use changeset::{ChangeSet, ChangeSetId, ChangeSetTag, DecodeError, EncodeError, TurnRef};
