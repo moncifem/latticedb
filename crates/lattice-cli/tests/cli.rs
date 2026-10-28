@@ -14,6 +14,11 @@ use lattice_core::{Config, Kernel, ledger};
 use lattice_seams::{OsRng, StdIo, SystemClock};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Mutex;
+
+// A fork can temporarily inherit another test thread's open WAL lock. Keep child creation
+// and in-process ledger writes apart, so the child cannot prolong a released writer lock.
+static PROCESS_IO: Mutex<()> = Mutex::new(());
 
 fn workdir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lattice-cli-{name}-{}", std::process::id()));
@@ -23,6 +28,7 @@ fn workdir(name: &str) -> PathBuf {
 }
 
 fn lattice(args: &[&str]) -> Output {
+    let _guard = PROCESS_IO.lock().unwrap();
     Command::new(env!("CARGO_BIN_EXE_lattice"))
         .args(args)
         .output()
@@ -118,8 +124,8 @@ fn doctor_reports_a_healthy_log_and_a_damaged_one() {
 #[test]
 fn ledger_show_lists_entries_and_counts_them() {
     let dir = workdir("ledger");
-    ledger::append(StdIo::new(&dir), SystemClock, OsRng, "sim", "{\"runs\":1}").unwrap();
-    ledger::append(StdIo::new(&dir), SystemClock, OsRng, "bench", "{\"x\":2}").unwrap();
+    ledger_entry(&dir, "sim", "{\"runs\":1}");
+    ledger_entry(&dir, "bench", "{\"x\":2}");
     let o = lattice(&["ledger", "show", "--dir", dir.to_str().unwrap()]);
     assert_eq!(code(&o), 0, "{}", err(&o));
     let text = out(&o);
@@ -192,23 +198,16 @@ fn lsl_with_the_wrong_arguments_prints_usage_and_exits_two() {
     assert_eq!(code(&lattice(&["lsl", "wibble", "x"])), 2);
 }
 
+fn ledger_entry(dir: &Path, kind: &str, json: &str) {
+    let _guard = PROCESS_IO.lock().unwrap();
+    ledger::append(StdIo::new(dir), SystemClock, OsRng, kind, json).unwrap();
+}
+
 fn sim_entry(dir: &Path, runs: u64, failing: u64, incomplete: u64) {
     let json = format!(
         "{{\"runs\":{runs},\"failing\":{failing},\"cut_short\":0,\"incomplete\":{incomplete}}}"
     );
-    // Tests run in parallel threads of one process. While another thread forks to start the binary,
-    // the child briefly shares this process's open files, so a lock that was just released can still
-    // look held. That is a property of flock and fork, not of the ledger: retry for a moment.
-    for _ in 0..200 {
-        match ledger::append(StdIo::new(dir), SystemClock, OsRng, "sim", &json) {
-            Ok(_) => return,
-            Err(e) if format!("{e:?}").contains("locked by another writer") => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(e) => panic!("cannot append to the ledger: {e:?}"),
-        }
-    }
-    panic!("the ledger stayed locked");
+    ledger_entry(dir, "sim", &json);
 }
 
 #[test]

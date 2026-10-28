@@ -7,6 +7,13 @@ between minor versions; format changes are called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep CLI test process launches separate from in-process ledger writes, preventing inherited WAL
+  locks from making parallel macOS tests fail intermittently.
+- Restore the catalog test lint gate and retain a separate CI run for each push to `main`, while
+  superseded pull request runs can still be cancelled.
+
 ## [0.1.0-alpha.0]
 
 Not published. This is the version under development; the first published build will be

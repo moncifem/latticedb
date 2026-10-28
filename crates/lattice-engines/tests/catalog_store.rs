@@ -165,8 +165,8 @@ fn a_catalog_change_is_all_there_or_not_at_all_across_crashes() {
         let cat = open(&disk, &clock, seed + 9000).unwrap();
         let now = cat.catalog().current();
         for n in attempted {
-            let a = now.get(&(10 * n + 1)).is_some();
-            let b = now.get(&(10 * n + 2)).is_some();
+            let a = now.contains_key(&(10 * n + 1));
+            let b = now.contains_key(&(10 * n + 2));
             assert_eq!(a, b, "seed {seed}: change {n} is partial");
             if acked.contains(&n) {
                 assert!(a, "seed {seed}: acknowledged change {n} was lost");
