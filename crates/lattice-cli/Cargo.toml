@@ -17,6 +17,7 @@ lattice-sdk = { path = "../lattice-sdk" }
 lattice-core = { path = "../lattice-core" }
 lattice-seams = { path = "../lattice-seams" }
 lattice-lsl = { path = "../lattice-lsl" }
+serde_json.workspace = true
 
 [dev-dependencies]
 lattice-sim = { path = "../lattice-sim" }

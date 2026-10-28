@@ -74,52 +74,71 @@ fn ledger_show<I: Io>(io: I) -> Result<String, String> {
     Ok(out)
 }
 
-/// Reads `"key":N` from the flat JSON the runners write.
-fn json_u64(json: &str, key: &str) -> Option<u64> {
-    let marker = format!("\"{key}\":");
-    let rest = json.get(json.find(&marker)? + marker.len()..)?;
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    rest.get(..end)?.parse().ok()
+/// One simulation entry read strictly: every count must be a non-negative integer.
+struct SimRun {
+    runs: u64,
+    failing: u64,
+    incomplete: u64,
 }
 
-/// Scorecard thresholds over the ledger: the latest simulation run must have verified runs and no
-/// violations, and mostly verified runs. Also reports how many recent runs in a row were clean.
+impl SimRun {
+    fn parse(json: &str) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_str(json).ok()?;
+        let count = |k: &str| v.get(k)?.as_u64();
+        Some(Self {
+            runs: count("runs")?,
+            failing: count("failing")?,
+            incomplete: count("incomplete")?,
+        })
+    }
+
+    /// The reasons this run fails the scorecard thresholds; empty when it passes.
+    fn failures(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if self.runs == 0 {
+            out.push("the latest run verified nothing");
+        }
+        if self.failing > 0 {
+            out.push("the latest run has violations");
+        }
+        // Compared without overflow: unverified runs must not exceed half of all runs.
+        if self.incomplete > self.runs || self.incomplete.saturating_mul(2) > self.runs {
+            out.push("more than half of the latest run was not verified");
+        }
+        out
+    }
+}
+
+/// Scorecard thresholds over the ledger: the latest simulation run must pass them, and the report
+/// says how many recent runs in a row passed every threshold.
 fn ledger_check<I: Io>(io: I) -> Result<(String, bool), String> {
     let entries = ledger::read(io, SystemClock, OsRng).map_err(|e| format!("{e:?}"))?;
-    let sims: Vec<&ledger::LedgerEntry> = entries.iter().filter(|e| e.kind == "sim").collect();
+    let sims: Vec<Option<SimRun>> = entries
+        .iter()
+        .filter(|e| e.kind == "sim")
+        .map(|e| SimRun::parse(&e.json))
+        .collect();
     let Some(latest) = sims.last() else {
         return Ok(("no simulation run in the ledger\n".into(), false));
     };
-    let field = |k: &str| json_u64(&latest.json, k);
-    let (Some(runs), Some(failing), Some(incomplete)) =
-        (field("runs"), field("failing"), field("incomplete"))
-    else {
+    let Some(latest) = latest else {
         return Ok(("the latest simulation entry is unreadable\n".into(), false));
     };
-    let clean = |e: &&ledger::LedgerEntry| {
-        json_u64(&e.json, "runs").is_some_and(|r| r > 0) && json_u64(&e.json, "failing") == Some(0)
-    };
-    let streak = sims.iter().rev().take_while(|e| clean(e)).count();
+    let streak = sims
+        .iter()
+        .rev()
+        .take_while(|r| r.as_ref().is_some_and(|r| r.failures().is_empty()))
+        .count();
     let mut out = format!(
-        "latest simulation run: {runs} runs, {failing} failing, {incomplete} unverified\n\
-         {streak} clean simulation run(s) in a row\n"
+        "latest simulation run: {} runs, {} failing, {} unverified\n\
+         {streak} clean simulation run(s) in a row\n",
+        latest.runs, latest.failing, latest.incomplete
     );
-    let mut ok = true;
-    if runs == 0 {
-        out.push_str("FAIL: the latest run verified nothing\n");
-        ok = false;
+    let failures = latest.failures();
+    for f in &failures {
+        out.push_str(&format!("FAIL: {f}\n"));
     }
-    if failing > 0 {
-        out.push_str("FAIL: the latest run has violations\n");
-        ok = false;
-    }
-    if incomplete * 2 > runs {
-        out.push_str("FAIL: more than half of the latest run was not verified\n");
-        ok = false;
-    }
-    Ok((out, ok))
+    Ok((out, failures.is_empty()))
 }
 
 fn read_file(path: &str) -> Result<String, String> {
@@ -317,6 +336,33 @@ mod tests {
             assert!(!ok, "{bad}: {text}");
         }
         assert!(!ledger_check(ledger_with(&[])).unwrap().1);
+    }
+
+    #[test]
+    fn ledger_check_reads_counts_strictly_and_never_overflows() {
+        for bad in [
+            "{\"runs\":10,\"failing\":0.5,\"incomplete\":0}",
+            "{\"runs\":10,\"failing\":0,\"incomplete\":9223372036854775808}",
+            "{\"runs\":10,\"failing\":0}",
+            "{\"runs\":-1,\"failing\":0,\"incomplete\":0}",
+        ] {
+            let (text, ok) = ledger_check(ledger_with(&[bad])).unwrap();
+            assert!(!ok, "{bad}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_run_that_fails_the_thresholds_does_not_count_toward_the_streak() {
+        let disk = ledger_with(&[
+            "{\"runs\":10,\"failing\":0,\"incomplete\":0}",
+            "{\"runs\":10,\"failing\":0,\"incomplete\":10}",
+            "{\"runs\":10,\"failing\":0,\"incomplete\":0}",
+        ]);
+        let (text, ok) = ledger_check(disk).unwrap();
+        assert!(
+            ok && text.contains("1 clean simulation run(s) in a row"),
+            "{text}"
+        );
     }
 
     #[test]
