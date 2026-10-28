@@ -1,9 +1,10 @@
 //! `cargo xtask bench`: measures, compares with the stored baseline, and gates.
 //!
-//! `bench-runner [--profile NAME] [--tolerance F] [--write-baseline] [--scale N]`
+//! `bench-runner [--profile NAME] [--tolerance F] [--write-baseline] [--scale N] [--ledger DIR]`
 #![allow(clippy::print_stdout, clippy::print_stderr, clippy::disallowed_methods)]
 
 use lattice_bench::{compare, parse_results, render_results, suite};
+use lattice_seams::{OsRng, StdIo, SystemClock};
 use std::process::ExitCode;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
@@ -28,6 +29,26 @@ fn main() -> ExitCode {
     let current = suite::run_all(scale);
     for (name, ns) in &current {
         println!("{name:<36} {ns:>12.1} ns/op");
+    }
+    if let Some(ledger) = arg(&args, "--ledger") {
+        let results = current
+            .iter()
+            .map(|(name, ns)| format!("\"{name}\":{ns:.1}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json =
+            format!("{{\"profile\":\"{profile}\",\"scale\":{scale},\"ns_per_op\":{{{results}}}}}");
+        let recorded = std::fs::create_dir_all(&ledger)
+            .map_err(|e| e.to_string())
+            .and_then(|()| {
+                lattice_core::ledger::append(StdIo::new(ledger), SystemClock, OsRng, "bench", &json)
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:?}"))
+            });
+        if let Err(e) = recorded {
+            eprintln!("could not record the run in the ledger: {e}");
+            return ExitCode::from(2);
+        }
     }
     if args.iter().any(|a| a == "--write-baseline") {
         if let Err(e) = std::fs::create_dir_all(&dir)
