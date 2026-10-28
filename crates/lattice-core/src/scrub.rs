@@ -200,7 +200,7 @@ fn check_records(records: &[Record], report: &mut ScrubReport) {
                     }
                     last_hlc = Some(cs.hlc);
                     if let Some(TurnRef { session, turn }) = cs.turn
-                        && turns.get(&session).is_some_and(|cur| turn < *cur)
+                        && turns.get(&session) != Some(&turn)
                     {
                         report.issues.push(Issue::FencedWriteLogged {
                             id: cs.id,
@@ -225,7 +225,7 @@ fn check_records(records: &[Record], report: &mut ScrubReport) {
             },
             Some(RecordType::Checkpoint) => match decode_checkpoint(&r.payload) {
                 Ok(c) => {
-                    if c.through_lsn + 1 != r.lsn
+                    if c.through_lsn.checked_add(1) != Some(r.lsn)
                         || c.change_sets != seen.len() as u64
                         || c.state_crc != state_crc(&seen, &turns)
                     {

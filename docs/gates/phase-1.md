@@ -12,7 +12,7 @@ are exercised.
 
 | Finding | Outcome |
 |---|---|
-| Typestate let one kernel promote another kernel's transaction; prepared transactions bypassed later fences and id reservations; HLCs could be assigned out of log order | Fixed: transactions carry a kernel-instance owner; duplicate and fence checks and HLC assignment happen at the log append (the linearization point); `sync` verifies durability per transaction |
+| Typestate let one kernel promote another kernel's transaction; prepared transactions bypassed later fences and id reservations; HLCs could be assigned out of log order | Fixed: transactions carry an owner token and `sync` and `apply` also require the id to be in flight at the claimed LSN (the token comes from the injected RNG, so kernels with the same seed share it); duplicate and fence checks and HLC assignment happen at the log append (the linearization point); `sync` verifies durability per transaction |
 | A repeated id in one batch was acknowledged even when the original's fsync failed | Fixed: repeats share the original's fate; planted bug `BatchDuplicateAckedEarly` proves the harness catches the old behaviour |
 | Writer could acknowledge records the decoder rejects (over 16 MiB); `ChangeSet::encode` silently dropped parents above 65,535 | Fixed: size checked before an LSN is taken; `encode` is fallible |
 | Recovery adopted visible-but-unsynced bytes; WAL directory creation lacked parent durability; two writers could share a log | Fixed: recovery fsyncs before returning, parents are synced, an exclusive `Io::lock` is held for the log's lifetime. Planted bugs `SkipRecoverySync` and `NoParentDirSync` are caught |

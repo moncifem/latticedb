@@ -77,7 +77,8 @@ pub struct Kernel<I: Io, C: Clock, R: Rng> {
     /// Distinguishes this instance (and this recovery generation) from every other kernel.
     owner: u64,
     seen: BTreeSet<ChangeSetId>,
-    in_flight: BTreeSet<ChangeSetId>,
+    /// Logged but not yet applied change sets, with the LSN they were logged at.
+    in_flight: BTreeMap<ChangeSetId, u64>,
     turns: BTreeMap<u64, u64>,
     metrics: Metrics,
 }
@@ -127,7 +128,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
                 Some(RecordType::Checkpoint) => {
                     let c = decode_checkpoint(&r.payload)
                         .map_err(|e| corrupt(format!("checkpoint at lsn {}: {e}", r.lsn)))?;
-                    if c.through_lsn + 1 != r.lsn
+                    if c.through_lsn.checked_add(1) != Some(r.lsn)
                         || c.change_sets != seen.len() as u64
                         || c.state_crc != state_crc(&seen, &turns)
                     {
@@ -156,7 +157,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             hlc: HlcClock::restore(config.node, highest),
             owner,
             seen,
-            in_flight: BTreeSet::new(),
+            in_flight: BTreeMap::new(),
             turns,
             metrics: Metrics::default(),
         };
@@ -192,6 +193,16 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         }
     }
 
+    /// The owner token comes from the injected RNG, so two kernels given the same seed share it.
+    /// A transaction must therefore also be one this kernel logged, at the LSN it claims.
+    fn check_logged_here(&self, id: &ChangeSetId, lsn: u64) -> Result<(), TxnError> {
+        if self.in_flight.get(id) == Some(&lsn) {
+            Ok(())
+        } else {
+            Err(TxnError::ForeignTransaction)
+        }
+    }
+
     fn check_fence(&self, cs: &ChangeSet) -> Result<(), TxnError> {
         let Some(t) = cs.turn else { return Ok(()) };
         if bugs::active(Bug::FenceIgnored) {
@@ -217,7 +228,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             if self.seen.contains(&cs.id) {
                 return Ok(PrepareOutcome::Duplicate(cs.id));
             }
-            if self.in_flight.contains(&cs.id) {
+            if self.in_flight.contains_key(&cs.id) {
                 return Err(TxnError::InFlight(cs.id));
             }
         }
@@ -238,7 +249,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             if self.seen.contains(&cs.id) {
                 return Err(TxnError::Duplicate(cs.id));
             }
-            if self.in_flight.contains(&cs.id) {
+            if self.in_flight.contains_key(&cs.id) {
                 return Err(TxnError::InFlight(cs.id));
             }
         }
@@ -246,7 +257,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         cs.hlc = self.hlc.tick(self.clock.now_ms())?;
         let encoded = cs.encode()?;
         let lsn = self.log.append(RecordType::ChangeSet as u8, &encoded)?;
-        self.in_flight.insert(cs.id);
+        self.in_flight.insert(cs.id, lsn);
         Ok(txn.logged(cs, lsn))
     }
 
@@ -255,6 +266,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     pub fn sync(&mut self, txns: Vec<Txn<Logged>>) -> Result<Vec<Txn<Durable>>, TxnError> {
         for t in &txns {
             self.check_owner(t.owner)?;
+            self.check_logged_here(&t.cs.id, t.lsn)?;
         }
         let durable = self.log.sync()?;
         let mut out = Vec::with_capacity(txns.len());
@@ -270,6 +282,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// Reflects a durable change set in memory.
     pub fn apply(&mut self, txn: Txn<Durable>) -> Result<Txn<Applied>, TxnError> {
         self.check_owner(txn.owner)?;
+        self.check_logged_here(&txn.cs.id, txn.lsn)?;
         if txn.lsn > self.log.durable_lsn() {
             return Err(TxnError::NotDurable(txn.lsn));
         }
@@ -416,7 +429,16 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     }
 
     /// Writes a checkpoint record summarising the state so far and returns its LSN.
+    ///
+    /// A checkpoint summarises applied state, so it is refused while any change set is logged but
+    /// not yet applied: its record would sit under the checkpoint without being counted in it, and
+    /// recovery would reject the log.
     pub fn checkpoint(&mut self) -> Result<u64, TxnError> {
+        if !self.in_flight.is_empty() {
+            return Err(TxnError::Invalid(
+                "checkpoint with change sets in flight".into(),
+            ));
+        }
         let cp = Checkpoint {
             through_lsn: self.log.next_lsn() - 1,
             change_sets: self.seen.len() as u64,
@@ -433,7 +455,7 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// see only acknowledged records, in LSN order, and never block or change the writer.
     pub fn read_from(&self, from_lsn: u64, max: usize) -> Result<(Vec<Record>, u64), LogError> {
         let records = self.log.read_from(from_lsn, max)?;
-        let next = records.last().map_or(from_lsn, |r| r.lsn + 1);
+        let next = records.last().map_or(from_lsn, |r| r.lsn.saturating_add(1));
         Ok((records, next))
     }
 

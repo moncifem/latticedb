@@ -392,6 +392,9 @@ impl<I: Io> Log<I> {
             .collect();
         firsts.sort_unstable();
         let mut out = Vec::new();
+        // The last LSN decoded from any segment scanned so far; everything up to the durable LSN
+        // must be reachable, in order, or the log is damaged and the reader must say so.
+        let mut reached: Option<u64> = None;
         for (i, first) in firsts.iter().enumerate() {
             let next_first = firsts.get(i + 1).copied().unwrap_or(u64::MAX);
             if next_first <= from_lsn || *first > self.durable_lsn {
@@ -406,13 +409,28 @@ impl<I: Io> Log<I> {
                 if r.lsn > self.durable_lsn {
                     return Ok(out);
                 }
+                let expected = reached.map_or(*first, |l| l.saturating_add(1));
+                if r.lsn != expected {
+                    return Err(LogError::Corrupt(format!(
+                        "expected lsn {expected} in segment {first}, found {}",
+                        r.lsn
+                    )));
+                }
+                reached = Some(r.lsn);
                 if r.lsn >= from_lsn {
                     out.push(r);
                 }
                 off = next;
             }
             if out.len() >= max {
-                break;
+                return Ok(out);
+            }
+            // The segment ended before the next one starts: a gap or damage below the durable LSN.
+            let stop = next_first.saturating_sub(1).min(self.durable_lsn);
+            if reached.is_none_or(|l| l < stop) {
+                return Err(LogError::Corrupt(format!(
+                    "segment {first} ends before lsn {stop}"
+                )));
             }
         }
         Ok(out)
