@@ -264,6 +264,56 @@ pub fn run(records: &[Record], exec: &mut dyn Executor) -> Report {
     report
 }
 
+/// A generated script over a fixed table: the setup statements followed by `queries` seeded
+/// `SELECT`s using only constructs of the declared subset (projection, comparison filters,
+/// `ORDER BY` with a unique tie-break, `LIMIT`, `count`). The same seed always yields the same
+/// text. Expected values are left empty; compare two engines with [`differential`].
+pub fn generate(seed: u64, queries: usize) -> String {
+    use lattice_sim::SeededRng;
+    let mut rng = SeededRng::new(seed);
+    let mut out = String::from(
+        "statement ok\nCREATE TABLE g (id INT PRIMARY KEY, grp INT, score INT, name TEXT)\n\n",
+    );
+    let rows = 5 + rng.below(20);
+    for id in 1..=rows {
+        let (grp, score) = (rng.below(4), rng.below(100));
+        out.push_str(&format!(
+            "statement ok\nINSERT INTO g VALUES ({id}, {grp}, {score}, 'n{id}')\n\n"
+        ));
+    }
+    const OPS: [&str; 5] = ["=", "<", "<=", ">", ">="];
+    const COLS: [&str; 3] = ["id", "grp", "score"];
+    for _ in 0..queries {
+        let col = COLS.get(rng.below(3) as usize).copied().unwrap_or("id");
+        let op = OPS.get(rng.below(5) as usize).copied().unwrap_or("=");
+        let bound = rng.below(100);
+        let filter = format!("WHERE {col} {op} {bound}");
+        let sql = match rng.below(4) {
+            0 => format!("SELECT id, score FROM g {filter}"),
+            1 => format!("SELECT count(*) FROM g {filter}"),
+            2 => format!(
+                "SELECT id FROM g {filter} ORDER BY score DESC, id LIMIT {}",
+                1 + rng.below(8)
+            ),
+            _ => format!("SELECT name FROM g {filter} ORDER BY id"),
+        };
+        let sort = if sql.contains("ORDER BY") {
+            "nosort"
+        } else {
+            "rowsort"
+        };
+        let types = if sql.starts_with("SELECT id, score") {
+            "II"
+        } else if sql.contains("name") {
+            "T"
+        } else {
+            "I"
+        };
+        out.push_str(&format!("query {types} {sort}\n{sql}\n----\n\n"));
+    }
+    out
+}
+
 /// Runs every record's SQL against a reference engine and the engine under test and reports each
 /// record where they disagree: on success versus failure, on the error code, or on the rows (after
 /// the record's sort mode). The script's own expected values are not consulted, so generated
@@ -498,6 +548,19 @@ mod tests {
             rep.mismatches.iter().map(|m| m.line).collect::<Vec<_>>(),
             vec![5, 9]
         );
+    }
+
+    #[test]
+    fn generated_scripts_are_deterministic_and_readable() {
+        assert_eq!(generate(7, 30), generate(7, 30));
+        assert_ne!(generate(7, 30), generate(8, 30));
+        let recs = parse(&generate(7, 30), "x").unwrap();
+        let queries = recs
+            .iter()
+            .filter(|r| matches!(r, Record::Query { .. }))
+            .count();
+        assert_eq!(queries, 30);
+        assert!(recs.len() >= 30 + 1 + 5);
     }
 
     #[test]
