@@ -313,9 +313,205 @@ pub fn lattice_core::crdt::LwwRegister<T>::merge(&mut self, &Self)
 impl<T: core::cmp::Ord + core::clone::Clone> lattice_core::crdt::Crdt for lattice_core::crdt::OrSet<T>
 pub fn lattice_core::crdt::OrSet<T>::merge(&mut self, &Self)
 pub type lattice_core::crdt::CharId = lattice_abi::hlc::Hlc
+pub mod lattice_core::crdt_text
+pub enum lattice_core::crdt_text::CompactError
+pub lattice_core::crdt_text::CompactError::AckBehind(u32)
+pub lattice_core::crdt_text::CompactError::MissingAck(u32)
+pub lattice_core::crdt_text::CompactError::Pending
+impl core::clone::Clone for lattice_core::crdt_text::CompactError
+pub fn lattice_core::crdt_text::CompactError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::CompactError
+impl core::cmp::PartialEq for lattice_core::crdt_text::CompactError
+pub fn lattice_core::crdt_text::CompactError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::crdt_text::CompactError
+impl core::fmt::Debug for lattice_core::crdt_text::CompactError
+pub fn lattice_core::crdt_text::CompactError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::crdt_text::CompactError
+pub fn lattice_core::crdt_text::CompactError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_text::CompactError
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::CompactError
+pub enum lattice_core::crdt_text::Op
+pub lattice_core::crdt_text::Op::Delete
+pub lattice_core::crdt_text::Op::Delete::id: lattice_abi::hlc::Hlc
+pub lattice_core::crdt_text::Op::Delete::target: lattice_core::crdt_text::ElemId
+pub lattice_core::crdt_text::Op::Insert
+pub lattice_core::crdt_text::Op::Insert::after: core::option::Option<lattice_core::crdt_text::ElemId>
+pub lattice_core::crdt_text::Op::Insert::id: lattice_abi::hlc::Hlc
+pub lattice_core::crdt_text::Op::Insert::text: alloc::string::String
+impl lattice_core::crdt_text::Op
+pub fn lattice_core::crdt_text::Op::decode(&[u8]) -> core::result::Result<Self, lattice_core::crdt_text::TextDecodeError>
+pub fn lattice_core::crdt_text::Op::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, lattice_core::crdt_text::OpError>
+pub fn lattice_core::crdt_text::Op::id(&self) -> lattice_abi::hlc::Hlc
+pub fn lattice_core::crdt_text::Op::validate(&self) -> core::result::Result<(), lattice_core::crdt_text::OpError>
+impl core::clone::Clone for lattice_core::crdt_text::Op
+pub fn lattice_core::crdt_text::Op::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::Op
+impl core::cmp::PartialEq for lattice_core::crdt_text::Op
+pub fn lattice_core::crdt_text::Op::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::crdt_text::Op
+pub fn lattice_core::crdt_text::Op::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::Op
+pub enum lattice_core::crdt_text::OpError
+pub lattice_core::crdt_text::OpError::BadOffset
+pub lattice_core::crdt_text::OpError::ChunkTooLong
+pub lattice_core::crdt_text::OpError::EmptyText
+pub lattice_core::crdt_text::OpError::NotCausal
+pub lattice_core::crdt_text::OpError::ZeroId
+impl core::clone::Clone for lattice_core::crdt_text::OpError
+pub fn lattice_core::crdt_text::OpError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::OpError
+impl core::cmp::PartialEq for lattice_core::crdt_text::OpError
+pub fn lattice_core::crdt_text::OpError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::crdt_text::OpError
+impl core::fmt::Debug for lattice_core::crdt_text::OpError
+pub fn lattice_core::crdt_text::OpError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::crdt_text::OpError
+pub fn lattice_core::crdt_text::OpError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_text::OpError
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::OpError
+pub enum lattice_core::crdt_text::Outcome
+pub lattice_core::crdt_text::Outcome::Applied
+pub lattice_core::crdt_text::Outcome::Duplicate
+pub lattice_core::crdt_text::Outcome::Pending
+impl core::clone::Clone for lattice_core::crdt_text::Outcome
+pub fn lattice_core::crdt_text::Outcome::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::Outcome
+impl core::cmp::PartialEq for lattice_core::crdt_text::Outcome
+pub fn lattice_core::crdt_text::Outcome::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::crdt_text::Outcome
+pub fn lattice_core::crdt_text::Outcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_text::Outcome
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::Outcome
+pub enum lattice_core::crdt_text::TextDecodeError
+pub lattice_core::crdt_text::TextDecodeError::BadFlag(u8)
+pub lattice_core::crdt_text::TextDecodeError::BadKind(u8)
+pub lattice_core::crdt_text::TextDecodeError::BadVersion(u8)
+pub lattice_core::crdt_text::TextDecodeError::Invalid(lattice_core::crdt_text::OpError)
+pub lattice_core::crdt_text::TextDecodeError::InvalidUtf8
+pub lattice_core::crdt_text::TextDecodeError::TrailingBytes
+pub lattice_core::crdt_text::TextDecodeError::Truncated
+impl core::clone::Clone for lattice_core::crdt_text::TextDecodeError
+pub fn lattice_core::crdt_text::TextDecodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::TextDecodeError
+impl core::cmp::PartialEq for lattice_core::crdt_text::TextDecodeError
+pub fn lattice_core::crdt_text::TextDecodeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::crdt_text::TextDecodeError
+impl core::fmt::Debug for lattice_core::crdt_text::TextDecodeError
+pub fn lattice_core::crdt_text::TextDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::crdt_text::TextDecodeError
+pub fn lattice_core::crdt_text::TextDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_text::TextDecodeError
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::TextDecodeError
+pub enum lattice_core::crdt_text::TextError
+pub lattice_core::crdt_text::TextError::AnchorGone
+pub lattice_core::crdt_text::TextError::ConflictingOpId
+pub lattice_core::crdt_text::TextError::Op(lattice_core::crdt_text::OpError)
+pub lattice_core::crdt_text::TextError::OpLimit
+pub lattice_core::crdt_text::TextError::PendingFull
+pub lattice_core::crdt_text::TextError::PendingQuota(u64)
+impl core::clone::Clone for lattice_core::crdt_text::TextError
+pub fn lattice_core::crdt_text::TextError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::TextError
+impl core::cmp::PartialEq for lattice_core::crdt_text::TextError
+pub fn lattice_core::crdt_text::TextError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::crdt_text::TextError
+impl core::fmt::Debug for lattice_core::crdt_text::TextError
+pub fn lattice_core::crdt_text::TextError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::crdt_text::TextError
+pub fn lattice_core::crdt_text::TextError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_text::TextError
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::TextError
+pub struct lattice_core::crdt_text::Compaction
+pub lattice_core::crdt_text::Compaction::removed: usize
+pub lattice_core::crdt_text::Compaction::tombstones_left: usize
+impl core::clone::Clone for lattice_core::crdt_text::Compaction
+pub fn lattice_core::crdt_text::Compaction::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::Compaction
+impl core::cmp::PartialEq for lattice_core::crdt_text::Compaction
+pub fn lattice_core::crdt_text::Compaction::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::crdt_text::Compaction
+pub fn lattice_core::crdt_text::Compaction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_text::Compaction
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::Compaction
+pub struct lattice_core::crdt_text::Doc
+impl lattice_core::crdt_text::Doc
+pub const lattice_core::crdt_text::Doc::ELEM_BYTES: usize
+pub fn lattice_core::crdt_text::Doc::applied_inserts(&self) -> usize
+pub fn lattice_core::crdt_text::Doc::apply(&mut self, lattice_core::crdt_text::Op) -> core::result::Result<lattice_core::crdt_text::Outcome, lattice_core::crdt_text::TextError>
+pub fn lattice_core::crdt_text::Doc::apply_keyed(&mut self, u64, lattice_core::crdt_text::Op) -> core::result::Result<lattice_core::crdt_text::Outcome, lattice_core::crdt_text::TextError>
+pub fn lattice_core::crdt_text::Doc::compact(&mut self, &lattice_core::crdt_text::Frontier, &[lattice_abi::hlc::Hlc]) -> core::result::Result<lattice_core::crdt_text::Compaction, lattice_core::crdt_text::CompactError>
+pub fn lattice_core::crdt_text::Doc::discard_pending(&mut self, lattice_abi::hlc::Hlc) -> usize
+pub fn lattice_core::crdt_text::Doc::element_heap_bytes(&self) -> usize
+pub fn lattice_core::crdt_text::Doc::is_empty(&self) -> bool
+pub fn lattice_core::crdt_text::Doc::len(&self) -> usize
+pub fn lattice_core::crdt_text::Doc::new() -> Self
+pub fn lattice_core::crdt_text::Doc::pending(&self) -> usize
+pub fn lattice_core::crdt_text::Doc::rejected(&self) -> usize
+pub fn lattice_core::crdt_text::Doc::stored(&self) -> usize
+pub fn lattice_core::crdt_text::Doc::text(&self) -> alloc::string::String
+pub fn lattice_core::crdt_text::Doc::text_at(&self, lattice_abi::hlc::Hlc) -> alloc::string::String
+pub fn lattice_core::crdt_text::Doc::tombstones(&self) -> usize
+pub fn lattice_core::crdt_text::Doc::visible_id(&self, usize) -> core::option::Option<lattice_core::crdt_text::ElemId>
+pub fn lattice_core::crdt_text::Doc::with_limits(lattice_core::crdt_text::Limits) -> Self
+impl core::clone::Clone for lattice_core::crdt_text::Doc
+pub fn lattice_core::crdt_text::Doc::clone(&self) -> Self
+impl core::default::Default for lattice_core::crdt_text::Doc
+pub fn lattice_core::crdt_text::Doc::default() -> Self
+impl core::fmt::Debug for lattice_core::crdt_text::Doc
+pub fn lattice_core::crdt_text::Doc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::crdt_text::ElemId
+pub lattice_core::crdt_text::ElemId::off: u32
+pub lattice_core::crdt_text::ElemId::op: lattice_abi::hlc::Hlc
+impl core::clone::Clone for lattice_core::crdt_text::ElemId
+pub fn lattice_core::crdt_text::ElemId::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::ElemId
+impl core::cmp::Ord for lattice_core::crdt_text::ElemId
+pub fn lattice_core::crdt_text::ElemId::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_core::crdt_text::ElemId
+pub fn lattice_core::crdt_text::ElemId::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_core::crdt_text::ElemId
+pub fn lattice_core::crdt_text::ElemId::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_core::crdt_text::ElemId
+pub fn lattice_core::crdt_text::ElemId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_core::crdt_text::ElemId
+pub fn lattice_core::crdt_text::ElemId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_core::crdt_text::ElemId
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::ElemId
+pub struct lattice_core::crdt_text::Frontier
+pub lattice_core::crdt_text::Frontier::acks: alloc::collections::btree::map::BTreeMap<u32, lattice_abi::hlc::Hlc>
+pub lattice_core::crdt_text::Frontier::stable: lattice_abi::hlc::Hlc
+impl core::clone::Clone for lattice_core::crdt_text::Frontier
+pub fn lattice_core::crdt_text::Frontier::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::Frontier
+impl core::cmp::PartialEq for lattice_core::crdt_text::Frontier
+pub fn lattice_core::crdt_text::Frontier::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::crdt_text::Frontier
+pub fn lattice_core::crdt_text::Frontier::default() -> Self
+impl core::fmt::Debug for lattice_core::crdt_text::Frontier
+pub fn lattice_core::crdt_text::Frontier::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::Frontier
+pub struct lattice_core::crdt_text::Limits
+pub lattice_core::crdt_text::Limits::max_elements: usize
+pub lattice_core::crdt_text::Limits::max_inserts: usize
+impl core::clone::Clone for lattice_core::crdt_text::Limits
+pub fn lattice_core::crdt_text::Limits::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_text::Limits
+impl core::cmp::PartialEq for lattice_core::crdt_text::Limits
+pub fn lattice_core::crdt_text::Limits::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::crdt_text::Limits
+pub fn lattice_core::crdt_text::Limits::default() -> Self
+impl core::fmt::Debug for lattice_core::crdt_text::Limits
+pub fn lattice_core::crdt_text::Limits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_text::Limits
+impl core::marker::StructuralPartialEq for lattice_core::crdt_text::Limits
+pub const lattice_core::crdt_text::MAX_CHUNK_CHARS: usize
+pub const lattice_core::crdt_text::MAX_ENCODED_LEN: usize
+pub const lattice_core::crdt_text::MAX_PENDING: usize
+pub const lattice_core::crdt_text::MAX_PENDING_PER_ORIGIN: usize
 pub mod lattice_core::crdt_tree
 pub enum lattice_core::crdt_tree::Outcome
 pub lattice_core::crdt_tree::Outcome::Applied
+pub lattice_core::crdt_tree::Outcome::BelowFrontier
 pub lattice_core::crdt_tree::Outcome::Duplicate
 pub lattice_core::crdt_tree::Outcome::Skipped
 impl core::clone::Clone for lattice_core::crdt_tree::Outcome
@@ -346,6 +542,9 @@ impl core::marker::Copy for lattice_core::crdt_tree::TreeDecodeError
 impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::TreeDecodeError
 pub enum lattice_core::crdt_tree::TreeError
 pub lattice_core::crdt_tree::TreeError::ConflictingOpId
+pub lattice_core::crdt_tree::TreeError::FrontierBeyondLog
+pub lattice_core::crdt_tree::TreeError::OpLimitReached
+pub lattice_core::crdt_tree::TreeError::OpLimitReached::limit: usize
 pub lattice_core::crdt_tree::TreeError::ReservedNode
 impl core::clone::Clone for lattice_core::crdt_tree::TreeError
 pub fn lattice_core::crdt_tree::TreeError::clone(&self) -> Self
@@ -413,7 +612,10 @@ impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::Snapshot
 pub struct lattice_core::crdt_tree::Tree
 impl lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::apply(&mut self, lattice_core::crdt_tree::Op) -> core::result::Result<lattice_core::crdt_tree::Outcome, lattice_core::crdt_tree::TreeError>
+pub fn lattice_core::crdt_tree::Tree::apply_local(&mut self, lattice_core::crdt_tree::Op) -> core::result::Result<lattice_core::crdt_tree::Outcome, lattice_core::crdt_tree::TreeError>
+pub fn lattice_core::crdt_tree::Tree::below_frontier_arrivals(&self) -> u64
 pub fn lattice_core::crdt_tree::Tree::children(&self, lattice_core::crdt_tree::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = lattice_core::crdt_tree::NodeId> + '_
+pub fn lattice_core::crdt_tree::Tree::compact(&mut self, lattice_abi::hlc::Hlc) -> core::result::Result<usize, lattice_core::crdt_tree::TreeError>
 pub fn lattice_core::crdt_tree::Tree::contains(&self, lattice_core::crdt_tree::NodeId) -> bool
 pub fn lattice_core::crdt_tree::Tree::is_acyclic(&self) -> bool
 pub fn lattice_core::crdt_tree::Tree::is_deleted(&self, lattice_core::crdt_tree::NodeId) -> bool
@@ -421,12 +623,16 @@ pub fn lattice_core::crdt_tree::Tree::new() -> Self
 pub fn lattice_core::crdt_tree::Tree::op_count(&self) -> usize
 pub fn lattice_core::crdt_tree::Tree::parent(&self, lattice_core::crdt_tree::NodeId) -> core::option::Option<lattice_core::crdt_tree::NodeId>
 pub fn lattice_core::crdt_tree::Tree::snapshot(&self) -> lattice_core::crdt_tree::Snapshot
+pub fn lattice_core::crdt_tree::Tree::stable_frontier(&self) -> core::option::Option<lattice_abi::hlc::Hlc>
+pub fn lattice_core::crdt_tree::Tree::with_op_limit(usize) -> Self
+pub fn lattice_core::crdt_tree::Tree::with_op_limit_and_reserve(usize, usize) -> Self
 impl core::clone::Clone for lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::clone(&self) -> Self
 impl core::default::Default for lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::default() -> Self
 impl core::fmt::Debug for lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const lattice_core::crdt_tree::DEFAULT_OP_LIMIT: usize
 pub mod lattice_core::feed
 pub enum lattice_core::feed::ChangeOp
 pub lattice_core::feed::ChangeOp::Delete
