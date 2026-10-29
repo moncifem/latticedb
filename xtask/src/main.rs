@@ -12,6 +12,7 @@
 mod backlog;
 mod checks;
 mod conventions;
+mod gate;
 mod lex;
 
 use std::path::{Path, PathBuf};
@@ -310,7 +311,8 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         "sim" => sim(&rest),
         "bench" => bench(&rest),
         "scorecard" => scorecard(&rest),
-        "fuzz" | "eval" | "doctor" | "release" | "gen" | "gate" => not_implemented(cmd),
+        "gate" => gate::collect(&rest),
+        "fuzz" | "eval" | "doctor" | "release" | "gen" => not_implemented(cmd),
         "help" | "--help" | "-h" => {
             println!(
                 "commands: ci fmt lint test test-portable deny docs setup commit-lint lint-conventions \

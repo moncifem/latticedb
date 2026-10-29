@@ -54,6 +54,7 @@ To build from source, use the Rust version pinned in `rust-toolchain.toml`:
 
 ```bash
 cargo xtask ci                               # the complete pull request gate
+cargo xtask gate --phase 1                    # collect a pending review package
 cargo xtask sim --seeds 1000                  # replay crashes across five fault profiles
 cargo run -p lattice-cli -- doctor --dir path/to/data
 cargo run -p lattice-cli -- lsl compat old.lsl new.lsl

@@ -1,6 +1,6 @@
 # Phase 1 status (gate NOT passed)
 
-Date: 2026-10-28. Phase 1 is partly built. This page says exactly what exists, what was measured, what
+Updated: 2026-10-29. Phase 1 is partly built. This page says exactly what exists, what was measured, what
 an independent review found, and what is missing. The gate in `docs/spec/01-foundations.md` is **not**
 met.
 
@@ -64,17 +64,17 @@ the harness before the kernel fixes in PR 61; the nightly run is the current evi
 | E1-9 | Benchmark baselines and regression gate | Met: the gate fails without a baseline; `ci-ubuntu` is a baseline recorded on a GitHub-hosted runner (`bench-baseline` workflow) and nightly compares against it with a 3x tolerance because shared runners are noisy; the `local` profile covers one developer machine |
 | E1-10 | Format ADR accepted, corpus read in CI | Met for the WAL and change set |
 | E1-11 | TLC passes four models | Met for the abstractions: Commit, Hlc, Fence, SetConvergence pass TLC, and Fence, Hlc and SetConvergence were shown to fail when the protection is removed (fence guard, counter advance, tombstone rule). Each header states what it does not model; run nightly by `tla/check-all.sh` |
-| E1-12 | Runtime ADR with benchmark data | Partial: ADR 0011 accepted with criteria written first and commit-path data from macOS (fsync is 92 to 98 percent of commit time; batching gave 55 times the throughput). The weekly job collected the same on Linux (fsync 78 to 95 percent of commit time). The `UringIo` prototype of P1-62 is not built, because it cannot be built or measured on the development machine |
-| E1-13 | Unsafe discipline, Miri, loom | Partial: zero `unsafe` anywhere; Miri runs the abi and core unit tests nightly (66 tests pass, locally and in CI); no loom because there is no shared-memory concurrency yet |
-| E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3, I7, I10, I11 and I14 belong to later phases |
-| E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs, then `lattice ledger check` fails when the latest simulation run has violations, no runs or mostly unverified runs and reports the streak of clean runs; no trend over time yet |
-| E1-16 | Gate review package | Not met |
+| E1-12 | Runtime ADR with benchmark data | Met: ADR 0011 records portable macOS/Linux measurements and the opt-in Linux portable/Tokio/io_uring comparison. [Run 40789753956](https://github.com/moncifem/latticedb/actions/runs/40789753956) passed all three backends, 36 measurement rows, conformance/recovery checks and the completion-error regression. Raw JSON is committed; the synchronous production runtime is unchanged |
+| E1-13 | Unsafe discipline, Miri, loom | Partial: no unsafe outside `lattice-sys`. Its opt-in Linux runtime prototype has one reviewed submission block, covered by Linux conformance and a completion-error regression, not a Miri syscall proof. Miri still runs the abi/core tests; loom remains applicable when shared-memory engine concurrency is introduced |
+| E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3 has early row snapshot tests but still needs full Phase 2 evidence. I7, I10, I11 and I14 belong to later phases |
+| E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs, then `lattice ledger check` fails when the latest simulation run has violations, no runs or mostly unverified runs and reports the streak and trend over the last seven simulation runs; automatic nightly ingestion and the remaining scorecard sections are not complete |
+| E1-16 | Gate review package | Review not met: `cargo xtask gate --phase 1` now collects declared criteria, source/document provenance, invariant traceability and optional raw/verified ledger snapshots. Every criterion stays unverified until reviewed; no signature or phase-pass decision is generated |
 
 ## Not built
 
 Snapshot cursors over derived state and checkpoint-based recovery start (both need engine state from
-phase 2), mutation testing of the remaining crates, the runtime spike, long fuzz runs (24 hours per
-target), the nightly simulation volume, and the final gate review.
+phase 2), mutation coverage of new engine/runtime modules, long fuzz history (24 hours per target), the
+seven-night simulation history, and the final signed gate review.
 
 North-star scenarios: NS1 runs at the log level in `crates/lattice-testkit/tests/north_star.rs`; NS2 to
 NS8 exist there as pending specs with their owning phase and are listed by `cargo xtask scorecard`.

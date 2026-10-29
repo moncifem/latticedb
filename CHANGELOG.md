@@ -9,6 +9,9 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Phase review evidence packages from `cargo xtask gate`, with declared criteria, source provenance,
+  invariant traceability and optional ledger diagnostics, without inferring or signing a gate pass.
+
 - Typed-row layouts and a canonical codec with an overflow area for fields unknown to the encoding
   layout. Decoding requires the original layout; catalog integration and schema migration remain open.
 
