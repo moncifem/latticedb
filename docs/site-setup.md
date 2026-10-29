@@ -18,9 +18,9 @@ notice and does nothing.
 4. The first successful run prints the site URL in the job summary. The expected URL is
    `https://moncifem.github.io/latticedb/`.
 
-Until Pages is enabled, the `deploy` job fails at `actions/configure-pages` with a "Pages not enabled"
-error. The build job, which runs on every pull request, is unaffected and is the check that matters
-for contributors.
+Until Pages is enabled, the `deploy` job on `main` fails at `actions/deploy-pages` (no Pages site). The
+`build` job, which runs on every pull request and checks the links, is unaffected and is the check that
+matters for contributors.
 
 ## 2. Initialize the wiki
 
@@ -39,7 +39,20 @@ web UI; a repository with the wiki enabled but no page has nothing to push to
 personal access token or secret is needed. If the push is ever rejected with a 403, the log says so;
 GitHub's documentation does not promise this behaviour for every account type, so that would be the
 point to add a token secret instead. Until step 2 is done the workflow detects that the wiki repository
-does not exist, prints a notice and ends successfully.
+does not exist (`git ls-remote` answers "Repository not found", which is what it answers today), prints
+a notice and ends successfully.
+
+## How the pieces fit
+
+- `tools/docs_summary.py` copies `docs/`, the README, CONTRIBUTING and `formats/` into `target/docs-src`
+  (never into `docs/`), rewrites relative links, writes `SUMMARY.md` in the fixed order overview, roadmap,
+  architecture, specification, gates, ADRs, RFCs, formats, policies, guides, and fails on a broken link.
+  Anchors (`#heading`) and external links are not checked.
+- `docs/book.toml` configures mdBook (pinned in `docs-site.yml` with a checked sha256).
+- `tools/docs_wiki.py` writes the wiki pages: Home, Roadmap, Architecture overview, How to contribute,
+  Glossary, Gates and board.
+- `docs/build.py` and the `docs` step of `cargo xtask ci` are the older single-page HTML viewer. They are
+  kept unchanged for now because the gate calls them; retiring them is a separate change to `xtask`.
 
 ## What not to do
 

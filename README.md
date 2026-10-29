@@ -12,6 +12,11 @@ The goal is to connect what the team knows, what it is building and what actuall
 
 **[Explore the architecture](docs/ARCHITECTURE.md) · [Follow the roadmap](https://github.com/users/moncifem/projects/1) · [Get involved](CONTRIBUTING.md)**
 
+Documentation: the reviewed documents are in [`docs/`](docs). A site built from them is published at
+https://moncifem.github.io/latticedb/ and a read-only wiki mirrors the main pages, but the site is **not live
+until the owner enables GitHub Pages** and the wiki stays empty until its first page exists
+([owner steps](docs/site-setup.md)). Edit `docs/`, never the wiki.
+
 > **Pre-alpha.** The storage kernel and early row engine work today. A development TCP listener
 > answers `SELECT 1`; storage-backed SQL execution and the connected team workspace are still ahead.
 > The Phase 1 gate remains open; Phase 2 development

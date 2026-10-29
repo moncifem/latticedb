@@ -27,3 +27,13 @@ cargo xtask ci         # everything the pull-request workflow runs
 ```
 
 A dev container is provided in `.devcontainer/`.
+
+## Documentation
+
+`docs/` is the single reviewed source; the site and the wiki are generated from it, so change the
+documents in a pull request and never edit the wiki. The site is meant to live at
+https://moncifem.github.io/latticedb/ but is **not live until the owner enables GitHub Pages**
+(`docs/site-setup.md` lists the owner steps). The `docs-site` check builds it on every pull request
+that touches the documents and fails on a broken relative link. To check locally:
+`python3 tools/docs_summary.py` (stages the pages in `target/docs-src`) and
+`python3 -m unittest discover -s tools -p 'test_docs_*.py'`. Add new terms to `docs/glossary.md`.
