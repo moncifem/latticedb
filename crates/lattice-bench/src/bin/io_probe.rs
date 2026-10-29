@@ -26,6 +26,11 @@ impl Io for Timed {
     fn read(&self, path: &str) -> Result<Vec<u8>, IoError> {
         self.inner.read(path)
     }
+
+    fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError> {
+        self.inner.read_prefix(path, max)
+    }
+
     fn append(&mut self, path: &str, data: &[u8]) -> Result<(), IoError> {
         self.inner.append(path, data)
     }

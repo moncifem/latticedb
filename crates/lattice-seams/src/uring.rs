@@ -68,6 +68,9 @@ impl Io for UringIo {
         bytes.truncate(done);
         Ok(bytes)
     }
+    fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError> {
+        self.metadata.read_prefix(path, max)
+    }
     fn append(&mut self, path: &str, data: &[u8]) -> Result<(), IoError> {
         let file = fs::OpenOptions::new()
             .create(true)

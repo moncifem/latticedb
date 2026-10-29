@@ -90,6 +90,11 @@ impl Io for SharedIo {
     fn read(&self, path: &str) -> Result<Vec<u8>, IoError> {
         self.0.borrow().read(path)
     }
+
+    fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError> {
+        self.0.borrow().read_prefix(path, max)
+    }
+
     fn append(&mut self, path: &str, data: &[u8]) -> Result<(), IoError> {
         self.0.borrow_mut().append(path, data)
     }

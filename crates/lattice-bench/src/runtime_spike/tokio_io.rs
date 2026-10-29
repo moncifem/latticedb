@@ -42,6 +42,9 @@ impl Io for TokioIo {
             .block_on(tokio::fs::read(self.root.join(path)))
             .map_err(|e| map(path, e))
     }
+    fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError> {
+        self.metadata.read_prefix(path, max)
+    }
     fn append(&mut self, path: &str, data: &[u8]) -> Result<(), IoError> {
         self.runtime
             .block_on(async {

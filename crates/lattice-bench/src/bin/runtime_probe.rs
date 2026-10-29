@@ -36,6 +36,11 @@ mod linux {
         fn read(&self, p: &str) -> Result<Vec<u8>, IoError> {
             self.inner.read(p)
         }
+
+        fn read_prefix(&self, p: &str, max: usize) -> Result<Vec<u8>, IoError> {
+            self.inner.read_prefix(p, max)
+        }
+
         fn append(&mut self, p: &str, b: &[u8]) -> Result<(), IoError> {
             self.inner.append(p, b)
         }

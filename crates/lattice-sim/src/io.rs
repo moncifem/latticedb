@@ -341,6 +341,22 @@ impl Io for SimIo {
             .ok_or_else(|| IoError::NotFound(path.into()))
     }
 
+    fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError> {
+        let file = self
+            .files
+            .get(path)
+            .ok_or_else(|| IoError::NotFound(path.into()))?;
+        let durable_len = file.effective_durable_len().min(max);
+        let mut bytes = Vec::with_capacity(max.min(file.len()));
+        bytes.extend_from_slice(file.durable.get(..durable_len).unwrap_or(&[]));
+        bytes.extend_from_slice(
+            file.pending
+                .get(..max.saturating_sub(durable_len).min(file.pending.len()))
+                .unwrap_or(&[]),
+        );
+        Ok(bytes)
+    }
+
     fn append(&mut self, path: &str, data: &[u8]) -> Result<(), IoError> {
         self.trace.write(b"append");
         self.trace.write(path.as_bytes());

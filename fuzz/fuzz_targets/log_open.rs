@@ -19,6 +19,9 @@ impl Io for Disk {
     fn exists(&self, p: &str) -> bool { self.0.exists(p) }
     fn len(&self, p: &str) -> Result<u64, lattice_seams::IoError> { self.0.len(p) }
     fn read(&self, p: &str) -> Result<Vec<u8>, lattice_seams::IoError> { self.0.read(p) }
+
+    fn read_prefix(&self, p: &str, max: usize) -> Result<Vec<u8>, lattice_seams::IoError> { self.0.read_prefix(p, max) }
+
     fn append(&mut self, p: &str, d: &[u8]) -> Result<(), lattice_seams::IoError> { self.0.append(p, d) }
     fn truncate(&mut self, p: &str, l: u64) -> Result<(), lattice_seams::IoError> { self.0.truncate(p, l) }
     fn sync(&mut self, p: &str) -> Result<(), lattice_seams::IoError> { self.0.sync(p) }

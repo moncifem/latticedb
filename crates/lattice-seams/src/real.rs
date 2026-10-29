@@ -3,7 +3,7 @@
 use crate::{Clock, Io, IoError, Rng, Spawner};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 /// The system wall clock.
@@ -91,6 +91,25 @@ impl Io for StdIo {
 
     fn read(&self, path: &str) -> Result<Vec<u8>, IoError> {
         fs::read(self.full(path)).map_err(|e| map(path, e))
+    }
+
+    fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError> {
+        let mut file = fs::File::open(self.full(path)).map_err(|e| map(path, e))?;
+        let mut bytes = vec![0; max];
+        let mut used = 0;
+        while used < max {
+            let rest = bytes
+                .get_mut(used..)
+                .ok_or_else(|| IoError::Other("read offset".into()))?;
+            match file.read(rest) {
+                Ok(0) => break,
+                Ok(n) => used += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(map(path, e)),
+            }
+        }
+        bytes.truncate(used);
+        Ok(bytes)
     }
 
     fn append(&mut self, path: &str, data: &[u8]) -> Result<(), IoError> {

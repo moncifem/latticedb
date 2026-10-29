@@ -63,6 +63,11 @@ impl Io for ObservedIo {
     fn read(&self, p: &str) -> Result<Vec<u8>, IoError> {
         self.disk.read(p)
     }
+
+    fn read_prefix(&self, p: &str, max: usize) -> Result<Vec<u8>, IoError> {
+        self.disk.read_prefix(p, max)
+    }
+
     fn list(&self, p: &str) -> Result<Vec<String>, IoError> {
         self.disk.list(p)
     }

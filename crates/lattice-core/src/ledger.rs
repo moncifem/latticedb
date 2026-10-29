@@ -94,6 +94,11 @@ mod tests {
         fn read(&self, p: &str) -> Result<Vec<u8>, lattice_seams::IoError> {
             self.0.borrow().read(p)
         }
+
+        fn read_prefix(&self, p: &str, max: usize) -> Result<Vec<u8>, lattice_seams::IoError> {
+            self.0.borrow().read_prefix(p, max)
+        }
+
         fn append(&mut self, p: &str, d: &[u8]) -> Result<(), lattice_seams::IoError> {
             self.0.borrow_mut().append(p, d)
         }

@@ -9,16 +9,39 @@ pub fn run<I: Io>(io: &mut I) {
     assert!(!io.exists("conf/a"), "fresh file must not exist");
     assert_eq!(io.len("conf/a"), Err(IoError::NotFound("conf/a".into())));
 
+    assert_eq!(
+        io.read_prefix("conf/missing", 0),
+        Err(IoError::NotFound("conf/missing".into()))
+    );
     io.append("conf/a", b"hello").expect("append");
     io.append("conf/a", b" world").expect("append");
     assert_eq!(io.read("conf/a").expect("read"), b"hello world");
     assert_eq!(io.len("conf/a").expect("len"), 11);
+    assert_eq!(io.read_prefix("conf/a", 0).expect("zero prefix"), b"");
+    let prefix = io.read_prefix("conf/a", 7).expect("pending prefix");
+    assert_eq!(prefix, b"hello w");
+    assert!(prefix.capacity() <= 7, "prefix allocation exceeds request");
+    assert_eq!(
+        io.read_prefix("conf/a", 32).expect("short prefix"),
+        b"hello world"
+    );
 
     io.sync("conf/a").expect("sync");
     io.sync_dir("conf").expect("sync dir");
 
     io.truncate("conf/a", 5).expect("truncate");
     assert_eq!(io.read("conf/a").expect("read"), b"hello");
+    assert_eq!(
+        io.read_prefix("conf/a", 32).expect("truncated prefix"),
+        b"hello"
+    );
+
+    io.append("conf/a", b"!").expect("append after truncate");
+    assert_eq!(
+        io.read_prefix("conf/a", 8)
+            .expect("durable and pending prefix"),
+        b"hello!"
+    );
 
     io.append("conf/b", b"x").expect("append b");
     assert_eq!(
@@ -65,6 +88,12 @@ mod tests {
             self.0
                 .get(path)
                 .cloned()
+                .ok_or_else(|| IoError::NotFound(path.into()))
+        }
+        fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError> {
+            self.0
+                .get(path)
+                .map(|v| v.get(..max.min(v.len())).unwrap_or(&[]).to_vec())
                 .ok_or_else(|| IoError::NotFound(path.into()))
         }
         fn append(&mut self, path: &str, _data: &[u8]) -> Result<(), IoError> {
