@@ -12,3 +12,6 @@
 # Python automation bytecode
 __pycache__/
 *.py[cod]
+
+# Local operating manual for development agents
+/AGENTS.md
