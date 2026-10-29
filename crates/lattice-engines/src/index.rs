@@ -3,14 +3,15 @@
 //! An index maps a value extracted from a row to the primary keys of the rows that hold it. Its
 //! entries are versioned exactly like rows and are applied at the same commit LSN as the row writes
 //! that cause them, in the same step, so a snapshot sees a row and its index entries together or
-//! neither (P2-07). Nothing about an index is logged: recovery rebuilds it by replaying the row change
-//! sets, and [`Indexes::live_entries`] lets a checker compare the live index with what the rows imply.
+//! neither (P2-07). Entries are derived, while managed definitions are logged in the catalog's draft
+//! compound format. Recovery replays definition and row changes; legacy callback definitions remain
+//! an explicit process-local mode. [`Indexes::live_entries`] supports comparison with the rows.
 
 use crate::mvcc::{MvccError, Snapshot, Table};
 use crate::rowops::{RowKey, RowWrite};
 use lattice_core::ChangeSetId;
 use lattice_core::bugs::{self, Bug};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// An index definition: which rows it covers and what it keys them by.
 #[derive(Clone, Copy)]
@@ -21,6 +22,82 @@ pub struct IndexDef {
     pub table: u32,
     /// The index key of a row value, or `None` if the row is not indexed.
     pub extract: fn(&[u8]) -> Option<Vec<u8>>,
+}
+
+/// Stable extraction operations that can be persisted without executable callbacks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexKey {
+    /// Index the complete physical row value.
+    WholeValue,
+    /// Index exactly this byte window. Values shorter than its end have no entry.
+    Slice {
+        /// Zero-based byte offset in the physical value.
+        offset: u32,
+        /// Exact number of bytes in the extracted key; zero selects an empty key.
+        length: u32,
+    },
+}
+impl IndexKey {
+    /// Rejects a window whose end cannot be represented in its format.
+    pub fn is_valid(&self) -> bool {
+        match self {
+            Self::WholeValue => true,
+            Self::Slice { offset, length } => offset.checked_add(*length).is_some(),
+        }
+    }
+    /// Extracts the stable key. This does not interpret an unaccepted typed-row layout.
+    pub fn extract(&self, value: &[u8]) -> Option<Vec<u8>> {
+        match self {
+            Self::WholeValue => Some(value.to_vec()),
+            Self::Slice { offset, length } => {
+                let end = offset.checked_add(*length)?;
+                value
+                    .get(*offset as usize..end as usize)
+                    .map(<[u8]>::to_vec)
+            }
+        }
+    }
+}
+
+/// A declarative index definition retained by the versioned catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedIndexDef {
+    /// Never-reused index id, independent of table ids.
+    pub id: u32,
+    /// Catalog table whose physical rows it covers.
+    pub table: u32,
+    /// Name, unique among live indexes of this table.
+    pub name: String,
+    /// Stable physical-byte extraction expression.
+    pub key: IndexKey,
+}
+
+/// Live managed index definitions keyed by their persistent id.
+pub type ManagedIndexes = BTreeMap<u32, ManagedIndexDef>;
+
+enum Definition<'a> {
+    Callback(&'a IndexDef),
+    Managed(&'a ManagedIndexDef),
+}
+impl Definition<'_> {
+    fn id(&self) -> u32 {
+        match self {
+            Self::Callback(d) => d.id,
+            Self::Managed(d) => d.id,
+        }
+    }
+    fn table(&self) -> u32 {
+        match self {
+            Self::Callback(d) => d.table,
+            Self::Managed(d) => d.table,
+        }
+    }
+    fn extract(&self, value: &[u8]) -> Option<Vec<u8>> {
+        match self {
+            Self::Callback(d) => (d.extract)(value),
+            Self::Managed(d) => d.key.extract(value),
+        }
+    }
 }
 
 type EntryKey = (u32, Vec<u8>);
@@ -54,6 +131,7 @@ fn entry_key(index: u32, ikey: &[u8], pk: &[u8]) -> EntryKey {
 pub struct Indexes {
     defs: Vec<IndexDef>,
     entries: Table<EntryKey, Vec<u8>>,
+    managed_versions: Vec<(u64, ManagedIndexes)>,
 }
 
 impl Indexes {
@@ -62,11 +140,15 @@ impl Indexes {
         Self {
             defs,
             entries: Table::new(),
+            managed_versions: Vec::new(),
         }
     }
 
     /// The table whose visible row must be authorized before returning an index candidate.
-    pub(crate) fn table_for(&self, index: u32) -> Option<u32> {
+    pub(crate) fn table_for(&self, snap: Snapshot, index: u32) -> Option<u32> {
+        if let Some(definitions) = self.managed_at(snap) {
+            return definitions.get(&index).map(|definition| definition.table);
+        }
         self.defs
             .iter()
             .find(|definition| definition.id == index)
@@ -79,6 +161,37 @@ impl Indexes {
         rows: &Table<RowKey, Vec<u8>>,
         writes: &[RowWrite],
     ) -> Result<Vec<EntryWrite>, MvccError> {
+        self.changes_for_catalog(rows, writes, self.managed_current())
+    }
+
+    fn managed_current(&self) -> Option<&ManagedIndexes> {
+        self.managed_versions.last().map(|(_, defs)| defs)
+    }
+    fn managed_at(&self, snap: Snapshot) -> Option<&ManagedIndexes> {
+        let end = self
+            .managed_versions
+            .partition_point(|(lsn, _)| *lsn <= snap.as_of);
+        end.checked_sub(1)
+            .and_then(|index| self.managed_versions.get(index))
+            .map(|(_, defs)| defs)
+    }
+    fn definitions<'a>(
+        &'a self,
+        managed: Option<&'a ManagedIndexes>,
+    ) -> impl Iterator<Item = Definition<'a>> {
+        self.defs.iter().map(Definition::Callback).chain(
+            managed
+                .into_iter()
+                .flat_map(|defs| defs.values())
+                .map(Definition::Managed),
+        )
+    }
+    fn changes_for_catalog(
+        &self,
+        rows: &Table<RowKey, Vec<u8>>,
+        writes: &[RowWrite],
+        managed: Option<&ManagedIndexes>,
+    ) -> Result<Vec<EntryWrite>, MvccError> {
         let before = rows.snapshot();
         // Rows written twice in one change set: the last write wins, so each step starts from the
         // value the previous step left.
@@ -89,26 +202,82 @@ impl Indexes {
                 Some(v) => *v,
                 None => rows.get(before, key)?,
             };
-            for def in self.defs.iter().filter(|d| d.table == key.0) {
-                let old_k = old.and_then(|v| (def.extract)(v));
-                let new_k = new.as_ref().and_then(|v| (def.extract)(v));
+            for def in self.definitions(managed).filter(|d| d.table() == key.0) {
+                let old_k = old.and_then(|v| def.extract(v));
+                let new_k = new.as_ref().and_then(|v| def.extract(v));
                 if old_k == new_k {
                     continue;
                 }
                 if let Some(o) = old_k
                     && !bugs::active(Bug::RowIndexStaleEntries)
                 {
-                    out.push((entry_key(def.id, &o, &key.1), None));
+                    out.push((entry_key(def.id(), &o, &key.1), None));
                 }
                 if let Some(n) = new_k
                     && !bugs::active(Bug::RowIndexMissingInsert)
                 {
-                    out.push((entry_key(def.id, &n, &key.1), Some(key.1.clone())));
+                    out.push((entry_key(def.id(), &n, &key.1), Some(key.1.clone())));
                 }
             }
             current.insert(key, new.as_ref());
         }
         Ok(out)
+    }
+
+    /// Prepares synchronous build/drop changes and the same transaction's row maintenance.
+    /// No state is changed, and no row-history copy is made. Building still visits all live rows.
+    pub(crate) fn catalog_changes_for(
+        &self,
+        rows: &Table<RowKey, Vec<u8>>,
+        writes: &[RowWrite],
+        next: &ManagedIndexes,
+    ) -> Result<Vec<EntryWrite>, MvccError> {
+        let before = rows.snapshot();
+        let previous = self.managed_current();
+        let mut changes = Vec::new();
+        let removed: BTreeSet<_> = previous
+            .into_iter()
+            .flat_map(|defs| defs.keys())
+            .filter(|id| !next.contains_key(id))
+            .copied()
+            .collect();
+        if !removed.is_empty() {
+            for (key, _) in self.entries.range(before, ..)? {
+                if removed.contains(&key.0) {
+                    changes.push((key.clone(), None));
+                }
+            }
+        }
+        let added: Vec<_> = next
+            .values()
+            .filter(|def| !previous.is_some_and(|defs| defs.contains_key(&def.id)))
+            .collect();
+        if !added.is_empty() {
+            for ((table, pk), value) in rows.range(before, ..)? {
+                for def in added.iter().filter(|def| def.table == *table) {
+                    if let Some(key) = def.key.extract(value) {
+                        changes.push((entry_key(def.id, &key, pk), Some(pk.clone())));
+                    }
+                }
+            }
+        }
+        changes.extend(self.changes_for_catalog(rows, writes, Some(next))?);
+        Ok(changes)
+    }
+
+    /// Publishes prepared entries and the definition version at the same LSN.
+    pub(crate) fn apply_catalog(
+        &mut self,
+        lsn: u64,
+        cs: ChangeSetId,
+        changes: Vec<EntryWrite>,
+        definitions: ManagedIndexes,
+    ) -> Result<(), MvccError> {
+        self.entries.apply(lsn, cs, changes)?;
+        if self.managed_current() != Some(&definitions) {
+            self.managed_versions.push((lsn, definitions));
+        }
+        Ok(())
     }
 
     /// Applies index changes at the commit LSN of the row writes that caused them.
@@ -175,11 +344,20 @@ impl Indexes {
         rows: &Table<RowKey, Vec<u8>>,
         snap: Snapshot,
     ) -> Result<IndexEntries, MvccError> {
+        self.expected_entries_catalog(rows, snap, self.managed_at(snap))
+    }
+
+    pub(crate) fn expected_entries_catalog(
+        &self,
+        rows: &Table<RowKey, Vec<u8>>,
+        snap: Snapshot,
+        managed: Option<&ManagedIndexes>,
+    ) -> Result<IndexEntries, MvccError> {
         let mut out = BTreeMap::new();
         for ((table, pk), value) in rows.range(snap, ..)? {
-            for def in self.defs.iter().filter(|d| d.table == *table) {
-                if let Some(ik) = (def.extract)(value) {
-                    out.insert(entry_key(def.id, &ik, pk), pk.clone());
+            for def in self.definitions(managed).filter(|d| d.table() == *table) {
+                if let Some(ik) = def.extract(value) {
+                    out.insert(entry_key(def.id(), &ik, pk), pk.clone());
                 }
             }
         }

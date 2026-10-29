@@ -6,8 +6,12 @@
 //!
 //! Layout (little endian): magic `LCAT`, a version byte, a `u32` count, then per operation a kind byte
 //! (1 create, 2 rename, 3 drop), a `u32` table id and, for create and rename, a `u32` name length and
-//! the UTF-8 name. Decoding is strict, like the row payloads.
+//! the UTF-8 name. Those version 1 bytes remain unchanged. The separately identified draft `LCIX`
+//! version 1 envelope adds managed index definitions and optional row mutations at one commit LSN;
+//! it does not reuse the reserved typed-catalog version 2. See RFC 0005 for upgrade restrictions.
 
+use crate::index::{IndexKey, ManagedIndexDef, ManagedIndexes};
+use crate::rowops::{self, RowWrite};
 use lattice_abi::{Classify, ErrorClass};
 use lattice_core::changeset::ChangeSet;
 use lattice_core::record::{Record, RecordType};
@@ -69,6 +73,20 @@ pub enum CatalogError {
     UnsupportedVersion(u8),
     /// Bytes remain after the last operation.
     Trailing,
+    /// A managed index id was already used, even if the index was dropped.
+    IndexIdUsed(u32),
+    /// An index does not exist in the current catalog.
+    NoSuchIndex(u32),
+    /// Another live index of the table has this name.
+    IndexNameTaken(String),
+    /// A table drop would strand a live index; drop its index in the same compound change.
+    TableHasIndexes(u32),
+    /// An extraction expression has an overflowing byte window.
+    BadIndexKey,
+    /// A compound field/count exceeds the bounded format.
+    TooLarge,
+    /// A nested field is structurally valid but not the canonical compound representation.
+    BadCompound(&'static str),
 }
 
 impl fmt::Display for CatalogError {
@@ -184,6 +202,189 @@ pub fn decode(payload: &[u8]) -> Result<Vec<CatalogOp>, CatalogError> {
     Ok(ops)
 }
 
+/// Independent draft envelope magic; it does not reinterpret reserved LCAT version 2.
+pub const INDEX_MAGIC: [u8; 4] = *b"LCIX";
+/// Maximum index operations in one compound change.
+pub const MAX_INDEX_OPS: usize = 4096;
+
+/// A definition change. Index ids are never reused; a recreated name receives a fresh id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexOp {
+    /// Build an index synchronously from the visible rows, then maintain it transactionally.
+    Create(ManagedIndexDef),
+    /// Remove the live definition and entries while preserving historical snapshots.
+    Drop {
+        /// Persistent index id to retire.
+        id: u32,
+    },
+}
+
+/// One atomic metadata and optional row mutation under the draft LCIX v1 envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompoundChange {
+    /// Existing canonical LCAT v1 table operations, applied before checking index references.
+    pub tables: Vec<CatalogOp>,
+    /// Managed definition operations, in their submitted order.
+    pub indexes: Vec<IndexOp>,
+    /// Row mutations, in their submitted order; the last write to a key wins.
+    pub rows: Vec<RowWrite>,
+}
+
+/// Whether a payload claims the managed-catalog compound format.
+pub fn is_compound_payload(payload: &[u8]) -> bool {
+    payload.get(..4) == Some(INDEX_MAGIC.as_slice())
+}
+
+fn put_block(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), CatalogError> {
+    out.extend_from_slice(
+        &u32::try_from(bytes.len())
+            .map_err(|_| CatalogError::TooLarge)?
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+/// Encodes the draft compound format. Existing LCAT and LROW bytes are unchanged.
+pub fn encode_compound(change: &CompoundChange) -> Result<Vec<u8>, CatalogError> {
+    if change.tables.is_empty() && change.indexes.is_empty() {
+        return Err(CatalogError::Empty);
+    }
+    if change.tables.len() > MAX_INDEX_OPS || change.indexes.len() > MAX_INDEX_OPS {
+        return Err(CatalogError::TooLarge);
+    }
+    let tables = if change.tables.is_empty() {
+        Vec::new()
+    } else {
+        encode(&change.tables)?
+    };
+    let rows = if change.rows.is_empty() {
+        Vec::new()
+    } else {
+        rowops::encode(&change.rows).map_err(|_| CatalogError::TooLarge)?
+    };
+    let mut out = INDEX_MAGIC.to_vec();
+    out.push(1);
+    put_block(&mut out, &tables)?;
+    out.extend_from_slice(
+        &u32::try_from(change.indexes.len())
+            .map_err(|_| CatalogError::TooLarge)?
+            .to_le_bytes(),
+    );
+    for op in &change.indexes {
+        match op {
+            IndexOp::Create(def) => {
+                if def.name.is_empty() || def.name.len() > MAX_NAME {
+                    return Err(CatalogError::BadName);
+                }
+                if !def.key.is_valid() {
+                    return Err(CatalogError::BadIndexKey);
+                }
+                out.push(1);
+                out.extend_from_slice(&def.id.to_le_bytes());
+                out.extend_from_slice(&def.table.to_le_bytes());
+                put_block(&mut out, def.name.as_bytes())?;
+                match def.key {
+                    IndexKey::WholeValue => out.push(0),
+                    IndexKey::Slice { offset, length } => {
+                        out.push(1);
+                        out.extend_from_slice(&offset.to_le_bytes());
+                        out.extend_from_slice(&length.to_le_bytes());
+                    }
+                }
+            }
+            IndexOp::Drop { id } => {
+                out.push(2);
+                out.extend_from_slice(&id.to_le_bytes());
+            }
+        }
+    }
+    put_block(&mut out, &rows)?;
+    if out.len() > lattice_core::record::MAX_PAYLOAD {
+        return Err(CatalogError::TooLarge);
+    }
+    Ok(out)
+}
+
+/// Strict bounded decoder. A successful value re-encodes to exactly the submitted bytes.
+pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
+    if payload.len() > lattice_core::record::MAX_PAYLOAD {
+        return Err(CatalogError::TooLarge);
+    }
+    let mut r = Reader { rest: payload };
+    if r.take(4)? != INDEX_MAGIC {
+        return Err(CatalogError::BadCompound("magic"));
+    }
+    match r.u8()? {
+        1 => {}
+        version => return Err(CatalogError::UnsupportedVersion(version)),
+    }
+    let table_len = r.u32()? as usize;
+    let tables = if table_len == 0 {
+        Vec::new()
+    } else {
+        decode(r.take(table_len)?)?
+    };
+    if tables.len() > MAX_INDEX_OPS {
+        return Err(CatalogError::TooLarge);
+    }
+    let count = r.u32()? as usize;
+    if count > MAX_INDEX_OPS {
+        return Err(CatalogError::TooLarge);
+    }
+    let mut indexes = Vec::new();
+    for _ in 0..count {
+        indexes.push(match r.u8()? {
+            1 => {
+                let id = r.u32()?;
+                let table = r.u32()?;
+                let name = r.name()?;
+                let key = match r.u8()? {
+                    0 => IndexKey::WholeValue,
+                    1 => IndexKey::Slice {
+                        offset: r.u32()?,
+                        length: r.u32()?,
+                    },
+                    other => return Err(CatalogError::BadKind(other)),
+                };
+                if !key.is_valid() {
+                    return Err(CatalogError::BadIndexKey);
+                }
+                IndexOp::Create(ManagedIndexDef {
+                    id,
+                    table,
+                    name,
+                    key,
+                })
+            }
+            2 => IndexOp::Drop { id: r.u32()? },
+            other => return Err(CatalogError::BadKind(other)),
+        });
+    }
+    let row_len = r.u32()? as usize;
+    let rows = if row_len == 0 {
+        Vec::new()
+    } else {
+        let rows =
+            rowops::decode(r.take(row_len)?).map_err(|_| CatalogError::BadCompound("rows"))?;
+        if rows.is_empty() {
+            return Err(CatalogError::BadCompound("empty row block"));
+        }
+        rows
+    };
+    if !r.rest.is_empty() {
+        return Err(CatalogError::Trailing);
+    }
+    if tables.is_empty() && indexes.is_empty() {
+        return Err(CatalogError::Empty);
+    }
+    Ok(CompoundChange {
+        tables,
+        indexes,
+        rows,
+    })
+}
+
 /// The tables that exist at one version: id to name.
 pub type Tables = BTreeMap<u32, String>;
 
@@ -194,6 +395,8 @@ pub struct Catalog {
     versions: Vec<(u64, Tables)>,
     /// Every id ever created, live or dropped.
     used: BTreeSet<u32>,
+    index_versions: Vec<(u64, ManagedIndexes)>,
+    used_indexes: BTreeSet<u32>,
 }
 
 impl Catalog {
@@ -232,7 +435,7 @@ impl Catalog {
     }
 
     /// Checks the operations against the current catalog without changing it.
-    pub fn check(&self, ops: &[CatalogOp]) -> Result<Tables, CatalogError> {
+    fn check_tables(&self, ops: &[CatalogOp]) -> Result<Tables, CatalogError> {
         let mut tables = self.current();
         let mut used = self.used.clone();
         for op in ops {
@@ -271,19 +474,108 @@ impl Catalog {
         Ok(tables)
     }
 
-    /// Applies one change set's operations atomically at `lsn`; on error nothing changes.
-    pub fn apply(&mut self, lsn: u64, ops: &[CatalogOp]) -> Result<(), CatalogError> {
+    /// Live managed definitions as of `lsn`; definition history is retained independently of rows.
+    pub fn indexes_as_of(&self, lsn: u64) -> ManagedIndexes {
+        let end = self.index_versions.partition_point(|(at, _)| *at <= lsn);
+        end.checked_sub(1)
+            .and_then(|i| self.index_versions.get(i))
+            .map(|(_, defs)| defs.clone())
+            .unwrap_or_default()
+    }
+
+    /// Current managed definitions. This never includes process-local callback definitions.
+    pub fn indexes(&self) -> ManagedIndexes {
+        self.index_versions
+            .last()
+            .map(|(_, defs)| defs.clone())
+            .unwrap_or_default()
+    }
+
+    /// Validates table changes while preserving every live managed index reference.
+    pub fn check(&self, ops: &[CatalogOp]) -> Result<Tables, CatalogError> {
+        self.check_change(ops, &[]).map(|(tables, _)| tables)
+    }
+
+    /// Validates all metadata before any WAL write; only the final table/index state is published.
+    pub fn check_change(
+        &self,
+        ops: &[CatalogOp],
+        changes: &[IndexOp],
+    ) -> Result<(Tables, ManagedIndexes), CatalogError> {
+        let tables = self.check_tables(ops)?;
+        let mut indexes = self.indexes();
+        let mut used = self.used_indexes.clone();
+        for change in changes {
+            match change {
+                IndexOp::Create(def) => {
+                    if !used.insert(def.id) {
+                        return Err(CatalogError::IndexIdUsed(def.id));
+                    }
+                    if def.name.is_empty() || def.name.len() > MAX_NAME {
+                        return Err(CatalogError::BadName);
+                    }
+                    if !def.key.is_valid() {
+                        return Err(CatalogError::BadIndexKey);
+                    }
+                    if !tables.contains_key(&def.table) {
+                        return Err(CatalogError::NoSuchTable(def.table));
+                    }
+                    if indexes
+                        .values()
+                        .any(|old| old.table == def.table && old.name == def.name)
+                    {
+                        return Err(CatalogError::IndexNameTaken(def.name.clone()));
+                    }
+                    indexes.insert(def.id, def.clone());
+                }
+                IndexOp::Drop { id } => {
+                    if indexes.remove(id).is_none() {
+                        return Err(CatalogError::NoSuchIndex(*id));
+                    }
+                }
+            }
+        }
+        if indexes.len() > MAX_INDEX_OPS {
+            return Err(CatalogError::TooLarge);
+        }
+        if let Some(def) = indexes
+            .values()
+            .find(|def| !tables.contains_key(&def.table))
+        {
+            return Err(CatalogError::TableHasIndexes(def.table));
+        }
+        Ok((tables, indexes))
+    }
+
+    /// Applies table and index metadata atomically at a single committed LSN.
+    pub fn apply_change(
+        &mut self,
+        lsn: u64,
+        ops: &[CatalogOp],
+        changes: &[IndexOp],
+    ) -> Result<(), CatalogError> {
         if lsn <= self.applied_lsn() {
             return Err(CatalogError::OutOfOrder);
         }
-        let tables = self.check(ops)?;
+        let (tables, indexes) = self.check_change(ops, changes)?;
         for op in ops {
             if let CatalogOp::Create { table, .. } = op {
                 self.used.insert(*table);
             }
         }
+        for change in changes {
+            if let IndexOp::Create(def) = change {
+                self.used_indexes.insert(def.id);
+            }
+        }
         self.versions.push((lsn, tables));
+        self.index_versions.push((lsn, indexes));
         Ok(())
+    }
+
+    /// Applies one change set's operations atomically at `lsn`; on error nothing changes.
+    pub fn apply(&mut self, lsn: u64, ops: &[CatalogOp]) -> Result<(), CatalogError> {
+        self.apply_change(lsn, ops, &[])
     }
 }
 
@@ -339,6 +631,20 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
                     return;
                 }
             };
+            if is_compound_payload(&cs.payload) {
+                match decode_compound(&cs.payload)
+                    .and_then(|change| catalog.apply_change(r.lsn, &change.tables, &change.indexes))
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        failure = Some(StoreError::Corrupt(format!(
+                            "compound catalog at lsn {}: {e}",
+                            r.lsn
+                        )))
+                    }
+                }
+                return;
+            }
             if !is_catalog_payload(&cs.payload) {
                 return;
             }
@@ -370,6 +676,47 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
     /// The catalog as it stands.
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// Commits table and index metadata without row mutations. RowStore owns synchronous builds.
+    pub fn commit_managed(
+        &mut self,
+        tables: Vec<CatalogOp>,
+        indexes: Vec<IndexOp>,
+    ) -> Result<u64, StoreError> {
+        if self.stale {
+            return Err(StoreError::Stale);
+        }
+        self.catalog
+            .check_change(&tables, &indexes)
+            .map_err(StoreError::Invalid)?;
+        let payload = encode_compound(&CompoundChange {
+            tables: tables.clone(),
+            indexes: indexes.clone(),
+            rows: Vec::new(),
+        })
+        .map_err(StoreError::Invalid)?;
+        let id = self.kernel.new_id();
+        match self.kernel.commit(ChangeSet::new(id, payload)) {
+            Ok(Receipt::Recorded { lsn, .. }) => {
+                if let Err(error) = self.catalog.apply_change(lsn, &tables, &indexes) {
+                    self.stale = true;
+                    return Err(StoreError::Corrupt(format!("apply after commit: {error}")));
+                }
+                Ok(lsn)
+            }
+            Ok(Receipt::Duplicate) => {
+                self.stale = true;
+                Err(StoreError::Corrupt(
+                    "a fresh change set id was a duplicate".into(),
+                ))
+            }
+            Err(error) if error.class() == ErrorClass::Rejected => Err(StoreError::Rejected(error)),
+            Err(error) => {
+                self.stale = true;
+                Err(StoreError::InDoubt(error))
+            }
+        }
     }
 
     /// Commits catalog operations as one change set and returns its LSN.
