@@ -32,8 +32,10 @@ sha256sum --check --ignore-missing SHA256SUMS
 ## Cutting a release
 
 1. Pick the version. The workspace version in `Cargo.toml` is the single source of truth.
-2. In one pull request: set the version, move the `[Unreleased]` entries of `CHANGELOG.md` under a new
-   `## [X.Y.Z]` heading, and update the README status if it changed.
+2. In one pull request: set the version, run `python3 tools/changelog.py compile --version X.Y.Z --write`
+   (it moves the `[Unreleased]` entries and every file in `changelog.d/` under a new `## [X.Y.Z] - date`
+   heading and deletes the fragments; run it without `--write` first to preview), read the result, and
+   update the README status if it changed.
 3. After it merges, rehearse: run the `release` workflow by hand from `main`. It checks the version and
    changelog, runs the full gate and builds every archive without publishing.
 4. Tag the merge commit and push the tag:
