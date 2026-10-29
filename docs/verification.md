@@ -9,8 +9,15 @@ nothing about larger ones. The unwind bound, which must exceed the largest loop 
 recorded with `#[kani::unwind(N)]` next to each harness, together with the input bound in its doc
 comment. These proofs complement, and do not replace, the unit, property, fuzz and simulation tests.
 
-The harnesses live in a `#[cfg(kani)] mod proofs` at the end of each source file, so they are not
-compiled by ordinary builds. The `kani` cfg is declared in the workspace `unexpected_cfgs` lint.
+Each harness file is a `proofs.rs` beside the source it checks (`feed/proofs.rs`,
+`crdt_tree/proofs.rs`, `sync/proofs.rs`, `contract/proofs.rs`), declared by a two line
+`#[cfg(kani)] mod proofs;` at the end of the source file, so editing a proof does not touch the
+risk-area source. They are **not compiled by any ordinary build, test or lint run**; only the `kani`
+workflow compiles them. The `kani` cfg is declared in the workspace `unexpected_cfgs` lint.
+
+Some harnesses carry `kani::cover!` statements. They fail the run if the success path they name
+(a frame decodes, a line is returned) is unreachable inside the bound, so a proof cannot pass
+because every input is refused.
 
 ## Running
 
@@ -20,7 +27,7 @@ pull-request gate because it is heavy. It installs the pinned `kani-verifier` wi
 `lattice-core`, `lattice-api` and `lattice-sdk` with `--harness-timeout 20m`. To run one locally:
 
 ```bash
-cargo install --locked kani-verifier --version 0.65.0 && cargo kani setup
+cargo install --locked kani-verifier --version 0.68.0 && cargo kani setup
 cargo kani -p lattice-core --harness cursor_round_trips
 ```
 
@@ -53,11 +60,26 @@ cargo kani -p lattice-core --harness cursor_round_trips
 
 ## Status of the runs
 
-The harnesses were written and type-checked against the normal build (cfg off), but Kani was not
-executed on the machine they were written on: it is heavy and the owner's rule is to leave long jobs to CI.
-The first scheduled or manual run of the `kani` workflow is the first execution; a harness that
-fails there, or exceeds its timeout, needs its bound lowered or the harness fixed before this document
-can claim it passes. The version pin (`0.65.0`) should be checked against the release list on that run.
+The harnesses have never been compiled or run. Kani was not executed on the machine they were written
+on (it is heavy, and the owner's rule is to leave long jobs to CI), and because they sit behind
+`cfg(kani)` no normal check, test or clippy run compiles them. The first run of the `kani` workflow is
+the first compile and the first execution. A harness that fails to compile, fails, or exceeds its 20
+minute timeout there needs fixing or a lower bound. `event_decode_never_panics` (80 bytes, unwind 82) is
+the likeliest to need one; going below 73 bytes (the smallest valid event) makes its `cover!` of a
+successful decode unreachable, so it would then only show that refusals do not panic.
+
+There is no cheap compile check: the harnesses need the `kani` crate's `proof` and `unwind` attributes
+and `any`, `assume` and `cover!`, which only Kani's own compiler driver supplies. A stand-in
+proc-macro crate injected with `RUSTFLAGS='--cfg kani'` would be one more thing to maintain and would
+not check Kani's semantics.
+
+Toolchain: the workflow pins `kani-verifier` 0.68.0, which per the Kani releases page upgrades Kani's
+bundled nightly to nightly-2026-08-21. Kani builds with that nightly, not with the repository's
+pinned 1.99.1. Whether that nightly reports a rustc of at least 1.99.1 was not verified. Cargo refuses
+a package whose `rust-version` is above the compiler, so the workflow relaxes the `rust-version` line
+of the root `Cargo.toml` in its throwaway checkout before proving; that is harmless if the nightly is
+new enough and the only change that lets the proofs build if it is older. The `--harness-timeout` flag
+and `cargo kani -p` were not run against 0.68.0.
 
 ## Demonstration that a proof can fail
 

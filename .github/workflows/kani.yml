@@ -1,14 +1,16 @@
 name: kani
 # Bounded model checking with Kani. Heavy, so it runs weekly and on demand, never on a pull request.
 # The unwind bound of every harness is recorded next to it with #[kani::unwind]; docs/verification.md
-# lists what each proof covers and what it does not.
+# lists what each proof covers and what it does not. The harnesses are in `proofs.rs` files beside the
+# sources they check.
 on:
   schedule: [{ cron: "0 4 * * 0" }]
   workflow_dispatch:
 permissions:
   contents: read
 env:
-  KANI_VERSION: "0.65.0"
+  # 0.68.0 bundles nightly-2026-08-21. Kani builds with its own nightly, not with the pinned toolchain.
+  KANI_VERSION: "0.68.0"
 jobs:
   kani:
     strategy:
@@ -20,19 +22,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - name: cache the Kani install
+        with:
+          toolchain: 1.99.1
+      # Only the compiled binaries are cached. `cargo kani setup` below is idempotent and fetches the
+      # bundle and Kani's nightly, so a cache hit can never leave a half-installed toolchain.
+      - name: cache the Kani binaries
         id: kani-cache
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
             ~/.cargo/bin/cargo-kani
             ~/.cargo/bin/kani
-            ~/.kani
-          key: kani-${{ env.KANI_VERSION }}-${{ runner.os }}
+          key: kani-bin-${{ env.KANI_VERSION }}-${{ runner.os }}
       - name: install kani-verifier ${{ env.KANI_VERSION }}
         if: steps.kani-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked kani-verifier --version "${KANI_VERSION}"
+      - name: set up Kani
+        run: cargo kani setup
+      # Kani's nightly may report a rustc older than the workspace rust-version (1.99.1), which cargo
+      # refuses. Relax the field in this throwaway checkout only; no other build is affected.
+      - name: relax rust-version for the proof build
         run: |
-          cargo install --locked kani-verifier --version "${KANI_VERSION}"
-          cargo kani setup
+          rustc --version
+          sed -i 's/^rust-version = .*/# rust-version relaxed for the Kani build/' Cargo.toml
       - name: prove ${{ matrix.package }}
         run: cargo kani -p ${{ matrix.package }} --harness-timeout 20m
