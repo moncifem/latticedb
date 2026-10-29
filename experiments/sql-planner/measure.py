@@ -312,6 +312,12 @@ def main():
         # Registry prefetch is separate; clean mode alone uses fresh compiler targets.
         fetch=command(['cargo','fetch','--locked','--manifest-path',str(MANIFEST)],out/'fetch.log');report['registry_prefetch']=fetch
         if fetch['exit']!=0:raise RuntimeError('registry prefetch failed; compiler timing would include uncontrolled network work')
+        # Catch shared bridge/API/test compilation failures before paying for all three backends.
+        # This separate check target never warms a candidate's clean compiler target or C5 timing.
+        report['shared_compile_preflight']=command(['cargo','check','--locked','--all-targets',
+            '--manifest-path',str(MANIFEST),'--target-dir',str(target/'preflight')],out/'shared-compile-preflight.log')
+        if report['shared_compile_preflight']['exit']!=0:
+            raise RuntimeError('shared experiment compile preflight failed; no candidate measurement attempted')
         baseline_manifest=HERE/'bridge-baseline/Cargo.toml'
         if args.functional_retry:
             baseline=None

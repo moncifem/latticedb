@@ -122,3 +122,21 @@ integer-bound and exact type/value comparisons run afterward, as do PostgreSQL o
 The report records the codec version. PostgreSQL still uses its distinct libpq/TCP transport.
 Historical enum-codec ratios above are retained; neither codec change nor source implementation is a
 new measured result.
+
+
+### Fresh-main integration attempts
+
+Run `40897564722` at `763310b` was cancelled deliberately after a static audit found an obsolete
+index-read API call; it is not measurement evidence. The corrected run
+[40897846609](https://github.com/moncifem/latticedb/actions/runs/40897846609), at
+`c637fb37c191910e5e9f4bf7f50de14965e4678a`, finished with build failures because the current
+policy-bound `RowTx` no longer exposes `into_writes`. Its artifact `12908347886` was verified against
+ZIP SHA256 `dc30b6656bc353739aa6f37224b202a496d412d332fdfc4fe1b2941e6714b5fa`.
+It contains no new query timings. Custom/parser dependency-policy checks passed; DataFusion retained
+the zstd-related policy failures.
+
+The bridge now derives the expected WAL envelope from its separate submitted-row overlay and checks
+read-only agreement, without exposing RowTx's private policy-bound buffer. A remote shared-code
+compile preflight uses a separate target before candidate builds, preserving clean target isolation
+and C5 measurement scope. The next result must establish compilation, conformance and measurement;
+these source corrections alone establish none of them.

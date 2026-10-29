@@ -293,7 +293,23 @@ impl<I: Io, C: Clock, R: Rng> Db<I, C, R> {
         let Some(tx) = s.tx.take() else {
             return Ok(None);
         };
-        let writes = tx.clone().into_writes();
+        // RowTx deliberately keeps its policy-bound buffer private. Derive the expected WAL
+        // envelope from the bridge's separate submitted-row overlay, then compare after commit.
+        if tx.is_read_only() != s.pending.is_empty() {
+            return Err(Error::storage(
+                "pending rows differ from transaction write state",
+            ));
+        }
+        let writes = s
+            .pending
+            .iter()
+            .map(|(key, row)| {
+                (
+                    key.clone(),
+                    row.as_ref().map(|row| serde_json::to_vec(row).unwrap()),
+                )
+            })
+            .collect::<Vec<_>>();
         s.pending.clear();
         #[cfg(feature = "fault-hooks")]
         if !writes.is_empty()
