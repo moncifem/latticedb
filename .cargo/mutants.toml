@@ -35,6 +35,11 @@ exclude_re = [
     # on; its planted-bug test checks that the bug is detected, not the bug's own byte counts.
     "log\\.rs:\\d+:65: replace \\+ with [-*] in recover",
     "log\\.rs:\\d+:18: replace -= with (\\+=|/=) in recover",
+    # SQL lexer: a comment is lexed before an operator can start with `--` or `/*`, so the position
+    # check `self.pos > start` can never see a comment start at the first character, and a
+    # one-character run never enters the sign-splitting loop whose guard is `run.len() > 1`.
+    "lexer\\.rs:423:25: replace > with >= in Lexer<'_>::operator",
+    "lexer\\.rs:434:22: replace > with >= in Lexer<'_>::operator",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
