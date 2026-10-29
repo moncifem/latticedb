@@ -23,6 +23,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use crate::cancel::CancellationToken;
+
 use crate::pgwire::{
     Backend, Column, ENCRYPTION_DECLINED, Frontend, ProtoError, Startup, Target, TxStatus,
 };
@@ -76,6 +78,30 @@ pub trait QueryHandler {
 
     /// Checks a statement at `Parse` time and returns the columns it will produce (empty for none).
     fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError>;
+
+    /// Runs with a statement-local cancellation signal. Cooperative executors override this method
+    /// and poll between bounded units of work, aborting before their commit boundary. The default
+    /// checks before entering the legacy handler; it cannot preempt a handler that blocks inside it.
+    /// A successful result is not changed into a cancellation error after the handler returns.
+    fn execute_cancellable(
+        &mut self,
+        sql: &str,
+        params: &[Option<Vec<u8>>],
+        cancellation: &CancellationToken,
+    ) -> Result<QueryOutput, QueryError> {
+        check_cancellation(cancellation)?;
+        self.execute(sql, params)
+    }
+
+    /// Describes with the same cooperative cancellation contract as execution.
+    fn describe_cancellable(
+        &mut self,
+        sql: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Column>, QueryError> {
+        check_cancellation(cancellation)?;
+        self.describe(sql)
+    }
 }
 
 /// What to do after one message.
@@ -220,8 +246,21 @@ impl<H: QueryHandler> Session<H> {
         }
     }
 
-    /// Handles a message sent after startup.
+    /// Handles a message without an externally cancellable signal, for legacy sans-I/O callers.
+    /// Hosts routing CancelRequest must use [`Session::on_message_with_cancellation`] instead.
     pub fn on_message(&mut self, msg: Frontend) -> Outcome {
+        self.on_message_with_cancellation(msg, &CancellationToken::default())
+    }
+
+    /// Handles a message with the fresh token allocated for that operation by the host registry.
+    /// The token reaches execution and Parse-time description. It is not retained between messages;
+    /// idle cancellation must not poison a subsequent statement. Cancellation is cooperative and
+    /// does not interrupt an uncooperative handler, blocking I/O or already-computed result output.
+    pub fn on_message_with_cancellation(
+        &mut self,
+        msg: Frontend,
+        cancellation: &CancellationToken,
+    ) -> Outcome {
         match self.phase {
             Phase::Closed => return closed(),
             Phase::AwaitingStartup => {
@@ -247,11 +286,14 @@ impl<H: QueryHandler> Session<H> {
             _ if self.discarding => {}
             Frontend::Flush => {}
             Frontend::Query(sql) => {
-                self.simple_query(&sql, &mut out);
+                self.simple_query(&sql, &mut out, cancellation);
                 out.push(Backend::ReadyForQuery(self.tx));
             }
             other => {
-                if let Err(e) = self.extended(other, &mut out) {
+                if let Err(e) = self.extended(other, &mut out, cancellation) {
+                    if self.tx == TxStatus::InTransaction {
+                        self.tx = TxStatus::Failed;
+                    }
                     out.push(error_message(&e));
                     self.discarding = true;
                 }
@@ -276,12 +318,17 @@ impl<H: QueryHandler> Session<H> {
         }
     }
 
-    fn simple_query(&mut self, sql: &str, out: &mut Vec<Backend>) {
+    fn simple_query(
+        &mut self,
+        sql: &str,
+        out: &mut Vec<Backend>,
+        cancellation: &CancellationToken,
+    ) {
         if is_blank(sql) {
             out.push(Backend::EmptyQueryResponse);
             return;
         }
-        match self.run(sql, &[]) {
+        match self.run(sql, &[], cancellation) {
             Ok(result) => {
                 if !result.columns.is_empty() {
                     out.push(Backend::RowDescription(result.columns));
@@ -295,14 +342,21 @@ impl<H: QueryHandler> Session<H> {
 
     /// Runs a statement through the handler, enforcing the failed-transaction rule and keeping the
     /// transaction status current.
-    fn run(&mut self, sql: &str, params: &[Option<Vec<u8>>]) -> Result<QueryOutput, QueryError> {
+    fn run(
+        &mut self,
+        sql: &str,
+        params: &[Option<Vec<u8>>],
+        cancellation: &CancellationToken,
+    ) -> Result<QueryOutput, QueryError> {
         if self.tx == TxStatus::Failed && !ends_transaction(sql) {
             return Err(QueryError::new(
                 "25P02",
                 "current transaction is aborted, commands ignored until end of transaction block",
             ));
         }
-        match self.handler.execute(sql, params) {
+        let result = check_cancellation(cancellation)
+            .and_then(|()| self.handler.execute_cancellable(sql, params, cancellation));
+        match result {
             Ok(result) => {
                 match result.tag.as_str() {
                     "BEGIN" if self.tx == TxStatus::Idle => self.tx = TxStatus::InTransaction,
@@ -320,7 +374,12 @@ impl<H: QueryHandler> Session<H> {
         }
     }
 
-    fn extended(&mut self, msg: Frontend, out: &mut Vec<Backend>) -> Result<(), QueryError> {
+    fn extended(
+        &mut self,
+        msg: Frontend,
+        out: &mut Vec<Backend>,
+        cancellation: &CancellationToken,
+    ) -> Result<(), QueryError> {
         match msg {
             Frontend::Parse {
                 name,
@@ -339,7 +398,8 @@ impl<H: QueryHandler> Session<H> {
                 let columns = if is_blank(&query) {
                     Vec::new()
                 } else {
-                    self.handler.describe(&query)?
+                    check_cancellation(cancellation)?;
+                    self.handler.describe_cancellable(&query, cancellation)?
                 };
                 self.statements.insert(
                     name,
@@ -424,7 +484,12 @@ impl<H: QueryHandler> Session<H> {
                 out.push(Backend::CloseComplete);
             }
             Frontend::Execute { portal, max_rows } => {
-                self.execute_portal(&portal, max_rows, out)?
+                if let Err(error) = self.execute_portal(&portal, max_rows, out, cancellation) {
+                    if error.code == "57014" {
+                        self.portals.remove(&portal);
+                    }
+                    return Err(error);
+                }
             }
             // Handled by the caller: these never reach here.
             Frontend::Query(_)
@@ -443,7 +508,9 @@ impl<H: QueryHandler> Session<H> {
         name: &str,
         max_rows: i32,
         out: &mut Vec<Backend>,
+        cancellation: &CancellationToken,
     ) -> Result<(), QueryError> {
+        check_cancellation(cancellation)?;
         let missing = || QueryError::new("34000", format!("portal \"{name}\" does not exist"));
         let portal = self.portals.get(name).ok_or_else(missing)?;
         let state = match &portal.state {
@@ -457,7 +524,7 @@ impl<H: QueryHandler> Session<H> {
                     }
                     return Ok(());
                 }
-                let result = self.run(&sql, &params)?;
+                let result = self.run(&sql, &params, cancellation)?;
                 let rows = if result.columns.is_empty() {
                     VecDeque::new()
                 } else {
@@ -491,6 +558,17 @@ impl<H: QueryHandler> Session<H> {
         if let Some(p) = self.portals.get_mut(name) {
             p.state = next;
         }
+        Ok(())
+    }
+}
+
+fn check_cancellation(cancellation: &CancellationToken) -> Result<(), QueryError> {
+    if cancellation.is_cancelled() {
+        Err(QueryError::new(
+            "57014",
+            "canceling statement due to user request",
+        ))
+    } else {
         Ok(())
     }
 }
@@ -1204,5 +1282,168 @@ mod tests {
                 }
             }
         }
+    }
+
+    struct CancelRng;
+    impl lattice_seams::Rng for CancelRng {
+        fn next_u64(&mut self) -> u64 {
+            17
+        }
+    }
+    fn cancellation() -> (
+        crate::cancel::CancelRegistry,
+        crate::cancel::CancelKey,
+        CancellationToken,
+    ) {
+        let mut registry = crate::cancel::CancelRegistry::new(1).unwrap();
+        let key = registry.register(&mut CancelRng, 0, 100).unwrap();
+        let token = registry.begin_query(key, 0).unwrap();
+        (registry, key, token)
+    }
+
+    #[test]
+    fn cancelled_simple_query_does_not_enter_legacy_handler_and_a_fresh_token_works() {
+        let (mut registry, key, token) = cancellation();
+        registry.cancel(key, 0);
+        let mut session = ready();
+        let out = session.on_message_with_cancellation(q("SELECT 1"), &token);
+        assert_eq!(err_code(&out.messages[0]), "57014");
+        assert_eq!(out.messages[1], Backend::ReadyForQuery(TxStatus::Idle));
+        assert!(session.handler().executed.is_empty());
+        let fresh = registry.begin_query(key, 0).unwrap();
+        let out = session.on_message_with_cancellation(q("SELECT 1"), &fresh);
+        assert_eq!(out.messages[1], Backend::DataRow(vec![Some(b"1".to_vec())]));
+        assert_eq!(session.handler().executed, ["SELECT 1"]);
+    }
+
+    #[test]
+    fn extended_parse_and_bind_errors_abort_the_transaction_and_sync_does_not_undo_it() {
+        for (bad, code) in [
+            (parse("", "BAD"), "42601"),
+            (bind("", "missing", vec![]), "26000"),
+        ] {
+            let mut session = ready();
+            session.on_message(q("BEGIN"));
+            let out = session.on_message(bad);
+            assert_eq!(err_code(&out.messages[0]), code);
+            assert_eq!(session.tx_status(), TxStatus::Failed);
+            assert_eq!(
+                session.on_message(Frontend::Sync).messages,
+                [Backend::ReadyForQuery(TxStatus::Failed)]
+            );
+            let out = session.on_message(q("SELECT 1"));
+            assert_eq!(err_code(&out.messages[0]), "25P02");
+            assert_eq!(session.handler().executed, ["BEGIN"]);
+            session.on_message(q("ROLLBACK"));
+            assert_eq!(session.tx_status(), TxStatus::Idle);
+        }
+    }
+
+    #[test]
+    fn cancelled_parse_aborts_active_transaction_and_cancelled_portals_cannot_resume() {
+        let (mut registry, key, token) = cancellation();
+        registry.cancel(key, 0);
+        let mut session = ready();
+        session.on_message(q("BEGIN"));
+        let out = session.on_message_with_cancellation(parse("", "SELECT 1"), &token);
+        assert_eq!(err_code(&out.messages[0]), "57014");
+        assert_eq!(session.tx_status(), TxStatus::Failed);
+        for suspended in [false, true] {
+            let mut session = ready();
+            session.on_message(parse("s", "SELECT 3"));
+            session.on_message(bind("p", "s", vec![]));
+            if suspended {
+                assert!(
+                    session
+                        .on_message(exec("p", 1))
+                        .messages
+                        .contains(&Backend::PortalSuspended)
+                );
+            }
+            let out = session.on_message_with_cancellation(exec("p", 0), &token);
+            assert_eq!(err_code(&out.messages[0]), "57014");
+            session.on_message(Frontend::Sync);
+            assert_eq!(
+                err_code(&session.on_message(exec("p", 0)).messages[0]),
+                "34000"
+            );
+            assert_eq!(session.handler().executed.len(), usize::from(suspended));
+        }
+    }
+
+    #[test]
+    fn cooperative_handler_receives_registry_token_but_late_cancellation_cannot_relabel_a_commit() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Cooperative {
+            registry: Rc<RefCell<crate::cancel::CancelRegistry>>,
+            key: crate::cancel::CancelKey,
+            committed: bool,
+            fallback: Fake,
+        }
+        impl QueryHandler for Cooperative {
+            fn execute(
+                &mut self,
+                sql: &str,
+                params: &[Option<Vec<u8>>],
+            ) -> Result<QueryOutput, QueryError> {
+                self.fallback.execute(sql, params)
+            }
+            fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError> {
+                self.fallback.describe(sql)
+            }
+            fn execute_cancellable(
+                &mut self,
+                sql: &str,
+                params: &[Option<Vec<u8>>],
+                token: &CancellationToken,
+            ) -> Result<QueryOutput, QueryError> {
+                match sql {
+                    "ABORT" => {
+                        self.registry.borrow_mut().cancel(self.key, 0);
+                        assert!(token.is_cancelled(), "handler received a detached token");
+                        Err(QueryError::new("57014", "cooperative abort"))
+                    }
+                    "COMMIT" => {
+                        self.committed = true; // Cancellation is observed only after our commit boundary.
+                        self.registry.borrow_mut().cancel(self.key, 0);
+                        assert!(token.is_cancelled());
+                        Ok(QueryOutput {
+                            tag: "COMMIT".into(),
+                            ..QueryOutput::default()
+                        })
+                    }
+                    _ => self.execute(sql, params),
+                }
+            }
+        }
+        let (registry, key, _) = cancellation();
+        let registry = Rc::new(RefCell::new(registry));
+        let handler = Cooperative {
+            registry: registry.clone(),
+            key,
+            committed: false,
+            fallback: Fake::default(),
+        };
+        let mut session = Session::new(handler, key.pid, key.secret);
+        session.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
+        for sql in ["BEGIN", "ABORT", "ROLLBACK", "BEGIN"] {
+            let token = registry.borrow_mut().begin_query(key, 0).unwrap();
+            let out = session.on_message_with_cancellation(q(sql), &token);
+            if sql == "ABORT" {
+                assert_eq!(err_code(&out.messages[0]), "57014");
+                assert_eq!(session.tx_status(), TxStatus::Failed);
+            }
+        }
+        let token = registry.borrow_mut().begin_query(key, 0).unwrap();
+        let out = session.on_message_with_cancellation(q("COMMIT"), &token);
+        assert!(session.handler().committed);
+        assert_eq!(
+            out.messages,
+            [
+                Backend::CommandComplete("COMMIT".into()),
+                Backend::ReadyForQuery(TxStatus::Idle)
+            ]
+        );
     }
 }

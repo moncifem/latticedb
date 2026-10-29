@@ -4,7 +4,8 @@
 //! start it calls [`CancelRegistry::begin_query`] and passes that token to the executor. A separate
 //! connection handling `Startup::Cancel` calls [`CancelRegistry::cancel`], then closes without a
 //! protocol response. The executor must poll its token between bounded units of work. This module
-//! does not yet wire cancellation into [`crate::session::Session`] or interrupt blocking I/O.
+//! supplies tokens to [`crate::session::Session::on_message_with_cancellation`]; the TCP host routes
+//! requests and owns registration lifetimes. Tokens do not interrupt blocking I/O.
 //!
 //! Credential lookup scans the entire configured capacity, including inactive slots, and compares
 //! both 32-bit words with arithmetic masks instead of an early-exit secret comparison. The final
@@ -154,6 +155,19 @@ impl CancelRegistry {
             }
         }
         count
+    }
+
+    /// Unregisters every connection and signals all of its current query tokens, for host shutdown.
+    /// The bounded scan also leaves issued PIDs reserved, so clearing does not revive stale keys.
+    pub fn clear(&mut self) -> usize {
+        let mut removed = 0;
+        for entry in &mut self.entries {
+            if entry.active {
+                entry.deactivate();
+                removed += 1;
+            }
+        }
+        removed
     }
 
     /// Allocates a connection key after expiry cleanup. Refusal does not consume RNG output or a PID.
@@ -462,5 +476,24 @@ mod tests {
             prop_assert_eq!(expired, model.len()); prop_assert!(registry.is_empty());
             for (key, token, _) in model { prop_assert!(token.is_cancelled()); prop_assert!(!registry.cancel(key, 0)); }
         }
+    }
+
+    #[test]
+    fn clearing_connections_cancels_all_tokens_without_reusing_keys() {
+        let mut registry = CancelRegistry::new(2).unwrap();
+        let mut rng = Counter(0);
+        let first = registry.register(&mut rng, 0, 100).unwrap();
+        let second = registry.register(&mut rng, 0, 100).unwrap();
+        let one = registry.begin_query(first, 0).unwrap();
+        let two = registry.begin_query(second, 0).unwrap();
+        assert_eq!(registry.clear(), 2);
+        assert_eq!(registry.clear(), 0);
+        assert!(registry.is_empty());
+        assert!(one.is_cancelled() && two.is_cancelled());
+        let next = registry.register(&mut rng, 0, 100).unwrap();
+        assert_eq!(next.pid, 3);
+        assert!(!registry.cancel(first, 0));
+        assert!(!registry.cancel(second, 0));
+        assert!(!registry.begin_query(next, 0).unwrap().is_cancelled());
     }
 }
