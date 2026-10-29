@@ -1,0 +1,6 @@
+// header
+type Note {
+  // field
+  title: text
+  count: int in -5..=5 // trailing
+}

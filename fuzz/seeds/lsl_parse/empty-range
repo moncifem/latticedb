@@ -1,0 +1,1 @@
+type T { x: int in 6..=5 }
