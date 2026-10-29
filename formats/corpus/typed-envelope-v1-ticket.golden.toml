@@ -1,0 +1,6 @@
+format = "typed-envelope"
+version = 1
+generator = "formats/generate_typed_catalog_golden.py (Python stdlib)"
+schema_version = 7
+table_id = 42
+description = "Independent byte-exact typed catalog/row fixture"
