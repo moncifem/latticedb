@@ -220,3 +220,45 @@ jobs:
             target/jobs.json
           if-no-files-found: warn
           retention-days: 90
+  report-failure:
+    # A failed scheduled night opens one issue, or adds a comment to the one still open, naming the
+    # failed jobs and the seed lines their logs print. Manual runs are not reported.
+    if: always() && github.event_name == 'schedule'
+    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: open or update the nightly failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          failed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .name')
+          if [ -z "$failed" ]; then echo "no failed jobs"; exit 0; fi
+          seeds=$(gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>/dev/null \
+            | grep -iE 'seed|scenario|invariant|panicked' | cut -c1-300 | head -20 || true)
+          {
+            echo "The scheduled nightly run failed: $RUN_URL"
+            echo
+            echo "Failed jobs:"
+            echo "$failed" | sed 's/^/- /'
+            echo
+            echo "Seed, scenario and invariant lines from the failed logs (the trace is in the run's artifacts):"
+            echo '```'
+            echo "$seeds"
+            echo '```'
+            echo
+            echo "Owner: whoever merged the newest commit on main before this run. Reproduce a simulation failure with the printed seed and profile through \`sim_runner\`."
+          } > body.md
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --label nightly-failure --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "nightly failed on $(date -u +%F)" \
+              --label nightly-failure --label "type: bug" --body-file body.md
+          fi
