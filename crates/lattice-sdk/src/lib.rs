@@ -7,3 +7,5 @@ pub mod contract;
 
 /// Layer marker used by the layer check. Do not remove.
 pub const LAYER: u8 = 6;
+
+pub mod client;
