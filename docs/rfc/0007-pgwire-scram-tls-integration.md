@@ -28,13 +28,20 @@ identified through different advertised work parameters. Provisioning/SASLprep a
 network input never triggers PBKDF2. Credential-file buffers are zeroized on drop, without claiming
 removal of compiler copies or upstream allocations.
 
-For unknown users derive a synthetic salt and stored/server keys from a fresh per-process secret,
-the startup name and distinct HMAC-SHA-256 domains. This gives stable per-name fake challenges within
-a server instance instead of one recognizable shared fake account. Run synthetic derivation for known
+For unknown users derive a synthetic salt and stored/server keys from a mandatory externally
+provisioned persistent 32-byte secret, the startup name and distinct HMAC-SHA-256 domains. This keeps
+per-name synthetic salts/keys stable across reloads and restarts with the same secret instead of one
+recognizable shared fake account. Run synthetic derivation for known
 users too; always refuse unknown users after proof even if their synthetic proof could be produced.
 Known/unknown proof failures use the same terminal `28P01` text and do not expose credentials/transcripts.
 This is a message/profile policy, not a measured constant-time or account-enumeration guarantee: map
-lookup/branches and cross-restart salt stability remain possible side channels requiring review.
+lookup/branches remain possible timing side channels requiring review. Read exactly 32 binary bytes
+from the configured decoy-secret file before binding; no generation-on-load or missing-secret fallback
+is permitted. Protect/persist this secret alongside verifier configuration and reuse it across instances
+serving the same account set. Rotating it changes unknown-account salts while unchanged known accounts
+retain theirs, so rotation is observable and can reveal account existence to observers comparing
+challenges across that event. Secret compromise, rotation and account/password changes need a separate
+operational migration policy; this proposal does not claim such changes are unobservable.
 
 The sans-I/O session explicitly tracks SASL initial/final phases; the host chooses the phase-aware
 password decoder. Do not emit AuthenticationOk, parameters, BackendKeyData or ReadyForQuery until a

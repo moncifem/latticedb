@@ -12,12 +12,34 @@ pub const MAX_CREDENTIAL_BYTES: usize = 256 * 1024;
 /// Maximum configured accounts.
 pub const MAX_ACCOUNTS: usize = 1024;
 
+/// A provisioned persistent 32-byte secret for synthetic account derivation.
+/// Keep the same secret across reloads/restarts and protect it like the verifier file. Rotation
+/// changes unknown-account challenges, so it is observable and needs a separate operational policy.
+/// This checks length, not entropy: provisioning must supply cryptographically random bytes.
+pub struct DecoySecret(Zeroizing<[u8; 32]>);
+impl DecoySecret {
+    /// Imports exactly 32 binary bytes; no secret generation or textual decoding occurs here.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ScramError> {
+        let mut secret = Zeroizing::new([0; 32]);
+        if bytes.len() != secret.len() {
+            return Err(ScramError::OutOfBounds);
+        }
+        secret.copy_from_slice(bytes);
+        Ok(Self(secret))
+    }
+}
+impl fmt::Debug for DecoySecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DecoySecret([redacted])")
+    }
+}
+
 /// Immutable credentials with one public cost profile: 4096 iterations and a 16-byte salt.
-/// Unknown users get a stable, keyed synthetic verifier per server instance and startup name.
+/// Unknown users get a stable, keyed synthetic verifier across account reloads and restarts using the same provisioned secret and startup name.
 /// This avoids distinct offers/failure messages, but does not claim measured timing resistance.
 pub struct Accounts {
     entries: BTreeMap<String, Verifier>,
-    decoy_key: Zeroizing<[u8; 32]>,
+    decoy_key: DecoySecret,
 }
 impl fmt::Debug for Accounts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -30,7 +52,8 @@ impl Accounts {
     /// Parses `username<TAB>SCRAM-SHA-256$4096:base64salt$storedkey:serverkey` lines.
     /// Provision externally using prepared password bytes; never put plaintext passwords here.
     /// Empty files, duplicate/invalid names, mixed cost profiles and malformed keys are refused.
-    pub fn parse(text: &str, rng: &mut (impl Rng + ?Sized)) -> Result<Self, ScramError> {
+    /// The persistent decoy secret is mandatory; no ephemeral fallback is generated on load.
+    pub fn parse(text: &str, decoy_key: DecoySecret) -> Result<Self, ScramError> {
         if text.len() > MAX_CREDENTIAL_BYTES {
             return Err(ScramError::OutOfBounds);
         }
@@ -66,14 +89,7 @@ impl Accounts {
         if entries.is_empty() {
             return Err(ScramError::Malformed);
         }
-        let mut key = Zeroizing::new([0; 32]);
-        for chunk in key.as_chunks_mut::<8>().0 {
-            chunk.copy_from_slice(&rng.next_u64().to_be_bytes());
-        }
-        Ok(Self {
-            entries,
-            decoy_key: key,
-        })
+        Ok(Self { entries, decoy_key })
     }
 
     /// Selects only the startup account; SASL's client-first name never selects credentials.
@@ -103,7 +119,7 @@ impl Accounts {
         ))
     }
     fn derive(&self, label: &[u8], name: &str) -> Result<Zeroizing<[u8; 32]>, ScramError> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.decoy_key.as_ref())
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.decoy_key.0.as_ref())
             .map_err(|_| ScramError::Crypto)?;
         mac.update(label);
         mac.update(&[0]);
@@ -138,7 +154,7 @@ mod tests {
     #[test]
     fn credentials_are_bounded_strict_and_redacted() {
         let line = format!("user\t{CREDENTIAL}");
-        let accounts = Accounts::parse(&line, &mut Counter(0)).unwrap();
+        let accounts = Accounts::parse(&line, DecoySecret::from_bytes(&[7; 32]).unwrap()).unwrap();
         assert_eq!(format!("{accounts:?}"), "Accounts { count: 1, .. }");
         for invalid in [
             String::new(),
@@ -149,12 +165,16 @@ mod tests {
             line.replace("SHA-256", "SHA-1"),
             "x".repeat(MAX_CREDENTIAL_BYTES + 1),
         ] {
-            assert!(Accounts::parse(&invalid, &mut Counter(0)).is_err());
+            assert!(Accounts::parse(&invalid, DecoySecret::from_bytes(&[7; 32]).unwrap()).is_err());
         }
     }
     #[test]
     fn unknown_accounts_get_stable_distinct_name_keyed_profiles() {
-        let accounts = Accounts::parse(&format!("user\t{CREDENTIAL}"), &mut Counter(0)).unwrap();
+        let accounts = Accounts::parse(
+            &format!("user\t{CREDENTIAL}"),
+            DecoySecret::from_bytes(&[7; 32]).unwrap(),
+        )
+        .unwrap();
         let challenge = |name| {
             let (mut exchange, known) = accounts.exchange(name, &mut Counter(10)).unwrap();
             (
@@ -172,5 +192,53 @@ mod tests {
         assert!(challenge("user").1);
         assert!(accounts.exchange("", &mut Counter(0)).is_err());
         assert!(accounts.exchange(&"x".repeat(64), &mut Counter(0)).is_err());
+    }
+    #[test]
+    fn persistent_decoy_secret_is_required_bounded_and_redacted() {
+        for size in [0, 31, 33, 1024] {
+            assert!(DecoySecret::from_bytes(&vec![7; size]).is_err());
+        }
+        assert_eq!(
+            format!("{:?}", DecoySecret::from_bytes(&[7; 32]).unwrap()),
+            "DecoySecret([redacted])"
+        );
+    }
+
+    #[test]
+    fn persisted_secret_keeps_known_and_unknown_salts_stable_across_instances() {
+        let line = format!("user\t{CREDENTIAL}");
+        let secret: Vec<u8> = (0..32).collect();
+        let first = Accounts::parse(&line, DecoySecret::from_bytes(&secret).unwrap()).unwrap();
+        let reloaded = Accounts::parse(&line, DecoySecret::from_bytes(&secret).unwrap()).unwrap();
+        let rotated = Accounts::parse(&line, DecoySecret::from_bytes(&[4; 32]).unwrap()).unwrap();
+        let challenge = |accounts: &Accounts, user: &str, seed| {
+            let (mut exchange, _) = accounts.exchange(user, &mut Counter(seed)).unwrap();
+            let crate::pgwire::Backend::AuthenticationSaslContinue(bytes) = exchange
+                .initial(crate::scram::MECHANISM, b"n,,n=,r=clientnonce")
+                .unwrap()
+            else {
+                panic!("expected challenge");
+            };
+            let challenge = String::from_utf8(bytes).unwrap();
+            let profile = challenge.split_once(',').unwrap().1.to_string();
+            (challenge, profile)
+        };
+        // Independent Python stdlib HMAC-SHA-256 fixture for secret bytes0..31 and salt domain.
+        for (user, expected) in [
+            ("user", "s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"),
+            ("missing", "s=D1xH2aiGaEY3qHuaGlIiiw==,i=4096"),
+        ] {
+            let a = challenge(&first, user, 10);
+            let b = challenge(&reloaded, user, 1000);
+            assert_ne!(a.0, b.0); // Fresh nonce is independent from the persistent salt/key derivation.
+            assert_eq!(a.1, expected);
+            assert_eq!(b.1, expected);
+            let c = challenge(&rotated, user, 2000);
+            if user == "user" {
+                assert_eq!(c.1, expected);
+            } else {
+                assert_ne!(c.1, expected);
+            }
+        }
     }
 }

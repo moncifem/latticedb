@@ -9,8 +9,7 @@
 )]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, KeyInit, Mac};
-use lattice_api::auth::Accounts;
-use lattice_seams::OsRng;
+use lattice_api::auth::{Accounts, DecoySecret};
 use latticed::{Authentication, ServerConfig, ServerHandle, TlsConfig};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned, pki_types::ServerName};
 use sha2::{Digest, Sha256};
@@ -37,7 +36,11 @@ fn fixture(budget: Duration) -> (ServerConfig, Arc<ClientConfig>) {
             .with_no_client_auth();
     // Python stdlib hashlib/hmac independently provisions the published RFC7677 account.
     let credential = "SCRAM-SHA-256$4096:W22ZaJ0SNY7soEsUEjb6gQ==$WG5d8oPm3OtcPnkdi4Uo7BkeZkBFzpcXkuLmtbsT4qY=:wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU=";
-    let accounts = Accounts::parse(&format!("user\t{credential}"), &mut OsRng).unwrap();
+    let accounts = Accounts::parse(
+        &format!("user\t{credential}"),
+        DecoySecret::from_bytes(&[7; 32]).unwrap(),
+    )
+    .unwrap();
     (
         ServerConfig {
             address: SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -330,4 +333,53 @@ fn client_rejects_untrusted_certificate_and_wrong_server_name() {
         assert!(connection.complete_io(&mut socket).is_err());
     }
     server.shutdown().unwrap();
+}
+
+#[test]
+fn cli_requires_persistent_decoy_secret_and_refuses_it_in_trust_mode() {
+    let binary = env!("CARGO_BIN_EXE_latticed");
+    let missing = std::process::Command::new(binary)
+        .args([
+            "--auth",
+            "scram-tls",
+            "--tls-cert",
+            "unused",
+            "--tls-key",
+            "unused",
+            "--scram-verifiers",
+            "unused",
+        ])
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8(missing.stderr)
+            .unwrap()
+            .contains("--scram-decoy-secret required")
+    );
+    let trust = std::process::Command::new(binary)
+        .args([
+            "--auth",
+            "development-trust",
+            "--scram-decoy-secret",
+            "unused",
+        ])
+        .output()
+        .unwrap();
+    assert!(!trust.status.success());
+    assert!(
+        String::from_utf8(trust.stderr)
+            .unwrap()
+            .contains("require --auth scram-tls")
+    );
+    let help = std::process::Command::new(binary)
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(
+        String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("--scram-decoy-secret FILE")
+    );
 }

@@ -7,8 +7,7 @@
     clippy::print_stderr
 )]
 
-use lattice_api::auth::{Accounts, MAX_CREDENTIAL_BYTES};
-use lattice_seams::OsRng;
+use lattice_api::auth::{Accounts, DecoySecret, MAX_CREDENTIAL_BYTES};
 use latticed::{Authentication, ServerConfig, ServerHandle, TlsConfig};
 use std::io::Read;
 use std::io::{self, BufRead};
@@ -23,6 +22,7 @@ fn run() -> Result<(), String> {
     let mut certificates = None;
     let mut private_key = None;
     let mut credentials = None;
+    let mut decoy_secret = None;
     let mut args = std::env::args().skip(1);
     while let Some(option) = args.next() {
         if option == "--version" || option == "-V" {
@@ -31,7 +31,7 @@ fn run() -> Result<(), String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N]\nLoopback development trust by default; SELECT 1 only. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N]\nLoopback development trust by default; SELECT 1 only. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop."
             );
             return Ok(());
         }
@@ -43,6 +43,7 @@ fn run() -> Result<(), String> {
             "--tls-cert" => certificates = Some(value),
             "--tls-key" => private_key = Some(value),
             "--scram-verifiers" => credentials = Some(value),
+            "--scram-decoy-secret" => decoy_secret = Some(value),
             "--startup-timeout-ms" => {
                 config.startup_timeout =
                     Duration::from_millis(value.parse().map_err(|_| "invalid startup timeout")?)
@@ -76,11 +77,21 @@ fn run() -> Result<(), String> {
     }
     match auth_mode.as_str() {
         "development-trust" => {
-            if certificates.is_some() || private_key.is_some() || credentials.is_some() {
+            if certificates.is_some()
+                || private_key.is_some()
+                || credentials.is_some()
+                || decoy_secret.is_some()
+            {
                 return Err("TLS/credential options require --auth scram-tls".into());
             }
         }
         "scram-tls" => {
+            let decoy_path = decoy_secret
+                .as_deref()
+                .ok_or("--scram-decoy-secret required")?;
+            let secret = bounded_file(decoy_path, 32)?;
+            let secret = DecoySecret::from_bytes(&secret)
+                .map_err(|_| "decoy secret must contain exactly 32 binary bytes")?;
             let cert = bounded_file(certificates.as_deref().ok_or("--tls-cert required")?, 65536)?;
             let key = bounded_file(private_key.as_deref().ok_or("--tls-key required")?, 16384)?;
             let verifiers = bounded_file(
@@ -89,8 +100,8 @@ fn run() -> Result<(), String> {
             )?;
             let text =
                 std::str::from_utf8(&verifiers).map_err(|_| "invalid credential file encoding")?;
-            let accounts = Accounts::parse(text, &mut OsRng)
-                .map_err(|_| "invalid credential configuration")?;
+            let accounts =
+                Accounts::parse(text, secret).map_err(|_| "invalid credential configuration")?;
             let tls = TlsConfig::from_pem(&cert, &key)
                 .map_err(|_| "invalid TLS certificate/key configuration")?;
             config.authentication = Authentication::ScramTls {

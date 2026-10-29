@@ -60,10 +60,18 @@ unregister recover the lock only to cancel/clean up safely.
 ```sh
 cargo run -p latticed -- --auth scram-tls --listen 127.0.0.1:5432 \
   --tls-cert /secure/server-chain.pem --tls-key /secure/server-key.pem \
-  --scram-verifiers /secure/accounts.txt --startup-timeout-ms 10000
+  --scram-verifiers /secure/accounts.txt --scram-decoy-secret /secure/decoy-secret.bin \
+  --startup-timeout-ms 10000
 ```
 
-Provision those files externally. The credential file has one `username<TAB>verifier` per line:
+Provision those files externally. The decoy-secret file is mandatory and must contain exactly 32
+cryptographically random binary bytes (not hex/Base64 text or a trailing newline). Generate it once
+with an operating-system cryptographic RNG, restrict access like the verifier file, and persist the
+same file across reloads/restarts and instances serving the same account set. The listener never
+generates a replacement on load. Back up and restore it together with credential configuration;
+changing it changes unknown-account salts and can reveal account existence to observers comparing
+challenges across rotation. Rotation/compromise requires a separate operational policy and is not
+claimed unobservable. The credential file has one `username<TAB>verifier` per line:
 `SCRAM-SHA-256$4096:base64-salt$base64-stored-key:base64-server-key`. Only the uniform 4096-iteration,
 16-byte-salt profile is accepted; keys are 32 bytes, names at most 63 UTF-8 bytes without controls,
 and files at most 256 KiB/1024 accounts. There is no plaintext password flag, embedded account,
