@@ -55,3 +55,36 @@ Binaries and the container image are published now. Crates are not published to 
 every crate is `publish = false` until the library APIs are meant to be depended on from outside this
 repository, which is a decision for the first minor version after the Phase 2 gate. Package
 managers (Homebrew, Linux distributions) come after the first stable release.
+
+
+## Phase 2 nightly verification
+
+The verification workflow configures Miri for the deterministic `lattice-engines` library tests as
+well as ABI/core libraries. AddressSanitizer includes engine and API library tests alongside the
+existing unit and simulator suites. Real socket/process tests are not Miri targets. These workflow
+entries describe coverage to execute, not evidence that a nightly run or a phase gate has passed.
+
+The row fault volume suite is `crates/lattice-engines/tests/row_faults.rs` (not `row_sim.rs`). Nightly
+partitions its original workload into five profiles × four shards: each shard runs 2500 distinct
+seeds for 150 steps, preserving 10,000 seeds per profile and 50,000 total histories. Shards cover the
+half-open ranges `0..2500`, `2500..5000`, `5000..7500`, and `7500..10000` for every profile, with no
+new random source or environment reads in the test. The full ignored test remains available for a
+manual aggregate run. The existing independent transaction-envelope oracle, fault-exercise checks,
+censoring rules and terminal recovery checks are shared by full and sharded execution.
+
+Each job first verifies that its exact named ignored test exists and selects one test; a stale
+filter cannot turn zero executed tests into a passing shard. Raw selection and run logs are retained
+as `evidence-row-faults-<profile>-<shard>` artifacts. The scorecard and scheduled failure reporter wait
+for all row shards; job conclusions record failures. These raw row logs are not normalized simulation
+seed totals in the scorecard. Bit-rot-censored histories remain incomplete and are not reported as
+verified histories.
+
+For a specific shard (shell test names replace profile hyphens with underscores):
+
+```bash
+cargo test -p lattice-engines --release --test row_faults gate_shards::crash_heavy_2 -- --ignored --exact --list
+cargo test -p lattice-engines --release --test row_faults gate_shards::crash_heavy_2 -- --ignored --exact --nocapture
+```
+
+Run high-volume simulation, Miri and sanitizer jobs on hosted CI rather than the development laptop.
+The Phase 1 sign-off and Phase 2 exit requirements remain independent of this pipeline configuration.

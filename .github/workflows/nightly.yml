@@ -88,8 +88,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: nightly, components: miri }
-      - name: miri on the deterministic core (few property cases; the interpreter is slow)
-        run: cargo +nightly miri test -p lattice-abi -p lattice-core --lib
+      - name: miri on deterministic core and engine libraries (few property cases; the interpreter is slow)
+        run: cargo +nightly miri test -p lattice-abi -p lattice-core -p lattice-engines --lib
         env:
           PROPTEST_CASES: "4"
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-disable-isolation"
@@ -102,7 +102,7 @@ jobs:
         with: { toolchain: nightly, components: rust-src }
       - name: AddressSanitizer (memory errors and leaks) over the unit and simulator tests
         run: >
-          cargo +nightly test -p lattice-abi -p lattice-core -p lattice-sim --lib
+          cargo +nightly test -p lattice-abi -p lattice-core -p lattice-sim -p lattice-engines -p lattice-api --lib
           --target x86_64-unknown-linux-gnu -Zbuild-std &&
           cargo +nightly test -p lattice-testkit --test scrub --test kernel_lifecycle --test power_cut_sweep
           --test convergence --test fuzz_lite --target x86_64-unknown-linux-gnu -Zbuild-std
@@ -146,7 +146,7 @@ jobs:
   scorecard:
     # Collection does not change any producer's exit status or gate volumes.
     if: always()
-    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc]
+    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, row-faults]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -244,7 +244,7 @@ jobs:
     # A failed scheduled night opens one issue, or adds a comment to the one still open, naming the
     # failed jobs and the seed lines their logs print. Manual runs are not reported.
     if: always() && github.event_name == 'schedule'
-    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, sql-reference]
+    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, row-faults]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -266,7 +266,7 @@ jobs:
             echo "The scheduled nightly run failed: $RUN_URL"
             echo
             echo "Failed jobs:"
-            echo "$failed" | sed 's/^/- /'
+            while IFS= read -r job; do printf -- '- %s\n' "$job"; done <<< "$failed"
             echo
             echo "Seed, scenario and invariant lines from the failed logs (the trace is in the run's artifacts):"
             echo '```'
@@ -282,3 +282,39 @@ jobs:
             gh issue create --repo "$GITHUB_REPOSITORY" --title "nightly failed on $(date -u +%F)" \
               --label nightly-failure --label "type: bug" --body-file body.md
           fi
+
+  row-faults:
+    name: row-faults (${{ matrix.profile }}, ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [clean, crash_heavy, disk_faulty, hostile, everything]
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: exact row-fault shard (2500 seeds, 150 steps; 10,000 seeds per profile)
+        env:
+          ROW_PROFILE: ${{ matrix.profile }}
+          ROW_SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          selected="gate_shards::${ROW_PROFILE}_${ROW_SHARD}"
+          # A misspelled test filter otherwise exits successfully after executing zero tests.
+          cargo test -p lattice-engines --release --test row_faults "$selected" -- --ignored --exact --list > row-faults-selection.txt
+          grep -Fx "$selected: test" row-faults-selection.txt
+          test "$(grep -c ': test$' row-faults-selection.txt)" -eq 1
+          cargo test -p lattice-engines --release --test row_faults "$selected" -- --ignored --exact --nocapture 2>&1 | tee row-faults.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: evidence-row-faults-${{ matrix.profile }}-${{ matrix.shard }}
+          path: |
+            row-faults-selection.txt
+            row-faults.log
+          if-no-files-found: warn

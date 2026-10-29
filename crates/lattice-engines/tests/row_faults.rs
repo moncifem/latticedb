@@ -590,71 +590,82 @@ fn run(seed: u64, profile: FaultProfile, steps: u64) -> Outcome {
 
 // Captured by the test runner unless --nocapture is requested for an evidence report.
 #[allow(clippy::print_stderr)]
+fn verify_profile(name: &str, profile: FaultProfile, range: std::ops::Range<u64>, steps: u64) {
+    assert!(
+        range.start < range.end,
+        "an empty seed selection is not evidence"
+    );
+    let seeds = range.end - range.start;
+    let mut acked = 0;
+    let mut incomplete = 0;
+    let mut cut_short = 0;
+    let mut cuts = 0;
+    let mut recoveries = 0;
+    let mut snapshots = 0;
+    let mut conflicts = 0;
+    let mut faults = Faults::default();
+    for seed in range.clone() {
+        let out = run(seed, profile, steps);
+        assert!(out.problem.is_none(), "profile={name} seed={seed}: {out:?}");
+        incomplete += u64::from(out.incomplete);
+        cut_short += u64::from(out.cut_short);
+        acked += out.acked;
+        cuts += out.power_cuts;
+        recoveries += out.recoveries;
+        snapshots += out.snapshots;
+        conflicts += out.conflicts;
+        faults.append_errors += out.faults.append_errors;
+        faults.partial_appends += out.faults.partial_appends;
+        faults.fsync_errors += out.faults.fsync_errors;
+        faults.no_space += out.faults.no_space;
+    }
+    assert!(
+        acked >= seeds,
+        "profile {name} produced too little acknowledged work: {acked}"
+    );
+    assert!(recoveries >= seeds, "profile {name} did not recover enough");
+    assert!(
+        cuts > 0 && snapshots > 0 && conflicts > 0,
+        "profile {name} missed a workload operation"
+    );
+    assert!(
+        cut_short * 4 < seeds,
+        "profile {name} lost too much workload: {cut_short}/{seeds}"
+    );
+    if profile.bit_rot_ppm == 0 {
+        assert_eq!(incomplete, 0, "profile {name} censored non-rot runs");
+    } else {
+        assert!(
+            incomplete * 2 < seeds,
+            "profile {name} censored too many runs: {incomplete}/{seeds}"
+        );
+    }
+    if profile.append_error_ppm > 0 {
+        assert!(
+            faults.append_errors > 0 && faults.partial_appends > 0,
+            "profile {name} did not exercise partial append errors"
+        );
+    }
+    if profile.sync_error_ppm > 0 {
+        assert!(
+            faults.fsync_errors > 0,
+            "profile {name} did not exercise fsync errors"
+        );
+    }
+    if profile.disk_full_after.is_some() {
+        assert!(faults.no_space > 0, "profile {name} never filled its disk");
+    }
+    eprintln!(
+        "row faults profile={name} seeds={}..{} steps={steps}: {seeds} runs, {} verified, {incomplete} incomplete, {cut_short} cut short (terminal verified), {acked} acknowledgements, {cuts} cuts, {faults:?}",
+        range.start,
+        range.end,
+        seeds - incomplete
+    );
+}
+
 fn verify_profiles(seeds: u64, steps: u64) {
     for (name, profile) in profiles() {
-        let mut acked = 0;
-        let mut incomplete = 0;
-        let mut cut_short = 0;
-        let mut cuts = 0;
-        let mut recoveries = 0;
-        let mut snapshots = 0;
-        let mut conflicts = 0;
-        let mut faults = Faults::default();
-        for seed in 0..seeds {
-            let out = run(seed, profile, steps);
-            assert!(out.problem.is_none(), "profile={name} seed={seed}: {out:?}");
-            incomplete += u64::from(out.incomplete);
-            cut_short += u64::from(out.cut_short);
-            acked += out.acked;
-            cuts += out.power_cuts;
-            recoveries += out.recoveries;
-            snapshots += out.snapshots;
-            conflicts += out.conflicts;
-            faults.append_errors += out.faults.append_errors;
-            faults.partial_appends += out.faults.partial_appends;
-            faults.fsync_errors += out.faults.fsync_errors;
-            faults.no_space += out.faults.no_space;
-        }
-        assert!(
-            acked >= seeds,
-            "profile {name} produced too little acknowledged work: {acked}"
-        );
-        assert!(recoveries >= seeds, "profile {name} did not recover enough");
-        assert!(
-            cuts > 0 && snapshots > 0 && conflicts > 0,
-            "profile {name} missed a workload operation"
-        );
-        assert!(
-            cut_short * 4 < seeds,
-            "profile {name} lost too much workload: {cut_short}/{seeds}"
-        );
-        if profile.bit_rot_ppm == 0 {
-            assert_eq!(incomplete, 0, "profile {name} censored non-rot runs");
-        } else {
-            assert!(
-                incomplete * 2 < seeds,
-                "profile {name} censored too many runs: {incomplete}/{seeds}"
-            );
-        }
-        if profile.append_error_ppm > 0 {
-            assert!(
-                faults.append_errors > 0 && faults.partial_appends > 0,
-                "profile {name} did not exercise partial append errors"
-            );
-        }
-        if profile.sync_error_ppm > 0 {
-            assert!(
-                faults.fsync_errors > 0,
-                "profile {name} did not exercise fsync errors"
-            );
-        }
-        if profile.disk_full_after.is_some() {
-            assert!(faults.no_space > 0, "profile {name} never filled its disk");
-        }
-        eprintln!(
-            "row faults profile={name}: {seeds} runs, {} verified, {incomplete} incomplete, {cut_short} cut short (terminal verified), {acked} acknowledgements, {cuts} cuts, {faults:?}",
-            seeds - incomplete
-        );
+        verify_profile(name, profile, 0..seeds, steps);
     }
 }
 
@@ -837,4 +848,120 @@ fn inv_i9_row_and_index_history_survive_every_cut_point() {
             }
         }
     }
+}
+
+// Keep the full ignored gate above for manual runs. Nightly selects exactly one named test below;
+// no ambient environment is read by deterministic engine tests.
+const GATE_SEEDS: u64 = 10_000;
+const GATE_SHARDS: u64 = 4;
+const GATE_STEPS: u64 = 150;
+
+fn gate_seed_range(shard: u64) -> Option<std::ops::Range<u64>> {
+    if shard >= GATE_SHARDS {
+        return None;
+    }
+    let per_shard = GATE_SEEDS / GATE_SHARDS;
+    Some(shard * per_shard..(shard + 1) * per_shard)
+}
+
+fn verify_gate_shard(name: &str, shard: u64) {
+    let (_, profile) = profiles()
+        .into_iter()
+        .find(|(candidate, _)| *candidate == name)
+        .expect("unknown row fault profile");
+    verify_profile(
+        name,
+        profile,
+        gate_seed_range(shard).expect("invalid row fault shard"),
+        GATE_STEPS,
+    );
+}
+
+#[test]
+fn gate_shard_ranges_partition_the_original_budget_exactly() {
+    let expected = [0..2500, 2500..5000, 5000..7500, 7500..10_000];
+    let mut observed = vec![0u8; 10_000];
+    for (shard, range) in expected.into_iter().enumerate() {
+        assert_eq!(gate_seed_range(shard as u64), Some(range.clone()));
+        for seed in gate_seed_range(shard as u64).unwrap() {
+            observed[seed as usize] += 1;
+        }
+    }
+    assert!(observed.into_iter().all(|count| count == 1));
+    assert_eq!(GATE_SEEDS, 10_000);
+    assert_eq!(GATE_SHARDS, 4);
+    assert_eq!(GATE_STEPS, 150);
+    assert_eq!(gate_shards::ASSIGNMENTS.len(), 20);
+    for (profile, _) in profiles() {
+        let mut observed = vec![0u8; 10_000];
+        let cases: Vec<_> = gate_shards::ASSIGNMENTS
+            .iter()
+            .filter(|(_, name, _)| *name == profile)
+            .collect();
+        assert_eq!(
+            cases.len(),
+            4,
+            "profile {profile} must have exactly four named tests"
+        );
+        for (name, _, shard) in cases {
+            assert_eq!(*name, format!("{}_{}", profile.replace('-', "_"), shard));
+            for seed in gate_seed_range(*shard).unwrap() {
+                observed[seed as usize] += 1;
+            }
+        }
+        assert!(
+            observed.into_iter().all(|count| count == 1),
+            "profile {profile} repeats or omits a seed"
+        );
+    }
+    assert_eq!(gate_seed_range(4), None);
+    assert_eq!(gate_seed_range(u64::MAX), None);
+    assert_eq!(
+        profiles().map(|(name, _)| name),
+        [
+            "clean",
+            "crash-heavy",
+            "disk-faulty",
+            "hostile",
+            "everything"
+        ]
+    );
+}
+
+mod gate_shards {
+    use super::*;
+    macro_rules! shard_cases {
+        ($(($test:ident, $profile:literal, $shard:literal)),+ $(,)?) => {
+            // The metadata and actual wrappers are emitted by the same case declaration. The
+            // bounded partition test independently checks each declared profile/name/range.
+            pub(super) const ASSIGNMENTS: &[(&str, &str, u64)] = &[$((stringify!($test), $profile, $shard)),+];
+            $(
+                #[test]
+                #[ignore = "volume: one exact 2500-seed slice of a 10,000-seed row fault profile"]
+                fn $test() { verify_gate_shard($profile, $shard); }
+            )+
+        };
+    }
+    shard_cases!(
+        (clean_0, "clean", 0),
+        (clean_1, "clean", 1),
+        (clean_2, "clean", 2),
+        (clean_3, "clean", 3),
+        (crash_heavy_0, "crash-heavy", 0),
+        (crash_heavy_1, "crash-heavy", 1),
+        (crash_heavy_2, "crash-heavy", 2),
+        (crash_heavy_3, "crash-heavy", 3),
+        (disk_faulty_0, "disk-faulty", 0),
+        (disk_faulty_1, "disk-faulty", 1),
+        (disk_faulty_2, "disk-faulty", 2),
+        (disk_faulty_3, "disk-faulty", 3),
+        (hostile_0, "hostile", 0),
+        (hostile_1, "hostile", 1),
+        (hostile_2, "hostile", 2),
+        (hostile_3, "hostile", 3),
+        (everything_0, "everything", 0),
+        (everything_1, "everything", 1),
+        (everything_2, "everything", 2),
+        (everything_3, "everything", 3),
+    );
 }
