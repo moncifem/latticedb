@@ -107,17 +107,59 @@ fn admit(required: u64, supported: u64) -> Result<(), LogError> {
     Ok(())
 }
 
+struct PreflightHeader {
+    prefix: Vec<u8>,
+    file_len: u64,
+    header: Option<SegmentHeader>,
+}
+
+impl PreflightHeader {
+    fn validate_full_read(&self, data: &[u8]) -> Result<Option<SegmentHeader>, LogError> {
+        if data.len() as u64 != self.file_len
+            || data.get(..self.prefix.len()) != Some(self.prefix.as_slice())
+        {
+            return Err(LogError::Corrupt(
+                "segment view changed after header admission".into(),
+            ));
+        }
+        let header = match admission::decode_header(data) {
+            Ok(header) => Some(header),
+            Err(HeaderError::Incomplete) => None,
+            Err(error) => {
+                return Err(LogError::Corrupt(format!(
+                    "header changed after admission: {error:?}"
+                )));
+            }
+        };
+        if header != self.header {
+            return Err(LogError::Corrupt(
+                "segment header changed after admission".into(),
+            ));
+        }
+        Ok(header)
+    }
+}
+
 /// All header admission happens before any recovery callback, repair, truncate or record read.
 fn preflight<I: Io>(
     io: &I,
     dir: &str,
     names: &[(u64, String)],
     supported: u64,
-) -> Result<Vec<Option<SegmentHeader>>, LogError> {
+) -> Result<Vec<PreflightHeader>, LogError> {
     let mut previous = 0;
     let mut headers = Vec::with_capacity(names.len());
     for (idx, (_, name)) in names.iter().enumerate() {
-        let bytes = io.read_prefix(&format!("{dir}/{name}"), admission::GUARDED_HEADER_LEN)?;
+        let path = format!("{dir}/{name}");
+        let file_len = io.len(&path)?;
+        let bytes = io.read_prefix(&path, admission::GUARDED_HEADER_LEN)?;
+        if bytes.len() as u64 != file_len.min(admission::GUARDED_HEADER_LEN as u64)
+            || io.len(&path)? != file_len
+        {
+            return Err(LogError::Corrupt(format!(
+                "segment {name} violates the exact prefix-read contract"
+            )));
+        }
         match admission::decode_header(&bytes) {
             Ok(header) => {
                 admit(header.required_capabilities, supported)?;
@@ -127,9 +169,19 @@ fn preflight<I: Io>(
                     )));
                 }
                 previous = header.required_capabilities;
-                headers.push(Some(header));
+                headers.push(PreflightHeader {
+                    prefix: bytes,
+                    file_len,
+                    header: Some(header),
+                });
             }
-            Err(HeaderError::Incomplete) if idx + 1 == names.len() => headers.push(None),
+            Err(HeaderError::Incomplete) if idx + 1 == names.len() => {
+                headers.push(PreflightHeader {
+                    prefix: bytes,
+                    file_len,
+                    header: None,
+                })
+            }
             Err(error) => {
                 return Err(LogError::Corrupt(format!(
                     "segment {name} header: {error:?}"
@@ -256,7 +308,10 @@ fn recover<I: Io>(
             )));
         }
         let data = io.read(&path)?;
-        let header = headers.get(idx).copied().flatten();
+        let admitted = headers
+            .get(idx)
+            .ok_or_else(|| LogError::Corrupt("missing preflight header".into()))?;
+        let header = admitted.validate_full_read(&data)?;
         if let Some(header) = header {
             if admission::decode_header(&data) != Ok(header) {
                 return Err(LogError::Corrupt(format!(
@@ -581,7 +636,7 @@ impl<I: Io> Log<I> {
             .iter()
             .map(|first| (*first, format!("{first:020}.seg")))
             .collect();
-        preflight(&self.io, &self.dir, &names, self.supported_capabilities)?;
+        let headers = preflight(&self.io, &self.dir, &names, self.supported_capabilities)?;
         // Nothing is ever deleted from the head of the log, so the first segment starts at lsn 1.
         // If everything up to the durable LSN is claimed, the history must start there.
         if self.durable_lsn >= 1 && firsts.first() != Some(&1) {
@@ -599,8 +654,13 @@ impl<I: Io> Log<I> {
                 continue;
             }
             let data = self.io.read(&seg_name(&self.dir, *first))?;
-            let header = admission::decode_header(&data)
-                .map_err(|e| LogError::Corrupt(format!("segment {first} header: {e:?}")))?;
+            let header = headers
+                .get(i)
+                .ok_or_else(|| LogError::Corrupt("missing preflight header".into()))?
+                .validate_full_read(&data)?
+                .ok_or_else(|| {
+                    LogError::Corrupt(format!("segment {first} header became incomplete"))
+                })?;
             let mut off = header.length;
             while off < data.len() && out.len() < max {
                 let Decoded::Record(r, next) = decode_record(&data, off) else {

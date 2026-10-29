@@ -75,7 +75,8 @@ pub trait Io {
     fn len(&self, path: &str) -> Result<u64, IoError>;
     /// Reads the whole file, including bytes that are not yet durable.
     fn read(&self, path: &str) -> Result<Vec<u8>, IoError>;
-    /// Reads at most `max` leading bytes, including pending writes. Implementations must bound
+    /// Reads exactly `min(max, file length)` leading bytes, including pending writes.
+    /// Implementations must bound
     /// allocation and underlying reads by `max`, never read the whole file and then truncate.
     /// A missing path is an error even when `max` is zero.
     fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, IoError>;

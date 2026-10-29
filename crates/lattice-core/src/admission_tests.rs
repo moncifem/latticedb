@@ -376,3 +376,116 @@ fn guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption() {
         }
     }
 }
+
+#[derive(Clone)]
+struct ChangingView {
+    disk: Disk,
+    mode: Rc<Cell<u8>>,
+}
+impl Io for ChangingView {
+    fn exists(&self, p: &str) -> bool {
+        self.disk.exists(p)
+    }
+    fn len(&self, p: &str) -> Result<u64, IoError> {
+        if self.mode.get() == 2 && p == FIRST {
+            Ok(7)
+        } else {
+            self.disk.len(p)
+        }
+    }
+    fn read(&self, p: &str) -> Result<Vec<u8>, IoError> {
+        if p == FIRST {
+            match self.mode.get() {
+                1 => {
+                    let mut bytes = HEADER.to_vec();
+                    bytes.extend(record::encode_record(1, 42, &[8; 16]));
+                    return Ok(bytes);
+                }
+                2 => return Ok(COMPOUND.to_vec()),
+                _ => {}
+            }
+        }
+        self.disk.read(p)
+    }
+    fn read_prefix(&self, p: &str, n: usize) -> Result<Vec<u8>, IoError> {
+        if p == FIRST && matches!(self.mode.get(), 2 | 3) {
+            return Ok(LEGACY[..7.min(n)].to_vec());
+        }
+        self.disk.read_prefix(p, n)
+    }
+    fn append(&mut self, p: &str, b: &[u8]) -> Result<(), IoError> {
+        self.disk.append(p, b)
+    }
+    fn truncate(&mut self, p: &str, n: u64) -> Result<(), IoError> {
+        self.disk.truncate(p, n)
+    }
+    fn sync(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.sync(p)
+    }
+    fn sync_dir(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.sync_dir(p)
+    }
+    fn list(&self, p: &str) -> Result<Vec<String>, IoError> {
+        self.disk.list(p)
+    }
+    fn remove(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.remove(p)
+    }
+    fn create_dir_all(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.create_dir_all(p)
+    }
+    fn lock(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.lock(p)
+    }
+    fn unlock(&mut self, p: &str) {
+        self.disk.unlock(p)
+    }
+}
+
+#[test]
+fn changing_views_never_reuse_or_repair_unadmitted_segment_bytes() {
+    let mut disk = Disk::new();
+    let mut bytes = LEGACY.to_vec();
+    bytes.extend(record::encode_record(1, 42, &[7; 32]));
+    plant(&mut disk, FIRST, &bytes);
+    let mode = Rc::new(Cell::new(0));
+    let view = ChangingView {
+        disk: disk.clone(),
+        mode: mode.clone(),
+    };
+    let (log, _) = Log::open(view.clone(), "wal", 1000).unwrap();
+    // Both views contain a CRC-valid record at LSN1 and have exactly65 bytes; only admission differs.
+    mode.set(1);
+    assert!(matches!(
+        log.read_from_with_context(1, 1),
+        Err(LogError::Corrupt(_))
+    ));
+    mode.set(0);
+    drop(log);
+    let before = disk.manifest();
+    let calls = Cell::new(0);
+    for mode_value in [2, 3] {
+        mode.set(mode_value);
+        assert!(matches!(
+            Log::open_streaming(view.clone(), "wal", 1000, |_| calls.set(calls.get() + 1)),
+            Err(LogError::Corrupt(_))
+        ));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            disk.manifest(),
+            before,
+            "changed/short seam view must never trigger repair"
+        );
+    }
+    // Unknown version is complete at12 bytes, even though the rest of its header is absent.
+    for n in 12..16 {
+        let mut disk = Disk::new();
+        plant(&mut disk, FIRST, &UNKNOWN_VERSION[..n]);
+        let before = disk.manifest();
+        assert!(matches!(
+            Log::open(disk.clone(), "wal", 1000),
+            Err(LogError::Corrupt(_))
+        ));
+        assert_eq!(disk.manifest(), before);
+    }
+}

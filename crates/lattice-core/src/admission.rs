@@ -56,6 +56,19 @@ pub fn guarded_header(required: u64) -> Result<Vec<u8>, HeaderError> {
 
 /// Parses a bounded prefix. No allocations depend on a declared length or capability count.
 pub fn decode_header(bytes: &[u8]) -> Result<SegmentHeader, HeaderError> {
+    // Reject a complete unsupported version before an otherwise short header is repairable.
+    if bytes.get(..8) == Some(GUARDED_MAGIC.as_slice()) {
+        if let Some(version) = bytes.get(8..12)
+            && version != 2u32.to_le_bytes().as_slice()
+        {
+            return Err(HeaderError::Invalid("unsupported guarded version".into()));
+        }
+        if let Some(length) = bytes.get(12..14)
+            && length != 32u16.to_le_bytes().as_slice()
+        {
+            return Err(HeaderError::Invalid("unsupported guarded length".into()));
+        }
+    }
     if bytes.len() < SEGMENT_HEADER_LEN {
         return Err(HeaderError::Incomplete);
     }
