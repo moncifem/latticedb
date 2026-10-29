@@ -7,14 +7,17 @@ Every `statement ok` must succeed, every `statement error CODE` must fail with t
 every `query` must return the expected values. Records that expect `0A000` are skipped: they are
 constructs PostgreSQL accepts and Lattice rejects. Each statement runs in its own connection, so
 scripts that depend on one session (BEGIN ... COMMIT) cannot be checked here and are listed in
-SESSION_SCRIPTS. Exits non-zero on any mismatch, when no script is given or checked (an unmatched glob arrives as
-its literal text or as nothing), or when the server fails a `select 1` preflight.
+SESSION_SCRIPTS. A record preceded by a comment line `# differs-from-postgres` is skipped: it states what
+Lattice answers by design where PostgreSQL answers otherwise (for example binary string order
+against the database collation). Exits non-zero on any mismatch, when no script is given or checked
+(an unmatched glob arrives as its literal text or as nothing), or when the server fails a `select 1`
+preflight.
 """
 import re
 import subprocess
 import sys
 
-SESSION_SCRIPTS = {"transactions.test"}
+SESSION_SCRIPTS = {"transactions.test", "transactions_visibility.test"}
 # psql exits 1 for a fatal error, 2 when the connection to the server failed and 3 for an error in a
 # script. Only 2 (or a missing binary) means the server was never reached; with `-c`, a rejected
 # statement exits 1 and prints `ERROR:  <SQLSTATE>` under VERBOSITY=sqlstate.
@@ -54,6 +57,7 @@ def check(path):
     if rc != 0:
         print(f"{path}: cannot reset the schema: {err.strip()}")
         return 1
+    skip_next = False
 
     def block(stop_at_separator):
         nonlocal i
@@ -66,11 +70,19 @@ def check(path):
     while i < len(lines):
         head = lines[i].strip()
         i += 1
-        if not head or head.startswith("#"):
+        if head.startswith("#"):
+            if head.startswith("# differs-from-postgres"):
+                skip_next = True
+            continue
+        if not head:
             continue
         words = head.split()
+        skip = skip_next
+        skip_next = False
         if words[0] == "statement":
             sql = block(False)
+            if skip:
+                continue
             rc, _, err = psql(sql)
             if words[1] == "ok":
                 if rc != 0:
@@ -96,14 +108,19 @@ def check(path):
         elif words[0] == "query":
             sql = block(True)
             i += 1
-            expected = block(False).split("\n") if i <= len(lines) else []
+            body = block(False) if i <= len(lines) else ""
+            expected = body.split("\n") if body else []
+            if skip:
+                continue
             mode = words[2] if len(words) > 2 else "nosort"
             rc, out, err = psql(sql)
             if rc != 0:
                 print(f"{path}: query failed: {sql!r}: {err.strip()}")
                 bad += 1
                 continue
-            rows = [r.split("\t") for r in out.strip("\n").split("\n")] if out.strip("\n") else []
+            # One line per row; a row whose only value is NULL is an empty line, so drop just the
+            # final newline instead of stripping every trailing one.
+            rows = [r.split("\t") for r in out.split("\n")[:-1]] if out else []
             rows = [["NULL" if v == "" else v for v in r] for r in rows]
             if mode == "rowsort":
                 rows.sort()
