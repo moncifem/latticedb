@@ -1,8 +1,8 @@
 # Phase 2 status (gate NOT passed)
 
 Phase 2 is in progress under the owner-confirmed waiver in
-[the Phase 1 review package](phase-1-review.md). The Phase 1 gate remains open; this page claims no
-Phase 2 exit criterion. Requirements and exit criteria are in
+[the Phase 1 review package](phase-1-review.md). The Phase 1 gate remains open; this page does not claim
+a completed Phase 2 gate. Requirements and exit criteria are in
 [the Phase 2 specification](../spec/02-storage-and-sql.md).
 
 ## Implemented slices
@@ -56,13 +56,38 @@ replays again after an interrupted recovery. The focused suite passed five tests
 10,000-seed-per-profile volume test; that ignored budget has not been run for this evidence.
 
 This is bounded correctness and fault-coverage evidence. It does not satisfy the million-seed,
-seven-night soak requirements, the ten-storage-bug target, or any Phase 2 exit criterion. Typed/catalog
-histories and broader soak evidence remain separate work.
+seven-night soak requirements. Its four-mutant scope is separate from the ten-defect witness suite
+below. Typed/catalog histories and broader soak evidence remain separate work.
+
+## Ten storage defect witnesses (E2-4)
+
+`cargo test -p lattice-engines --test storage_bugs` runs a clean control for every witness, then
+requires each of ten distinct guarded storage defects to fail its intended semantic oracle. Setup
+errors and panics fail the test rather than counting as detection. Guard cleanup is checked on unwind.
+The 21 kernel defects are separate; the mask-capacity test verifies all 31 guard bits are distinct.
+
+| Planted storage defect | Detection |
+|---|---|
+| Skip write conflicts | A stale writer must lose to the committed writer |
+| Apply only part of a change set | The complete multi-row write envelope must be visible |
+| Drop deletes during replay | A deleted row must remain absent after restart |
+| Keep stale index entries | Old equality results and the scrubber must agree with current rows |
+| Overwrite MVCC history | A retained snapshot must keep the old row value |
+| Skip visible tombstones | A current deletion must not expose an older live value |
+| Ignore transaction-local writes | Reads must see buffered updates, inserts and deletes |
+| Include an excluded scan bound | Bounded scans must match an independent ordered map |
+| Omit new index entries | Equality results and scrubbed entries must include every primary key |
+| Match index prefixes as equality | Empty, zero-byte, absent and prefix-neighbor probes must match exact values |
+
+All ten witnesses have passing clean controls and detect their respective defect. This completes the
+ten-defect slice of E2-4; it does not establish soak coverage, branch fault histories, NS1 row-engine
+acceptance, or the Phase 2 gate. The randomized row workloads retain their existing four-defect
+contract; the new deterministic suite explicitly covers all ten through public storage operations.
 
 ## Still missing
 
 Catalog-backed index definitions; completed typed-table integration; checkpoint-based recovery with
 memory/time measurements; vacuum; SQL parser, planner and executor; PostgreSQL wire and driver
 conformance; branches and SQL time travel; online schema changes; and complete Phase 2 simulation,
-benchmark and planted-bug evidence. The Phase 1 nightly/fuzz history and final gate review also remain
+benchmark and north-star evidence. The Phase 1 nightly/fuzz history and final gate review also remain
 open. Track partial acceptance on [the roadmap](https://github.com/users/moncifem/projects/1).

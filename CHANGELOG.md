@@ -9,6 +9,9 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Ten distinct storage defect witnesses with independent semantic oracles, clean controls and guard
+  cleanup checks; the existing four-defect randomized workload remains unchanged.
+
 - Phase review evidence packages from `cargo xtask gate`, with declared criteria, source provenance,
   invariant traceability and optional ledger diagnostics, without inferring or signing a gate pass.
 

@@ -23,3 +23,10 @@ from the rows and compares both keys and values. A checker can inspect old snaps
 Index definitions are supplied by the caller on each open; they are not persisted in the catalog yet.
 There is no SQL server, index planner integration, vacuum or checkpoint-based recovery start yet.
 See [the Phase 2 status](../../docs/gates/phase-2.md).
+
+## Testing the checks
+
+`cargo test -p lattice-engines --test storage_bugs` checks ten distinct planted storage defects
+against specific public-operation witnesses and clean controls. The seeded `row_sim` and `row_faults`
+workloads retain their original four-defect contract. These are complementary bounded checks; see the
+Phase 2 gate record for the remaining soak, north-star and branch evidence.

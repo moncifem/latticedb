@@ -64,7 +64,8 @@ cargo run -p lattice-cli -- lsl compat old.lsl new.lsl
 <summary><strong>How the foundation is checked</strong></summary>
 
 The simulator replays seeded crashes, torn writes, disk errors and bit rot. Twenty-one planted kernel
-bugs prove its checks can fail; the row engine has its own model and planted-bug tests. Mutation
+bugs prove its checks can fail; ten storage defects have specific witnesses with clean controls. The
+row engine also has seeded history and fault-profile tests. Mutation
 checks, independent format fixtures, TLA+ models, fuzzing, Miri and AddressSanitizer provide different
 kinds of evidence. Long-run evidence and known gaps stay visible in the [gate records](docs/gates).
 
@@ -74,7 +75,7 @@ Nightly archives include checksums, SBOMs and build provenance. See [release ver
 
 ## Build it with us
 
-This is early enough to influence the foundations. Review a [design decision](docs/adr), try a
+This is early enough to influence the foundations. Review a [design decision](docs/adr), try an
 [open work package](https://github.com/moncifem/latticedb/issues?q=is%3Aissue+is%3Aopen+label%3A%22type%3A+feature%22), challenge an
 assumption in [Discussions](https://github.com/moncifem/latticedb/discussions), or contribute a test
 that makes the database harder to break. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
