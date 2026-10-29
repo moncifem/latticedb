@@ -61,6 +61,15 @@ pub trait PolicyEvaluator {
     fn allows_write(&self, _row: RowWriteRef<'_>) -> bool {
         false
     }
+
+    /// Whether this actor may change the catalog (create, rename or drop tables, create or drop
+    /// managed indexes). Denied by default, so only an evaluator that opts in is an administrator.
+    /// An index build reads every visible row regardless of [`PolicyEvaluator::allows_read`],
+    /// which is why DDL is a separate, stronger grant than row access.
+    #[cfg(feature = "row")]
+    fn authorize_ddl(&self, _change: crate::catalog::DdlRef<'_>) -> bool {
+        false
+    }
 }
 
 /// References retain the evaluator's identity when a transaction borrows its actor policy.
@@ -72,6 +81,10 @@ impl<P: PolicyEvaluator + ?Sized> PolicyEvaluator for &P {
     fn allows_write(&self, row: RowWriteRef<'_>) -> bool {
         (**self).allows_write(row)
     }
+    #[cfg(feature = "row")]
+    fn authorize_ddl(&self, change: crate::catalog::DdlRef<'_>) -> bool {
+        (**self).authorize_ddl(change)
+    }
 }
 
 /// Explicit Phase 2 policy for an integration that has no access restrictions yet.
@@ -82,6 +95,10 @@ impl PolicyEvaluator for AllowAll {
         true
     }
     fn allows_write(&self, _row: RowWriteRef<'_>) -> bool {
+        true
+    }
+    #[cfg(feature = "row")]
+    fn authorize_ddl(&self, _change: crate::catalog::DdlRef<'_>) -> bool {
         true
     }
 }

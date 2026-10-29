@@ -51,6 +51,15 @@ pub enum CatalogOp {
     },
 }
 
+/// A proposed catalog change shown to the actor policy before anything is written.
+#[derive(Debug, Clone, Copy)]
+pub struct DdlRef<'a> {
+    /// Table operations in the change.
+    pub tables: &'a [CatalogOp],
+    /// Managed index operations in the change.
+    pub indexes: &'a [IndexOp],
+}
+
 /// Why a catalog change or payload was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogError {
@@ -238,6 +247,16 @@ pub fn is_compound_payload(payload: &[u8]) -> bool {
     payload.get(..4) == Some(INDEX_MAGIC.as_slice())
 }
 
+/// An LCIX envelope may only be appended with the managed capability required, because a plain
+/// append leaves the segment unguarded and an older reader would skip the rows. `Kernel::commit`
+/// itself accepts any payload with no requirement, so every engine append site asserts this.
+pub(crate) fn check_guard(payload: &[u8], required: u64) -> Result<(), &'static str> {
+    if is_compound_payload(payload) && required & MANAGED_COMPOUND == 0 {
+        return Err("a managed compound payload needs the guarded commit");
+    }
+    Ok(())
+}
+
 fn put_block(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), CatalogError> {
     out.extend_from_slice(
         &u32::try_from(bytes.len())
@@ -402,8 +421,14 @@ pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
 /// The tables that exist at one version: id to name.
 pub type Tables = BTreeMap<u32, String>;
 
+#[cfg(test)]
+thread_local! {
+    /// Whole-catalog copies made on this thread; recovery must make none per record.
+    pub(crate) static CATALOG_CLONES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Every version of the catalog.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Catalog {
     /// (LSN of the change, tables right after it), in increasing LSN order.
     versions: Vec<(u64, Tables)>,
@@ -411,6 +436,19 @@ pub struct Catalog {
     used: BTreeSet<u32>,
     index_versions: Vec<(u64, ManagedIndexes)>,
     used_indexes: BTreeSet<u32>,
+}
+
+impl Clone for Catalog {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        CATALOG_CLONES.with(|c| c.set(c.get() + 1));
+        Self {
+            versions: self.versions.clone(),
+            used: self.used.clone(),
+            index_versions: self.index_versions.clone(),
+            used_indexes: self.used_indexes.clone(),
+        }
+    }
 }
 
 impl Catalog {
@@ -451,14 +489,15 @@ impl Catalog {
     /// Checks the operations against the current catalog without changing it.
     fn check_tables(&self, ops: &[CatalogOp]) -> Result<Tables, CatalogError> {
         let mut tables = self.current();
-        let mut used = self.used.clone();
+        // Ids used by earlier changes are looked up, never copied: replay stays linear in history.
+        let mut created = BTreeSet::new();
         for op in ops {
             match op {
                 CatalogOp::Create { table, name } => {
                     if name.is_empty() || name.len() > MAX_NAME {
                         return Err(CatalogError::BadName);
                     }
-                    if !used.insert(*table) {
+                    if self.used.contains(table) || !created.insert(*table) {
                         return Err(CatalogError::IdUsed(*table));
                     }
                     if tables.values().any(|n| n == name) {
@@ -527,11 +566,11 @@ impl Catalog {
     ) -> Result<(Tables, ManagedIndexes), CatalogError> {
         let tables = self.check_tables(ops)?;
         let mut indexes = self.indexes();
-        let mut used = self.used_indexes.clone();
+        let mut created = BTreeSet::new();
         for change in changes {
             match change {
                 IndexOp::Create(def) => {
-                    if !used.insert(def.id) {
+                    if self.used_indexes.contains(&def.id) || !created.insert(def.id) {
                         return Err(CatalogError::IndexIdUsed(def.id));
                     }
                     if def.name.is_empty() || def.name.len() > MAX_NAME {
@@ -769,6 +808,8 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
         }
         self.catalog.check(&ops).map_err(StoreError::Invalid)?;
         let payload = encode(&ops).map_err(StoreError::Invalid)?;
+        // `Kernel::commit` appends with no required capabilities, so it must never carry LCIX.
+        check_guard(&payload, 0).map_err(|e| StoreError::Corrupt(e.into()))?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {
             Ok(Receipt::Recorded { lsn, .. }) => {
@@ -931,5 +972,21 @@ mod tests {
         bytes.push(0);
         assert_eq!(decode(&bytes), Err(CatalogError::Trailing));
         assert!(!is_catalog_payload(b"LROW"));
+    }
+
+    #[test]
+    fn only_the_guarded_commit_may_carry_a_compound_payload() {
+        let compound = encode_compound(&CompoundChange {
+            tables: vec![create(1, "a")],
+            indexes: Vec::new(),
+            rows: Vec::new(),
+        })
+        .unwrap();
+        assert!(is_compound_payload(&compound));
+        assert!(check_guard(&compound, 0).is_err());
+        assert!(check_guard(&compound, MANAGED_COMPOUND).is_ok());
+        let legacy = encode(&[create(1, "a")]).unwrap();
+        assert!(check_guard(&legacy, 0).is_ok());
+        assert!(check_guard(b"LROW", 0).is_ok());
     }
 }

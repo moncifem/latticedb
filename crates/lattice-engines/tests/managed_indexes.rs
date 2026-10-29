@@ -1105,6 +1105,10 @@ fn compound_writes_and_historical_managed_lookups_preserve_the_bound_actor_polic
                 && row.before.is_none_or(|value| value.starts_with(b"a"))
                 && row.after.is_none_or(|value| value.starts_with(b"a"))
         }
+        // This test is about row policy; DDL is granted explicitly (see the DDL authorization test).
+        fn authorize_ddl(&self, _change: lattice_engines::catalog::DdlRef<'_>) -> bool {
+            true
+        }
     }
     let (disk, clock) = fresh();
     let mut store = open(&disk, &clock);
@@ -1206,6 +1210,231 @@ fn compound_writes_and_historical_managed_lookups_preserve_the_bound_actor_polic
         store.check_indexes_at(old).unwrap();
         store.check_indexes_at(now).unwrap();
     }
+}
+
+/// Catalog and index changes need their own grant: row access never implies DDL, and the host-only
+/// `commit_catalog` is the one path that does not take an actor.
+#[test]
+fn ddl_is_denied_by_default_to_an_actor_and_leaves_no_trace() {
+    use lattice_engines::limits::{AllowAll, DenyAll, PolicyEvaluator, RowRef, RowWriteRef};
+    struct RowsOnly;
+    impl PolicyEvaluator for RowsOnly {
+        fn allows_read(&self, _row: RowRef<'_>) -> bool {
+            true
+        }
+        fn allows_write(&self, _row: RowWriteRef<'_>) -> bool {
+            true
+        }
+    }
+    struct Admin;
+    impl PolicyEvaluator for Admin {
+        fn authorize_ddl(&self, change: lattice_engines::catalog::DdlRef<'_>) -> bool {
+            // Sees the actual change, not just a request for "some DDL".
+            change
+                .tables
+                .iter()
+                .all(|op| matches!(op, CatalogOp::Create { .. }))
+        }
+    }
+    for mutated in [false, true] {
+        bugs::clear();
+        let guard = BugGuard;
+        let (disk, clock) = fresh();
+        let mut store = open(&disk, &clock);
+        store.commit_catalog(vec![table(7)], vec![]).unwrap();
+        let before = wal(&disk);
+        let applied = store.catalog().applied_lsn();
+        if mutated {
+            bugs::enable(Bug::DdlPolicySkipped);
+        }
+        let change = (
+            vec![table(8)],
+            vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))],
+        );
+        let tx = store.begin_with_policy(RowsOnly);
+        let result = store.commit_with_catalog(tx, change.0.clone(), change.1.clone());
+        drop(guard);
+        if mutated {
+            // The planted bug lets an actor with only row access create tables and indexes.
+            assert!(result.is_ok(), "{result:?}");
+            assert_ne!(store.catalog().applied_lsn(), applied);
+            continue;
+        }
+        assert_eq!(result, Err(RowError::PermissionDenied));
+        let tx = store.begin_with_policy(DenyAll);
+        assert_eq!(
+            store.commit_with_catalog(tx, change.0, change.1),
+            Err(RowError::PermissionDenied)
+        );
+        assert_eq!(wal(&disk), before, "a denied DDL must append nothing");
+        assert_eq!(store.catalog().applied_lsn(), applied);
+        // Row-only commits by the same restricted actor are unaffected.
+        let mut tx = store.begin_with_policy(RowsOnly);
+        tx.put((7, b"k".to_vec()), b"v".to_vec());
+        store
+            .commit_with_catalog(tx, Vec::new(), Vec::new())
+            .unwrap();
+        // A grant that looks at the change: creating is allowed, dropping is not.
+        store
+            .commit_with_catalog(store.begin_with_policy(Admin), vec![table(8)], vec![])
+            .unwrap();
+        assert_eq!(
+            store.commit_with_catalog(
+                store.begin_with_policy(Admin),
+                vec![CatalogOp::Drop { table: 8 }],
+                vec![]
+            ),
+            Err(RowError::PermissionDenied)
+        );
+        // The host path binds the explicit allow-all policy.
+        store
+            .commit_with_catalog(store.begin_with_policy(AllowAll), vec![table(9)], vec![])
+            .unwrap();
+        store.commit_catalog(vec![table(10)], vec![]).unwrap();
+    }
+}
+
+/// Old pre-guard catalog bytes, framed by hand from `formats/catalog-v1.md`: magic, version 1, a
+/// count, then per operation a kind byte, a table id and (create, rename) a length-prefixed name.
+fn old_lcat(ops: &[(u8, u32, &str)]) -> Vec<u8> {
+    let mut out = b"LCAT".to_vec();
+    out.push(1);
+    out.extend_from_slice(&(ops.len() as u32).to_le_bytes());
+    for (kind, table, name) in ops {
+        out.push(*kind);
+        out.extend_from_slice(&table.to_le_bytes());
+        if *kind != 3 {
+            out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+        }
+    }
+    out
+}
+
+fn old_log(disk: &SharedIo, clock: &Rc<SimClock>, payloads: Vec<Vec<u8>>) {
+    // What a binary from before managed indexes did: the plain, unguarded kernel commit.
+    let (mut kernel, _) = Kernel::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(23),
+        &config(),
+    )
+    .unwrap();
+    for payload in payloads {
+        let id = kernel.new_id();
+        kernel.commit(ChangeSet::new(id, payload)).unwrap();
+    }
+}
+
+#[test]
+fn an_existing_unguarded_log_with_catalog_records_replays_under_strict_application() {
+    let (disk, clock) = fresh();
+    assert_eq!(
+        old_lcat(&[(1, 7, "items")]),
+        LEGACY,
+        "hand framing matches the golden"
+    );
+    old_log(
+        &disk,
+        &clock,
+        vec![
+            old_lcat(&[(1, 7, "items")]),
+            old_lcat(&[(2, 7, "things")]),
+            old_lcat(&[(1, 8, "extra"), (1, 9, "more")]),
+            old_lcat(&[(3, 8, "")]),
+        ],
+    );
+    let before = wal(&disk);
+    assert!(
+        before[0].1.starts_with(include_bytes!(
+            "../../../formats/corpus/wal-admission-v1-legacy.golden"
+        )),
+        "the fixture log is a v1 unguarded log"
+    );
+    let live = vec![(7, "things".to_string()), (9, "more".to_string())];
+    let store = RowStore::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(23),
+        &config(),
+    )
+    .unwrap();
+    assert_eq!(
+        store.catalog().current().into_iter().collect::<Vec<_>>(),
+        live
+    );
+    assert_eq!(store.catalog().id_of(1, "items"), Some(7));
+    assert_eq!(store.catalog().id_of(2, "things"), Some(7));
+    assert_eq!(store.catalog().applied_lsn(), 4);
+    assert!(store.catalog().indexes().is_empty());
+    drop(store);
+    let catalog_store = CatalogStore::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(23),
+        &config(),
+    )
+    .unwrap();
+    assert_eq!(
+        catalog_store
+            .catalog()
+            .current()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        live
+    );
+    drop(catalog_store);
+    let callback = RowStore::open_with_indexes(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(23),
+        &config(),
+        vec![IndexDef {
+            id: 1,
+            table: 7,
+            extract: |value| Some(value.to_vec()),
+        }],
+    )
+    .unwrap();
+    assert_eq!(callback.catalog().applied_lsn(), 4);
+    drop(callback);
+    assert_eq!(
+        wal(&disk),
+        before,
+        "replaying an old log must not rewrite it or install a guard"
+    );
+}
+
+#[test]
+fn a_catalog_record_the_strict_rules_refuse_still_stops_recovery_with_corruption() {
+    // Documents the cost of strict application: a log whose LCAT record breaks the catalog rules
+    // (here a reused table id) refuses to open instead of silently skipping the record.
+    let (disk, clock) = fresh();
+    old_log(
+        &disk,
+        &clock,
+        vec![old_lcat(&[(1, 7, "items")]), old_lcat(&[(1, 7, "again")])],
+    );
+    let before = wal(&disk);
+    assert!(matches!(
+        RowStore::open(
+            disk.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(23),
+            &config()
+        ),
+        Err(RowError::Corrupt(message)) if message.contains("lsn 2")
+    ));
+    assert!(matches!(
+        CatalogStore::open(
+            disk.clone(),
+            SharedClock(clock),
+            SeededRng::new(23),
+            &config()
+        ),
+        Err(catalog::StoreError::Corrupt(_))
+    ));
+    assert_eq!(wal(&disk), before);
 }
 
 fn install_literal_segment(disk: &SharedIo, bytes: &[u8]) {

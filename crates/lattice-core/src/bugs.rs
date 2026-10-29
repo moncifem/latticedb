@@ -84,6 +84,8 @@ pub enum Bug {
     GuardRewriteUnstaged,
     /// Recovery ignores managed index definitions and therefore omits their rebuilt entries.
     ManagedIndexesNotRecovered,
+    /// A catalog or managed-index change commits without asking the actor policy (authorization).
+    DdlPolicySkipped,
     /// Strict HLC history resolution silently substitutes the vacuum floor for an expired view.
     HlcSnapshotClamped,
     /// The duplicate check runs before the fence check, so a superseded turn retrying an
@@ -125,7 +127,7 @@ impl Bug {
     /// Authorization defects, detected by the independent public row-policy witness suite.
     pub const POLICY: [Bug; 2] = [Bug::RowPolicyReadSkipped, Bug::RowPolicyWriteSkipped];
     /// Catalog-managed definition recovery defects, exercised by the focused fault witness.
-    pub const CATALOG_INDEX: [Bug; 1] = [Bug::ManagedIndexesNotRecovered];
+    pub const CATALOG_INDEX: [Bug; 2] = [Bug::ManagedIndexesNotRecovered, Bug::DdlPolicySkipped];
 
     /// Strict HLC snapshot defects, detected by the focused retention witness.
     pub const HLC_SNAPSHOT: [Bug; 1] = [Bug::HlcSnapshotClamped];
@@ -235,7 +237,7 @@ mod tests {
             .chain(Bug::HLC_SNAPSHOT)
             .chain(Bug::FENCE_ORDER)
             .collect();
-        assert_eq!(all.len(), 39);
+        assert_eq!(all.len(), 40);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

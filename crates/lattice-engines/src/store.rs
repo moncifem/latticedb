@@ -19,7 +19,7 @@
 //! when a change set committed, whatever rows it touched. A request handler must not expose them
 //! to an actor without its own authorization.
 
-use crate::catalog::{self, Catalog, CatalogError, CatalogOp, CompoundChange, IndexOp};
+use crate::catalog::{self, Catalog, CatalogError, CatalogOp, CompoundChange, DdlRef, IndexOp};
 use crate::index::{IndexDef, Indexes, ManagedIndexes};
 use crate::limits::{
     AllowAll, LimitError, MemoryReservation, PolicyEvaluator, RowRef, RowWriteRef, StatementLimits,
@@ -302,21 +302,25 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                         let change = catalog::decode_compound(&cs.payload).map_err(|e| {
                             RowError::Corrupt(format!("compound at lsn {}: {e}", r.lsn))
                         })?;
-                        let mut next = catalog.clone();
-                        next.apply_change(r.lsn, &change.tables, &change.indexes)
+                        // Validate against the recovered catalog by borrow; it is only changed once
+                        // every later step of this record has succeeded.
+                        let (_, definitions) = catalog
+                            .check_change(&change.tables, &change.indexes)
                             .map_err(|e| {
                                 RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
                             })?;
-                        (change.rows, Some(next))
+                        (
+                            change.rows,
+                            Some((change.tables, change.indexes, definitions)),
+                        )
                     } else if catalog::is_catalog_payload(&cs.payload) {
                         let ops = catalog::decode(&cs.payload).map_err(|e| {
                             RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
                         })?;
-                        let mut next = catalog.clone();
-                        next.apply(r.lsn, &ops).map_err(|e| {
+                        let (_, definitions) = catalog.check_change(&ops, &[]).map_err(|e| {
                             RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
                         })?;
-                        (Vec::new(), Some(next))
+                        (Vec::new(), Some((ops, Vec::new(), definitions)))
                     } else if rowops::is_row_payload(&cs.payload) {
                         (
                             rowops::decode(&cs.payload).map_err(|e| {
@@ -330,11 +334,11 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                     if bugs::active(Bug::RowRecoveryDropsDeletes) {
                         writes.retain(|(_, value)| value.is_some());
                     }
-                    if let Some(next) = next_catalog {
+                    if let Some((table_ops, index_ops, definitions)) = next_catalog {
                         let definitions = if bugs::active(Bug::ManagedIndexesNotRecovered) {
                             Default::default()
                         } else {
-                            next.indexes()
+                            definitions
                         };
                         let changes = indexes
                             .catalog_changes_for(&table, &writes, &definitions)
@@ -343,7 +347,11 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                         indexes
                             .apply_catalog(r.lsn, cs.id, changes, definitions)
                             .map_err(mvcc_error)?;
-                        catalog = next;
+                        catalog
+                            .apply_change(r.lsn, &table_ops, &index_ops)
+                            .map_err(|e| {
+                                RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
+                            })?;
                     } else {
                         let changes = indexes.changes_for(&table, &writes).map_err(mvcc_error)?;
                         table
@@ -446,6 +454,16 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.authorize_staged(&tx)?;
         if !bugs::active(Bug::RowConflictCheckSkipped) {
             tx.inner.check(&self.table).map_err(mvcc_error)?;
+        }
+        // DDL needs its own grant: row access never implies it, and an index build reads rows the
+        // actor may not be allowed to see. Checked before catalog state can leak through errors.
+        if !bugs::active(Bug::DdlPolicySkipped)
+            && !tx.policy.authorize_ddl(DdlRef {
+                tables: &tables,
+                indexes: &indexes,
+            })
+        {
+            return Err(RowError::PermissionDenied);
         }
         let (_, definitions) = self
             .catalog
@@ -901,6 +919,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
+        // `Kernel::commit` appends with no required capabilities, so it must never carry LCIX.
+        catalog::check_guard(&payload, 0).map_err(|e| RowError::Corrupt(e.into()))?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {
             Ok(Receipt::Recorded { lsn, hlc }) => {
@@ -1173,6 +1193,71 @@ mod vacuum_tests {
 }
 
 // Keep these public-API policy workloads in the library test target so Miri and ASan run them too.
+#[cfg(test)]
+mod catalog_replay_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
+    use super::*;
+    use crate::catalog::CATALOG_CLONES;
+    use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
+    use lattice_testkit::scenario::{SharedClock, SharedIo};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn recovery_validates_each_catalog_record_by_borrow_and_never_copies_the_catalog() {
+        let disk = SharedIo::new(SimIo::new(17, FaultProfile::clean()));
+        let clock = Rc::new(SimClock::new(1_000));
+        let open = || {
+            clock.advance(1);
+            RowStore::open(
+                disk.clone(),
+                SharedClock(clock.clone()),
+                SeededRng::new(17),
+                &Config::default(),
+            )
+            .unwrap()
+        };
+        let mut store = open();
+        let changes: u32 = 200;
+        for table in 0..changes {
+            let create = CatalogOp::Create {
+                table,
+                name: format!("t{table}"),
+            };
+            store
+                .commit_catalog(vec![create, CatalogOp::Drop { table }], Vec::new())
+                .unwrap();
+        }
+        store
+            .commit_catalog(
+                vec![CatalogOp::Create {
+                    table: changes,
+                    name: "live".into(),
+                }],
+                Vec::new(),
+            )
+            .unwrap();
+        drop(store);
+        let before = CATALOG_CLONES.with(Cell::get);
+        let reopened = open();
+        // The old replay copied the catalog once per record: 201 copies of an ever longer history.
+        assert_eq!(CATALOG_CLONES.with(Cell::get), before);
+        // The counter is live: an explicit copy is seen.
+        let _copy = reopened.catalog().clone();
+        assert_eq!(CATALOG_CLONES.with(Cell::get), before + 1);
+        assert_eq!(reopened.catalog().applied_lsn(), u64::from(changes) + 1);
+        assert_eq!(
+            reopened.catalog().current().into_iter().collect::<Vec<_>>(),
+            vec![(changes, "live".to_string())]
+        );
+    }
+}
+
 #[cfg(test)]
 #[path = "store_policy_tests.rs"]
 mod policy_tests;
