@@ -44,12 +44,13 @@ Registry PIDs are not reused during this server lifetime.
 Handlers that override `execute_cancellable` or `describe_cancellable` must poll the token between
 bounded work units and choose their abort/commit boundary. Returning `57014` gives the normal query
 error flow; extended errors discard messages until Sync, and an active transaction remains failed
-until rollback. A cancelled portal cannot resume. Idle cancellation does not poison the next query.
+until rollback. A portal cancelled before execution cannot resume; cached successful results remain readable. Idle cancellation does not poison the next query.
 
 Legacy handler methods remain usable: their default cancellation-aware methods check before entry,
 but they cannot preempt a handler that blocks without polling. Successful possibly-committed results
 are never relabeled as cancellation after return, and already-computed result transmission is not
 interrupted. No real SQL executor, statement rollback implementation or driver conformance is claimed.
-Shutdown signals all registered tokens, closes sockets and then joins workers; cooperative handlers
+Shutdown atomically closes admission and new query-token allocation while signalling all registered
+tokens, closes sockets and then joins workers; cooperative handlers
 can exit promptly. Registry poison causes normal operations to fail closed, while shutdown and
 unregister recover the lock only to cancel/clean up safely.

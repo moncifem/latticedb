@@ -510,11 +510,11 @@ impl<H: QueryHandler> Session<H> {
         out: &mut Vec<Backend>,
         cancellation: &CancellationToken,
     ) -> Result<(), QueryError> {
-        check_cancellation(cancellation)?;
         let missing = || QueryError::new("34000", format!("portal \"{name}\" does not exist"));
         let portal = self.portals.get(name).ok_or_else(missing)?;
         let state = match &portal.state {
             PortalState::Fresh => {
+                check_cancellation(cancellation)?;
                 let sql = portal.sql.clone();
                 let params = portal.params.clone();
                 if is_blank(&sql) {
@@ -1340,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_parse_aborts_active_transaction_and_cancelled_portals_cannot_resume() {
+    fn cancelled_parse_aborts_active_transaction_and_cancelled_fresh_portal_cannot_resume() {
         let (mut registry, key, token) = cancellation();
         registry.cancel(key, 0);
         let mut session = ready();
@@ -1348,27 +1348,17 @@ mod tests {
         let out = session.on_message_with_cancellation(parse("", "SELECT 1"), &token);
         assert_eq!(err_code(&out.messages[0]), "57014");
         assert_eq!(session.tx_status(), TxStatus::Failed);
-        for suspended in [false, true] {
-            let mut session = ready();
-            session.on_message(parse("s", "SELECT 3"));
-            session.on_message(bind("p", "s", vec![]));
-            if suspended {
-                assert!(
-                    session
-                        .on_message(exec("p", 1))
-                        .messages
-                        .contains(&Backend::PortalSuspended)
-                );
-            }
-            let out = session.on_message_with_cancellation(exec("p", 0), &token);
-            assert_eq!(err_code(&out.messages[0]), "57014");
-            session.on_message(Frontend::Sync);
-            assert_eq!(
-                err_code(&session.on_message(exec("p", 0)).messages[0]),
-                "34000"
-            );
-            assert_eq!(session.handler().executed.len(), usize::from(suspended));
-        }
+        let mut session = ready();
+        session.on_message(parse("s", "SELECT 3"));
+        session.on_message(bind("p", "s", vec![]));
+        let out = session.on_message_with_cancellation(exec("p", 0), &token);
+        assert_eq!(err_code(&out.messages[0]), "57014");
+        session.on_message(Frontend::Sync);
+        assert_eq!(
+            err_code(&session.on_message(exec("p", 0)).messages[0]),
+            "34000"
+        );
+        assert!(session.handler().executed.is_empty());
     }
 
     #[test]
@@ -1445,5 +1435,70 @@ mod tests {
                 Backend::ReadyForQuery(TxStatus::Idle)
             ]
         );
+    }
+
+    #[test]
+    fn cancelled_resume_preserves_committed_returning_rows_and_completion() {
+        struct Returning {
+            committed: bool,
+            calls: usize,
+        }
+        impl QueryHandler for Returning {
+            fn execute(
+                &mut self,
+                _: &str,
+                _: &[Option<Vec<u8>>],
+            ) -> Result<QueryOutput, QueryError> {
+                self.calls += 1;
+                self.committed = true; // Simulated commit boundary before returning cached rows.
+                Ok(QueryOutput {
+                    columns: vec![col()],
+                    rows: vec![vec![Some(b"11".to_vec())], vec![Some(b"22".to_vec())]],
+                    tag: "INSERT 0 2".into(),
+                })
+            }
+            fn describe(&mut self, _: &str) -> Result<Vec<Column>, QueryError> {
+                Ok(vec![col()])
+            }
+        }
+        let mut session = Session::new(
+            Returning {
+                committed: false,
+                calls: 0,
+            },
+            1,
+            2,
+        );
+        session.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
+        session.on_message(parse("s", "INSERT RETURNING"));
+        session.on_message(bind("p", "s", vec![]));
+        assert_eq!(
+            session.on_message(exec("p", 1)).messages,
+            [
+                Backend::DataRow(vec![Some(b"11".to_vec())]),
+                Backend::PortalSuspended,
+            ]
+        );
+        assert!(session.handler().committed);
+        let (mut registry, key, token) = cancellation();
+        registry.cancel(key, 0);
+        assert_eq!(
+            session
+                .on_message_with_cancellation(exec("p", 1), &token)
+                .messages,
+            [
+                Backend::DataRow(vec![Some(b"22".to_vec())]),
+                Backend::CommandComplete("INSERT 0 2".into()),
+            ]
+        );
+        // A completed portal also returns its successful completion even with a cancelled token.
+        assert_eq!(
+            session
+                .on_message_with_cancellation(exec("p", 0), &token)
+                .messages,
+            [Backend::CommandComplete("INSERT 0 2".into()),]
+        );
+        assert_eq!(session.handler().calls, 1);
+        assert_eq!(session.tx_status(), TxStatus::Idle);
     }
 }

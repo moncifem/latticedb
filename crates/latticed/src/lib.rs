@@ -45,7 +45,27 @@ impl Default for ServerConfig {
 /// Flooding these slots can still delay/refuse cancellation; this is a resource bound, not a DoS guarantee.
 pub const CONTROL_CONNECTION_RESERVE: usize = 8;
 
-type Registry = Arc<Mutex<CancelRegistry>>;
+struct RegistryState {
+    entries: CancelRegistry,
+    closing: bool,
+}
+impl RegistryState {
+    fn new(capacity: usize) -> io::Result<Self> {
+        Ok(Self {
+            entries: CancelRegistry::new(capacity).map_err(io::Error::other)?,
+            closing: false,
+        })
+    }
+    fn ensure_open(&self) -> io::Result<()> {
+        if self.closing {
+            Err(io::Error::other("server shutting down"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+type Registry = Arc<Mutex<RegistryState>>;
 
 /// An active listener. Explicit shutdown and drop both close active sockets and join every worker.
 pub struct ServerHandle {
@@ -78,9 +98,7 @@ impl ServerHandle {
                 "nonzero timeouts and 1..=1024 connections required",
             ));
         }
-        let registry = Arc::new(Mutex::new(
-            CancelRegistry::new(config.max_connections).map_err(io::Error::other)?,
-        ));
+        let registry = Arc::new(Mutex::new(RegistryState::new(config.max_connections)?));
         let listener = TcpListener::bind(config.address)?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?;
@@ -203,7 +221,7 @@ where
     })();
     // Cancellation comes before joining CPU-bound cooperative handlers. Recover a poisoned mutex
     // only for shutdown/cleanup; normal admission and query operations fail closed on poison.
-    clear_registry(&registry);
+    close_registry(&registry);
     // Shutdown is independent of each client's configured timeout, including partial-frame clients.
     for worker in &workers {
         let _ = worker.socket.shutdown(Shutdown::Both);
@@ -307,18 +325,21 @@ fn frame(
     Ok(Some(bytes))
 }
 
-fn lock_registry(registry: &Mutex<CancelRegistry>) -> io::Result<MutexGuard<'_, CancelRegistry>> {
+fn lock_registry(registry: &Mutex<RegistryState>) -> io::Result<MutexGuard<'_, RegistryState>> {
     registry
         .lock()
         .map_err(|_| io::Error::other("cancel registry poisoned"))
 }
 
-fn clear_registry(registry: &Mutex<CancelRegistry>) {
+fn close_registry(registry: &Mutex<RegistryState>) {
     let mut registry = match registry.lock() {
         Ok(registry) => registry,
         Err(poisoned) => poisoned.into_inner(),
     };
-    registry.clear();
+    // Serialize the shutdown latch with both admission and query-token allocation. Closing sockets
+    // alone cannot prevent an already-classified/pipelined request from starting CPU-bound work.
+    registry.closing = true;
+    registry.entries.clear();
 }
 
 struct Registration {
@@ -329,13 +350,21 @@ impl Registration {
     fn new(registry: Registry) -> io::Result<Self> {
         // A key is valid for this connection's lifetime, not a wall-clock TTL that could silently
         // invalidate the client's only BackendKeyData. Drop unregisters it, even on worker unwind.
-        let key = lock_registry(&registry)?
-            .register(&mut OsRng, 0, u64::MAX)
-            .map_err(io::Error::other)?;
+        let key = {
+            let mut state = lock_registry(&registry)?;
+            state.ensure_open()?;
+            state
+                .entries
+                .register(&mut OsRng, 0, u64::MAX)
+                .map_err(io::Error::other)?
+        };
         Ok(Self { registry, key })
     }
     fn begin_query(&self) -> io::Result<CancellationToken> {
-        lock_registry(&self.registry)?
+        let mut state = lock_registry(&self.registry)?;
+        state.ensure_open()?;
+        state
+            .entries
             .begin_query(self.key, 0)
             .map_err(io::Error::other)
     }
@@ -346,7 +375,7 @@ impl Drop for Registration {
             Ok(registry) => registry,
             Err(poisoned) => poisoned.into_inner(),
         };
-        registry.unregister(self.key, 0);
+        registry.entries.unregister(self.key, 0);
     }
 }
 
@@ -397,7 +426,9 @@ where
         };
         match startup {
             Startup::Cancel { pid, secret } => {
-                lock_registry(&registry)?.cancel(CancelKey { pid, secret }, 0);
+                lock_registry(&registry)?
+                    .entries
+                    .cancel(CancelKey { pid, secret }, 0);
                 let _ = socket.shutdown(Shutdown::Both);
                 return Ok(());
             }
@@ -539,13 +570,19 @@ mod tests {
     use super::*;
     #[test]
     fn poisoned_registry_is_fail_closed_normally_but_shutdown_still_cancels_tokens() {
-        let registry = Arc::new(Mutex::new(CancelRegistry::new(1).unwrap()));
+        let registry = Arc::new(Mutex::new(RegistryState::new(1).unwrap()));
         let key = registry
             .lock()
             .unwrap()
+            .entries
             .register(&mut OsRng, 0, u64::MAX)
             .unwrap();
-        let token = registry.lock().unwrap().begin_query(key, 0).unwrap();
+        let token = registry
+            .lock()
+            .unwrap()
+            .entries
+            .begin_query(key, 0)
+            .unwrap();
         let poison = registry.clone();
         assert!(
             thread::spawn(move || {
@@ -556,12 +593,56 @@ mod tests {
             .is_err()
         );
         assert!(lock_registry(&registry).is_err());
-        clear_registry(&registry);
+        close_registry(&registry);
         assert!(token.is_cancelled());
         let registration = Registration {
             registry: registry.clone(),
             key,
         };
         drop(registration); // Cleanup must not panic on the same poisoned mutex.
+    }
+
+    #[test]
+    fn shutdown_serializes_with_delayed_registration_and_query_start() {
+        use std::sync::mpsc;
+        // Model a classification worker paused after reading a pipelined startup/query, and an
+        // admitted worker paused immediately before allocating its next query token.
+        for already_registered in [false, true] {
+            let registry = Arc::new(Mutex::new(RegistryState::new(1).unwrap()));
+            let registration =
+                already_registered.then(|| Registration::new(registry.clone()).unwrap());
+            let active = registration.as_ref().map(|r| r.begin_query().unwrap());
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let (result_tx, result_rx) = mpsc::channel();
+            let worker_registry = registry.clone();
+            let worker = thread::spawn(move || {
+                ready_tx.send(()).unwrap();
+                // Both synchronization points are bounded so a regression cannot hang the suite.
+                release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                let result = match registration {
+                    Some(registration) => registration.begin_query(),
+                    None => Registration::new(worker_registry).and_then(|r| r.begin_query()),
+                };
+                result_tx
+                    .send(
+                        result
+                            .map(|token| token.is_cancelled())
+                            .map_err(|e| e.to_string()),
+                    )
+                    .unwrap();
+            });
+            ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            close_registry(&registry);
+            if let Some(token) = active {
+                assert!(token.is_cancelled());
+            }
+            release_tx.send(()).unwrap();
+            let result = result_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            worker.join().unwrap();
+            assert_eq!(result.unwrap_err(), "server shutting down");
+            let state = registry.lock().unwrap();
+            assert!(state.closing);
+        }
     }
 }
