@@ -16,15 +16,15 @@ import scorecard_metrics as metrics
 from scorecard_metrics import require
 
 
-def validate_baseline(shard, assigned):
+def validate_baseline(shard, assigned, trusted_manifest):
     require(not shard.get('baseline_read_error'), 'matching-scope baseline JSON malformed')
     proof = shard.get('baseline')
     require(isinstance(proof, dict), 'matching-scope baseline proof missing or malformed')
-    expected = campaign.baseline_context(shard['manifest'], assigned)
+    expected = campaign.baseline_context(trusted_manifest, assigned)
     context = {key: value for key, value in proof.items() if key != 'commands'}
-    require(json.dumps(context, sort_keys=True) == json.dumps(expected, sort_keys=True),
+    require(campaign.same_json(context, expected),
             'baseline source, plan or assignment differs')
-    commands = campaign.baseline_commands(shard['manifest']['group'], assigned)
+    commands = campaign.baseline_commands(trusted_manifest['group'], assigned)
     records = proof.get('commands')
     require(isinstance(records, list) and len(records) == len(commands), 'baseline scopes missing or duplicated')
     logs = shard.get('baseline_logs', {})
@@ -66,10 +66,16 @@ def aggregate(plan, universes, shards, source_complete):
             require(not shard.get('generation_error'), shard.get('generation_error', 'generation proof missing'))
             manifest = shard['manifest']
             require(isinstance(manifest, dict), 'missing mutation shard manifest')
-            require(manifest.get('source') == plan['source'] and manifest.get('group') == group
-                    and manifest.get('shard') == index and manifest.get('total') == item['total']
-                    and manifest.get('tool_version') == campaign.VERSION
-                    and manifest.get('universe_sha256') == plan['groups'][group]['universe_sha256'], 'shard manifest/plan mismatch')
+            trusted_manifest = {'schema': 1, 'source': plan['source'], 'group': group, 'shard': index,
+                                'total': item['total'], 'tool_version': campaign.VERSION,
+                                'universe_sha256': plan['groups'][group]['universe_sha256'],
+                                'plan_sha256': plan.get('plan_sha256')}
+            require(isinstance(manifest.get('source'), dict)
+                    and all(type(manifest.get(field)) is int for field in ('schema', 'shard', 'total'))
+                    and all(type(manifest.get('source', {}).get(field)) is int
+                            for field in ('run_id', 'attempt', 'workflow_id'))
+                    and campaign.same_json({key: manifest.get(key) for key in trusted_manifest}, trusted_manifest),
+                    'shard manifest/plan mismatch')
             if shard.get('outcomes') is not None:
                 expected_command = campaign.command(group) + ['--shard', f'{index}/{item["total"]}', '--sharding', 'round-robin', '--output']
                 actual_command = shard.get('command', {}).get('arguments', [])
@@ -80,7 +86,7 @@ def aggregate(plan, universes, shards, source_complete):
             campaign.check_assignment(plan, group, index, assigned)
             assignments[group][index] = assigned
             try:
-                validate_baseline(shard, assigned)
+                validate_baseline(shard, assigned, trusted_manifest)
                 diagnostic['baseline_scope'] = 'verified_matching_scope'
             except (ValueError, KeyError, TypeError) as error:
                 diagnostic['baseline_scope'] = 'unverified'
@@ -193,8 +199,9 @@ def fetch(repository, branch, run, workflow, artifacts, jobs, diagnostic=False):
         extract_archive(plans[0], run, repository, root / 'plan')
         plan, universes = campaign.load_plan(root / 'plan')
         expected_source = campaign.source_from_run(run, repository, run['head_sha'])
-        require(plan['source'] == expected_source, 'mutation plan source run/attempt/revision mismatch')
+        require(campaign.same_json(plan['source'], expected_source), 'mutation plan source run/attempt/revision mismatch')
         plan_hash = campaign.digest(root / 'plan/plan.json')
+        plan['plan_sha256'] = plan_hash
         shards = {}
         for row in plan['matrix']['include']:
             group, index = row['group'], row['shard']
@@ -224,7 +231,7 @@ def fetch(repository, branch, run, workflow, artifacts, jobs, diagnostic=False):
             baseline_error = None
             try:
                 baseline = read('baseline.json')
-            except (ValueError, TypeError) as error:
+            except (ValueError, TypeError, RecursionError) as error:
                 baseline, baseline_error = None, str(error)
             generation_error = None
             if not isinstance(manifest, dict) or manifest.get('plan_sha256') != plan_hash:

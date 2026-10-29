@@ -43,6 +43,14 @@ def baseline_context(manifest, assigned):
                 'schema': 1, 'assigned_ids': identities(assigned)}
 
 
+def same_json(left, right):
+    """Compare JSON identities without Python's bool/int equality or recursion escape."""
+    try:
+        return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(right, sort_keys=True, allow_nan=False)
+    except (ValueError, TypeError, RecursionError):
+        return False
+
+
 def run_logged(arguments, path):
     with path.open('wb') as log:
         with subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
@@ -212,15 +220,16 @@ def load_plan(directory):
         universes[group] = scorecard.load(path)
         require(identities(universes[group]) == block['ids'], 'universe identity mismatch')
     expected = make_plan(universes, plan['source'])
-    require(expected['matrix'] == plan['matrix'] and plan['max_per_shard'] == MAX_PER_SHARD, 'mutation plan matrix changed')
+    require(same_json(expected['matrix'], plan['matrix']) and type(plan['max_per_shard']) is int
+            and plan['max_per_shard'] == MAX_PER_SHARD, 'mutation plan matrix changed')
     for group in GROUPS:
         for field in ('count', 'shards', 'command', 'ids', 'universe_file'):
-            require(plan['groups'][group][field] == expected['groups'][group][field], 'mutation plan group changed')
+            require(same_json(plan['groups'][group][field], expected['groups'][group][field]), 'mutation plan group changed')
     assignments = {group: {} for group in GROUPS}
     for row in plan['matrix']['include']:
         path = directory / 'assignments' / f'{row["group"]}-{row["shard"]}.json'
         assignments[row['group']][row['shard']] = scorecard.load(path)
-    require(partition_proof(plan, assignments) == plan['listing_proof']
+    require(same_json(partition_proof(plan, assignments), plan['listing_proof'])
             and plan['listing_proof']['union_equals_full_universe'], 'real listing partition proof changed')
     return plan, universes
 
@@ -231,7 +240,7 @@ def shard_run(args):
     group, index = args.group, args.shard
     block = plan['groups'][group]
     revision = checkout_revision(clean=True)
-    require(source_from_run(scorecard.load(args.run_metadata), args.repository, revision) == plan['source'],
+    require(same_json(source_from_run(scorecard.load(args.run_metadata), args.repository, revision), plan['source']),
             'shard run/attempt differs from the exact planning source')
     require(plan['source'].get('type') == 'github_workflow' and plan['source']['revision'] == revision,
             'shard must execute the exact CI plan revision')

@@ -429,6 +429,7 @@ def campaign_fixture(count=50):
     source = {'type': 'github_workflow', 'repository': 'owner/repo', 'run_id': 1, 'attempt': 1,
               'revision': 'a' * 40, 'branch': 'main', 'workflow_id': 2, 'workflow_path': '.github/workflows/weekly.yml'}
     plan = campaign.make_plan(universes, source)
+    plan['plan_sha256'] = 'd' * 64
     for group, block in plan['groups'].items():
         block['universe_sha256'] = 'b' * 64
     shards = {}
@@ -643,7 +644,7 @@ class MutationCampaignTests(unittest.TestCase):
             self.assertTrue(all(row['mutation_score'] == 1.0 for row in result['modules']))
             original = archives[200]
             artifact = next(item for item in artifacts if item['id'] == 200)
-            for damage in ('missing', 'malformed', 'tampered_log'):
+            for damage in ('missing', 'malformed', 'nested', 'tampered_log'):
                 with self.subTest(damage=damage):
                     replacement = io.BytesIO()
                     with zipfile.ZipFile(io.BytesIO(original)) as old, zipfile.ZipFile(replacement, 'w') as new:
@@ -651,6 +652,8 @@ class MutationCampaignTests(unittest.TestCase):
                             if damage == 'missing' and name == 'baseline.json': continue
                             data = old.read(name)
                             if damage == 'malformed' and name == 'baseline.json': data = b'{'
+                            if damage == 'nested' and name == 'baseline.json':
+                                data = b'{"commands":' + b'[' * 1200 + b'0' + b']' * 1200 + b'}'
                             if damage == 'tampered_log' and name == 'baselines/0.log': data += b'changed'
                             new.writestr(name, data)
                     archives[200] = replacement.getvalue()
@@ -674,15 +677,39 @@ class MutationCampaignTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 campaign.source_from_run(dict(run, **{field: value}), 'owner/repo', 'a' * 40)
 
-    def test_legacy_single_job_mutation_import_still_works(self):
-        raw, planned = mutation_fixture(['CaughtMutant'])
+    def test_legacy_single_job_mutation_import_retains_both_groups_without_score(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'legacy.zip'
             with zipfile.ZipFile(path, 'w') as archive:
-                archive.writestr('mutants/mutants.out/outcomes.json', json.dumps(raw))
-                archive.writestr('mutants/mutants.out/mutants.json', json.dumps(planned))
+                for prefix, package in [('mutants', 'lattice-core'), ('mutants-crates', 'lattice-abi')]:
+                    raw, planned = mutation_fixture(['CaughtMutant', 'MissedMutant'])
+                    for mutant in planned: mutant['package'] = package
+                    for outcome in raw['outcomes']:
+                        if isinstance(outcome['scenario'], dict): outcome['scenario']['Mutant']['package'] = package
+                    archive.writestr(f'{prefix}/mutants.out/outcomes.json', json.dumps(raw))
+                    archive.writestr(f'{prefix}/mutants.out/mutants.json', json.dumps(planned))
             observed = metrics.import_mutation_archive(path, *weekly_fixture(), 'owner/repo', 'main')
-            self.assertEqual(observed[0]['mutation_score'], 1.0)
+            self.assertEqual({row['package'] for row in observed}, {'lattice-core', 'lattice-abi'})
+            for row in observed:
+                self.assertEqual(row['counts']['tested'], 2)
+                self.assertEqual(row['counts']['survived'], 1)
+                self.assertEqual(row['baseline_scope'], 'unverified')
+                self.assertTrue(row['internal_baseline_passed'])
+                self.assertFalse(row['baseline_passed'])
+                self.assertIsNone(row['mutation_score'])
+                self.assertEqual(row['score_status'], 'unverified')
+                metrics.validate_record('mutation', row)
+            run, job, artifact, workflow = weekly_fixture()
+            payload = path.read_bytes()
+            def download(command, stdout, check):
+                stdout.write(payload)
+            with patch.object(metrics, 'gh_json', side_effect=[workflow,
+                    {'workflow_runs': [{'id': run['id']}]}, run,
+                    [{'artifacts': [artifact]}], {'jobs': [job]}]), \
+                 patch.object(metrics.subprocess, 'run', side_effect=download):
+                fetched = metrics.fetch_weekly('owner/repo', 'main')
+            self.assertEqual({row['package'] for row in fetched}, {'lattice-core', 'lattice-abi'})
+            self.assertTrue(all(row['mutation_score'] is None for row in fetched))
 
     def test_matching_baseline_commands_do_not_unify_self_package_features(self):
         assigned = [{'package': 'lattice-sim'}, {'package': 'lattice-abi'}, {'package': 'lattice-sim'}]
@@ -697,7 +724,7 @@ class MutationCampaignTests(unittest.TestCase):
     def test_old_or_bad_scope_proof_retains_survivors_but_never_qualifies_for_score(self):
         for damage in ('missing', 'boolean', 'scope', 'duplicate', 'source', 'group', 'shard',
                        'plan', 'assigned', 'log', 'digest', 'failed', 'boolean_exit',
-                       'started', 'malformed', 'extra'):
+                       'started', 'malformed', 'extra', 'nested'):
             with self.subTest(damage=damage):
                 plan, universes, shards = campaign_fixture(count=2)
                 shard = shards['dependent/0']
@@ -724,6 +751,10 @@ class MutationCampaignTests(unittest.TestCase):
                 elif damage == 'started': command['status'] = 'started'
                 elif damage == 'malformed': proof['commands'] = [None]
                 elif damage == 'extra': proof['passed'] = True
+                elif damage == 'nested':
+                    nested = 0
+                    for _ in range(1200): nested = [nested]
+                    proof['extra'] = nested
                 result = campaign_results.aggregate(plan, universes, shards, True)
                 self.assertEqual(result['outcome_counts']['survived'], 1)
                 self.assertEqual(result['outcome_counts']['tested'], 4)
@@ -800,10 +831,30 @@ class MutationCampaignTests(unittest.TestCase):
             shard = {'manifest': manifest, 'baseline': proof, 'baseline_logs': {
                 f'baselines/{i}.log': ('log for ' + command[-1]).encode()
                 for i, command in enumerate(expected)}}
-            campaign_results.validate_baseline(shard, assigned)
+            campaign_results.validate_baseline(shard, assigned, manifest)
             proof['commands'].pop()
             with self.assertRaises(ValueError):
-                campaign_results.validate_baseline(shard, assigned)
+                campaign_results.validate_baseline(shard, assigned, manifest)
+
+    def test_consistent_manifest_and_baseline_counter_drift_is_invalid_identity(self):
+        for field in ('schema', 'shard', 'total', 'run_id', 'attempt', 'workflow_id'):
+            with self.subTest(field=field):
+                plan, universes, shards = campaign_fixture(count=26)
+                shard = shards['dependent/1']
+                manifest = shard['manifest']
+                if field in ('schema', 'shard', 'total'):
+                    manifest[field] = True
+                else:
+                    manifest['source'] = dict(manifest['source'], **{field: True})
+                # The forged baseline agrees with the forged producer, not with the trusted plan.
+                records = shard['baseline']['commands']
+                shard['baseline'] = campaign.baseline_context(manifest, shard['assigned'])
+                shard['baseline']['commands'] = records
+                result = campaign_results.aggregate(plan, universes, shards, True)
+                self.assertTrue(result['proof']['invalid_shards'])
+                self.assertEqual(next(row for row in result['shards'] if row['group'] == 'dependent'
+                                      and row['shard'] == 1)['state'], 'invalid')
+                self.assertTrue(all(row['mutation_score'] is None for row in result['modules']))
 
 
 if __name__ == '__main__':

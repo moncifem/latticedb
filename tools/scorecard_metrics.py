@@ -260,6 +260,11 @@ def import_mutation_archive(path, run, job, artifact, workflow, repository, bran
             report, report_hash = zip_json(archive, name)
             planned, planned_hash = zip_json(archive, planned_path)
             for row in mutation_rows(report, planned, job['conclusion']):
+                # This historical layout carries no matching-scope command/log proof.
+                # Keep every observation without promoting its internal baseline to scope evidence.
+                row['internal_baseline_passed'] = row['baseline_passed']
+                row.update(baseline_scope='unverified', baseline_passed=False,
+                           mutation_score=None, score_status='unverified')
                 identity = hashlib.sha256((name + '\n' + row['package'] + '\n' + row['module']).encode()).hexdigest()
                 row['artifact_groups_observed'] = sorted(set(outcomes))
                 row['artifact_groups_missing'] = sorted(expected_groups - set(outcomes))
