@@ -106,8 +106,12 @@ Codes never change meaning once released; new situations get new codes.
 
 ## Conformance
 
-- `sqllogictest` files under `crates/lattice-sql/tests/slt/` cover every row of the tables above, one
-  directory per section, plus a negative file per section that asserts the `0A000` rejections.
+- `sqllogictest` files cover the tables above and assert the `0A000` rejections. The first scripts
+  (basics, joins, aggregates, data changes, transactions) live in
+  `crates/lattice-testkit/tests/slt/` until the SQL crate exists; they are read by the testkit's
+  runner (`lattice_testkit::slt`), and every night `tools/slt_reference.py` checks their expected
+  values against PostgreSQL 17 (except the `0A000` records and the single-session transaction
+  script). No Lattice engine runs them yet.
 - A generator produces random queries from this grammar and runs them against Lattice and PostgreSQL;
   any difference in results is a failure (P2-13, E2-3).
 - This file is **frozen** for the phase at the Phase 2 gate (E2-8). Until then each change updates the
