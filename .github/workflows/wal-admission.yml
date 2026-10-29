@@ -6,6 +6,8 @@ on:
       - 'crates/lattice-core/**'
       - 'crates/lattice-engines/**'
       - 'formats/corpus/catalog-index-*'
+      - 'formats/corpus/catalog-v1-table.golden*'
+      - 'formats/catalog-index-v1.md'
       - 'crates/lattice-seams/**'
       - 'crates/lattice-sim/**'
       - 'formats/corpus/wal-admission-*'
