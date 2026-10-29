@@ -263,6 +263,126 @@ mod tests {
         );
     }
 
+    /// Valid evidence inputs, and a way to build the matching gate report for any thresholds, so a
+    /// test can break exactly one rule without the report check rejecting the input first.
+    mod evidence {
+        use super::*;
+        use crate::dataset::{Dataset, Example, Split};
+        use crate::gate::{Threshold, evaluate};
+        use std::collections::BTreeMap;
+
+        pub(super) fn dataset() -> Dataset {
+            Dataset::new(
+                "d",
+                1,
+                Split::Test,
+                "fixture",
+                vec![Example {
+                    input: "i".into(),
+                    expected: vec!["l".into()],
+                }],
+            )
+        }
+
+        pub(super) fn threshold(name: &str) -> Threshold {
+            Threshold {
+                name: name.into(),
+                lower_bound: 0.5,
+                confidence: 0.95,
+                tolerance: 0.0,
+            }
+        }
+
+        pub(super) fn result(n: usize) -> MetricResult {
+            MetricResult {
+                value: 0.9,
+                ci_lo: 0.8,
+                ci_hi: 0.95,
+                n,
+            }
+        }
+
+        /// Runs `to_evidence_json`, building the report from the thresholds and a result of `n`
+        /// samples for every threshold name.
+        pub(super) fn run(
+            suite: &str,
+            dataset: &Dataset,
+            provider: &str,
+            thresholds: &[Threshold],
+            n: usize,
+        ) -> Result<String, String> {
+            let results: BTreeMap<String, MetricResult> = thresholds
+                .iter()
+                .map(|t| (t.name.clone(), result(n)))
+                .collect();
+            let report = evaluate(thresholds, &results);
+            to_evidence_json(suite, dataset, provider, thresholds, &report)
+        }
+    }
+
+    #[test]
+    fn evidence_json_rejects_each_invalid_input_on_its_own() {
+        use evidence::{dataset, run, threshold};
+        let ok = vec![threshold("f1")];
+        // The baseline is valid, so every refusal below is caused by the one thing changed.
+        assert!(run("s", &dataset(), "p", &ok, 1).is_ok());
+
+        assert!(run("", &dataset(), "p", &ok, 1).is_err(), "empty suite");
+        assert!(run("s", &dataset(), "", &ok, 1).is_err(), "empty provider");
+        let mut d = dataset();
+        d.name.clear();
+        assert!(run("s", &d, "p", &ok, 1).is_err(), "empty dataset name");
+        let mut d = dataset();
+        d.provenance.clear();
+        assert!(run("s", &d, "p", &ok, 1).is_err(), "empty provenance");
+        let mut d = dataset();
+        d.version = 0;
+        assert!(run("s", &d, "p", &ok, 1).is_err(), "version zero");
+        let mut d = dataset();
+        d.hash = "0".repeat(d.hash.len());
+        assert!(run("s", &d, "p", &ok, 1).is_err(), "wrong dataset hash");
+
+        let bad = |f: &dyn Fn(&mut crate::gate::Threshold)| {
+            let mut t = threshold("f1");
+            f(&mut t);
+            run("s", &dataset(), "p", &[t], 1)
+        };
+        assert!(bad(&|t| t.name.clear()).is_err(), "empty threshold name");
+        assert!(bad(&|t| t.lower_bound = f64::NAN).is_err(), "nan bound");
+        assert!(
+            bad(&|t| t.tolerance = f64::INFINITY).is_err(),
+            "infinite tolerance"
+        );
+        assert!(bad(&|t| t.tolerance = -0.1).is_err(), "negative tolerance");
+        assert!(bad(&|t| t.confidence = 0.0).is_err(), "confidence zero");
+        assert!(bad(&|t| t.confidence = 1.0).is_err(), "confidence one");
+        assert!(
+            bad(&|t| t.confidence = -0.5).is_err(),
+            "negative confidence"
+        );
+        assert!(
+            bad(&|t| t.confidence = 1.5).is_err(),
+            "confidence above one"
+        );
+        assert!(bad(&|t| t.confidence = f64::NAN).is_err(), "nan confidence");
+
+        let dup = vec![threshold("f1"), threshold("f1")];
+        assert!(
+            run("s", &dataset(), "p", &dup, 1).is_err(),
+            "duplicate names"
+        );
+        assert!(run("s", &dataset(), "p", &[], 1).is_err(), "no thresholds");
+    }
+
+    #[test]
+    fn evidence_json_accepts_a_sample_count_equal_to_the_dataset_and_refuses_one_more() {
+        use evidence::{dataset, run, threshold};
+        let ok = vec![threshold("f1")];
+        let examples = dataset().examples.len();
+        assert!(run("s", &dataset(), "p", &ok, examples).is_ok());
+        assert!(run("s", &dataset(), "p", &ok, examples + 1).is_err());
+    }
+
     #[test]
     fn json_escapes_control_characters_and_nulls_non_finite_numbers() {
         let j = to_json(
