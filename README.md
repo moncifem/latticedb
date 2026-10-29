@@ -36,7 +36,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 |---|---|
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
 | Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, replayed indexes and in-memory version vacuum; reads below the vacuum floor return an error |
-| Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; trust authentication, plaintext and a `SELECT 1` placeholder handler |
+| Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS, with a `SELECT 1` placeholder handler |
 | SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
 | Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
@@ -61,7 +61,7 @@ flowchart TB
 ```
 
 Storage-backed SQL execution, PostgreSQL driver conformance, live sync, authenticated agent permissions and the connected workspace are still ahead.
-Row policies currently come from a trusted host; the development listener still uses trust authentication.
+Row policies currently come from a trusted host; authenticated listener identities are not yet bound to those evaluators.
 See the [delivery plan](docs/spec/README.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
 
 ## Try the foundations
@@ -91,7 +91,8 @@ cargo run -p latticed -- --listen 127.0.0.1:5432 --max-connections 32
 
 Keep stdin open, then enter `shutdown` to stop cleanly; EOF also stops it. This placeholder uses
 plaintext and trust authentication and does not open a database. See the
-[listener guide](crates/latticed/README.md) for timeouts and supported behavior. Published nightly
+[listener guide](crates/latticed/README.md) for timeouts, configured TLS/SCRAM authentication and
+externally provisioned verifier files. Published nightly
 archives may predate these source changes.
 
 <details>

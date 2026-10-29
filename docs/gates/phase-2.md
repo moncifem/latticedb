@@ -194,3 +194,22 @@ This evidence predates PRs [204](https://github.com/moncifem/latticedb/pull/204)
 [215](https://github.com/moncifem/latticedb/pull/215). It establishes neither coverage of those
 changes nor seven consecutive scheduled nights, million-seed nightly volume, a completed Phase 2
 soak requirement, or either phase's gate sign-off.
+
+
+## TLS and configured SCRAM integration proposal (2026-10-29)
+
+PR [223](https://github.com/moncifem/latticedb/pull/223) implements the host integration proposed in
+RFC 0007 / ADR 0021. It requires TLS before configured SCRAM startup, bounds verifier/account input,
+uses one absolute startup/TLS/authentication deadline and emits no successful startup or cancel key
+before a known account proves possession. Trust remains an explicit loopback development mode.
+The server requires an externally provisioned persistent 32-byte decoy secret: an independent review
+found that regenerating it on load exposed account existence through salt stability across restart.
+The fix and independent HMAC/two-instance regression resolve that finding for an unchanged secret;
+secret rotation remains observable and is documented. There is no constant-time account-lookup claim.
+
+The author reports 97 focused tests (74 API, three host, nine TLS/SCRAM/CLI and eleven existing socket
+cases) and strict touched-crate Clippy. Independent security review and a narrow fix rereview found
+no remaining blocker. RFC acceptance and its seven-day review policy remain pending owner decision;
+the prior RFC 0006 primitives waiver does not cover this integration. External-driver conformance,
+binary result formats, storage-backed SQL execution and authenticated row-policy actor binding remain
+open; this proposal does not complete P2-11/P2-12 or sign either phase gate.

@@ -9,6 +9,11 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Configured PostgreSQL SCRAM-SHA-256 authentication over mandatory TLS, with bounded account/verifier
+  loading, a persistent provisioned unknown-user secret and one absolute startup/authentication deadline.
+  Trust mode is restricted to loopback; authenticated mode never falls back to trust or plaintext.
+  The query handler remains the development `SELECT 1` placeholder, with no row-policy identity binding.
+
 - Loom models exercise cancellation/query replacement, unregister and stale credentials against the
   actual registry with instrumented token atomics. API pull requests and nightly run the models;
   socket, host admission and engine synchronization need separate evidence.
