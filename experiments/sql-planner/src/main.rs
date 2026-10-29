@@ -387,7 +387,13 @@ fn verify_kill(root: &Path, count: usize, observed: &Json) -> Json {
             .collect::<Vec<_>>();
         assert_eq!(
             db.rows
-                .lookup_at(db.rows.snapshot(), 9, &priority.to_be_bytes()),
+                .lookup_at(
+                    db.rows.snapshot(),
+                    9,
+                    &priority.to_be_bytes(),
+                    &lattice_engines::limits::AllowAll
+                )
+                .unwrap(),
             expected
         );
     }
