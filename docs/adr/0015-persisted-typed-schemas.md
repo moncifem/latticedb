@@ -26,12 +26,15 @@ New schemas do not implicitly migrate old data. The draft catalog/envelope forma
 Python golden files, semantic replay refusal tests and power-cut regressions provide review evidence.
 The raw-history id-collision found during independent review has a fix and regression coverage.
 
-There is no safe automatic downgrade, online backfill, persisted index configuration or completed
-Phase 2 gate. The RFC records the backup/rollback restriction and old row-only client limitation.
+There is no safe automatic downgrade, online backfill or completed Phase 2 gate. Existing persisted
+managed indexes and vacuum are integrated through the shared writer; they are not online migration.
+The RFC records backup/rollback restrictions and mandatory capability refusal by older consumers.
 
 Schema validation is enforced at both `TypedStore` and the shared `RowStore` commit/replay boundary.
-Raw tables keep their byte API. Core-only/older writers can still damage typed data and must not write
-upgraded directories; engine recovery refuses invalid typed payloads rather than serving them.
+Raw tables keep their byte API. Proposed typed capability 4 is required for schema adoption and typed
+writes; default core-only, catalog-only and callback readers refuse upgraded history before replay.
+A deliberately lying explicit-capability consumer can still inject invalid data; engine recovery
+validates its typed semantics rather than trusting the advertised bit alone.
 
 ## Resumed proposal integration
 

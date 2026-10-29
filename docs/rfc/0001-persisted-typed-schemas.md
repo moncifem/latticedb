@@ -40,13 +40,25 @@ meet P2-02. Serializing compiler structs would make private Rust changes an acci
 
 ## Compatibility and migration
 
-The WAL and row-operation outer formats remain v1. New catalog readers accept v1 and v2; older
-catalog readers reject v2. Older row-only library clients may ignore catalog payloads entirely and
-must not be used to write a directory after typed schema adoption. Current `RowStore` commits validate
-catalog-owned typed tables too: malformed envelopes, superseded writer schemas and constraint violations
-are rejected before WAL append, and replay refuses invalid historical payloads. Raw tables retain their
-byte API. A core-only writer or old binary can still bypass the engine; its semantic damage is detected
-on recovery. There is no automatic downgrade.
+The WAL record and row-operation outer framing remain unchanged. New full row engines accept LCAT v1
+and proposed v2 and validate every typed row at commit and historical replay. Proposed capability
+`TYPED_SCHEMA = 4` (bit 2) is distinct from accepted `MANAGED_COMPOUND = 1` (bit 0); bit 1/value 2
+remains unknown/reserved so the accepted negative admission fixture retains its exact meaning.
+
+Standalone LCAT v2 requires capability 4. Accepted LCIX v1 retains nested LCAT v1 only. Proposed
+LCIX v2 allows nested LCAT v2 and requires capability 5 (typed plus managed). LCIX v1 containing
+writes to typed tables also requires capability 4 in addition to its managed bit. LROW writes to
+typed tables require capability 4. The actual segment context is checked during replay, not inferred
+from a decoded operation alone. Legacy LCAT v1/LROW/LCIX v1 bytes are not rewritten.
+
+The default RowStore advertises capabilities 1 and 4 only with its real schema decoder, raw/compound
+write validators and historical replay validators in place. A nonempty callback list still advertises
+zero. CatalogStore remains a metadata projection supporting only capability 1; it refuses typed history
+and typed schema writes because it does not validate typed row semantics. Default core-only opens
+advertise zero and cannot reopen upgraded directories. A deliberately lying explicit-capability engine
+can still inject CRC-valid semantic corruption; historical validation refuses it. Admission is a
+contract with trusted consumers, not a security boundary against arbitrary byte-writing processes.
+There is no automatic downgrade.
 
 Only disposable pre-alpha test data should be used during review. Before later adoption, retain a
 consistent backup readable by the old binary. Rollback restores that backup; it does not reinterpret
@@ -55,8 +67,8 @@ payloads fail rather than selecting a guessed layout. A downgrade converter and 
 capability negotiation are not implemented here.
 
 Schema installation does not backfill rows or synthesize newly required fields. Online migration,
-layout changes with a dual-write window, persisted index definitions, vacuum and checkpoint-based
-recovery remain in their owning Phase 2 work packages.
+layout changes with a dual-write window and checkpoint-based recovery remain separate work. Current
+managed indexes and vacuum must coexist with typed history; they do not implement online migration.
 
 ## Resumed integration proposal (2026-10-29)
 

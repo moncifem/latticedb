@@ -39,6 +39,10 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS, with a `SELECT 1` placeholder handler |
 | SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
 | Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
+
+Persisted typed-schema integration is proposed in [RFC 0001](docs/rfc/0001-persisted-typed-schemas.md)
+and [ADR 0015](docs/adr/0015-persisted-typed-schemas.md). The review implementation preserves original
+writer layouts through the shared guarded writer; format acceptance and full SQL types remain pending.
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
 | Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
 

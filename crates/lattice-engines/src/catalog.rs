@@ -440,7 +440,7 @@ pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
         decode(nested)?
     };
     if (compound_version == 2) != has_schema(&tables) {
-        return Err(CatalogError::BadCompound("typed compound version"));
+        return Err(CatalogError::UnsupportedVersion(compound_version));
     }
     let count = r.u32()? as usize;
     if count > MAX_INDEX_OPS {

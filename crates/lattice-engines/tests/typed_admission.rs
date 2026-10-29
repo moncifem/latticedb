@@ -99,7 +99,7 @@ fn accepted_lcix_v1_remains_v1_and_nested_typed_catalog_requires_proposed_v2() {
     *false_v2.get_mut(4).unwrap() = 2;
     assert!(matches!(
         catalog::decode_compound(&false_v2),
-        Err(catalog::CatalogError::BadCompound(_))
+        Err(catalog::CatalogError::UnsupportedVersion(2))
     ));
     assert_eq!(TYPED_SCHEMA, 4);
     assert!(
@@ -307,4 +307,104 @@ fn typed_validation_planted_defect_is_detected_at_the_raw_boundary() {
         RowStore::open(disk, SharedClock(clock), SeededRng::new(617), &config()),
         Err(RowError::Corrupt(_))
     ));
+}
+
+#[test]
+fn independent_typed_capability_fixtures_decode_and_validate_with_current_engine() {
+    for bytes in [
+        include_bytes!("../../../formats/corpus/typed-admission-cap4-schema-rows.golden")
+            .as_slice(),
+        include_bytes!("../../../formats/corpus/typed-admission-cap5-schema-rows.golden")
+            .as_slice(),
+    ] {
+        let (disk, clock) = fresh();
+        disk.clone().create_dir_all("wal").unwrap();
+        disk.clone()
+            .append("wal/00000000000000000001.seg", bytes)
+            .unwrap();
+        disk.clone().sync("wal/00000000000000000001.seg").unwrap();
+        let store =
+            TypedStore::open(disk, SharedClock(clock), SeededRng::new(618), &config()).unwrap();
+        assert_eq!(
+            store
+                .get_at(store.snapshot(), "Ticket", b"key", &AllowAll)
+                .unwrap(),
+            Some(value())
+        );
+    }
+}
+
+/// Successful actual-engine histories plus independent vectors are hosted proof inputs, not a soak.
+#[test]
+#[ignore = "exports host files for the separately compiled immutable 45926c7 reader"]
+fn export_typed_admission_histories_for_frozen_reader() {
+    use std::path::Path;
+    fn export(disk: &SharedIo, root: &Path, mode: &str) {
+        let mut host = lattice_seams::StdIo::new(".");
+        host.create_dir_all(&root.join("wal").display().to_string())
+            .unwrap();
+        for (name, bytes) in manifest(disk) {
+            host.append(&root.join("wal").join(name).display().to_string(), &bytes)
+                .unwrap();
+        }
+        host.append(&root.join("wal/LOCK").display().to_string(), &[])
+            .unwrap();
+        host.append(
+            &root.join("mode.txt").display().to_string(),
+            mode.as_bytes(),
+        )
+        .unwrap();
+    }
+    let root = Path::new("target/typed-admission-cases");
+    assert!(!root.exists(), "export destination must be new");
+    let (disk, clock) = fresh();
+    let mut raw = open(&disk, &clock);
+    let mut tx = raw.begin();
+    tx.put((9, b"prefix".to_vec()), b"legacy".to_vec());
+    raw.commit(tx).unwrap();
+    drop(raw);
+    export(&disk, &root.join("actual-legacy"), "legacy");
+    let mut typed = TypedStore::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(619),
+        &config(),
+    )
+    .unwrap();
+    typed.install_schema(SCHEMA).unwrap();
+    let mut tx = typed.begin();
+    typed.put(&mut tx, "Ticket", b"typed", &value()).unwrap();
+    typed.commit(tx).unwrap();
+    drop(typed);
+    export(&disk, &root.join("actual-typed"), "guarded");
+    let segment = disk
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|name| name.ends_with(".seg"))
+        .max()
+        .unwrap();
+    disk.clone()
+        .append(&format!("wal/{segment}"), &[0xff, 0x01])
+        .unwrap();
+    export(&disk, &root.join("actual-typed-torn-tail"), "guarded");
+    for (name, bytes) in [
+        (
+            "independent-cap4",
+            include_bytes!("../../../formats/corpus/typed-admission-cap4-schema-rows.golden")
+                .as_slice(),
+        ),
+        (
+            "independent-cap5",
+            include_bytes!("../../../formats/corpus/typed-admission-cap5-schema-rows.golden")
+                .as_slice(),
+        ),
+    ] {
+        let (case, _) = fresh();
+        case.clone().create_dir_all("wal").unwrap();
+        case.clone()
+            .append("wal/00000000000000000001.seg", bytes)
+            .unwrap();
+        export(&case, &root.join(name), "guarded");
+    }
 }

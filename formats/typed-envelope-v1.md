@@ -20,8 +20,15 @@ in old values, backfill data, or promise online schema migration. New writes val
 transaction's checked schema; a catalog change before commit makes a writing transaction retry.
 
 Unknown magic/versions, missing writer schemas, table/schema mismatches, corrupt cell encodings and
-stored values violating writer constraints are fail-stop typed read errors. Reopen verifies live
-values in typed tables. Historical values are checked when read at their snapshot.
+stored values violating writer constraints are fail-stop typed read errors. Every raw or compound
+write to a catalog-owned typed table validates the current writer version and constraints before
+append. Historical replay validates each write against the schema governing its original LSN;
+reads decode retained values using their immutable writer layout. Deletions from dropped typed
+tables are rejected too. Policy and retention checks still apply to the wrapper's public reads.
+
+Typed writes require proposed capability 4 in the actual segment context; a compound additionally
+requires managed capability 1. The payload envelope is unchanged from the preserved proposal.
+This capability assignment remains proposed in RFC 0001 / ADR 0015.
 
 The committed `formats/corpus` examples are produced by
 `formats/generate_typed_catalog_golden.py`, using only Python's standard library and no Rust encoder.

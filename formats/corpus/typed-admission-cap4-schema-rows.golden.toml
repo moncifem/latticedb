@@ -1,0 +1,4 @@
+format = "typed-admission"
+version = 2
+status = "proposed"
+description = "Independent Python typed capability 4/5; RFC 0001 and ADR 0015 remain proposed"

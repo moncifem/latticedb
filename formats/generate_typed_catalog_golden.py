@@ -18,7 +18,7 @@ def write(name, data, format_name, version):
     path = ROOT / (name + ".golden")
     path.write_bytes(data)
     path.with_suffix(".golden.toml").write_text(
-        f'format = "{format_name}"\nversion = {version}\n'
+        f'format = "{format_name}"\nversion = {version}\nstatus = "proposed"\n'
         'generator = "formats/generate_typed_catalog_golden.py (Python stdlib)"\n'
         'schema_version = 7\ntable_id = 42\n'
         'description = "Independent byte-exact typed catalog/row fixture"\n'

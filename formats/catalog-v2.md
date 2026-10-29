@@ -40,3 +40,12 @@ The typed-store integration suite decodes and re-encodes them byte-exactly.
 Physical table allocation also excludes ids seen in raw row history, even if no catalog entry exists
 or all rows were deleted. Adopting an existing untyped catalog table with any row history is rejected
 before appending a schema record. Recovery rebuilds physical-id reservations from every row write.
+
+## Proposed admission and compound nesting
+
+Standalone LCAT v2 requires proposed typed capability 4 in its guarded segment. Accepted LCIX v1
+continues to permit only nested LCAT v1. Proposed [LCIX v2](catalog-index-v2.md) carries nested LCAT v2
+and requires capabilities 1 and 4 together (mask 5). The full RowStore validates schema semantics,
+raw-history id reservations and typed writes before publication and during replay. CatalogStore
+refuses this capability and schema operations; metadata decoding without row validation is not
+typed-engine support. Bit 1/value 2 remains unknown/reserved. No acceptance or downgrade is implied.
