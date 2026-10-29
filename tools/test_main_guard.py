@@ -115,7 +115,144 @@ class Helpers(unittest.TestCase):
                 }
             )
         )
-        self.assertFalse(g.infra_only({"steps": []}))
+        # A failed job with no failed step, or with a cancelled step, is not the code's fault.
+        self.assertTrue(g.infra_only({"steps": []}))
+        self.assertTrue(
+            g.infra_only(
+                {
+                    "steps": [
+                        {"name": "cargo xtask ci", "conclusion": "cancelled"},
+                        {"name": "cargo xtask ci", "conclusion": "failure"},
+                    ]
+                }
+            )
+        )
+
+    def test_root_manifest_change_makes_culprit_undeterminable(self):
+        files = {"a": ["Cargo.lock"], "b": ["crates/lattice-core/x.rs"], "c": ["docs/x.md"]}
+        self.assertIsNone(g.pick_culprit(files, {"lattice-core"}))
+        # A single commit is still blamed even if it touches the manifest.
+        self.assertEqual(g.pick_culprit({"a": ["Cargo.toml"]}, set()), "a")
+
+    def test_clean_neutralises_markdown_and_mentions(self):
+        out = g.clean("fix `x` @owner closes #12")
+        self.assertNotIn("`", out)
+        self.assertNotIn("@owner", out)
+        self.assertNotIn("#12", out)
+
+    def test_pr_body_flags_best_guess_and_cleans_subject(self):
+        guess = g.pr_body("msrv", "https://run", "abc", "fix @a `b`", guess=True)
+        self.assertIn("best guess", guess)
+        self.assertNotIn("`b`", guess)
+        self.assertNotIn("best guess", g.pr_body("msrv", "https://run", "abc", "s"))
+
+
+def run_rec(rid, created, conclusion, name="pr", status="completed"):
+    return {"id": rid, "created_at": created, "conclusion": conclusion, "name": name, "status": status}
+
+
+class Baseline(unittest.TestCase):
+    def test_previous_green_is_ok(self):
+        runs = [run_rec(2, "2026-01-02", "failure"), run_rec(1, "2026-01-01", "success")]
+        self.assertTrue(g.baseline_ok(runs, 2)[0])
+
+    def test_previous_red_is_not_ok(self):
+        runs = [run_rec(2, "2026-01-02", "failure"), run_rec(1, "2026-01-01", "failure")]
+        self.assertFalse(g.baseline_ok(runs, 2)[0])
+
+    def test_previous_cancelled_is_not_ok(self):
+        runs = [run_rec(2, "2026-01-02", "failure"), run_rec(1, "2026-01-01", "cancelled")]
+        self.assertFalse(g.baseline_ok(runs, 2)[0])
+
+    def test_newer_green_run_is_not_ok(self):
+        runs = [
+            run_rec(3, "2026-01-03", "success"),
+            run_rec(2, "2026-01-02", "failure"),
+            run_rec(1, "2026-01-01", "success"),
+        ]
+        self.assertFalse(g.baseline_ok(runs, 2)[0])
+
+    def test_no_history_or_unknown_run_is_not_ok(self):
+        self.assertFalse(g.baseline_ok([run_rec(2, "2026-01-02", "failure")], 2)[0])
+        self.assertFalse(g.baseline_ok([run_rec(1, "2026-01-01", "success")], 9)[0])
+
+    def test_other_workflows_are_ignored(self):
+        runs = [
+            run_rec(2, "2026-01-02", "failure"),
+            run_rec(5, "2026-01-01T12", "failure", name="other"),
+            run_rec(1, "2026-01-01", "success"),
+        ]
+        self.assertTrue(g.baseline_ok(runs, 2)[0])
+
+    def test_in_progress_newer_run_does_not_count(self):
+        runs = [
+            run_rec(3, "2026-01-03", None, status="in_progress"),
+            run_rec(2, "2026-01-02", "failure"),
+            run_rec(1, "2026-01-01", "success"),
+        ]
+        self.assertTrue(g.baseline_ok(runs, 2)[0])
+
+
+class BaselineDecision(unittest.TestCase):
+    def test_red_baseline_is_issue_only(self):
+        d = decide("failure", ["typos"], [job("typos")], False, False, baseline_green=False)
+        self.assertEqual(d.action, ISSUE_ONLY)
+
+    def test_baseline_does_not_override_none(self):
+        d = decide("failure", ["gate (macos-latest)"], [], False, False, baseline_green=False)
+        self.assertEqual(d.action, NONE)
+
+    def test_default_baseline_reverts(self):
+        self.assertEqual(decide("failure", ["typos"], [job("typos")], False, False).action, REVERT_PR)
+
+
+class RevertFailure(unittest.TestCase):
+    def test_conflict_aborts_and_returns_error(self):
+        import subprocess
+        from unittest import mock
+
+        calls = []
+
+        def fake_run(cmd, check=True, capture=True):
+            calls.append(cmd[:3])
+            if cmd[:3] == ["git", "ls-remote", "origin"]:
+                return ""
+            if cmd[:2] == ["git", "revert"] and "--abort" not in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="CONFLICT in x.rs")
+            return ""
+
+        with mock.patch.object(g, "run", fake_run):
+            err = g.do_revert("abc", "feat: x", "revert/abc")
+        self.assertIn("CONFLICT", err)
+        self.assertIn(["git", "revert", "--abort"], calls)
+        self.assertFalse(any(c[:2] == ["git", "push"] for c in calls))
+
+    def test_push_rejection_returns_error(self):
+        import subprocess
+        from unittest import mock
+
+        def fake_run(cmd, check=True, capture=True):
+            if cmd[:2] == ["git", "push"]:
+                raise subprocess.CalledProcessError(1, cmd, stderr="refusing to allow workflow update")
+            return ""
+
+        with mock.patch.object(g, "run", fake_run), mock.patch.object(g.subprocess, "run") as sub:
+            sub.return_value = None
+            err = g.do_revert("abc", "feat: x", "revert/abc")
+        self.assertIn("workflow", err)
+
+    def test_existing_remote_branch_skips_revert_and_push(self):
+        from unittest import mock
+
+        calls = []
+
+        def fake_run(cmd, check=True, capture=True):
+            calls.append(cmd[:2])
+            return "deadbeef\trefs/heads/revert/abc\n" if cmd[:2] == ["git", "ls-remote"] else ""
+
+        with mock.patch.object(g, "run", fake_run):
+            self.assertIsNone(g.do_revert("abc", "feat: x", "revert/abc"))
+        self.assertEqual(calls, [["git", "ls-remote"]])
 
     def test_revert_message_shape(self):
         m = g.revert_message("abc123", "feat(lattice-core): " + "x" * 80)

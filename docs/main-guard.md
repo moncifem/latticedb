@@ -17,11 +17,13 @@ made by `tools/main_guard.py` (`decide`), which has a unit test for every row of
 |---|---|
 | Run succeeded, was cancelled, skipped or timed out | none |
 | Only a non-required check failed (for example `gate (macos-latest)`) | none |
-| A required check failed, but only for infrastructure reasons (runner setup or teardown steps) or the job was cancelled or timed out | none |
+| A required check failed, but only for infrastructure reasons (runner setup or teardown steps failed, the job has no failed step, or a step was cancelled) or the job was cancelled or timed out | none |
+| main was already red: the previous `pr` push run on main did not succeed (or there is none), a newer push run already succeeded, or another `main-red` PR or issue is open | tracking issue only |
 | A required check failed on a commit that is itself a revert | tracking issue only |
 | A revert PR for this commit already exists (open, merged or closed) | tracking issue only |
 | The push contained only Dependabot or merge-queue commits | tracking issue only |
-| A multi-commit push where no single commit can be blamed | tracking issue only |
+| A multi-commit push where no single commit can be blamed (including any push that changes the root `Cargo.toml` or `Cargo.lock`) | tracking issue only |
+| `git revert` conflicts, or pushing the branch is rejected (the workflow token cannot push changes to workflow files) | tracking issue only, with the error in its body |
 | A required check failed on an ordinary commit | revert PR plus tracking issue |
 
 Required checks are `gate (ubuntu-latest)`, `gate (ubuntu-24.04-arm)`, `secret-scan`, `typos`,
@@ -35,7 +37,12 @@ Required checks are `gate (ubuntu-latest)`, `gate (ubuntu-24.04-arm)`, `secret-s
   unique, it only files the issue.
 - Creates `revert/<short-sha>` from `origin/main`, runs `git revert --no-edit <sha>`, rewrites the message
   as `revert: <original subject>`, and pushes that branch (an explicit refspec, never `main`).
-- Opens a PR labelled `main-red`. The body states the failing check and links the run.
+- If `revert/<short-sha>` already exists on the remote (a retry), it skips the revert and push and goes
+  straight to the PR. On a conflict it runs `git revert --abort`.
+- Opens a PR labelled `main-red`. The body states the failing check and links the run. When the commit was
+  picked from the failing log in a multi-commit push, the body says it is a best guess. Commit subjects
+  in bodies have backticks, `@` and `#` neutralised.
+- Skips adding an issue comment when the issue already mentions the run URL.
 - Opens one tracking issue titled `main is red: <short-sha>` (labels `main-red`, `type: bug`) or, if one is
   already open, comments on it. Close it by hand once main is green.
 
@@ -57,3 +64,12 @@ start them before merging.
 - Rehearse without side effects: run the workflow by hand (`workflow_dispatch`) with the id of an earlier
   run of `pr` on `main` and `dry_run` left at its default `true`. It prints the decision and changes nothing.
   Set `dry_run` to `false` on a throwaway repository or branch to see the revert PR opened.
+
+## Known limits
+
+- The culprit in a multi-commit push comes from crate names in the failing log; it is a best guess and the
+  PR says so.
+- Infrastructure detection looks at step names and conclusions only. An unusual runner failure can still
+  look like a code failure, and a flaky test looks like one too.
+- Runs for different pushes are not serialised, so two near-simultaneous failures can each file an issue.
+- The previous-run baseline looks at the 50 most recent push runs of the `pr` workflow.

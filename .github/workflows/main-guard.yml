@@ -18,11 +18,12 @@ on:
         type: boolean
         default: true
 permissions:
+  actions: read # list runs, jobs and logs
   contents: write # the revert/<short-sha> branch only
   pull-requests: write
   issues: write
 concurrency:
-  group: main-guard
+  group: main-guard-${{ github.event.workflow_run.id || inputs.run_id }}
   cancel-in-progress: false
 jobs:
   guard:
@@ -37,11 +38,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Always the tooling from main, never the code of the failing commit.
+      # main already contains the failing commit; that code was reviewed and merged, and this job only
+      # runs the stdlib script and git. Credentials are not persisted: `gh auth setup-git` below
+      # provides them for the one push to revert/*.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - name: unit tests for the decision table
         run: python3 -m unittest discover -s tools -p 'test_main_guard.py'
       - name: evaluate the run
@@ -51,6 +55,7 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
         run: |
+          gh auth setup-git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           flags=()
