@@ -10,7 +10,9 @@ P2-11 requires a PostgreSQL authentication hook. The existing session and develo
 use trust authentication. This proposal adds a pure SCRAM-SHA-256 server exchange and the standard
 PostgreSQL SASL messages without silently changing that trust-only session or claiming deployment
 security. The draft needs independent review and at least seven full days of comment time after its
-PR opens; the calendar date above does not shorten that interval. Explicit acceptance remains required.
+PR opens; the calendar date above does not shorten that interval. PR 204 opened at
+2026-10-29 12:57:08 UTC, so the earliest acceptance time is **2026-11-05 12:57:08 UTC**, after review.
+Explicit acceptance remains required.
 
 ## Proposal
 
