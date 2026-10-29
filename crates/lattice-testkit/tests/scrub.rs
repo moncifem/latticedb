@@ -300,3 +300,44 @@ fn a_checkpoint_is_found_on_recovery_and_a_wrong_one_is_refused() {
     assert!(open(&disk).is_err());
     assert!(!scrub(&disk, "wal").unwrap().is_clean());
 }
+
+/// A checkpoint is wrong if any one of its three claims is wrong, however right the other two are.
+#[test]
+fn a_checkpoint_is_flagged_when_only_its_change_set_count_is_wrong() {
+    use lattice_core::Log;
+    use lattice_core::changeset::{Checkpoint, encode_checkpoint, state_crc};
+    use lattice_core::record::RecordType;
+    use std::collections::{BTreeMap, BTreeSet};
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    let mut ids = BTreeSet::new();
+    for _ in 0..3 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![1; 20])).unwrap();
+        ids.insert(id);
+    }
+    drop(k);
+    // The position and the state checksum are right; only the count is not.
+    let (mut log, _) = Log::open(disk.clone(), "wal", 400).unwrap();
+    let wrong_count = Checkpoint {
+        through_lsn: 3,
+        change_sets: 99,
+        state_crc: state_crc(&ids, &BTreeMap::new()),
+    };
+    log.append(
+        RecordType::Checkpoint as u8,
+        &encode_checkpoint(wrong_count),
+    )
+    .unwrap();
+    log.sync().unwrap();
+    drop(log);
+    let report = scrub(&disk, "wal").unwrap();
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|i| matches!(i, Issue::DerivedStateMismatch { .. })),
+        "{:?}",
+        report.issues
+    );
+}

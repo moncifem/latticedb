@@ -15,6 +15,11 @@ exclude_re = [
     # "either is zero" before the formula gives the same number. The denominator is not excluded:
     # replacing its `+` gives F1 = 2 for a perfect result and is caught.
     "replace && with \\|\\| in prf",
+    # In `LwwRegister::set` the tie-break `value > *v` only matters when the value differs. With equal
+    # timestamps and equal values, `>=` rewrites the same pair over itself and the state is identical.
+    # The first comparison (`at > *t`) is not excluded: its `>=` lets a smaller value win a tie, and a
+    # test catches it.
+    "crdt\\.rs:\\d+:64: replace > with >= in LwwRegister<T>::set",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies

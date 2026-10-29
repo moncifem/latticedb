@@ -211,6 +211,24 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    #[test]
+    fn a_tie_in_timestamps_keeps_the_larger_value_whatever_the_order() {
+        let at = Hlc {
+            wall_ms: 5,
+            counter: 0,
+            node: 1,
+        };
+        let mut large_first = LwwRegister::default();
+        large_first.set(at, 5u8);
+        large_first.set(at, 3);
+        let mut small_first = LwwRegister::default();
+        small_first.set(at, 3u8);
+        small_first.set(at, 5);
+        // The tie is decided by the value, not by which write arrived last, so merge stays commutative.
+        assert_eq!(large_first.get(), Some(&5));
+        assert_eq!(small_first.get(), Some(&5));
+    }
+
     fn arb_hlc() -> impl Strategy<Value = Hlc> {
         (0u64..50, 0u32..3, 0u32..3).prop_map(|(w, c, n)| Hlc {
             wall_ms: w,

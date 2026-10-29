@@ -537,6 +537,29 @@ mod tests {
     }
 
     #[test]
+    fn a_valid_record_a_few_lsns_ahead_is_found_whatever_the_data_length() {
+        // The plausible-LSN window is the number of records the data could hold. A bug that derives it
+        // from a remainder instead shrinks it to one for some lengths, and then valid data after damage
+        // looks like a torn tail and gets truncated away.
+        let mut found = false;
+        for pad in 0..RECORD_HEADER_LEN {
+            let mut data = segment_header();
+            data.extend_from_slice(&encode_record(1, 1, b"first"));
+            let at = data.len();
+            data.extend_from_slice(&[0xFF; 20]);
+            data.extend_from_slice(&encode_record(4, 1, &vec![7; pad]));
+            if data.len() % RECORD_HEADER_LEN == 0 {
+                assert!(valid_record_after(&data, at, 1), "pad {pad}");
+                found = true;
+            }
+        }
+        assert!(
+            found,
+            "no padding made the length a multiple of the header size"
+        );
+    }
+
+    #[test]
     fn the_scan_ignores_implausible_lsns_without_checksumming() {
         let mut data = segment_header();
         data.extend_from_slice(&[0u8; 400]);
