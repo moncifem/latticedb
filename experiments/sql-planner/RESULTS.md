@@ -275,3 +275,17 @@ including PostgreSQL's ordinal and alias semantics. Those intentional prototype 
 reported separately from matching supported SQL results. The fixed four performance queries
 remain unchanged. One batched semantic confirmation and a frozen-source clean full comparison
 follow these review fixes; no result for that source is inferred here.
+
+The final review batch passed [semantic confirmation 40910710191](https://github.com/moncifem/latticedb/actions/runs/40910710191)
+at `ac1efb80162509640f1ecb42d7e474a7dc34626f`. Both custom/parser candidates passed conformance,
+twenty-seven negative fixtures, simulator repeat checks, all process-kill cases and seven explicit
+unsupported-semantics PostgreSQL reference checks, including the 42803 aggregate-ordinal case and
+qualified RETURNING rollback/no-write checks. Artifact `12913138745` was verified against ZIP SHA256
+`316cf70a22ed1c88a3e7771ad7e4e93a21b7f0a86a307f3dc5c0db781fe0b0ad`. Source status and hashes
+remained unchanged; this semantic-only result supplies no C4/C5 evidence.
+
+The final rebase targets explicit main `0142daf495b0907e2e640547ec7217b15dfe7870`; the documentation
+append conflict retained both sections, and all experiment/experiment-workflow bytes were verified
+unchanged from that successful semantic source. The next clean full run will establish current
+all-candidate compilation, semantics, PostgreSQL timing and clean build measurements. Research
+publication remains separate from accepting ADR 0013 or claiming full-subset/phase readiness.
