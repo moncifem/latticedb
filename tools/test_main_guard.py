@@ -1,265 +1,559 @@
+"""Pure decisions plus actual Git/bare-origin and fake-gh rehearsal. No live GitHub mutation."""
+
+import importlib.util
+import json
 import os
+from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+SPEC = importlib.util.spec_from_file_location(
+    "guard", Path(__file__).with_name("main_guard.py")
+)
+g = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(g)
 
-import main_guard as g  # noqa: E402
-from main_guard import ISSUE_ONLY, NONE, REVERT_PR, decide
+FAKE_GH = r"""#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+from urllib.parse import parse_qs
+p=Path(os.environ['MAIN_GUARD_FIXTURE_STATE']); s=json.loads(p.read_text()); a=sys.argv[1:]
+assert a[0]=='api',a
+if '--method' in a:
+ i=a.index('--method'); method=a[i+1]; path=a[i+2]
+else: method='GET';path=a[1]
+fields=json.load(sys.stdin) if '--input' in a else None
+s['calls'].append({'method':method,'path':path,'fields':fields})
+route=path.split('?',1)[0]; query=parse_qs(path.split('?',1)[1] if '?' in path else '')
+prefix='repos/moncifem/latticedb'
+def save():p.write_text(json.dumps(s))
+def reply(v):save();print(json.dumps(v));sys.exit(0)
+def advance():
+ subprocess.run(['git','--git-dir',s['origin'],'update-ref','refs/heads/main',s['future']],check=True,capture_output=True)
+if method!='GET':
+ assert route.startswith(prefix+'/'),route
+ s['writes'].append({'path':route,'fields':fields})
+ if route==prefix+'/labels':s['labels'].append(fields);reply(fields)
+ if route==prefix+'/issues':
+  issue={'number':7,'state':'open',**fields};s['issues'].append(issue)
+  if s.get('advance_after_issue'):advance()
+  reply(issue)
+ if route==prefix+'/issues/8/labels':reply(fields)
+ if route.endswith('/comments'):
+  s.setdefault('comments',[]).append(fields);reply(fields)
+ if route==prefix+'/pulls':
+  assert fields['draft'] is True,fields
+  assert fields['base']=='main' and fields['head']=='revert/'+s['run']['head_sha']
+  s['prs'].append({'number':8,'head':{'ref':fields['head'],'repo':{'full_name':'moncifem/latticedb'}},'base':{'ref':'main'},**fields})
+  reply({'number':8,'html_url':'https://github.com/moncifem/latticedb/pull/8'})
+ raise AssertionError((method,path,fields))
+if route==prefix+'/actions/workflows/pr.yml':reply(s['workflow'])
+if route==prefix+'/actions/runs/200':reply(s['run'])
+if route==prefix+'/actions/runs/100':reply(next(r for r in s['runs'] if r['id']==100))
+if route==prefix+'/actions/workflows/42/runs':
+ if s.get('advance_on_runs'):advance()
+ data=s['runs']; page=int(query.get('page',['1'])[0]);reply({'total_count':len(data),'workflow_runs':data[(page-1)*100:page*100]})
+if route==prefix+'/actions/runs/200/attempts/1/jobs':
+ data=s['jobs'];page=int(query.get('page',['1'])[0]);reply({'total_count':len(data),'jobs':data[(page-1)*100:page*100]})
+if route.startswith(prefix+'/actions/jobs/') and route.endswith('/logs'):
+ ident=route.split('/')[-2]
+ if ident in s.get('deny_logs',[]):save();sys.exit(1)
+ save();print(s['logs'][ident]);sys.exit(0)
+if route==prefix+'/commits/'+s['run']['head_sha']:reply(s['commit'])
+if route==prefix+'/pulls':
+ if s.get('race_branch'):
+  worktrees=subprocess.check_output(['git','-C',s['work'],'worktree','list','--porcelain'],text=True)
+  if worktrees.count('worktree ')>1:
+   subprocess.run(['git','--git-dir',s['origin'],'update-ref','refs/heads/revert/'+s['run']['head_sha'],s['good']],check=True,capture_output=True)
+ reply(s['prs'])
+if route==prefix+'/issues':reply(s['issues'])
+if route.endswith('/comments'):reply(s.get('comments',[]))
+if route==prefix+'/labels':reply(s['labels'])
+raise AssertionError(path)
+"""
 
 
-def job(name, conclusion="failure", infra=False):
-    return {"name": name, "conclusion": conclusion, "infra": infra}
-
-
-class DecisionTable(unittest.TestCase):
-    def act(self, *a, **k):
-        return decide(*a, **k).action
-
-    def test_required_failure_reverts(self):
-        for check in sorted(g.REQUIRED_CHECKS):
-            with self.subTest(check=check):
-                self.assertEqual(self.act("failure", [check], [job(check)], False, False), REVERT_PR)
-
-    def test_reason_names_the_check(self):
-        d = decide("failure", ["msrv"], [job("msrv")], False, False)
-        self.assertIn("msrv", d.reason)
-
-    def test_non_failure_runs_do_nothing(self):
-        for c in ("success", "cancelled", "skipped", "timed_out", "neutral", "action_required", None):
-            with self.subTest(conclusion=c):
-                self.assertEqual(self.act(c, ["gate (ubuntu-latest)"], [], False, False), NONE)
-
-    def test_macos_only_failure_does_nothing(self):
+class Decisions(unittest.TestCase):
+    def test_only_explicit_code_and_proven_single_delta_proposes(self):
         self.assertEqual(
-            self.act("failure", ["gate (macos-latest)"], [job("gate (macos-latest)")], False, False), NONE
+            g.decide("failure", {"msrv": "code"}, culprit_known=True).action,
+            g.REVERT_PR,
+        )
+        for condition in ("is_revert", "duplicate", "bot", "manual"):
+            self.assertEqual(
+                g.decide(
+                    "failure", {"msrv": "code"}, culprit_known=True, **{condition: True}
+                ).action,
+                g.ISSUE_ONLY,
+            )
+        self.assertEqual(g.decide("failure", {"msrv": "code"}).action, g.ISSUE_ONLY)
+        self.assertEqual(
+            g.decide("failure", {"msrv": "unknown"}, culprit_known=True).action,
+            g.ISSUE_ONLY,
         )
 
-    def test_no_failed_checks_does_nothing(self):
-        self.assertEqual(self.act("failure", [], [], False, False), NONE)
+    def test_optional_cancelled_skipped_timeout_infra_never_blame_code(self):
+        for state in ("none", "infra"):
+            self.assertEqual(
+                g.decide(
+                    "failure",
+                    {"msrv": state, "gate (macos-latest)": "code"},
+                    culprit_known=True,
+                ).action,
+                g.NONE,
+            )
+        for conclusion in ("success", "cancelled", "timed_out", "skipped", None):
+            self.assertEqual(
+                g.decide(conclusion, {"msrv": "code"}, culprit_known=True).action,
+                g.NONE,
+            )
 
-    def test_macos_plus_required_still_acts(self):
-        names = ["gate (macos-latest)", "typos"]
-        self.assertEqual(self.act("failure", names, [job(n) for n in names], False, False), REVERT_PR)
-
-    def test_infra_failure_does_nothing(self):
-        self.assertEqual(self.act("failure", ["msrv"], [job("msrv", infra=True)], False, False), NONE)
-
-    def test_cancelled_or_timed_out_job_does_nothing(self):
-        for c in ("cancelled", "timed_out", "skipped"):
-            with self.subTest(job=c):
-                self.assertEqual(self.act("failure", ["msrv"], [job("msrv", c)], False, False), NONE)
-
-    def test_one_real_failure_among_infra_still_acts(self):
-        jobs = [job("msrv", infra=True), job("typos")]
-        self.assertEqual(self.act("failure", ["msrv", "typos"], jobs, False, False), REVERT_PR)
-
-    def test_revert_of_revert_is_issue_only(self):
-        self.assertEqual(self.act("failure", ["typos"], [job("typos")], True, False), ISSUE_ONLY)
-
-    def test_second_revert_for_same_sha_is_issue_only(self):
-        self.assertEqual(self.act("failure", ["typos"], [job("typos")], False, True), ISSUE_ONLY)
-
-    def test_bot_only_change_is_issue_only(self):
+    def test_failure_classification_unknown_is_not_code(self):
+        job = {"name": "msrv", "conclusion": "failure", "steps": []}
+        self.assertEqual(g.classify_job(job, "error[E0308]: mismatch"), "unknown")
+        job["steps"] = [
+            {"name": "Run cargo check --workspace", "conclusion": "failure"}
+        ]
+        self.assertEqual(g.classify_job(job, "failed to download: HTTP 503"), "infra")
         self.assertEqual(
-            self.act("failure", ["typos"], [job("typos")], False, False, bot_only=True), ISSUE_ONLY
+            g.classify_job(job, "error[E0308]: mismatch\nHTTP 503"), "unknown"
         )
+        self.assertEqual(g.classify_job(job, "random diagnostic"), "unknown")
+        self.assertEqual(g.classify_job(job, "error[E0308]: mismatch"), "code")
+        job["steps"] = [
+            {"name": "Post dangerous code validator", "conclusion": "failure"}
+        ]
+        self.assertEqual(g.classify_job(job, "error[E0308]: mismatch"), "unknown")
+        job["steps"] = [{"name": "Run actions/checkout@pin", "conclusion": "failure"}]
+        self.assertEqual(g.classify_job(job, "network failed"), "unknown")
+        for conclusion in ("success", "cancelled", "timed_out", "skipped", "neutral"):
+            job["conclusion"] = conclusion
+            self.assertEqual(g.classify_job(job, None), "none")
 
-    def test_unknown_culprit_is_issue_only(self):
-        self.assertEqual(
-            self.act("failure", ["typos"], [job("typos")], False, False, culprit_known=False), ISSUE_ONLY
+    def test_revert_detection_is_anchored(self):
+        for subject in ('Revert "feat: x"', "revert: x", "revert(core): x"):
+            self.assertTrue(g.is_revert_subject(subject))
+        self.assertFalse(g.is_revert_subject("feat: revert support"))
+
+
+class Rehearsal(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="main-guard-fixture-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.work = self.root / "checkout"
+        self.origin = self.root / "origin.git"
+        self.work.mkdir()
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.call(["git", "init", "--bare", str(self.origin)])
+        self.call(["git", "init", "-b", "main", str(self.work)])
+        self.git("config", "user.name", "Fixture Owner")
+        self.git("config", "user.email", "fixture-owner@example.invalid")
+        self.git("remote", "add", "origin", "https://github.com/moncifem/latticedb.git")
+        self.git(
+            "config",
+            f"url.{self.origin.as_uri()}.insteadOf",
+            "https://github.com/moncifem/latticedb.git",
         )
+        (self.work / "tools").mkdir()
+        (self.work / "tools/branch-protection.json").write_text(
+            json.dumps(
+                {"required_status_checks": {"contexts": sorted(g.REQUIRED_CHECKS)}}
+            )
+        )
+        self.source = "crates/lattice-api/src/case.rs"
+        (self.work / self.source).parent.mkdir(parents=True)
+        (self.work / self.source).write_text("good\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "test: green fixture")
+        self.good = self.git("rev-parse", "HEAD").strip()
+        (self.work / self.source).write_text("bad\n")
+        self.git("commit", "-am", "test: red fixture")
+        self.bad = self.git("rev-parse", "HEAD").strip()
+        self.git("push", "origin", "main")
+        (self.work / self.source).write_text("future fix\n")
+        self.git("commit", "-am", "test: fixture future fix")
+        self.future = self.git("rev-parse", "HEAD").strip()
+        self.git("push", "origin", "HEAD:refs/heads/fixture-future")
+        self.git("reset", "--hard", self.bad)
 
-    def test_guards_do_not_override_none(self):
-        self.assertEqual(self.act("cancelled", ["typos"], [], True, True, bot_only=True), NONE)
-        self.assertEqual(self.act("failure", ["gate (macos-latest)"], [], True, True), NONE)
+        def run(ident, sha, date, conclusion):
+            return {
+                "id": ident,
+                "workflow_id": 42,
+                "path": g.WORKFLOW_PATH,
+                "repository": {"full_name": g.REPOSITORY},
+                "head_repository": {"full_name": g.REPOSITORY},
+                "event": "push",
+                "head_branch": "main",
+                "status": "completed",
+                "head_sha": sha,
+                "run_attempt": 1,
+                "conclusion": conclusion,
+                "created_at": date,
+            }
 
-
-class Helpers(unittest.TestCase):
-    def test_revert_subjects(self):
-        for s in ('Revert "feat: x"', "revert: feat: x", "revert(core): y", "Revert foo"):
-            self.assertTrue(g.is_revert_subject(s), s)
-        for s in ("feat: add revert flag", "fix(x): reverting is hard", "docs: revert policy"):
-            self.assertFalse(g.is_revert_subject(s), s)
-
-    def test_single_commit_is_culprit(self):
-        self.assertEqual(g.pick_culprit({"a": ["README.md"]}, set()), "a")
-
-    def test_culprit_is_commit_touching_failing_crate(self):
-        files = {
-            "a": ["docs/x.md"],
-            "b": ["crates/lattice-core/src/x.rs"],
-            "c": ["crates/lattice-api/a.rs"],
+        current = run(200, self.bad, "2026-10-29T01:00:00Z", "failure")
+        previous = run(100, self.good, "2026-10-29T00:00:00Z", "success")
+        jobs = []
+        for at, name in enumerate(sorted(g.REQUIRED_CHECKS)):
+            failed = name == "msrv"
+            jobs.append(
+                {
+                    "id": at + 1,
+                    "name": name,
+                    "conclusion": "failure" if failed else "success",
+                    "steps": [
+                        {"name": "Run cargo check --workspace", "conclusion": "failure"}
+                    ]
+                    if failed
+                    else [],
+                }
+            )
+        failed = str(next(j["id"] for j in jobs if j["name"] == "msrv"))
+        self.state = {
+            "origin": str(self.origin),
+            "work": str(self.work),
+            "good": self.good,
+            "future": self.future,
+            "workflow": {"id": 42, "path": g.WORKFLOW_PATH},
+            "run": current,
+            "runs": [current, previous],
+            "jobs": jobs,
+            "logs": {
+                failed: "error[E0308]: mismatched types\n --> "
+                + self.source
+                + ":1:2\nsecret-not-for-output"
+            },
+            "commit": {
+                "sha": self.bad,
+                "author": {"login": "moncifem"},
+                "committer": {"login": "moncifem"},
+            },
+            "prs": [],
+            "issues": [],
+            "labels": [{"name": "main-red"}],
+            "calls": [],
+            "writes": [],
         }
-        self.assertEqual(g.pick_culprit(files, {"lattice-core"}), "b")
+        self.state_path = self.root / "state.json"
+        self.save()
+        fake = self.bin / "gh"
+        fake.write_text(FAKE_GH)
+        fake.chmod(0o755)
+        self.env = {
+            **os.environ,
+            "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
+            "MAIN_GUARD_FIXTURE_STATE": str(self.state_path),
+            "GH_TOKEN": "fixture-token-not-for-output",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_AUTHOR_EMAIL": "fixture-owner@example.invalid",
+            "GIT_COMMITTER_EMAIL": "fixture-owner@example.invalid",
+        }
 
-    def test_ambiguous_or_unknown_culprit(self):
-        files = {"a": ["crates/lattice-core/x.rs"], "b": ["crates/lattice-core/y.rs"]}
-        self.assertIsNone(g.pick_culprit(files, {"lattice-core"}))
-        self.assertIsNone(g.pick_culprit(files, set()))
-        self.assertIsNone(g.pick_culprit(files, {"lattice-api"}))
+    def call(self, args, **kwargs):
+        return subprocess.run(
+            args, text=True, capture_output=True, check=True, **kwargs
+        ).stdout
 
-    def test_crates_from_log(self):
-        log = "info: building lattice-sim\nerror: could not compile `lattice-core` (lib)\nok lattice_abi\n"
-        self.assertEqual(g.crates_in_log(log), {"lattice-core"})
-
-    def test_infra_only_steps(self):
-        self.assertTrue(g.infra_only({"steps": [{"name": "Set up job", "conclusion": "failure"}]}))
-        self.assertFalse(
-            g.infra_only(
-                {
-                    "steps": [
-                        {"name": "Set up job", "conclusion": "failure"},
-                        {"name": "cargo xtask ci", "conclusion": "failure"},
-                    ]
-                }
-            )
+    def git(self, *args):
+        return self.call(
+            ["git", "-c", "core.hooksPath=/dev/null", "-C", str(self.work), *args]
         )
-        # A failed job with no failed step, or with a cancelled step, is not the code's fault.
-        self.assertTrue(g.infra_only({"steps": []}))
+
+    def save(self):
+        self.state_path.write_text(json.dumps(self.state))
+
+    def read(self):
+        return json.loads(self.state_path.read_text())
+
+    def guard(self, *args):
+        self.assertEqual(
+            self.git("remote", "get-url", "origin").strip(), self.origin.as_uri()
+        )
+        self.save()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("main_guard.py").resolve()),
+                "--repo",
+                g.REPOSITORY,
+                "--run-id",
+                "200",
+                *args,
+            ],
+            cwd=self.work,
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.state = self.read()
+        self.assertNotIn("fixture-token-not-for-output", result.stdout + result.stderr)
+        self.assertNotIn(
+            "secret-not-for-output",
+            result.stdout + result.stderr + json.dumps(self.state["writes"]),
+        )
+        return result
+
+    def remote(self, ref):
+        return self.call(
+            ["git", "--git-dir", str(self.origin), "rev-parse", ref]
+        ).strip()
+
+    def test_default_and_explicit_dry_run_use_actual_git_without_remote_mutations(self):
+        for args in ((), ("--dry-run",)):
+            r = self.guard(*args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("REVERT_PR", r.stdout)
+            self.assertEqual(self.state["writes"], [])
+            self.assertEqual(self.remote("refs/heads/main"), self.bad)
+            self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.bad)
+            self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_apply_reverts_actual_tree_only_on_full_sha_candidate_branch(self):
+        r = self.guard("--apply")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        branch = "refs/heads/revert/" + self.bad
+        candidate = self.remote(branch)
+        self.assertEqual(self.remote("refs/heads/main"), self.bad)
+        tree = self.call(
+            ["git", "--git-dir", str(self.origin), "rev-parse", candidate + "^{tree}"]
+        ).strip()
+        self.assertEqual(tree, self.git("rev-parse", self.good + "^{tree}").strip())
+        author = self.call(
+            [
+                "git",
+                "--git-dir",
+                str(self.origin),
+                "log",
+                "-1",
+                "--format=%an%n%ae%n%B",
+                candidate,
+            ]
+        )
+        self.assertIn("github-actions[bot]", author)
+        self.assertNotIn("fixture-owner@example.invalid", author)
+        self.assertIn("This reverts commit " + self.bad, author)
+        writes = self.state["writes"]
+        self.assertEqual(
+            [w["path"].rsplit("/", 1)[1] for w in writes], ["issues", "pulls", "labels"]
+        )
+        self.assertIs(writes[-2]["fields"]["draft"], True)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(
+            len(self.git("worktree", "list", "--porcelain").split("worktree ")) - 1, 1
+        )
+
+    def test_stale_run_never_writes(self):
+        self.call(
+            [
+                "git",
+                "--git-dir",
+                str(self.origin),
+                "update-ref",
+                "refs/heads/main",
+                self.future,
+            ]
+        )
+        r = self.guard("--apply")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(self.state["writes"], [])
+        self.assertIn("main or run attempt changed", r.stdout)
+
+    def test_main_advance_during_collection_blocks_all_writes(self):
+        self.state["advance_on_runs"] = True
+        self.guard("--apply")
+        self.assertEqual(self.state["writes"], [])
+        self.assertEqual(self.remote("refs/heads/main"), self.future)
+
+    def test_main_advance_after_issue_blocks_branch_and_pr(self):
+        self.state["advance_after_issue"] = True
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+        self.assertTrue(self.state["writes"][0]["path"].endswith("/issues"))
+        self.assertEqual(
+            self.git("ls-remote", "origin", "refs/heads/revert/" + self.bad), ""
+        )
+
+    def test_wrong_workflow_path_event_repo_or_incomplete_run_is_not_acted_on(self):
+        original = json.loads(json.dumps(self.state["run"]))
+        for field, value in [
+            ("workflow_id", 99),
+            ("path", ".github/workflows/other.yml"),
+            ("event", "pull_request"),
+            ("status", "in_progress"),
+            ("head_branch", "topic"),
+            ("head_repository", {"full_name": "evil/fork"}),
+        ]:
+            self.state["run"] = {**original, field: value}
+            self.guard("--apply")
+            self.assertEqual(self.state["writes"], [])
+        self.state["run"] = original
+
+    def test_unknown_failed_logs_and_missing_steps_report_only(self):
+        failed = next(j for j in self.state["jobs"] if j["name"] == "msrv")
+        self.state["deny_logs"] = [str(failed["id"])]
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+        self.assertTrue(self.state["writes"][0]["path"].endswith("/issues"))
+
+    def test_multi_commit_unknown_or_red_predecessor_is_not_guessed(self):
+        self.state["runs"][-1]["head_sha"] = self.future
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+        self.assertTrue(self.state["writes"][0]["path"].endswith("/issues"))
+
+    def test_absent_current_run_in_history_reports_only(self):
+        self.state["runs"] = self.state["runs"][1:]
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+
+    def test_optional_failure_never_supplies_attribution_or_logs(self):
+        self.state["jobs"].append(
+            {
+                "id": 999,
+                "name": "gate (macos-latest)",
+                "conclusion": "failure",
+                "steps": [],
+            }
+        )
+        self.guard("--apply")
+        self.assertFalse(any("/jobs/999/" in c["path"] for c in self.state["calls"]))
+        self.assertEqual(len(self.state["prs"]), 1)
+
+    def test_code_error_outside_changed_files_is_issue_only(self):
+        key = next(iter(self.state["logs"]))
+        self.state["logs"][key] = (
+            "error[E0308]: mismatch\n --> crates/lattice-core/src/other.rs:9:3"
+        )
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+
+    def test_exact_bot_login_is_issue_only_not_spoofable_git_display_name(self):
+        self.state["commit"]["author"]["login"] = "dependabot[bot]"
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+
+    def test_existing_remote_branch_is_never_overwritten(self):
+        ref = "refs/heads/revert/" + self.bad
+        self.call(["git", "--git-dir", str(self.origin), "update-ref", ref, self.good])
+        self.guard("--apply")
+        self.assertEqual(self.remote(ref), self.good)
+        self.assertEqual(len(self.state["writes"]), 1)
+
+    def test_closed_exact_revert_pr_blocks_duplicate_publication(self):
+        self.state["prs"] = [
+            {
+                "number": 5,
+                "head": {
+                    "ref": "revert/" + self.bad,
+                    "repo": {"full_name": g.REPOSITORY},
+                },
+                "base": {"ref": "main"},
+            }
+        ]
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+
+    def test_required_jobs_are_paginated(self):
+        fillers = [
+            {
+                "id": 1000 + i,
+                "name": f"optional-{i}",
+                "conclusion": "failure",
+                "steps": [],
+            }
+            for i in range(100)
+        ]
+        self.state["jobs"] = fillers + self.state["jobs"]
+        self.guard("--dry-run")
+        self.assertEqual(self.state["writes"], [])
         self.assertTrue(
-            g.infra_only(
-                {
-                    "steps": [
-                        {"name": "cargo xtask ci", "conclusion": "cancelled"},
-                        {"name": "cargo xtask ci", "conclusion": "failure"},
-                    ]
-                }
+            any(
+                "jobs?" in c["path"] and "page=2" in c["path"]
+                for c in self.state["calls"]
             )
         )
 
-    def test_root_manifest_change_makes_culprit_undeterminable(self):
-        files = {"a": ["Cargo.lock"], "b": ["crates/lattice-core/x.rs"], "c": ["docs/x.md"]}
-        self.assertIsNone(g.pick_culprit(files, {"lattice-core"}))
-        # A single commit is still blamed even if it touches the manifest.
-        self.assertEqual(g.pick_culprit({"a": ["Cargo.toml"]}, set()), "a")
+    def test_red_predecessor_is_not_treated_as_known_good(self):
+        self.state["runs"][-1]["conclusion"] = "failure"
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+        self.assertTrue(self.state["writes"][0]["path"].endswith("/issues"))
 
-    def test_clean_neutralises_markdown_and_mentions(self):
-        out = g.clean("fix `x` @owner closes #12")
-        self.assertNotIn("`", out)
-        self.assertNotIn("@owner", out)
-        self.assertNotIn("#12", out)
+    def test_missing_required_job_and_missing_failure_steps_report_only(self):
+        self.state["jobs"] = [j for j in self.state["jobs"] if j["name"] != "typos"]
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+        self.assertIn("unknown", self.state["writes"][0]["fields"]["body"])
 
-    def test_pr_body_flags_best_guess_and_cleans_subject(self):
-        guess = g.pr_body("msrv", "https://run", "abc", "fix @a `b`", guess=True)
-        self.assertIn("best guess", guess)
-        self.assertNotIn("`b`", guess)
-        self.assertNotIn("best guess", g.pr_body("msrv", "https://run", "abc", "s"))
+    def test_required_infrastructure_failure_does_not_mutate(self):
+        key = next(iter(self.state["logs"]))
+        self.state["logs"][key] = "failed to download dependency: HTTP 503"
+        self.guard("--apply")
+        self.assertEqual(self.state["writes"], [])
 
+    def test_unknown_commit_identity_does_not_guess_bot_or_human(self):
+        self.state["commit"]["author"] = None
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 1)
+        self.assertTrue(self.state["writes"][0]["path"].endswith("/issues"))
 
-def run_rec(rid, created, conclusion, name="pr", status="completed"):
-    return {"id": rid, "created_at": created, "conclusion": conclusion, "name": name, "status": status}
-
-
-class Baseline(unittest.TestCase):
-    def test_previous_green_is_ok(self):
-        runs = [run_rec(2, "2026-01-02", "failure"), run_rec(1, "2026-01-01", "success")]
-        self.assertTrue(g.baseline_ok(runs, 2)[0])
-
-    def test_previous_red_is_not_ok(self):
-        runs = [run_rec(2, "2026-01-02", "failure"), run_rec(1, "2026-01-01", "failure")]
-        self.assertFalse(g.baseline_ok(runs, 2)[0])
-
-    def test_previous_cancelled_is_not_ok(self):
-        runs = [run_rec(2, "2026-01-02", "failure"), run_rec(1, "2026-01-01", "cancelled")]
-        self.assertFalse(g.baseline_ok(runs, 2)[0])
-
-    def test_newer_green_run_is_not_ok(self):
-        runs = [
-            run_rec(3, "2026-01-03", "success"),
-            run_rec(2, "2026-01-02", "failure"),
-            run_rec(1, "2026-01-01", "success"),
+    def test_foreign_fork_pr_with_same_head_name_is_not_our_revert(self):
+        self.state["prs"] = [
+            {
+                "number": 5,
+                "head": {
+                    "ref": "revert/" + self.bad,
+                    "repo": {"full_name": "someone/fork"},
+                },
+                "base": {"ref": "main"},
+            }
         ]
-        self.assertFalse(g.baseline_ok(runs, 2)[0])
+        self.guard("--apply")
+        self.assertEqual(len(self.state["prs"]), 2)
+        self.assertEqual(len(self.state["writes"]), 3)
 
-    def test_no_history_or_unknown_run_is_not_ok(self):
-        self.assertFalse(g.baseline_ok([run_rec(2, "2026-01-02", "failure")], 2)[0])
-        self.assertFalse(g.baseline_ok([run_rec(1, "2026-01-01", "success")], 9)[0])
-
-    def test_other_workflows_are_ignored(self):
-        runs = [
-            run_rec(2, "2026-01-02", "failure"),
-            run_rec(5, "2026-01-01T12", "failure", name="other"),
-            run_rec(1, "2026-01-01", "success"),
+    def test_exact_existing_tracking_marker_is_idempotent(self):
+        self.state["issues"] = [
+            {
+                "number": 7,
+                "title": "main is red: " + self.bad,
+                "state": "open",
+                "body": "<!-- main-guard:"
+                + self.bad
+                + " -->\n<!-- main-guard-run:200:1 -->",
+            }
         ]
-        self.assertTrue(g.baseline_ok(runs, 2)[0])
+        self.guard("--apply")
+        self.assertEqual(len(self.state["writes"]), 2)
+        self.assertFalse(
+            any(w["path"].endswith("/issues") for w in self.state["writes"])
+        )
 
-    def test_in_progress_newer_run_does_not_count(self):
-        runs = [
-            run_rec(3, "2026-01-03", None, status="in_progress"),
-            run_rec(2, "2026-01-02", "failure"),
-            run_rec(1, "2026-01-01", "success"),
+    def test_issue_with_similar_title_but_no_exact_marker_is_not_reused(self):
+        self.state["issues"] = [
+            {
+                "number": 9,
+                "title": "main is red: " + self.bad,
+                "state": "open",
+                "body": "unrelated report",
+            }
         ]
-        self.assertTrue(g.baseline_ok(runs, 2)[0])
+        self.guard("--apply")
+        self.assertTrue(self.state["writes"][0]["path"].endswith("/issues"))
+        self.assertEqual(len(self.state["issues"]), 2)
 
-
-class BaselineDecision(unittest.TestCase):
-    def test_red_baseline_is_issue_only(self):
-        d = decide("failure", ["typos"], [job("typos")], False, False, baseline_green=False)
-        self.assertEqual(d.action, ISSUE_ONLY)
-
-    def test_baseline_does_not_override_none(self):
-        d = decide("failure", ["gate (macos-latest)"], [], False, False, baseline_green=False)
-        self.assertEqual(d.action, NONE)
-
-    def test_default_baseline_reverts(self):
-        self.assertEqual(decide("failure", ["typos"], [job("typos")], False, False).action, REVERT_PR)
-
-
-class RevertFailure(unittest.TestCase):
-    def test_conflict_aborts_and_returns_error(self):
-        import subprocess
-        from unittest import mock
-
-        calls = []
-
-        def fake_run(cmd, check=True, capture=True):
-            calls.append(cmd[:3])
-            if cmd[:3] == ["git", "ls-remote", "origin"]:
-                return ""
-            if cmd[:2] == ["git", "revert"] and "--abort" not in cmd:
-                raise subprocess.CalledProcessError(1, cmd, stderr="CONFLICT in x.rs")
-            return ""
-
-        with mock.patch.object(g, "run", fake_run):
-            err = g.do_revert("abc", "feat: x", "revert/abc")
-        self.assertIn("CONFLICT", err)
-        self.assertIn(["git", "revert", "--abort"], calls)
-        self.assertFalse(any(c[:2] == ["git", "push"] for c in calls))
-
-    def test_push_rejection_returns_error(self):
-        import subprocess
-        from unittest import mock
-
-        def fake_run(cmd, check=True, capture=True):
-            if cmd[:2] == ["git", "push"]:
-                raise subprocess.CalledProcessError(1, cmd, stderr="refusing to allow workflow update")
-            return ""
-
-        with mock.patch.object(g, "run", fake_run), mock.patch.object(g.subprocess, "run") as sub:
-            sub.return_value = None
-            err = g.do_revert("abc", "feat: x", "revert/abc")
-        self.assertIn("workflow", err)
-
-    def test_existing_remote_branch_skips_revert_and_push(self):
-        from unittest import mock
-
-        calls = []
-
-        def fake_run(cmd, check=True, capture=True):
-            calls.append(cmd[:2])
-            return "deadbeef\trefs/heads/revert/abc\n" if cmd[:2] == ["git", "ls-remote"] else ""
-
-        with mock.patch.object(g, "run", fake_run):
-            self.assertIsNone(g.do_revert("abc", "feat: x", "revert/abc"))
-        self.assertEqual(calls, [["git", "ls-remote"]])
-
-    def test_revert_message_shape(self):
-        m = g.revert_message("abc123", "feat(lattice-core): " + "x" * 80)
-        first = m.splitlines()[0]
-        self.assertTrue(first.startswith("revert: "))
-        self.assertLessEqual(len(first), 72)
-        self.assertIn("This reverts commit abc123.", m)
+    def test_racing_candidate_ref_is_protected_by_actual_git_create_lease(self):
+        self.state["race_branch"] = True
+        result = self.guard("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.remote("refs/heads/revert/" + self.bad), self.good)
+        self.assertEqual(self.remote("refs/heads/main"), self.bad)
+        self.assertEqual(len(self.state["prs"]), 0)
 
 
 if __name__ == "__main__":

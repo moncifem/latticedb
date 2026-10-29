@@ -1,27 +1,17 @@
 #!/usr/bin/env python3
-"""Main guard: react when a push to main fails a required check.
-
-The decision is a pure function (`decide`) so the whole table is unit tested. The CLI gathers the
-facts with `gh` and `git`, asks `decide`, and then either does nothing, opens a revert pull request
-plus a tracking issue, or only opens/updates the tracking issue. It never pushes to main: the only
-ref it pushes is `revert/<short-sha>`.
-
-Standard library only. See docs/main-guard.md.
-"""
+"""Conservative main-red proposals. Default is dry-run; never writes main or changes settings."""
 
 import argparse
 import json
 import os
 import re
 import subprocess
-import sys
+import tempfile
+from pathlib import Path
 from typing import NamedTuple
 
-NONE = "NONE"
-REVERT_PR = "REVERT_PR"
-ISSUE_ONLY = "ISSUE_ONLY"
-
-# Branch protection's required checks (tools/branch-protection.json).
+REPOSITORY = "moncifem/latticedb"
+WORKFLOW_PATH = ".github/workflows/pr.yml"
 REQUIRED_CHECKS = frozenset(
     {
         "gate (ubuntu-latest)",
@@ -32,15 +22,55 @@ REQUIRED_CHECKS = frozenset(
         "msrv",
     }
 )
-
-# A job that "failed" only because the runner broke, not because the code did.
-INFRA_STEPS = frozenset({"Set up job", "Initialize containers", "Complete job"})
-NON_FAILURE_JOB_CONCLUSIONS = frozenset({"cancelled", "skipped", "timed_out", "neutral", "success"})
-
-ROOT_MANIFESTS = frozenset({"Cargo.toml", "Cargo.lock"})
-BOT_NAMES = ("dependabot[bot]", "github-merge-queue[bot]")
+BOT_LOGINS = frozenset({"dependabot[bot]", "github-merge-queue[bot]"})
 LABEL = "main-red"
-ISSUE_TITLE = "main is red"
+NONE, REVERT_PR, ISSUE_ONLY = "NONE", "REVERT_PR", "ISSUE_ONLY"
+MAX_PAGES = 10
+VALIDATION_STEPS = {
+    "gate (ubuntu-latest)": {
+        "Run cargo xtask ci",
+        "engine without row features",
+        "scorecard evidence semantics and real ledger ingestion",
+    },
+    "gate (ubuntu-24.04-arm)": {"Run cargo xtask test-portable"},
+    "msrv": {"Run cargo check --workspace"},
+    "typos": {"Run typos"},
+    "commit-messages": {"lint every commit subject in the PR"},
+}
+INFRA = re.compile(
+    r"failed to (?:download|fetch)|could not resolve host|connection (?:reset|timed out)|HTTP (?:429|502|503|504)|rate limit exceeded|no space left on device|lost communication|runner.*(?:shutdown|lost)|signal: 9|SIGKILL|exit code 137",
+    re.I,
+)
+CODE = re.compile(
+    r'error\[E\d+\]:|panicked at [^\n]*(?:crates|xtask|tests)/[^\n]+:\d+|error: "[^"\n]+" should be "',
+    re.I,
+)
+SOURCE_ERROR = re.compile(
+    r"error:[^\n]+[\s\S]*?--> [^\n]*(?:crates|xtask|tests)/[^\n]+\.rs:\d+"
+)
+# These changes need explicit storage/format or guard-control review, not an automatic proposal.
+MANUAL_PATHS = (
+    "formats/",
+    "docs/rfc/",
+    "docs/adr/",
+    "tools/main_guard.py",
+    "tools/test_main_guard.py",
+    ".github/workflows/main-guard.yml",
+    ".github/workflows/pr.yml",
+    "crates/lattice-core/src/admission.rs",
+    "crates/lattice-core/src/record.rs",
+    "crates/lattice-core/src/log.rs",
+    "crates/lattice-engines/src/typed.rs",
+    "crates/lattice-engines/src/catalog.rs",
+)
+
+
+class EvidenceError(RuntimeError):
+    pass
+
+
+class StaleRun(EvidenceError):
+    pass
 
 
 class Decision(NamedTuple):
@@ -48,359 +78,543 @@ class Decision(NamedTuple):
     reason: str
 
 
-def _is_real_failure(name, jobs_by_name):
-    """A required check counts only when its job genuinely failed (not infra, cancelled, timed out)."""
-    job = jobs_by_name.get(name)
-    if job is None:
-        # No job detail: trust the caller's claim that the check failed.
-        return True
-    if job.get("conclusion") in NON_FAILURE_JOB_CONCLUSIONS:
+def command(args, *, cwd=None, input=None, env=None):
+    try:
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            input=input,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=90,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
+        # Do not copy logs, credentials, original commit identity or arbitrary stderr into issues.
+        raise EvidenceError(
+            f"{args[0]} command failed; evidence unavailable"
+        ) from error
+    if len(result.stdout) > 8 * 1024 * 1024:
+        raise EvidenceError("command output exceeds evidence parser limit")
+    return result.stdout
+
+
+def git(*args, cwd=None, input=None, env=None):
+    return command(
+        [
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.helper=!gh auth git-credential",
+            *args,
+        ],
+        cwd=cwd,
+        input=input,
+        env=env,
+    )
+
+
+def api(path, method="GET", fields=None):
+    args = ["gh", "api", "--method", method, path]
+    payload = None
+    if fields is not None:
+        args.extend(["--input", "-"])
+        payload = json.dumps(fields)
+    data = command(args, input=payload)
+    if not data.strip():
+        return None
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as error:
+        raise EvidenceError("invalid API JSON") from error
+
+
+def pages(path, key=None):
+    values = []
+    for page in range(1, MAX_PAGES + 1):
+        data = api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}")
+        items = data.get(key) if key and isinstance(data, dict) else data
+        if not isinstance(items, list):
+            raise EvidenceError("missing paginated API evidence")
+        values.extend(items)
+        if len(items) < 100:
+            if key and data.get("total_count", len(values)) != len(values):
+                raise EvidenceError("incomplete API evidence")
+            return values
+    raise EvidenceError("API pagination exceeds bounded collection")
+
+
+def full_sha(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None
+
+
+def verified_run(run, workflow, run_id):
+    if (
+        not isinstance(run, dict)
+        or not isinstance(workflow, dict)
+        or type(run_id) is not int
+        or run_id <= 0
+    ):
         return False
-    if job.get("infra"):
-        return False
-    return True
-
-
-def decide(
-    run_conclusion,
-    failed_required_checks,
-    failed_jobs_info,
-    head_commit_is_revert,
-    already_open_revert,
-    *,
-    bot_only=False,
-    culprit_known=True,
-    baseline_green=True,
-):
-    """Return a Decision(action, reason).
-
-    run_conclusion: conclusion of the workflow run ("failure", "cancelled", ...).
-    failed_required_checks: names of failed checks; only REQUIRED_CHECKS count.
-    failed_jobs_info: list of dicts {name, conclusion, infra} for the failed jobs.
-    head_commit_is_revert: the commit that would be reverted is itself a revert.
-    already_open_revert: a revert PR for that sha already exists.
-    bot_only: every candidate commit came from dependabot or the merge queue.
-    culprit_known: a single offending commit could be determined.
-    baseline_green: main was green before this push and nothing is already tracked as red.
-    """
-    if run_conclusion != "failure":
-        return Decision(NONE, f"run concluded {run_conclusion!r}, not a failure")
-    required = sorted(set(failed_required_checks) & REQUIRED_CHECKS)
-    if not required:
-        return Decision(NONE, "no required check failed (non-required, e.g. macOS-only, failure)")
-    jobs_by_name = {j.get("name"): j for j in (failed_jobs_info or [])}
-    real = [c for c in required if _is_real_failure(c, jobs_by_name)]
-    if not real:
-        return Decision(NONE, "required check failures are infrastructure, cancelled or timed out")
-    names = ", ".join(real)
-    if head_commit_is_revert:
-        return Decision(ISSUE_ONLY, f"{names} failed on a revert commit; never revert a revert")
-    if already_open_revert:
-        return Decision(ISSUE_ONLY, f"{names} failed; a revert for this commit already exists")
-    if not baseline_green:
-        return Decision(ISSUE_ONLY, f"{names} failed, but main was already red or is already tracked as red")
-    if bot_only:
-        return Decision(ISSUE_ONLY, f"{names} failed on a dependabot or merge-queue change")
-    if not culprit_known:
-        return Decision(ISSUE_ONLY, f"{names} failed; no single offending commit could be determined")
-    return Decision(REVERT_PR, f"{names} failed on main")
+    return (
+        type(workflow.get("id")) is int
+        and workflow["id"] > 0
+        and run.get("id") == run_id
+        and run.get("workflow_id") == workflow.get("id")
+        and workflow.get("path") == WORKFLOW_PATH
+        and run.get("path") == WORKFLOW_PATH
+        and run.get("repository", {}).get("full_name") == REPOSITORY
+        and run.get("head_repository", {}).get("full_name") == REPOSITORY
+        and run.get("event") == "push"
+        and run.get("head_branch") == "main"
+        and run.get("status") == "completed"
+        and full_sha(run.get("head_sha"))
+        and type(run.get("run_attempt")) is int
+        and run["run_attempt"] > 0
+    )
 
 
 def is_revert_subject(subject):
-    s = subject.strip()
-    return bool(re.match(r'^(Revert\b|revert(\(.*?\))?!?:)', s))
+    return bool(re.match(r"^(Revert\b|revert(?:\([^\n]*?\))?!?:)", subject.strip()))
 
 
-def crates_in_log(log):
-    """Crate names mentioned on error-looking lines of a failed job log."""
-    found = set()
-    for line in log.splitlines():
-        low = line.lower()
-        if not any(k in low for k in ("error", "failed", "panicked", "could not compile")):
-            continue
-        found.update(re.findall(r"\blattice(?:[-_][a-z0-9]+)*\b|\bxtask\b", line))
-    return {c.replace("_", "-") for c in found}
+def classify_job(job, log):
+    if not isinstance(job, dict) or not isinstance(job.get("steps", []), list):
+        return "unknown"
+    if any(not isinstance(step, dict) for step in job.get("steps", [])):
+        return "unknown"
+    conclusion = job.get("conclusion")
+    if conclusion in {"success", "cancelled", "skipped", "timed_out", "neutral"}:
+        return "none"
+    if conclusion != "failure":
+        return "unknown"
+    failed = [
+        s.get("name") for s in job.get("steps", []) if s.get("conclusion") == "failure"
+    ]
+    if not failed or not isinstance(log, str):
+        return "unknown"
+    code = bool(CODE.search(log) or SOURCE_ERROR.search(log))
+    infra = bool(INFRA.search(log))
+    if infra:
+        return "unknown" if code else "infra"
+    known = VALIDATION_STEPS.get(job.get("name"), set())
+    if job.get("name") == "secret-scan":
+        known = {
+            name
+            for name in failed
+            if isinstance(name, str)
+            and name.startswith("Run gitleaks/gitleaks-action@")
+        }
+        code = bool(re.search(r"(?:leaks found|found \d+ leaks)", log, re.I))
+    if all(name in known for name in failed) and code:
+        return "code"
+    return "unknown"
 
 
-def pick_culprit(commits_files, crates):
-    """commits_files: ordered {sha: [paths]}. Return the sha, or None when not determinable."""
-    if len(commits_files) == 1:
-        return next(iter(commits_files))
-    # A dependency or lockfile change can break any crate, so the log cannot point at one commit.
-    if any(f in ROOT_MANIFESTS for files in commits_files.values() for f in files):
-        return None
-    if not crates:
-        return None
-    prefixes = tuple(f"crates/{c}/" for c in crates) + tuple(f"{c}/" for c in crates)
-    hits = [sha for sha, files in commits_files.items() if any(f.startswith(prefixes) for f in files)]
-    return hits[0] if len(hits) == 1 else None
-
-
-def infra_only(job):
-    """True when the job failed for reasons outside the code: no failed step at all, a cancelled
-    step, or only runner-level steps failed."""
-    steps = job.get("steps", [])
-    failed = [s["name"] for s in steps if s.get("conclusion") == "failure"]
-    if not failed or any(s.get("conclusion") == "cancelled" for s in steps):
-        return True
-    return all(n in INFRA_STEPS or n.startswith("Post ") for n in failed)
-
-
-def clean(text):
-    """Make a commit subject safe to paste into a PR or issue body: no code spans, no mentions,
-    no issue references."""
-    return text.replace("`", "'").replace("@", "@\u200b").replace("#", "#\u200b")
-
-
-def baseline_ok(runs, run_id):
-    """Decide from the list of push runs on main whether main was green before this push.
-
-    Returns (ok, reason). Not ok when the previous run did not succeed (or there is none), or when a
-    newer run already succeeded (the break was fixed or this run is stale)."""
-    this = next((r for r in runs if r["id"] == run_id), None)
-    if this is None:
-        return False, "this run is not in the recent push runs"
-    same = [r for r in runs if r["name"] == this["name"] and r["status"] == "completed"]
-    older = sorted((r for r in same if r["created_at"] < this["created_at"]),
-                   key=lambda r: r["created_at"], reverse=True)
-    newer = [r for r in same if r["created_at"] > this["created_at"]]
-    if not older:
-        return False, "no earlier completed run to prove main was green"
-    if older[0]["conclusion"] != "success":
-        return False, f"the previous run concluded {older[0]['conclusion']!r}"
-    if any(r["conclusion"] == "success" for r in newer):
-        return False, "a newer run on main already succeeded"
-    return True, "previous run was green"
-
-
-# ---------------------------------------------------------------- side effects
-
-def run(cmd, check=True, capture=True):
-    return subprocess.run(cmd, check=check, text=True, capture_output=capture).stdout
-
-
-def gh_json(args):
-    return json.loads(run(["gh", *args]))
-
-
-def short(sha):
-    return sha[:8]
-
-
-def push_runs(repo):
-    return gh_json(
-        ["api", f"repos/{repo}/actions/runs?branch=main&event=push&per_page=50"]
-    )["workflow_runs"]
-
-
-def previous_main_sha(runs, run_id, created_at):
-    this = [r for r in runs if r["id"] == run_id]
-    name = this[0]["name"] if this else None
-    older = [r for r in runs if r["name"] == name and r["created_at"] < created_at]
-    older.sort(key=lambda r: r["created_at"], reverse=True)
-    return older[0]["head_sha"] if older else None
-
-
-def push_commits(runs, run_id, head_sha, created_at):
-    """Commits in the push, oldest first. Falls back to the head commit alone."""
-    prev = previous_main_sha(runs, run_id, created_at)
-    rng = f"{prev}..{head_sha}" if prev else f"{head_sha}^..{head_sha}"
-    out = run(["git", "rev-list", "--reverse", "--no-merges", rng], check=False)
-    shas = out.split()
-    return shas or [head_sha]
-
-
-def commit_info(sha):
-    fmt = run(["git", "log", "-1", "--format=%an%n%cn%n%s", sha]).splitlines()
-    files = run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha]).splitlines()
-    return {"author": fmt[0], "committer": fmt[1], "subject": fmt[2] if len(fmt) > 2 else "", "files": files}
-
-
-def failed_job_logs(repo, jobs):
-    logs = []
-    for j in jobs:
-        out = run(["gh", "api", f"repos/{repo}/actions/jobs/{j['id']}/logs"], check=False)
-        logs.append(out)
-    return "\n".join(logs)
-
-
-def revert_message(sha, subject):
-    base = re.sub(r'^Revert "(.*)"$', r"\1", subject)
-    subj = f"revert: {base}"
-    if len(subj) > 72:
-        subj = subj[:71].rstrip() + "."
-    return f"{subj}\n\nThis reverts commit {sha}.\n"
-
-
-def remote_branch_exists(branch):
-    return bool(run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], check=False).strip())
-
-
-def error_text(e):
-    out = (getattr(e, "stderr", None) or getattr(e, "stdout", None) or str(e)).strip()
-    return out[-1500:]
-
-
-def do_revert(sha, subject, branch):
-    """Create and push the revert branch. Returns None on success or an error string; on failure
-    the working tree is left clean and nothing is pushed."""
-    try:
-        if remote_branch_exists(branch):
-            return None  # a previous attempt pushed it; go straight to the PR
-        run(["git", "fetch", "origin", "main"])
-        run(["git", "switch", "-c", branch, "origin/main"])
-        try:
-            run(["git", "revert", "--no-edit", sha])
-        except subprocess.CalledProcessError:
-            run(["git", "revert", "--abort"], check=False)
-            raise
-        msg = revert_message(sha, subject)
-        subprocess.run(["git", "commit", "--amend", "-F", "-"], input=msg, text=True, check=True,
-                       capture_output=True)
-        # Explicit refspec to revert/*: this tool never pushes main.
-        run(["git", "push", "origin", f"{branch}:refs/heads/{branch}"])
-    except subprocess.CalledProcessError as e:
-        return error_text(e)
-    return None
-
-
-def ensure_label(repo):
-    run(["gh", "label", "create", LABEL, "--repo", repo, "--color", "B60205",
-         "--description", "main failed a required check"], check=False)
-
-
-def pr_body(check, run_url, sha, subject, guess=False):
-    note = ""
-    if guess:
-        note = ("The push had several commits; this one is a best guess from the crate named in the "
-                "failing log. Check it before merging.\n\n")
-    return (
-        f"Automatic revert of {sha} ({clean(subject)}).\n\n{note}"
-        f"Failing required check: {check}\n"
-        f"Run: {run_url}\n\n"
-        "main was red after this commit. Merge this PR if the revert is right, or close it and fix forward. "
-        "Nothing was pushed to main. See docs/main-guard.md.\n"
+def decide(
+    conclusion,
+    failures,
+    *,
+    culprit_known=False,
+    is_revert=False,
+    duplicate=False,
+    bot=False,
+    manual=False,
+):
+    if conclusion != "failure":
+        return Decision(NONE, "run is not a completed failure")
+    relevant = {
+        name: state for name, state in failures.items() if name in REQUIRED_CHECKS
+    }
+    if not any(state in {"code", "unknown"} for state in relevant.values()):
+        return Decision(
+            NONE,
+            "no code/unknown failure in required checks; optional/infra/cancelled ignored",
+        )
+    if any(state == "unknown" for state in relevant.values()):
+        return Decision(
+            ISSUE_ONLY, "required-check evidence or failure classification is unknown"
+        )
+    if not culprit_known:
+        return Decision(
+            ISSUE_ONLY,
+            "no verified single change from an observed green main predecessor",
+        )
+    if is_revert or duplicate or bot or manual:
+        return Decision(
+            ISSUE_ONLY,
+            "revert/bot/duplicate/format-or-control change requires manual review",
+        )
+    return Decision(
+        REVERT_PR,
+        "required code-validation failure after one observed green predecessor",
     )
 
 
-def upsert_issue(repo, title_suffix, body, run_url):
-    ensure_label(repo)
-    existing = gh_json(
-        ["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--json", "number,title"]
-    )
-    existing = [i for i in existing if i["title"].startswith(ISSUE_TITLE)]
-    if existing:
-        num = existing[0]["number"]
-        seen = run(["gh", "issue", "view", str(num), "--repo", repo, "--json", "body,comments"])
-        if run_url in seen:
-            return f"#{num} already mentions this run"
-        run(["gh", "issue", "comment", str(num), "--repo", repo, "--body", body])
-        return f"commented on #{num}"
-    run(["gh", "issue", "create", "--repo", repo, "--title", f"{ISSUE_TITLE}: {title_suffix}",
-         "--label", LABEL, "--label", "type: bug", "--body", body])
-    return "opened tracking issue"
+class Guard:
+    def __init__(self, repo, run_id):
+        if repo != REPOSITORY:
+            raise EvidenceError("repository namespace is not authorized")
+        policy = json.loads(Path("tools/branch-protection.json").read_text())
+        if (
+            set(policy.get("required_status_checks", {}).get("contexts", []))
+            != REQUIRED_CHECKS
+        ):
+            raise EvidenceError(
+                "declared required-check policy changed; review guard configuration"
+            )
+        origin = git("config", "--get", "remote.origin.url").strip()
+        if origin not in {
+            f"https://github.com/{repo}",
+            f"https://github.com/{repo}.git",
+            f"git@github.com:{repo}.git",
+        }:
+            raise EvidenceError("origin does not match the authorized repository")
+        self.repo, self.run_id = repo, run_id
+        self.prefix = f"repos/{repo}"
+        self.workflow = api(f"{self.prefix}/actions/workflows/pr.yml")
+        self.run = api(f"{self.prefix}/actions/runs/{run_id}")
+        if not verified_run(self.run, self.workflow, run_id):
+            raise StaleRun("not the verified completed pr workflow push/main run")
+        self.head = self.run["head_sha"]
+        self.branch = f"revert/{self.head}"
+        self.url = f"https://github.com/{repo}/actions/runs/{run_id}"
+        self.marker = f"<!-- main-guard:{self.head} -->"
+        self.run_marker = f"<!-- main-guard-run:{run_id}:{self.run['run_attempt']} -->"
+        self.published_candidate = None
+        self.baseline = None
+        self.assert_current()
 
+    def assert_current(self):
+        git("fetch", "--no-tags", "origin", "main")
+        current = git("rev-parse", "refs/remotes/origin/main").strip()
+        remote = git("ls-remote", "--exit-code", "origin", "refs/heads/main").split()
+        observed = api(f"{self.prefix}/actions/runs/{self.run_id}")
+        if (
+            current != self.head
+            or not remote
+            or remote[0] != self.head
+            or not verified_run(observed, self.workflow, self.run_id)
+            or observed.get("run_attempt") != self.run["run_attempt"]
+            or observed.get("conclusion") != self.run.get("conclusion")
+            or observed.get("head_sha") != self.head
+        ):
+            raise StaleRun(
+                "main or run attempt changed; no further mutation authorized"
+            )
+        if self.baseline is not None:
+            baseline = api(f"{self.prefix}/actions/runs/{self.baseline['id']}")
+            if (
+                not verified_run(baseline, self.workflow, self.baseline["id"])
+                or baseline.get("conclusion") != "success"
+                or baseline.get("head_sha") != self.baseline["head_sha"]
+                or baseline.get("run_attempt") != self.baseline["run_attempt"]
+            ):
+                raise StaleRun("green predecessor proof changed")
+        if self.published_candidate is not None:
+            candidate = git(
+                "ls-remote", "--exit-code", "origin", f"refs/heads/{self.branch}"
+            ).split()
+            if not candidate or candidate[0] != self.published_candidate:
+                raise StaleRun(
+                    "candidate branch changed; no further mutation authorized"
+                )
 
-def tracked_red(repo, branch, short_sha):
-    """Open main-red PRs or issues other than the ones for this very commit."""
-    prs = gh_json(["pr", "list", "--repo", repo, "--state", "open", "--label", LABEL,
-                   "--json", "headRefName"])
-    issues = gh_json(["issue", "list", "--repo", repo, "--state", "open", "--label", LABEL,
-                      "--json", "title"])
-    return any(p["headRefName"] != branch for p in prs) or any(
-        short_sha not in i["title"] for i in issues
-    )
+    def mutation(self, path, method="POST", fields=None):
+        self.assert_current()
+        return api(path, method, fields)
 
+    def duplicate(self):
+        remote = git("ls-remote", "origin", f"refs/heads/{self.branch}").split()
+        if remote:
+            return True
+        prs = pages(f"{self.prefix}/pulls?state=all&head=moncifem:{self.branch}")
+        return any(
+            p.get("head", {}).get("ref") == self.branch
+            and p.get("head", {}).get("repo", {}).get("full_name") == self.repo
+            and p.get("base", {}).get("ref") == "main"
+            for p in prs
+        )
 
-def existing_revert(repo, branch):
-    prs = gh_json(["pr", "list", "--repo", repo, "--state", "all", "--head", branch, "--json", "number"])
-    return bool(prs)
+    def predecessor(self):
+        parents = git("rev-list", "--parents", "-n", "1", self.head).split()
+        if len(parents) != 2:
+            return False
+        runs = pages(
+            f"{self.prefix}/actions/workflows/{self.workflow['id']}/runs?branch=main&event=push",
+            "workflow_runs",
+        )
+        if any(not isinstance(run, dict) for run in runs):
+            return False
+        current = [r for r in runs if r.get("id") == self.run_id]
+        if len(current) != 1 or not self.run.get("created_at"):
+            return False
+        if any(
+            r.get("id") != self.run_id and r.get("created_at") == self.run["created_at"]
+            for r in runs
+        ):
+            return False
+        older = [r for r in runs if r.get("created_at", "") < self.run["created_at"]]
+        if not older:
+            return False
+        previous = max(older, key=lambda r: r["created_at"])
+        if sum(r.get("created_at") == previous["created_at"] for r in older) != 1:
+            return False
+        if not verified_run(previous, self.workflow, previous.get("id")):
+            return False
+        # No fallback to HEAD: a multi-commit or unknown delta only produces an issue.
+        known = (
+            previous.get("conclusion") == "success"
+            and previous.get("head_sha") == parents[1]
+        )
+        if known:
+            self.baseline = previous
+        return known
+
+    def failures(self):
+        jobs = pages(
+            f"{self.prefix}/actions/runs/{self.run_id}/attempts/{self.run['run_attempt']}/jobs",
+            "jobs",
+        )
+        if any(not isinstance(job, dict) for job in jobs):
+            raise EvidenceError("malformed job evidence")
+        result = {}
+        self.failure_paths = {}
+        for name in REQUIRED_CHECKS:
+            matches = [j for j in jobs if j.get("name") == name]
+            if len(matches) != 1:
+                result[name] = "unknown"
+                continue
+            job = matches[0]
+            log = None
+            if job.get("conclusion") == "failure":
+                try:
+                    log = command(
+                        [
+                            "gh",
+                            "api",
+                            f"{self.prefix}/actions/jobs/{int(job['id'])}/logs",
+                        ]
+                    )
+                except (EvidenceError, KeyError, ValueError, TypeError):
+                    pass
+            result[name] = classify_job(job, log)
+            if result[name] == "code":
+                paths = set()
+                for match in re.finditer(r"(?:-->|at )\s*([A-Za-z0-9_./-]+):\d+", log):
+                    path = match[1]
+                    rooted = re.search(r"(?:crates|xtask|tests)/.+", path)
+                    paths.add(rooted[0] if rooted else path)
+                self.failure_paths[name] = paths
+        return result
+
+    def decision(self):
+        failures = self.failures()
+        preliminary = decide(self.run.get("conclusion"), failures)
+        if preliminary.action == NONE:
+            return preliminary, failures
+        subject = git("log", "-1", "--format=%s", self.head).strip()
+        files = git(
+            "diff-tree", "--no-commit-id", "--name-only", "-z", "-r", self.head
+        ).split("\0")
+        commit = api(f"{self.prefix}/commits/{self.head}")
+        if not isinstance(commit, dict) or commit.get("sha") != self.head:
+            raise EvidenceError("commit provenance mismatch")
+        bot = any(
+            (commit.get(field) or {}).get("login") in BOT_LOGINS
+            for field in ("author", "committer")
+        )
+        identity_known = all(
+            isinstance((commit.get(field) or {}).get("login"), str)
+            and (commit.get(field) or {})["login"]
+            for field in ("author", "committer")
+        )
+        relevant_source = all(
+            paths and set(files).intersection(paths)
+            for paths in self.failure_paths.values()
+        )
+        return decide(
+            self.run.get("conclusion"),
+            failures,
+            culprit_known=self.predecessor(),
+            is_revert=is_revert_subject(subject),
+            duplicate=self.duplicate(),
+            bot=bot,
+            manual=not identity_known
+            or not relevant_source
+            or any(p and p.startswith(MANUAL_PATHS) for p in files),
+        ), failures
+
+    def tracking_issue(self, decision, failures):
+        title = f"main is red: {self.head}"
+        names = (
+            ", ".join(
+                sorted(
+                    n for n, state in failures.items() if state in {"code", "unknown"}
+                )
+            )
+            or "unknown"
+        )
+        body = (
+            f"{self.marker}\n{self.run_marker}\nRequired failure: {names}\nRun: {self.url}\nExact head: {self.head}\n"
+            f"Decision: {decision.action}: {decision.reason}.\n"
+            "No main write or automatic merge is authorized. Revert proposals require review and fresh checks."
+        )
+        issues = pages(f"{self.prefix}/issues?state=all&labels={LABEL}")
+        for issue in issues:
+            if (
+                not issue.get("pull_request")
+                and issue.get("title") == title
+                and self.marker in (issue.get("body") or "")
+            ):
+                if issue.get("state") != "closed" and self.run_marker not in (
+                    issue.get("body") or ""
+                ):
+                    comments = pages(f"{self.prefix}/issues/{issue['number']}/comments")
+                    if not any(
+                        self.run_marker in (comment.get("body") or "")
+                        for comment in comments
+                    ):
+                        self.mutation(
+                            f"{self.prefix}/issues/{issue['number']}/comments",
+                            fields={"body": body},
+                        )
+                return issue["number"]
+        labels = pages(f"{self.prefix}/labels")
+        if not any(label.get("name") == LABEL for label in labels):
+            self.mutation(
+                f"{self.prefix}/labels", fields={"name": LABEL, "color": "B60205"}
+            )
+        return self.mutation(
+            f"{self.prefix}/issues",
+            fields={"title": title, "body": body, "labels": [LABEL]},
+        )["number"]
+
+    def publish(self, decision, failures):
+        if decision.action != REVERT_PR:
+            self.baseline = None
+        self.tracking_issue(decision, failures)
+        if decision.action != REVERT_PR:
+            return
+        if self.duplicate():
+            return
+        self.assert_current()
+        # A private worktree avoids sweeping another checkout's staged or untracked work.
+        with tempfile.TemporaryDirectory(prefix="main-guard-") as directory:
+            work = str(Path(directory) / "revert")
+            git("worktree", "add", "--detach", work, self.head)
+            try:
+                self.assert_current()
+                git("revert", "--no-commit", self.head, cwd=work)
+                paths = [
+                    p
+                    for p in git(
+                        "diff", "--cached", "--name-only", "-z", cwd=work
+                    ).split("\0")
+                    if p
+                ]
+                if not paths:
+                    raise EvidenceError("revert has no staged patch")
+                message = f"revert: restore the green predecessor of {self.head[:12]}\n\nThis reverts commit {self.head}.\n"
+                self.assert_current()
+                identity = {
+                    **os.environ,
+                    "GIT_AUTHOR_NAME": "github-actions[bot]",
+                    "GIT_COMMITTER_NAME": "github-actions[bot]",
+                    "GIT_AUTHOR_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
+                    "GIT_COMMITTER_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
+                }
+                git(
+                    "commit",
+                    "-F",
+                    "-",
+                    "--",
+                    *paths,
+                    cwd=work,
+                    input=message,
+                    env=identity,
+                )
+                candidate = git("rev-parse", "HEAD", cwd=work).strip()
+                self.assert_current()
+                if self.duplicate():
+                    return
+                git(
+                    "push",
+                    f"--force-with-lease=refs/heads/{self.branch}:",
+                    "origin",
+                    f"HEAD:refs/heads/{self.branch}",
+                    cwd=work,
+                )
+                self.published_candidate = candidate
+                self.assert_current()
+                made = self.mutation(
+                    f"{self.prefix}/pulls",
+                    fields={
+                        "title": message.splitlines()[0],
+                        "head": self.branch,
+                        "base": "main",
+                        "draft": True,
+                        "body": f"{self.marker}\nCandidate only; expected main {self.head}.\nRun: {self.url}\nRequired evidence: {decision.reason}\nReview storage/format safety and trigger fresh required CI with a human credential before merging.\nNo main branch write occurred.",
+                    },
+                )
+                self.mutation(
+                    f"{self.prefix}/issues/{int(made['number'])}/labels",
+                    fields={"labels": [LABEL]},
+                )
+            finally:
+                git("worktree", "remove", "--force", work)
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--repo", required=True)
-    ap.add_argument("--run-id", type=int, required=True)
-    ap.add_argument("--dry-run", action="store_true", help="decide and print, change nothing")
-    args = ap.parse_args(argv)
-    repo = args.repo
-
-    info = gh_json(["api", f"repos/{repo}/actions/runs/{args.run_id}"])
-    if info.get("head_branch") != "main" or info.get("event") != "push":
-        print("not a push run on main; nothing to do")
-        return 0
-    conclusion = info.get("conclusion")
-    head = info["head_sha"]
-    run_url = info["html_url"]
-
-    jobs = gh_json(["api", f"repos/{repo}/actions/runs/{args.run_id}/jobs?per_page=100"])["jobs"]
-    failed = [j for j in jobs if j.get("conclusion") in ("failure", "cancelled", "timed_out")]
-    jobs_info = [
-        {"name": j["name"], "conclusion": j["conclusion"], "infra": infra_only(j)} for j in failed
-    ]
-    failed_names = [j["name"] for j in failed]
-
-    runs = push_runs(repo)
-    commits = push_commits(runs, args.run_id, head, info["created_at"])
-    cinfo = {s: commit_info(s) for s in commits}
-    crates = crates_in_log(failed_job_logs(repo, [j for j in failed if j.get("conclusion") == "failure"])) if len(commits) > 1 else set()
-    culprit = pick_culprit({s: cinfo[s]["files"] for s in commits}, crates)
-    target = culprit or head
-    tinfo = cinfo[target]
-    branch = f"revert/{short(target)}"
-    bot_only = all(
-        any(b in cinfo[s]["author"] or b in cinfo[s]["committer"] for b in BOT_NAMES) for s in commits
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--run-id", type=int, required=True)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--apply",
+        action="store_true",
+        help="explicitly allow fenced issue/draft-PR publication",
     )
-    base_ok, base_reason = baseline_ok(runs, args.run_id)
-    if base_ok and conclusion == "failure":
-        base_ok = not tracked_red(repo, branch, short(target))
-        base_reason = "" if base_ok else "an open main-red PR or issue already exists"
-    d = decide(
-        conclusion,
-        failed_names,
-        jobs_info,
-        is_revert_subject(tinfo["subject"]),
-        existing_revert(repo, branch) if conclusion == "failure" else False,
-        bot_only=bot_only,
-        culprit_known=culprit is not None,
-        baseline_green=base_ok,
+    mode.add_argument(
+        "--dry-run", action="store_true", help="read-only decision (the default)"
     )
-    if not base_ok and base_reason:
-        print(f"baseline: {base_reason}")
-    print(f"decision: {d.action}: {d.reason}")
-    if d.action == NONE:
+    args = parser.parse_args(argv)
+    if args.run_id <= 0:
+        parser.error("run-id must be positive")
+    guard = None
+    try:
+        guard = Guard(args.repo, args.run_id)
+        if guard.run.get("conclusion") != "failure":
+            print("decision: NONE: run did not fail")
+            return 0
+        try:
+            decision, failures = guard.decision()
+        except EvidenceError:
+            decision, failures = (
+                Decision(
+                    ISSUE_ONLY, "incomplete evidence; automatic attribution refused"
+                ),
+                {},
+            )
+        print(f"decision: {decision.action}: {decision.reason}")
+        if not args.apply or decision.action == NONE:
+            print("dry-run/no-action: no remote refs, labels, issues or PRs changed")
+            return 0
+        guard.publish(decision, failures)
         return 0
-    check = ", ".join(sorted(set(failed_names) & REQUIRED_CHECKS))
-    issue_body = (
-        f"Required check failed on main: {check}\n\nRun: {run_url}\nCommit: {target}\n"
-        f"Decision: {d.action} ({d.reason}).\nSubject: {clean(tinfo['subject'])}\n"
-    )
-    if args.dry_run:
-        print(f"dry run: would {d.action} on {short(target)}; no changes made")
+    except StaleRun as error:
+        print(f"decision: NONE: {error}")
         return 0
-    if d.action == REVERT_PR:
-        err = do_revert(target, tinfo["subject"], branch)
-        url = None
-        if err is None:
-            ensure_label(repo)
-            try:
-                url = run(["gh", "pr", "create", "--repo", repo, "--base", "main", "--head", branch,
-                           "--title", clean(revert_message(target, tinfo["subject"]).splitlines()[0]),
-                           "--label", LABEL,
-                           "--body", pr_body(check, run_url, target, tinfo["subject"],
-                                             guess=len(commits) > 1)]).strip()
-            except subprocess.CalledProcessError as e:
-                err = error_text(e)
-        if url:
-            issue_body += f"Revert PR: {url}\n"
-            print(f"opened {url}")
-        else:
-            issue_body += (f"\nThe automatic revert could not be created, so only this issue was "
-                           f"opened. Error:\n\n```\n{err}\n```\n")
-            print(f"revert failed, falling back to issue only: {err}")
-    print(upsert_issue(repo, short(target), issue_body, run_url))
-    return 0
+    except EvidenceError as error:
+        print(f"guard stopped: {error}")
+        return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

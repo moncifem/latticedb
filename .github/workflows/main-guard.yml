@@ -1,63 +1,93 @@
 name: main-guard
-# When a push to main fails a required check, open a revert pull request and a tracking issue.
-# It never pushes to main. The decision logic lives in tools/main_guard.py (unit tested).
 on:
   workflow_run:
     workflows: [pr]
     types: [completed]
     branches: [main]
+  pull_request:
+    paths:
+      - 'tools/main_guard.py'
+      - 'tools/test_main_guard.py'
+      - 'tools/branch-protection.json'
+      - '.github/workflows/main-guard.yml'
   workflow_dispatch:
     inputs:
       run_id:
-        description: Run id of a finished pr workflow run on main to evaluate
+        description: Completed pr push/main run to evaluate
         required: true
         type: string
       dry_run:
-        description: Decide and print only; open nothing
+        description: Read-only decision; publication also requires owner activation
         required: true
         type: boolean
         default: true
 permissions:
-  actions: read # list runs, jobs and logs
-  contents: write # the revert/<short-sha> branch only
-  pull-requests: write
-  issues: write
+  contents: read
 concurrency:
-  group: main-guard-${{ github.event.workflow_run.id || inputs.run_id }}
+  group: main-guard-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'publisher' }}
   cancel-in-progress: false
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit and real-Git fake-GitHub fixture rehearsal
+        run: python3 -m unittest discover -s tools -p 'test_main_guard.py'
   guard:
-    name: guard
-    # Only push runs on main that did not succeed. The script re-checks everything through the API.
+    needs: tests
     if: >-
       github.repository == 'moncifem/latticedb' &&
-      (github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.conclusion == 'failure'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      issues: read
     steps:
-      # main already contains the failing commit; that code was reviewed and merged, and this job only
-      # runs the stdlib script and git. Credentials are not persisted: `gh auth setup-git` below
-      # provides them for the one push to revert/*.
+      # Immutable controller revision; no failing-run artifacts, shell text or PR code is executed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: unit tests for the decision table
-        run: python3 -m unittest discover -s tools -p 'test_main_guard.py'
-      - name: evaluate the run
+      - name: Read-only evaluation of the verified run
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
-        run: |
-          gh auth setup-git
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          flags=()
-          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
-          python3 tools/main_guard.py --repo "$REPO" --run-id "$RUN_ID" "${flags[@]}"
+        run: python3 tools/main_guard.py --repo "$REPO" --run-id "$RUN_ID" --dry-run
+  publish:
+    needs: [tests, guard]
+    if: >-
+      github.repository == 'moncifem/latticedb' &&
+      vars.MAIN_GUARD_ENABLED == 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.dry_run) ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'failure'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Revalidate independently before each permitted publication mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        run: python3 tools/main_guard.py --repo "$REPO" --run-id "$RUN_ID" --apply
