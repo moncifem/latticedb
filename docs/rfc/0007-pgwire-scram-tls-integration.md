@@ -1,15 +1,16 @@
 # RFC 0007: PostgreSQL SCRAM sessions over required TLS
 
-Status: draft
-Comment period ends: 2026-11-05
-Decision ADR: proposed ADR 0021
+Status: accepted
+Comment period ends: waived by the project owner on 2026-10-29
+Decision ADR: ADR 0021
 
 ## Motivation
 
 P2-11 requires actual authentication and TLS, beyond RFC 0006's accepted primitives. The development
 listener currently accepts trust authentication. This proposal gates successful startup/query handling
-on a configured SCRAM verifier and a protected TLS transport. It does not inherit RFC 0006's wait waiver.
-Independent security review and the normal comment period remain required before acceptance/merge.
+on a configured SCRAM verifier and a protected TLS transport. The owner explicitly accepted RFC 0007 / ADR 0021 and waived this RFC's wait on 2026-10-29 after
+independent security review and fix rereview. This is a separate decision from RFC 0006 and does not
+waive WAL format or PR 209 holds.
 
 ## Proposal
 
@@ -75,4 +76,5 @@ Existing local development defaults keep SELECT 1 and explicit trust mode. Bindi
 address becomes a startup error. Production provisioning, certificate trust/rotation, secret-file
 permissions and remote exposure configuration remain operator responsibilities. TLS/SCRAM tests do
 not establish the five-driver matrix, SQL execution, timing audit, penetration testing or phase gates.
-This proposal stays draft until independent review and policy acceptance.
+The owner accepted this integration on 2026-10-29 after independent security review and fix rereview,
+explicitly waiving this RFC's comment period. WAL-format and PR 209 review holds remain unchanged.

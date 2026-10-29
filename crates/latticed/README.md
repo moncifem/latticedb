@@ -55,7 +55,7 @@ tokens, closes sockets and then joins workers; cooperative handlers
 can exit promptly. Registry poison causes normal operations to fail closed, while shutdown and
 unregister recover the lock only to cancel/clean up safely.
 
-## Configured SCRAM over TLS (proposed integration)
+## Configured SCRAM over TLS
 
 ```sh
 cargo run -p latticed -- --auth scram-tls --listen 127.0.0.1:5432 \
@@ -88,6 +88,7 @@ The existing transport/SQL bounds remain, with at most 64 TLS starts per rolling
 Unknown accounts get keyed per-name synthetic credentials and the same terminal `28P01` proof failure;
 no measured timing-resistance or comprehensive account-enumeration defense is claimed. BackendKeyData,
 successful startup and queries are gated on proof. Tests generate certificates/keys in memory and
-independently calculate client proofs. The proposal is [RFC 0007](../../docs/rfc/0007-pgwire-scram-tls-integration.md)
-with [proposed ADR 0021](../../docs/adr/0021-pgwire-scram-tls-integration.md); security review and normal
-comment period are pending. No production readiness, driver matrix or phase gate is established.
+independently calculate client proofs. The accepted design is [RFC 0007](../../docs/rfc/0007-pgwire-scram-tls-integration.md)
+with [ADR 0021](../../docs/adr/0021-pgwire-scram-tls-integration.md). Independent security review and
+fix rereview are complete; the owner accepted the integration and waived its comment period on
+2026-10-29. This decision does not establish production readiness, driver conformance or a phase gate.

@@ -1,16 +1,17 @@
 # ADR 0021: Require TLS for configured SCRAM sessions
 
-Status: proposed
+Status: accepted
 
 ## Context
 
 Accepted ADR 0020 covers primitives only. The TCP adapter needs transport protection, verifier lookup,
-unknown-user behavior and bounded authentication lifecycle. RFC 0007 proposes those integration rules;
-its seven-day comment period and independent review are pending, with no inherited waiver.
+unknown-user behavior and bounded authentication lifecycle. The owner accepted RFC 0007 and this ADR
+on 2026-10-29 after independent security review and a fix rereview, explicitly waiving its seven-day
+comment period. No WAL-format/PR 209 hold or phase-gate signature is supplied by this decision.
 
 ## Decision
 
-Propose rustls TLS 1.2/1.3 via standard PostgreSQL SSLRequest upgrade before SCRAM. Reject plaintext
+Use rustls TLS 1.2/1.3 via standard PostgreSQL SSLRequest upgrade before SCRAM. Reject plaintext
 SQL startup in SCRAM mode and restrict development trust to loopback. Configure certificates/keys and
 bounded pre-provisioned verifier files before binding. Use startup account selection, a uniform public
 cost profile and keyed per-name synthetic credentials from a mandatory persistent provisioned 32-byte
