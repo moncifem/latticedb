@@ -303,3 +303,27 @@ fn validated_results_round_trip_and_reject_oversized_or_nonobject_input() {
     let entries: serde_json::Value = serde_json::from_str(&out(&exported)).unwrap();
     assert_eq!(entries.as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn a_recorded_result_of_exactly_the_size_limit_is_accepted_and_one_byte_more_is_refused_for_its_size()
+ {
+    let dir = workdir("record-limit");
+    let object = |total: usize| format!("{{\"a\":\"{}\"}}", "x".repeat(total - 8));
+    let file = write(&dir, "result.json", &object(65536));
+    let args = [
+        "ledger",
+        "record",
+        "--dir",
+        dir.to_str().unwrap(),
+        "--kind",
+        "sim",
+        "--json",
+        &file,
+    ];
+    assert_eq!(code(&lattice(&args)), 0);
+    std::fs::write(&file, object(65537)).unwrap();
+    let over = lattice(&args);
+    assert_eq!(code(&over), 1);
+    // The reason is the size, not a parse error from a read that stopped one byte early.
+    assert!(err(&over).contains("64 KiB"), "{}", err(&over));
+}

@@ -386,6 +386,73 @@ mod tests {
         );
     }
 
+    /// A JSON object of exactly `total` bytes.
+    fn object_of_len(total: usize) -> String {
+        format!("{{\"a\":\"{}\"}}", "x".repeat(total - 8))
+    }
+
+    #[test]
+    fn the_result_size_limit_is_exact() {
+        let max = MAX_RESULT_BYTES as usize;
+        assert!(validate_result("sim", &object_of_len(max)).is_ok());
+        let over = validate_result("sim", &object_of_len(max + 1)).unwrap_err();
+        assert!(over.contains("64 KiB"), "{over}");
+    }
+
+    #[test]
+    fn each_rule_for_a_result_kind_is_enforced_on_its_own() {
+        assert!(validate_result(&"a".repeat(64), "{}").is_ok());
+        assert!(validate_result(&"a".repeat(65), "{}").is_err());
+        assert!(validate_result("", "{}").is_err());
+        for bad in ["Sim", "a b", "a.b", "a/b", "\u{e9}"] {
+            assert!(validate_result(bad, "{}").is_err(), "{bad:?}");
+        }
+        for good in ["a-b", "a_b", "a1", "0", "z"] {
+            assert!(validate_result(good, "{}").is_ok(), "{good:?}");
+        }
+    }
+
+    #[test]
+    fn each_failed_threshold_is_named_separately() {
+        let failures = |runs, failing, incomplete| {
+            SimRun {
+                runs,
+                failing,
+                incomplete,
+            }
+            .failures()
+        };
+        assert!(failures(10, 0, 0).is_empty());
+        assert_eq!(failures(10, 1, 0), vec!["the latest run has violations"]);
+        assert_eq!(failures(0, 0, 0), vec!["the latest run verified nothing"]);
+        // Exactly half unverified is acceptable; one more is not.
+        assert!(failures(10, 0, 5).is_empty());
+        assert_eq!(
+            failures(10, 0, 6),
+            vec!["more than half of the latest run was not verified"]
+        );
+    }
+
+    #[test]
+    fn the_trend_warns_only_above_ten_percent_and_more_than_double_the_earlier_share() {
+        let run = |runs, incomplete| {
+            Some(SimRun {
+                runs,
+                failing: 0,
+                incomplete,
+            })
+        };
+        let warns = |sims: &[Option<SimRun>]| trend(sims).contains("WARN");
+        // Exactly ten percent, from a clean start: not above it.
+        assert!(!warns(&[run(100, 0), run(100, 10)]));
+        assert!(warns(&[run(100, 0), run(100, 11)]));
+        // Exactly double the earlier share: not more than double.
+        assert!(!warns(&[run(100, 10), run(100, 20)]));
+        assert!(warns(&[run(100, 10), run(100, 30)]));
+        // A small share of many runs is small, whatever the counts multiply to.
+        assert!(!warns(&[run(100, 0), run(200, 10)]));
+    }
+
     /// Builds a small log on simulated storage and returns the disk.
     fn disk_with_log() -> SharedIo {
         let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
