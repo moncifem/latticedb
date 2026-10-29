@@ -60,8 +60,9 @@ One week, on a branch, producing numbers for the table above and no production c
 
 ## Decision
 
-Pending the spike. Until it completes, work that does not depend on the choice proceeds: the catalog,
-the row engine and the isolation rules do not call the planner.
+Pending resolution of the unmeasured criteria and recorded candidate failures. The bounded measured
+research is recorded below; this ADR does not select a planner. Work that does not depend on the
+choice proceeds: the catalog, the row engine and isolation rules do not call the planner.
 
 ## Consequences
 
@@ -83,9 +84,9 @@ establish these bounded observations, without selecting a planner:
 | C1 | Five representative constructs executed across all three options. The stated budget is absent and historical effort-days were not recorded; full-subset cost is unresolved. |
 | C2 | Custom/parser paths have matching observable simulator traces and bounded source review. The pinned DataFusion integration reaches host clocks and randomized optimizer hashing, failing the strict condition; ordered output does not repair this. |
 | C3 | All candidates passed three process-kill/reopen cases, receipt/WAL-envelope checks and row/index/log scrub on the recorded corpus. These cover staged precommit statements, not a kill inside the durability protocol or hardware power loss. |
-| C4 | The retained initial retry failed all four ratios. The first optimized run meets point/range but fails joins/groups. The verified ordered-scan/predicate run meets all twelve 3x ratios, with a thin custom/parser join margin. No comparable Phase 1 SQL baseline exists. Final binding guards await confirmation; old failures remain recorded. |
-| C5 | First clean added build costs were 8.82s custom, 47.97s parser and 881.38s DataFusion. The retry failed own-package license metadata checks for all candidates and additional DataFusion dependency advisories. The verified fresh-main run passes custom/parser dependency policy; DataFusion retains zstd-related failures. No exceptions or clean-build claims arise from a functional retry. |
-| C6 | All three matched the nine negative prototype fixtures in the functional retry. This is bounded error-fidelity coverage, not the complete declared subset. |
+| C4 | The final clean run meets all four PostgreSQL ratios for sqlparser + custom; custom fails join, and DataFusion fails join/group. Earlier all-ratio passing runs remain historical observations. No comparable Phase 1 SQL baseline exists, so C4 as a whole is unresolved. |
+| C5 | Final clean added build costs are 11.278s custom, 56.906s parser and 1127.774s DataFusion. Custom/parser pass dependency policy; DataFusion retains zstd-related failures and exceeds 60s. Earlier measurements and all raw provenance remain recorded; cached timings do not replace clean evidence. |
+| C6 | All three matched twenty-seven negative prototype fixtures and passed the final bounded semantic checks in the clean run. This is bounded error-fidelity coverage, not the complete declared subset. |
 | C7 | Written assessments identify required correlated-scope binding and window operators for custom/parser, and snapshot/write/determinism integration work for DataFusion. The assessment remains qualified; no prototype demonstrates the no-rewrite threshold. |
 
 C1, the Phase 1 baseline part of C4 and full-subset feasibility remain open. In particular, no

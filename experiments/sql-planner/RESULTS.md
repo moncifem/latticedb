@@ -289,3 +289,54 @@ append conflict retained both sections, and all experiment/experiment-workflow b
 unchanged from that successful semantic source. The next clean full run will establish current
 all-candidate compilation, semantics, PostgreSQL timing and clean build measurements. Research
 publication remains separate from accepting ADR 0013 or claiming full-subset/phase readiness.
+
+
+## Final frozen-source clean comparison
+
+[Run 40912191052](https://github.com/moncifem/latticedb/actions/runs/40912191052), attempt 1, measured
+`aeae4492debdffdb9363ff8c31bcd865adbffd58` in `clean_build` mode. Artifact `12916705355` was
+verified against ZIP SHA256 `863030b2c251edcc5efbfec684fced95a4addda303128460894c33a4261ba429`.
+The run/attempt/SHA context matches the report. Experiment input hashes and tracked source stayed
+unchanged; the sole untracked path before/after was the run's `planner-evidence/` output directory.
+No compiler cache was restored, the bridge and all candidates used separate empty compiler targets,
+and the shared compile preflight used its own target. Performance binaries excluded fault hooks;
+PostgreSQL fsync, synchronous_commit and full_page_writes all remained on.
+
+All three candidates built and passed release conformance, twenty-seven negative fixtures, repeated
+simulator traces, supported PostgreSQL comparisons, seven explicitly unsupported-semantics reference
+checks and three process-kill/reopen cases each. This includes the latest DataFusion expression-type
+and prepared-rebind guards. There is no remaining known compilation or bounded-contract failure.
+The sole workflow failure was DataFusion's dependency-policy check, retained without exclusions.
+
+The bridge-only clean build took **12.452 seconds**. Current clean measurements are:
+
+| Candidate | Clean build seconds | Added vs bridge seconds | Added under 60s | Dependency policy |
+|---|---:|---:|---|---|
+| custom | 23.730 | 11.278 | yes | passed |
+| sqlparser + custom | 69.358 | 56.906 | yes | passed |
+| DataFusion | 1140.226 | 1127.774 | **no** | **failed** |
+
+Client median ratios recomputed from all nine raw samples per query are:
+
+| Candidate | Point ratio | 10,000-row range ratio | Join ratio | Group ratio |
+|---|---:|---:|---:|---:|
+| custom | 0.4399 | 1.8182 | **3.2509** | 2.6230 |
+| sqlparser + custom | 0.5500 | 1.8729 | 2.7910 | 2.3901 |
+| DataFusion | 2.3001 | 1.8418 | **3.0655** | **3.1132** |
+
+The parser candidate meets all four PostgreSQL ratios and the added-build threshold in this clean
+run, with limited build-time margin. Custom fails the join ratio; DataFusion fails join/group ratios,
+the build threshold and dependency policy, and its independent strict C2 clock/random-seed finding
+remains. Earlier passing ratios are retained above but do not override these latest failures. No
+rerun was used to select a more favorable outcome. Client protocols and storage designs still differ
+as described in README.md, and no comparable Phase 1 SQL baseline exists.
+
+The final landing rebase includes main `61739f39ee8b736cc43bfcea93ee2e6567c36d99`. Experiment source
+and workflow bytes were verified unchanged from this measured source before this evidence-only
+update; the rebase added the independent core feed module and tests, without changing the called
+storage/I/O APIs. These are measurements at the named source, not invented timings for later commits.
+
+This completes the bounded research artifact, not ADR acceptance. C1's absent budget and unrecorded
+historical effort-days, full-subset coverage, C4's Phase 1 baseline portion and the qualified C7
+assessment remain open. Production dependencies, the declared SQL subset, phase gates and pivot
+selection are unchanged. No further prototype features or heavy runs are planned for this PR.

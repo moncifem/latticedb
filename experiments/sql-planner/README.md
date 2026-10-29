@@ -1,11 +1,11 @@
 # ADR 0013 planner experiment
 
-This is an isolated, unfinished experiment for P2-10 / issue #119. ADR 0013 remains **proposed**.
+This is an isolated measured experiment for P2-10 / issue #119. ADR 0013 remains **proposed**.
 Its seven criteria are fixed in `../../docs/adr/0013-sql-planner-and-executor.md`; this directory does
 not replace them or select a winner. Historical clean-build and simulator observations, including a failed first harness run, are recorded
-in [RESULTS.md](RESULTS.md). The retained functional retry failed all C4 ratios. The verified ordered-scan/predicate run meets all
-twelve PostgreSQL ratios, but DataFusion still fails strict C2 and dependency policy; see RESULTS.md.
-Final binding guards await fresh confirmation; effort-days remain unknown. A workflow or source implementation
+in [RESULTS.md](RESULTS.md). The final clean run meets all PostgreSQL ratios and the added-build threshold for sqlparser + custom.
+Custom misses the join ratio; DataFusion misses join/group ratios, strict C2 and C5; see RESULTS.md.
+All three passed the bounded semantic/recovery contract. Historical effort-days remain unknown. A workflow or source implementation
 is not successful execution evidence.
 
 The nested `[workspace]` and lockfile keep all experiment dependencies out of the production graph
@@ -178,5 +178,5 @@ gh workflow run io-probe.yml --ref codex/sql-planner-spike \
 
 This explicit `semantic_confirmation` mode checks conformance, simulator behavior, PostgreSQL semantic
 cases and process-kill recovery. It does not run C4 benchmarks, does not establish C5 and does not
-enter any ADR acceptance score. Default full-measurement behavior is unchanged. After semantic
-iteration and independent review, run one full all-candidate confirmation at the frozen source.
+enter any ADR acceptance score. Default full-measurement behavior is unchanged. The retained final clean confirmation follows semantic iteration and independent review; its exact
+source and remaining criteria are recorded in RESULTS.md.
