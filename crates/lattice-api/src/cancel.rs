@@ -16,8 +16,14 @@
 //! even when the RNG repeats a secret. Create one registry for the server lifetime, not per query.
 
 use lattice_seams::Rng;
+#[cfg(loom)]
+use loom::sync::Arc;
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicBool, Ordering};
 use std::fmt;
+#[cfg(not(loom))]
 use std::sync::Arc;
+#[cfg(not(loom))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Hard allocation ceiling, independent of caller configuration.
@@ -44,8 +50,13 @@ impl fmt::Debug for CancelKey {
 ///
 /// This flag publishes no other state. The host determines request/poll ordering; the same order
 /// produces the same result. A new statement gets a fresh token instead of resetting an old one.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct CancellationToken(Arc<AtomicBool>);
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+}
 impl CancellationToken {
     /// Whether cancellation has been requested for this statement.
     pub fn is_cancelled(&self) -> bool {
@@ -274,7 +285,7 @@ fn equal_mask(a: u32, b: u32) -> u32 {
     0u32.wrapping_sub(nonzero ^ 1)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use proptest::prelude::*;

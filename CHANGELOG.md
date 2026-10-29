@@ -9,6 +9,10 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Loom models exercise cancellation/query replacement, unregister and stale credentials against the
+  actual registry with instrumented token atomics. API pull requests and nightly run the models;
+  socket, host admission and engine synchronization need separate evidence.
+
 - Seed corpora for every fuzz target under `fuzz/seeds`, read by the nightly, weekly and 24-hour runs. The
   manual 24-hour campaign ran six targets for 28 hours 20 minutes each with no crash.
 - A failed scheduled nightly opens an issue labelled `nightly-failure` with the failed jobs and the seed,

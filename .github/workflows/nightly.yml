@@ -146,7 +146,7 @@ jobs:
   scorecard:
     # Collection does not change any producer's exit status or gate volumes.
     if: always()
-    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, row-faults]
+    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, row-faults, cancel-loom]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -240,11 +240,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: check the sqllogictest scripts against PostgreSQL 17
         run: python3 tools/slt_reference.py crates/lattice-testkit/tests/slt/*.test
+  cancel-loom:
+    uses: ./.github/workflows/cancel-loom.yml
+
   report-failure:
     # A failed scheduled night opens one issue, or adds a comment to the one still open, naming the
     # failed jobs and the seed lines their logs print. Manual runs are not reported.
     if: always() && github.event_name == 'schedule'
-    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, row-faults]
+    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, row-faults, cancel-loom]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -121,3 +121,20 @@ paths, outside the restored Cargo build cache. A stale cached `target/focused-pl
 being created. The helper still refuses pre-existing output paths, and downloaded plans retain
 source/run/attempt/digest validation. Run 40896129210 stopped at planning because the old output
 path was restored from cache; it produced no mutation result and is not replacement proof.
+
+### Cancellation registry concurrency models
+
+`cancel-loom.yml` runs on API changes, by manual dispatch and as part of nightly.
+It follows [Loom’s conditional instrumentation pattern](https://docs.rs/loom/0.7.2/loom/);
+the model explores Loom-supported executions, not a complete processor memory-model proof. It selects
+exactly four models before execution, retains selection/run logs and fails on any model failure.
+`RUSTFLAGS="--cfg loom" cargo test -p lattice-api --test cancel_loom` substitutes Loom's Arc and
+atomic flag in the actual registry token code. Default builds retain standard synchronization.
+The tests use a Loom mutex for the registry's documented external serialization contract.
+
+The bounded two-worker models enumerate interleavings without a permutation, time or preemption
+cap: query replacement versus cancellation, unregister versus query start, and stale keys versus
+a reused slot. A negative control deliberately loses a cancel action and must expose the violation.
+This checks the actual registry and token implementation; it does not model sockets, TLS, the host's
+closing/admission latch, or concurrent engine access. A branch/CI timeout is a failure, not completed
+model evidence. Run model enumeration on hosted CI rather than the development laptop.

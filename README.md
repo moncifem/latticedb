@@ -53,7 +53,7 @@ flowchart TB
     ifc["Interfaces: development TCP listener, CLI, SQL/LSL parsers"]
     eng["Storage engine: row engine, AS OF reads, indexes, catalog"]
     ker["Durable kernel: WAL, recovery, commit logic, checkpoints"]
-    ver["Verification: simulator, fuzzing, mutation tests, TLA+, Miri, ASan"]
+    ver["Verification: simulator, fuzzing, mutation tests, TLA+, Miri, ASan, Loom"]
     ifc --> eng --> ker
     ver -.-> ker
   end

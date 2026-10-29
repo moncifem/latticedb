@@ -1,0 +1,39 @@
+name: cancel-loom
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    paths:
+      - 'crates/lattice-api/**'
+      - 'crates/lattice-seams/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cancel-loom.yml'
+permissions:
+  contents: read
+jobs:
+  cancel-loom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: '--cfg loom'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with: { shared-key: cancel-loom }
+      - name: Verify four models are selected, then enumerate their interleavings
+        run: |
+          set -euo pipefail
+          cargo test -p lattice-api --test cancel_loom -- --list > cancel-loom-selection.txt
+          test "$(grep -c ': test$' cancel-loom-selection.txt)" -eq 4
+          cargo test -p lattice-api --test cancel_loom -- --nocapture 2>&1 | tee cancel-loom.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: evidence-cancel-loom
+          path: |
+            cancel-loom-selection.txt
+            cancel-loom.log
+          if-no-files-found: error
