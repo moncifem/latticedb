@@ -44,3 +44,12 @@ predecessor has expired. An empty snapshot before the first commit is valid unti
 it. The existing `snapshot_as_of_hlc` intentionally keeps its floor-clamping behavior. Reopening
 restores history from the WAL; reapplying vacuum restores the retention boundary. This is a storage
 API: SQL timestamp parsing, microsecond conversion and SQLSTATE mapping remain executor work.
+
+## Column merge (not wired)
+
+`merge` (WP42, [RFC 0011](../../docs/rfc/0011-column-crdt-merge.md), draft) is a pure in-memory
+function that merges a remote row change into a local row, column by column: a last-writer-wins
+register or an observed-remove set per column, whole-row last-writer-wins for plain columns, and a
+row delete that hides writes stamped at or before it. It has no byte encoding and is not called by the
+row store, the catalog or sync yet; the stored form of CRDT state is an open question in the RFC.
+Run its tests with `cargo test -p lattice-engines --lib merge`.

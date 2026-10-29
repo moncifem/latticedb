@@ -24,3 +24,5 @@ pub mod limits;
 
 #[cfg(feature = "row")]
 pub mod feed_emit;
+
+pub mod merge;
