@@ -154,6 +154,11 @@ between minor versions; format changes are called out explicitly.
   over a simulated network driven by the five fault profile names, with a checker for identical digests, no
   lost acknowledged write and an acyclic tree, a seed sweep, an ignored 100,000-seed volume test and planted
   defects in harness replicas. Not yet in the nightly shards.
+- `lattice_api::subscribe` (WP37, #239): sans-I/O server subscription host over an abstract
+  `EventSource` (Hello/Welcome, scoped subscribe with replay then live events in order, acks, ping
+  timers, `invalid_scope` and `invalid_cursor` errors). Simulation with random disconnects, restarts
+  and duplicate frames shows no gap or duplicate against an independent oracle. Not wired to a
+  socket or the change feed yet.
 
 ### Changed
 
