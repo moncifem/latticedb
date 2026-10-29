@@ -264,6 +264,57 @@ pub fn run(records: &[Record], exec: &mut dyn Executor) -> Report {
     report
 }
 
+/// Runs every record's SQL against a reference engine and the engine under test and reports each
+/// record where they disagree: on success versus failure, on the error code, or on the rows (after
+/// the record's sort mode). The script's own expected values are not consulted, so generated
+/// scripts can be compared without writing results by hand.
+pub fn differential(
+    records: &[Record],
+    reference: &mut dyn Executor,
+    under_test: &mut dyn Executor,
+) -> Report {
+    let mut report = Report::default();
+    for record in records {
+        let (line, sql, sort) = match record {
+            Record::Halt { .. } => break,
+            Record::StatementOk { line, sql } | Record::StatementError { line, sql, .. } => {
+                (*line, sql, Sort::NoSort)
+            }
+            Record::Query {
+                line, sql, sort, ..
+            } => (*line, sql, *sort),
+        };
+        let normalise = |r: Result<Outcome, ExecError>| -> Result<Outcome, String> {
+            match r.map_err(|e| e.code)? {
+                Outcome::Rows(mut rows) => {
+                    match sort {
+                        Sort::NoSort => {}
+                        Sort::RowSort => rows.sort(),
+                        Sort::ValueSort => {
+                            let mut all: Vec<String> = rows.into_iter().flatten().collect();
+                            all.sort();
+                            rows = all.into_iter().map(|v| vec![v]).collect();
+                        }
+                    }
+                    Ok(Outcome::Rows(rows))
+                }
+                Outcome::Done => Ok(Outcome::Done),
+            }
+        };
+        let a = normalise(reference.execute(sql));
+        let b = normalise(under_test.execute(sql));
+        if a == b {
+            report.passed += 1;
+        } else {
+            report.mismatches.push(Mismatch {
+                line,
+                detail: format!("reference {a:?}, engine {b:?}"),
+            });
+        }
+    }
+    report
+}
+
 fn compare(
     line: usize,
     types: &str,
@@ -420,6 +471,33 @@ mod tests {
         assert_eq!(q(Sort::NoSort, rows(&[&["1"]]), &["1"]), 1);
         assert_eq!(q(Sort::NoSort, Ok(Outcome::Done), &[]), 1);
         assert_eq!(q(Sort::NoSort, fail("X"), &[]), 1);
+    }
+
+    #[test]
+    fn the_differential_run_flags_each_kind_of_disagreement() {
+        let recs = parse(
+            "query I rowsort\nq1\n----\n\nquery I rowsort\nq2\n----\n\nstatement ok\ns1\n\nstatement ok\ns2\n\nquery I\nq3\n----\n",
+            "x",
+        )
+        .unwrap();
+        let mut reference = Fake(BTreeMap::from([
+            ("q1".to_string(), rows(&[&["1"], &["2"]])),
+            ("q2".to_string(), rows(&[&["1"]])),
+            ("s1".to_string(), fail("A")),
+            ("q3".to_string(), rows(&[&["1"]])),
+        ]));
+        let mut engine = Fake(BTreeMap::from([
+            ("q1".to_string(), rows(&[&["2"], &["1"]])),
+            ("q2".to_string(), rows(&[&["9"]])),
+            ("s1".to_string(), fail("B")),
+            ("q3".to_string(), rows(&[&["1"]])),
+        ]));
+        let rep = differential(&recs, &mut reference, &mut engine);
+        assert_eq!(rep.passed, 3);
+        assert_eq!(
+            rep.mismatches.iter().map(|m| m.line).collect::<Vec<_>>(),
+            vec![5, 9]
+        );
     }
 
     #[test]
