@@ -12,6 +12,10 @@ between minor versions; format changes are called out explicitly.
 - `docs/agent-workflow.md`: contributor and agent workflow guide with an onboarding checklist.
 - A manual same-host foundation benchmark diagnostic with nine alternating sample pairs and raw
   evidence retention; it does not change benchmark thresholds or decide SQL planner criteria.
+- `tools/merge-pr.sh`: serial PR merger that treats API errors and unknown values as retries, updates
+  BEHIND branches, refuses on failed checks and merges only when CLEAN (tests in
+  `tools/test_merge_pr.sh`, guide in `docs/merging.md`). `tools/branch-protection.json` now requires
+  strict (up-to-date) status checks and `enforce_admins`; the owner applies the live settings.
 
 - Managed physical-byte index definitions and create/drop/recreate history persisted in atomic LCIX
   catalog/row changes. Default managed opens rebuild without callbacks; explicit callback mode remains

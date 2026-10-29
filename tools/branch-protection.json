@@ -1,6 +1,6 @@
 {
   "required_status_checks": {
-    "strict": false,
+    "strict": true,
     "contexts": [
       "gate (ubuntu-latest)",
       "gate (ubuntu-24.04-arm)",
@@ -10,7 +10,7 @@
       "msrv"
     ]
   },
-  "enforce_admins": false,
+  "enforce_admins": true,
   "required_pull_request_reviews": {
     "required_approving_review_count": 0,
     "dismiss_stale_reviews": true,
