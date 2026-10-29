@@ -11,7 +11,9 @@ LCIX proposal in RFC 0005 / PR 209. Operational-only coordinated upgrade was rej
 selects a requirement, not the candidate encoding below. This RFC accepts no storage/checkpoint
 format, reserves no assigned release, and waives neither its own review period nor PR 209's hold.
 Implementation, independent format review, compatibility evidence and an explicit acceptance decision
-remain required. No WAL implementation is changed by this documentation PR.
+remain required. The separate draft implementation now provides these core/log APIs and independent fixtures;
+no engine is switched to LCIX activation. Hosted compatibility/crash evidence and independent code
+review remain pending. Implementation presence does not accept this encoding.
 
 Existing v1 readers preserve unknown record types and RowStore skips unknown engine payloads. Thus
 an unknown record, LCIX marker, directory sidecar, or the ignored v1 header reserved word cannot stop
@@ -147,3 +149,26 @@ measured header-preflight recovery overhead and allocation bounds; and a recorde
 acceptance after the review period. Merely merging a design document or selecting the guard approach
 cannot activate LCIX. PR 209 stays draft until this guard is implemented and accepted and its own
 unwaived hold and review requirements are satisfied.
+
+## Draft implementation scope and seam contract
+
+The draft adds `Io::read_prefix(path, max)` as a required, deliberately breaking seam API for these
+unpublished crates. It must bound physical reads and returned-buffer allocation by `max`, include
+visible pending/truncated bytes just as `read` does, and report missing paths even at zero length.
+There is no whole-file fallback. StdIo and SimIo implement bounded reads; transparent adapters
+delegate. The experimental Tokio/io_uring adapters delegate this small metadata read to their
+synchronous StdIo metadata path. Existing simulated content faults remain in the shared backing
+file model; a prefix read draws no new RNG or mutating trace event, matching full-read behavior.
+
+Core open methods default to zero support. Explicit streaming opens pass `RecoveryContext` alongside
+records; explicit append/commit APIs bind required bits to that append. Explicit raw scrub/read
+methods retain admission requirements without interpreting LCIX. Caller-controlled supported bits
+are a host contract, not proof that arbitrary callers actually understand an engine format. The
+RowStore integration is deliberately deferred to PR 209 after independent guard acceptance.
+
+Independent header/full-ChangeSet fixtures, normal codec/context/denial tests and a planted omitted-guard
+witness are implemented. The bounded all-operation upgrade sweep is ignored locally and selected
+explicitly by the hosted compatibility workflow. That workflow also builds the frozen old source
+with its original lockfile, retains executable/source/harness hashes and exact before/after byte
+manifests. No completed hosted evidence, large fault campaign or measured recovery overhead is
+claimed until the corresponding exact-head jobs and measurements finish.

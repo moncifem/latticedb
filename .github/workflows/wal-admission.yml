@@ -1,0 +1,53 @@
+name: wal-admission
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/lattice-core/**'
+      - 'crates/lattice-seams/**'
+      - 'crates/lattice-sim/**'
+      - 'formats/corpus/wal-admission-*'
+      - 'tools/wal-admission/**'
+      - '.github/workflows/wal-admission.yml'
+permissions:
+  contents: read
+jobs:
+  guarded-wal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: moncifem/latticedb
+          ref: 743b0fb52a495a3f875490268d604ed543be9e64
+          path: frozen
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - name: Verify independent fixtures reproduce byte for byte
+        run: |
+          python3 tools/wal-admission/make_fixtures.py
+          git diff --exit-code -- formats/corpus
+      - name: Guarded header, context and every bounded upgrade cut
+        run: |
+          set -euo pipefail
+          cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --list > wal-admission-selection.txt
+          test "$(grep -c ': test$' wal-admission-selection.txt)" -eq 6
+          cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --nocapture 2>&1 | tee wal-admission-codec.log
+          cargo test -p lattice-core --locked --lib --features planted-bugs guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption -- --ignored --nocapture 2>&1 | tee wal-admission-crashes.log
+      - name: Build actual immutable old RowStore and verify admission without mutation
+        run: |
+          mkdir -p frozen/crates/lattice-engines/examples
+          cp tools/wal-admission/old_reader.rs frozen/crates/lattice-engines/examples/admission_old_reader.rs
+          cargo build --manifest-path frozen/Cargo.toml --locked -p lattice-engines --example admission_old_reader --target-dir target/frozen-old
+          python3 tools/wal-admission/verify_old_reader.py target/frozen-old/debug/examples/admission_old_reader
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: evidence-wal-admission
+          path: |
+            wal-admission-selection.txt
+            wal-admission-codec.log
+            wal-admission-crashes.log
+            wal-admission-old-reader.json
+          if-no-files-found: error
