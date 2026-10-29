@@ -2,7 +2,7 @@
 # Public API snapshot check (issue 281). Generates the public API of each library crate with
 # `cargo public-api` and diffs it against api-snapshots/<crate>.txt.
 #
-#   tools/check_public_api.sh                 check every crate that has a snapshot
+#   tools/check_public_api.sh                 check every covered crate (a missing snapshot fails)
 #   tools/check_public_api.sh --update        rewrite the snapshots (creates missing ones)
 #   tools/check_public_api.sh [--update] lattice-abi lattice-core   only these crates
 #
@@ -13,6 +13,10 @@ set -euo pipefail
 
 CPA_VERSION="0.52.0"
 API_NIGHTLY="${API_NIGHTLY:-nightly-2026-10-27}"
+# The one list of covered crates. Not covered, on purpose: lattice-sys (unsafe OS shims, internal),
+# lattice-testkit (test support), lattice-identity, lattice-intel, lattice-packs and lattice-service
+# (server-side crates still changing shape in Phase 2/3, no external consumers yet; add them here
+# when their API stabilises). lattice-bench, lattice-cli and latticed are not libraries.
 CRATES=(lattice-abi lattice-seams lattice-lsl lattice-sim lattice-core lattice-engines lattice-api lattice-sql lattice-sdk lattice-evalkit)
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,12 +46,11 @@ fi
 
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
 failed=0
-skipped=()
 for crate in "${selected[@]}"; do
   snap="api-snapshots/$crate.txt"
   if [ "$update" -eq 0 ] && [ ! -f "$snap" ]; then
-    echo "warning: no snapshot for $crate, skipping (create it with: tools/check_public_api.sh --update $crate)" >&2
-    skipped+=("$crate")
+    echo "error: no snapshot for $crate (api-snapshots/$crate.txt is missing); create it with: tools/check_public_api.sh --update $crate" >&2
+    failed=1
     continue
   fi
   cargo "+$API_NIGHTLY" rustdoc -q -p "$crate" --lib -- -Z unstable-options --output-format json >/dev/null
@@ -66,13 +69,10 @@ for crate in "${selected[@]}"; do
   fi
 done
 
-if [ ${#skipped[@]} -gt 0 ]; then
-  echo "skipped (no snapshot yet): ${skipped[*]}" >&2
-fi
 if [ "$failed" -ne 0 ]; then
   cat >&2 <<MSG
 
-The public API of a library crate changed (diff above). If the change is intended, run
+The public API check failed (a diff or a missing snapshot above). If the change is intended, run
   tools/check_public_api.sh --update
 and commit the api-snapshots/ changes so reviewers see the API diff. See docs/api-snapshots.md.
 MSG

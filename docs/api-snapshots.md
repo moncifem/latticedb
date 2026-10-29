@@ -23,10 +23,19 @@ tools/check_public_api.sh --update lattice-core # rewrite one snapshot
 tools/check_public_api.sh --update              # rewrite all snapshots
 ```
 
-A crate without a snapshot file is skipped with a warning; `--update <crate>` creates it.
+A covered crate without a snapshot file fails the check; `--update <crate>` creates it. The covered
+list is `CRATES` in `tools/check_public_api.sh`, the only place to edit.
+
+Not covered, on purpose: `lattice-sys` (unsafe OS shims, internal), `lattice-testkit` (test support),
+`lattice-identity`, `lattice-intel`, `lattice-packs` and `lattice-service` (server-side crates whose
+API is still changing, no external consumers; add them to `CRATES` once stable), and the
+non-library `lattice-bench`, `lattice-cli` and `latticed`.
 
 ## Toolchain pins
 
+- Verified pair: `cargo-public-api` 0.52.0 (the newest release at the time of writing) reads the
+  rustdoc JSON of `nightly-2026-10-27` without error. When bumping either, re-run the check on the
+  new pair first; a rustdoc JSON format the tool does not know fails loudly.
 - `cargo-public-api` 0.52.0: `cargo install cargo-public-api --version 0.52.0 --locked`.
 - Nightly `nightly-2026-10-27`, used only to build rustdoc JSON (install with
   `rustup toolchain install nightly-2026-10-27 --profile minimal`). Override with `API_NIGHTLY`

@@ -154,8 +154,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: public-api-nightly-2026-10-27
-      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
-        with:
-          tool: cargo-public-api@0.52.0
+      - name: install the pinned cargo-public-api (binary is kept by the cargo cache)
+        run: |
+          if ! command -v cargo-public-api >/dev/null || [ "$(cargo-public-api --version | awk '{print $2}')" != "0.52.0" ]; then
+            cargo install cargo-public-api --version 0.52.0 --locked
+          fi
       - name: compare public API with api-snapshots/
         run: tools/check_public_api.sh
