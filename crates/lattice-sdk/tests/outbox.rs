@@ -31,10 +31,9 @@ fn outbox() -> Outbox {
 
 /// Store the queue the way an application would: bytes first, then the barrier.
 fn persist(o: &mut Outbox) -> Vec<u8> {
-    let upto = o.next_counter();
-    let bytes = o.to_bytes();
-    o.mark_persisted(upto);
-    bytes
+    let snap = o.snapshot();
+    o.mark_persisted(&snap);
+    snap.into_bytes()
 }
 
 /// A server that applies each record id at most once and fences chosen turns.
@@ -100,17 +99,24 @@ fn offline_writes_wait_for_the_persist_barrier_then_go_out_in_order() {
 }
 
 #[test]
-fn a_stale_barrier_value_does_not_release_newer_writes() {
+fn a_snapshot_releases_only_the_writes_it_contains() {
     let mut o = outbox();
     o.enqueue(1, Kind::Message, "a").unwrap();
-    let upto = o.next_counter();
-    let _stored = o.to_bytes();
+    let snap = o.snapshot();
+    // Enqueued between taking the snapshot and marking it stored: not in the stored bytes.
     o.enqueue(1, Kind::Message, "b").unwrap();
-    o.mark_persisted(upto);
+    o.mark_persisted(&snap);
     assert_eq!(rids(&o.poll(0, 0).unwrap()), ["c1-0"]);
-    o.mark_persisted(99); // beyond the counter: ignored
     o.connection_lost();
     assert_eq!(rids(&o.poll(0, 0).unwrap()), ["c1-0"]);
+    // An older snapshot never moves the barrier back.
+    let old = Outbox::new("c1", cfg()).unwrap().snapshot();
+    o.mark_persisted(&old);
+    o.connection_lost();
+    assert_eq!(rids(&o.poll(0, 0).unwrap()), ["c1-0"]);
+    // The stored bytes really lack "b": a restore from them cannot resend it.
+    let back = Outbox::from_bytes(snap.as_bytes(), cfg()).unwrap();
+    assert_eq!(back.pending().len(), 1);
 }
 
 #[test]
@@ -155,7 +161,10 @@ fn retries_back_off_exponentially_up_to_the_cap_with_caller_jitter() {
     persist(&mut o);
     let mut now = u64::MAX - 5;
     for _ in 0..200 {
-        let _ = o.poll(now, u64::MAX);
+        if let Some(b) = o.poll(now, u64::MAX) {
+            assert_eq!(b.records.len(), 1);
+        }
+        assert!(o.next_deadline().unwrap() >= now);
         now = now.saturating_add(1);
     }
 }
@@ -273,12 +282,12 @@ fn full_queue_is_an_explicit_error_and_changes_nothing() {
     for i in 0..8 {
         o.enqueue(1, Kind::Message, &format!("{i}")).unwrap();
     }
-    let before = o.to_bytes();
+    let before = o.snapshot();
     assert_eq!(
         o.enqueue(1, Kind::Message, "x"),
         Err(OutboxError::Full { items: 8, bytes: 8 })
     );
-    assert_eq!(o.to_bytes(), before);
+    assert_eq!(o.snapshot(), before);
     // Acking frees room, and the freed id is never reused.
     persist(&mut o);
     let b = o.poll(0, 0).unwrap();
@@ -288,6 +297,10 @@ fn full_queue_is_an_explicit_error_and_changes_nothing() {
 
     let mut o = outbox();
     o.enqueue(1, Kind::Message, &"y".repeat(60)).unwrap();
+    assert_eq!(
+        o.enqueue(1, Kind::Message, &"z".repeat(65)),
+        Err(OutboxError::BodyExceedsBudget)
+    );
     assert_eq!(
         o.enqueue(1, Kind::Message, "12345"),
         Err(OutboxError::Full {
@@ -398,11 +411,10 @@ fn the_stored_form_matches_the_documented_layout() {
     o.enqueue(7, Kind::ToolResult, "hi").unwrap();
     o.enqueue(7, Kind::Note, "").unwrap();
     let expected = raw("c1", 2, &[], &[item(0, 7, 2, b"hi"), item(1, 7, 3, b"")]);
-    assert_eq!(o.to_bytes(), expected);
+    assert_eq!(o.snapshot().as_bytes(), expected);
     let back = Outbox::from_bytes(&expected, cfg()).unwrap();
     assert_eq!(back.pending(), o.pending());
-    assert_eq!(back.next_counter(), 2);
-    assert_eq!(back.to_bytes(), expected);
+    assert_eq!(back.snapshot().as_bytes(), expected);
 }
 
 #[test]
@@ -530,7 +542,7 @@ proptest! {
         data in proptest::collection::vec(any::<u8>(), 0..300),
     ) {
         if let Ok(o) = Outbox::from_bytes(&data, cfg()) {
-            prop_assert_eq!(o.to_bytes(), data);
+            prop_assert_eq!(o.snapshot().into_bytes(), data);
         }
     }
 
@@ -543,7 +555,7 @@ proptest! {
         b.extend_from_slice(&body);
         let data = seal(b);
         if let Ok(o) = Outbox::from_bytes(&data, cfg()) {
-            prop_assert_eq!(o.to_bytes(), data);
+            prop_assert_eq!(o.snapshot().into_bytes(), data);
         }
     }
 
@@ -557,7 +569,7 @@ proptest! {
         for b in &bodies {
             o.enqueue(1, Kind::Message, b).unwrap();
         }
-        let mut bytes = o.to_bytes();
+        let mut bytes = o.snapshot().into_bytes();
         let i = at % bytes.len();
         bytes[i] ^= delta;
         prop_assert!(Outbox::from_bytes(&bytes, cfg()).is_err());
@@ -640,7 +652,7 @@ fn note_persist(
 fn run(ops: &[Op], buggy: bool) -> Result<(), String> {
     let mut o = Outbox::new("dev", cfg()).map_err(|e| e.to_string())?;
     let mut s = Server::default();
-    let mut stored = o.to_bytes();
+    let mut stored = o.snapshot().into_bytes();
     let mut now = 0u64;
     let mut written = 0u64;
     let mut restarts = 0u32;
@@ -780,10 +792,12 @@ fn the_property_fails_without_the_persist_barrier() {
     // the crash, so the server's dedupe swallows a different write.
     let mut s = Server::default();
     let mut o = outbox();
-    let stored = o.to_bytes();
+    let stored = o.snapshot().into_bytes();
     o.enqueue(1, Kind::Message, "first").unwrap();
-    // The faulty application marks the write sendable without storing it.
-    o.mark_persisted(o.next_counter());
+    // The faulty application marks the write sendable without storing it. The API cannot say
+    // that directly, so the model takes a snapshot and discards the bytes.
+    let lost = o.snapshot();
+    o.mark_persisted(&lost);
     s.append(&o.poll(0, 0).unwrap());
     let mut o = Outbox::from_bytes(&stored, cfg()).unwrap();
     o.enqueue(1, Kind::Message, "second").unwrap();
@@ -832,7 +846,7 @@ fn fuzz_seeds_decode_as_their_names_say() {
         let got = Outbox::from_bytes(bytes, OutboxConfig::default());
         assert_eq!(got.is_ok(), valid.contains(&name), "{name}");
         if let Ok(o) = got {
-            assert_eq!(o.to_bytes(), bytes, "{name} is canonical");
+            assert_eq!(o.snapshot().as_bytes(), bytes, "{name} is canonical");
         }
     }
 }

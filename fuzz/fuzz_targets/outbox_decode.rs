@@ -8,8 +8,8 @@ fuzz_target!(|data: &[u8]| {
     // Stored bytes that decode must be the one canonical encoding of the queue they describe:
     // re-encoding gives the same bytes, and a second restore gives the same queue.
     if let Ok(mut o) = Outbox::from_bytes(data, cfg) {
-        assert_eq!(o.to_bytes(), data);
-        let again = Outbox::from_bytes(&o.to_bytes(), cfg).expect("a canonical queue restores");
+        assert_eq!(o.snapshot().as_bytes(), data);
+        let again = Outbox::from_bytes(o.snapshot().as_bytes(), cfg).expect("a canonical queue restores");
         assert_eq!(again.pending(), o.pending());
         // A restored queue is sendable, and receipts for what it sent clear it.
         let mut now = 0;

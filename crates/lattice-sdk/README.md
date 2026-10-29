@@ -54,9 +54,9 @@ a logical clock. `on_receipts` clears `recorded` and `duplicate` writes; `fenced
 turn, returns them to the application and refuses the turn from then on. `connection_lost` keeps every unacked
 write and resends it at the next poll.
 
-`to_bytes` / `from_bytes` store the queue: magic, version 1, client id, next counter, fenced turns, items, CRC-32,
+`snapshot` / `from_bytes` store the queue: magic, version 1, client id, next counter, fenced turns, items, CRC-32,
 with one canonical encoding, bounded sizes and no panic on any input. A write is only sent after the application
-has stored it and called `mark_persisted(next_counter)`, so a crash can neither reuse an id for a different write
+has stored a `Snapshot` and handed it to `mark_persisted`, so a crash can neither reuse an id for a different write
 nor lose one; a crash between persist and ack just resends under the same id and the server answers `duplicate`.
 Tests (`tests/outbox.rs`) cover scripted scenarios, a crash/restart property against a server that applies each
 id once, and two deliberately broken variants that make it fail. Fuzz target: `outbox_decode`.

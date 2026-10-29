@@ -3,7 +3,7 @@
 //!
 //! [`Outbox`] is a pure state machine in the same style as [`crate::client::SyncClient`]: no I/O,
 //! no thread, no real time, no randomness. The caller owns the transport, the clock (any
-//! monotonic logical counter) and the jitter value, and stores the queue with [`Outbox::to_bytes`].
+//! monotonic logical counter) and the jitter value, and stores the queue with [`Outbox::snapshot`].
 //!
 //! # Why a crash can neither lose nor double a write
 //!
@@ -17,21 +17,28 @@
 //! * The one dangerous crash is a send of an id the stored queue never contained: after restore the
 //!   counter would be reused for a different write and the server would answer `duplicate` for a
 //!   write it never applied. [`Outbox::poll`] therefore sends nothing that is newer than the last
-//!   [`Outbox::mark_persisted`] call: store `to_bytes()`, then report the `next_counter()` read
-//!   together with it.
+//!   [`Outbox::mark_persisted`] call, and that call takes a [`Snapshot`]: take one with
+//!   [`Outbox::snapshot`], store its bytes, then hand it back. The snapshot carries the counter it
+//!   was taken at, so an enqueue between the two steps stays unsendable, and there is no way to
+//!   report a counter that was not stored.
 //!
 //! # Retry
 //!
 //! One batch is in flight at a time (stop and wait), which keeps delivery in enqueue order. A batch
 //! is resent when its deadline passes: `base_delay << attempt`, capped at `max_delay`, plus the
 //! caller's jitter reduced to at most half of that delay. After a lost connection
-//! ([`Outbox::connection_lost`]) the unacked batch is sent again at the next poll.
+//! ([`Outbox::connection_lost`]) the unacked batch is sent again at the next poll and reports
+//! `attempt` 0 again: the attempt number counts resends on one connection, not over the life of
+//! the write.
 //!
 //! # Fencing
 //!
 //! A `fenced` receipt means another turn took over: the write was not applied and never will be.
 //! The outbox drops every queued write of that turn, returns them in [`Outcome::fenced`] for the
-//! application and refuses further writes for the turn. It never retries them.
+//! application and refuses further writes for the turn. It never retries them. The report lives
+//! only in the returned [`Outcome`]: if the process dies before the application handled it and the
+//! queue is restored from older bytes, the writes are sent again, the server answers `fenced`
+//! again and they are reported again.
 //!
 //! # Stored format (version 1)
 //!
@@ -47,7 +54,11 @@
 //! Item counters strictly increase and stay below the next counter; no item belongs to a fenced
 //! turn; the client id uses the characters allowed by [`MAX_CLIENT_ID_BYTES`]; there are no
 //! trailing bytes. [`Outbox::from_bytes`] checks the length bound and the checksum first and never
-//! panics on any input.
+//! panics on any input. CRC-32 detects accidental corruption (torn writes, bit rot) only; it is not
+//! authentication, and anyone who can write the bytes can forge a valid queue. Limits come from the
+//! configuration passed to `from_bytes`, so a queue stored under a larger configuration fails with
+//! [`DecodeError::OverLimit`] after the limits are tightened; restore it with the old limits and
+//! drain it first.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
@@ -122,6 +133,8 @@ pub enum OutboxError {
     },
     /// The body is longer than the contract allows.
     BodyTooLarge,
+    /// The body alone is larger than `max_bytes`, so it could never be queued, even when empty.
+    BodyExceedsBudget,
     /// The turn number is above the largest wire integer.
     TurnTooLarge,
     /// The turn was fenced; its writes are refused.
@@ -139,6 +152,7 @@ impl fmt::Display for OutboxError {
                 write!(f, "outbox full ({items} items, {bytes} bytes)")
             }
             Self::BodyTooLarge => write!(f, "body too large"),
+            Self::BodyExceedsBudget => write!(f, "body larger than the outbox byte budget"),
             Self::TurnTooLarge => write!(f, "turn number too large"),
             Self::TurnFenced(t) => write!(f, "turn {t} is fenced"),
             Self::CounterExhausted => write!(f, "record counter exhausted"),
@@ -191,6 +205,27 @@ impl fmt::Display for DecodeError {
 }
 
 impl std::error::Error for DecodeError {}
+
+/// The stored form of the queue at one moment. Created only by [`Outbox::snapshot`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    bytes: Vec<u8>,
+    upto: u64,
+}
+
+impl Snapshot {
+    /// The bytes to store; [`Outbox::from_bytes`] reads them back.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The bytes to store, by value.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
 
 /// A write waiting for its receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,6 +333,9 @@ impl Outbox {
         if body.len() > MAX_BODY_BYTES {
             return Err(OutboxError::BodyTooLarge);
         }
+        if body.len() > self.cfg.max_bytes {
+            return Err(OutboxError::BodyExceedsBudget);
+        }
         if self.next_counter > MAX_INT {
             return Err(OutboxError::CounterExhausted);
         }
@@ -339,19 +377,33 @@ impl Outbox {
         digits.parse().ok()
     }
 
-    /// Declare that the bytes returned by [`Outbox::to_bytes`] while [`Outbox::next_counter`] was
-    /// `upto` are safely stored. Writes with a counter below `upto` become sendable. Values below
-    /// an earlier call or above the current counter are ignored.
-    pub fn mark_persisted(&mut self, upto: u64) {
-        if upto > self.persisted_upto && upto <= self.next_counter {
-            self.persisted_upto = upto;
+    /// Declare that `snapshot` is safely stored. Writes enqueued before it was taken become
+    /// sendable; later ones stay held until a later snapshot is stored. An older snapshot than one
+    /// already marked changes nothing.
+    ///
+    /// The counter cannot be passed on its own, so the mistake of reporting a counter newer than
+    /// the stored bytes does not compile:
+    ///
+    /// ```compile_fail
+    /// # use lattice_sdk::outbox::{Outbox, OutboxConfig};
+    /// let mut o = Outbox::new("c", OutboxConfig::default()).unwrap();
+    /// o.mark_persisted(7);
+    /// ```
+    pub fn mark_persisted(&mut self, snapshot: &Snapshot) {
+        if snapshot.upto > self.persisted_upto && snapshot.upto <= self.next_counter {
+            self.persisted_upto = snapshot.upto;
         }
     }
 
-    /// The counter the next write will get. Read it together with [`Outbox::to_bytes`].
+    /// The queue as it is now, in the canonical stored form, together with the point up to which
+    /// writes are in it. Store [`Snapshot::as_bytes`], then pass the snapshot to
+    /// [`Outbox::mark_persisted`].
     #[must_use]
-    pub fn next_counter(&self) -> u64 {
-        self.next_counter
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            bytes: self.encode(),
+            upto: self.next_counter,
+        }
     }
 
     /// The next batch to send at logical time `now`, or `None` when nothing is due. `jitter` is any
@@ -473,19 +525,18 @@ impl Outbox {
         while self.fenced.len() > MAX_FENCED_TURNS {
             self.fenced.pop_first();
         }
-        let mut i = 0;
-        while i < self.items.len() {
-            if self.items.get(i).is_some_and(|it| it.turn == turn) {
-                if let Some(it) = self.remove_at(i) {
-                    out.fenced.push(Pending {
-                        rid: self.rid(it.counter),
-                        turn: it.turn,
-                        kind: it.kind,
-                        body: it.body,
-                    });
-                }
+        // One pass: linear in the queue length.
+        for it in std::mem::take(&mut self.items) {
+            if it.turn == turn {
+                self.bytes = self.bytes.saturating_sub(it.body.len());
+                out.fenced.push(Pending {
+                    rid: self.rid(it.counter),
+                    turn: it.turn,
+                    kind: it.kind,
+                    body: it.body,
+                });
             } else {
-                i += 1;
+                self.items.push_back(it);
             }
         }
         self.attempt = 0;
@@ -541,9 +592,7 @@ impl Outbox {
             .collect()
     }
 
-    /// The canonical stored form of the queue (see the module documentation).
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
+    fn encode(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(64 + self.bytes + self.items.len() * 21);
         b.extend_from_slice(&MAGIC);
         b.push(VERSION);
@@ -567,7 +616,7 @@ impl Outbox {
         b
     }
 
-    /// Restore a queue stored by [`Outbox::to_bytes`]. Every restored write keeps its record id;
+    /// Restore a queue stored from [`Outbox::snapshot`] bytes. Every restored write keeps its record id;
     /// the in-flight state is not stored, so unacked writes are sent again at the next poll.
     pub fn from_bytes(bytes: &[u8], cfg: OutboxConfig) -> Result<Self, DecodeError> {
         if !cfg.validate() {
