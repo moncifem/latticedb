@@ -22,13 +22,14 @@ The scrubber derives expected managed definitions from the catalog rather than t
 ## Consequences
 
 This remains proposed until RFC review, independent format review and compatibility policy are
-complete. Older RowStore readers can silently skip LCIX row mutations. Acceptance therefore needs
-an owner decision about enforced capability checks or coordinated upgrade; no mixed-version or
-in-place downgrade support is claimed. A pre-upgrade backup is required for rollback.
+complete. Older RowStore readers can silently skip LCIX row mutations. The owner selected enforced
+old-reader refusal on 2026-10-29 and rejected operational-only upgrade. LCIX activation requires a separately reviewed, implemented and accepted WAL
+version/capability guard. No mixed-version or in-place downgrade support is claimed. A pre-upgrade backup is required for rollback.
 
 Synchronous builds can block and require temporary entry memory. Used ids and catalog/index history
 grow; the nested row decoder also retains allocation amplification beyond its encoded byte length.
 No new row-count limit, peak-allocation bound or phase exit is established. A row admission-budget
-policy and its measurement remain unresolved. Online backfill and schema migration remain
-RFC 0004 work. Future checkpoint composition must preserve the complete definition timeline under
+policy and its measurement remain unresolved. The seven-full-day RFC hold was not waived;
+Owner selection of the guard approach does not accept this format or the future WAL encoding.
+Online backfill and schema migration remain RFC 0004 work. Future checkpoint composition must preserve the complete definition timeline under
 an independently reviewed engine tag.

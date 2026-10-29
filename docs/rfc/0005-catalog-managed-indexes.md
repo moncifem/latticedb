@@ -101,8 +101,9 @@ metadata-plus-row publication. An online build state machine is broader work tra
 row mutations. This draft does not provide automatic old-reader refusal or mixed-version safety.**
 Changing only the engine magic or catalog version cannot fix an old kernel's unknown-payload policy.
 
-Before accepting the format, the owner must choose and review either an enforced kernel/segment
-capability mechanism or an operational coordinated-upgrade restriction. That choice is unresolved.
+The owner selected enforced old-reader refusal on 2026-10-29. Acceptance and LCIX activation now
+require a separately reviewed, implemented and accepted WAL version/capability admission mechanism.
+Operational-only coordinated upgrade was not selected; it cannot satisfy this prerequisite.
 Do not point old clients at an upgraded directory. Upgrade all writers/readers together, take a
 verified backup before the first LCIX write, retain the old binary and pre-upgrade backup, and restore
 that backup for rollback. No downgrade converter or in-place downgrade is supplied. WAL is retained,
@@ -126,7 +127,58 @@ A hard-coded expected lookup and the catalog-driven scrubber detect the semantic
 kernel/row/vacuum defect sets are unchanged; the registry uses u64 to give the new defect a distinct bit.
 
 The code is a draft implementation, not acceptance evidence for arbitrary data sizes or online builds.
-Before acceptance: independent review; exact-head required CI; a recorded compatibility decision;
-freeze-corpus integration under the accepted format policy; larger fault/soak evidence; and measured
-build/recovery cost and retained-state memory. Current test fixture files live with the engine tests,
-within this task's scope, and do not replace the repository-wide format freeze process.
+Before acceptance: independent review; exact-head required CI; implemented and independently accepted WAL admission;
+final freeze review under the accepted format policy; larger fault/soak evidence; and measured
+build/recovery cost and retained-state memory. Independent proposal fixtures now live in the global corpus as described below; structural
+integration does not constitute format acceptance.
+
+## Concrete compatibility decision required before acceptance
+
+The owner-required enforced-refusal mechanism needs a separate WAL admission proposal. The existing
+v1 segment header is `LATLOG01`, u32 version `1`, then a reserved u32. Old `check_header` validates
+the version but ignores the reserved word. Therefore a reserved-word bit, unknown record type,
+unknown ChangeSet payload or directory sidecar alone cannot stop an already shipped old reader.
+Neither an LCIX magic change nor an engine-only marker provides enforcement.
+
+A concrete candidate is a new segment-header version with explicit required capabilities, including
+managed compound changes. No version number, bit assignment or revised header bytes are reserved or
+implemented by this RFC. A separate WAL RFC/ADR must define and independently review them. Its minimum
+contract is:
+
+1. A writer must rotate to a guarded segment and durably sync its header and directory entry before
+   appending its first LCIX record. Existing v1 segments remain byte-unchanged. Every later segment
+   in that upgraded history retains the guard, including segments containing ordinary LROW writes.
+2. A reader must reject an unsupported header version or required capability before interpreting,
+   repairing or truncating that segment. It must not expose a partially replayed RowStore. A frozen
+   pre-upgrade reader must reject a complete guarded directory and leave its bytes unchanged.
+3. Rotation/header-sync/directory-sync/LCIX-append/commit-sync failures need an exhaustive bounded
+   power-cut matrix. A durable LCIX record must never survive in an unguarded segment. A durable
+   guarded empty segment may conservatively prevent downgrade even before any LCIX write succeeds.
+   A torn guard creation may be repaired only when no guarded record could have been acknowledged.
+4. Normal rollover, reopen, callback readers, metadata-only CatalogStore, raw kernel tools, retained
+   histories and future checkpoint recovery must agree on admission. Missing guarded segments and
+   unknown capabilities must refuse; capability support cannot be inferred merely from a decoder
+   accepting the header. Required support must reach the actual engine reader.
+5. Independent fixtures must include legacy headers, complete supported guarded headers, unknown
+   versions/capabilities, every truncated guarded-header prefix, and a full guarded LCIX history.
+   Compatibility tests must run the frozen old reader, not a new-reader imitation. Future header
+   extension bytes must never be silently treated as record data.
+
+This is broader than an engine-only compatibility fix and is intentionally not implemented here.
+The owner explicitly selected separately reviewed WAL admission before LCIX activation on
+2026-10-29 and rejected operational-only upgrade. The operational alternative is retained above
+for design history, not as an available acceptance shortcut. Backup verification and restore-based
+rollback still apply alongside the mandatory guard. This selection accepts no header bytes, feature
+bits, checkpoint format, release or phase gate. The seven-full-day hold remains in force; no waiver
+was given. This PR stays draft until the separate guard is implemented and accepted, the hold ends,
+and independent format review plus exact-head required checks pass.
+
+## Global proposal corpus
+
+The independent examples are now in `formats/corpus/` with `.golden.toml` draft metadata and the
+[global layout specification](../../formats/catalog-index-v1.md). Engine tests consume those exact
+bytes. The structural corpus check covers their metadata; codec tests pin the independent bytes and
+literal semantics. This supplies repository-wide proposal fixtures without changing WAL v1 or
+promoting RFC 0005/ADR 0019 to accepted. Final format acceptance and the selected mandatory WAL admission implementation
+remain separate requirements. Compound row writes also retain their bound host policy from PR 215;
+metadata APIs remain privileged host operations and do not implement SQL catalog authorization.

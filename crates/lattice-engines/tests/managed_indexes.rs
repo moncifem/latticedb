@@ -23,10 +23,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 type Store = RowStore<SharedIo, SharedClock, SeededRng>;
-const COMPOUND: &[u8] = include_bytes!("fixtures/managed-index/compound.bin");
-const LEGACY: &[u8] = include_bytes!("fixtures/managed-index/legacy-catalog.bin");
-const DROP: &[u8] = include_bytes!("fixtures/managed-index/drop.bin");
-const SLICE: &[u8] = include_bytes!("fixtures/managed-index/slice.bin");
+const COMPOUND: &[u8] = include_bytes!("../../../formats/corpus/catalog-index-v1-compound.golden");
+const LEGACY: &[u8] = include_bytes!("../../../formats/corpus/catalog-v1-table.golden");
+const DROP: &[u8] = include_bytes!("../../../formats/corpus/catalog-index-v1-drop.golden");
+const SLICE: &[u8] = include_bytes!("../../../formats/corpus/catalog-index-v1-slice.golden");
 
 fn config() -> Config {
     Config {
@@ -1086,4 +1086,121 @@ fn empty_index_recovery_omission_is_detected_before_a_later_write_can_bypass_mai
         vec![b"a".to_vec()]
     );
     assert!(broken.check_indexes().is_err());
+}
+
+#[test]
+fn compound_writes_and_historical_managed_lookups_preserve_the_bound_actor_policy() {
+    use lattice_engines::limits::{AllowAll, DenyAll, PolicyEvaluator, RowRef, RowWriteRef};
+    struct Actor;
+    impl PolicyEvaluator for Actor {
+        fn allows_read(&self, row: RowRef<'_>) -> bool {
+            row.table == 7 && row.value.starts_with(b"a")
+        }
+        fn allows_write(&self, row: RowWriteRef<'_>) -> bool {
+            row.table == 7
+                && row.before.is_none_or(|value| value.starts_with(b"a"))
+                && row.after.is_none_or(|value| value.starts_with(b"a"))
+        }
+    }
+    let (disk, clock) = fresh();
+    let mut store = open(&disk, &clock);
+    let mut tx = store.begin();
+    tx.put((7, b"allowed".to_vec()), b"alpha".to_vec());
+    tx.put((7, b"hidden".to_vec()), b"beta".to_vec());
+    tx.put((8, b"other-table".to_vec()), b"alpha".to_vec());
+    let born = store
+        .commit_with_catalog(
+            tx,
+            vec![table(7), table(8)],
+            vec![
+                IndexOp::Create(definition(9, 7, IndexKey::WholeValue)),
+                IndexOp::Create(definition(12, 8, IndexKey::WholeValue)),
+            ],
+        )
+        .unwrap();
+    let before = wal(&disk);
+    let mut denied = store.begin_with_policy(DenyAll);
+    denied.put((7, b"allowed".to_vec()), b"after".to_vec());
+    assert_eq!(
+        store.commit_with_catalog(
+            denied,
+            vec![CatalogOp::Rename {
+                table: 7,
+                name: "changed".into()
+            }],
+            Vec::new(),
+        ),
+        Err(RowError::PermissionDenied)
+    );
+    assert_eq!(wal(&disk), before);
+    assert_eq!(store.snapshot().as_of, born);
+    let mut mixed = store.begin_with_policy(Actor);
+    mixed.put((7, b"allowed".to_vec()), b"after".to_vec());
+    mixed.delete((7, b"hidden".to_vec()));
+    assert_eq!(
+        store.commit_with_catalog(
+            mixed,
+            vec![CatalogOp::Rename {
+                table: 7,
+                name: "changed".into()
+            }],
+            Vec::new(),
+        ),
+        Err(RowError::PermissionDenied)
+    );
+    assert_eq!(wal(&disk), before);
+    let mut allowed = store.begin_with_policy(Actor);
+    allowed.put((7, b"allowed".to_vec()), b"after".to_vec());
+    let replaced = store
+        .commit_with_catalog(
+            allowed,
+            Vec::new(),
+            vec![
+                IndexOp::Drop { id: 9 },
+                IndexOp::Create(definition(10, 7, IndexKey::WholeValue)),
+            ],
+        )
+        .unwrap();
+    for reopen in 0..2 {
+        if reopen == 1 {
+            drop(store);
+            disk.crash();
+            store = open(&disk, &clock);
+        }
+        let old = Snapshot { as_of: born };
+        let now = Snapshot { as_of: replaced };
+        assert_eq!(
+            store.lookup_at(old, 9, b"alpha", &Actor).unwrap(),
+            vec![b"allowed".to_vec()]
+        );
+        assert!(store.lookup_at(old, 9, b"beta", &Actor).unwrap().is_empty());
+        assert!(
+            store
+                .lookup_at(old, 12, b"alpha", &Actor)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .lookup_at(now, 9, b"alpha", &Actor)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store.lookup_at(now, 10, b"after", &Actor).unwrap(),
+            vec![b"allowed".to_vec()]
+        );
+        assert!(
+            store
+                .lookup_at(now, 10, b"after", &DenyAll)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store.lookup_at(now, 10, b"beta", &AllowAll).unwrap(),
+            vec![b"hidden".to_vec()]
+        );
+        store.check_indexes_at(old).unwrap();
+        store.check_indexes_at(now).unwrap();
+    }
 }
