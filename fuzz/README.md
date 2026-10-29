@@ -58,3 +58,13 @@ that only canonical encodings are accepted. Seeds in `seeds/feed_decode/` cover 
 the extreme cursor and index values, the origin cursor, and malformed inputs (lsn 0, index past the set,
 wrong version, trailing byte, oversized length, truncation). The target is not yet in the nightly,
 weekly or 24-hour matrices.
+
+## MCP message target
+
+`mcp_message` feeds arbitrary bytes to the MCP server (`lattice_sdk::mcp::Server::handle`) as a caller who
+may only read and subscribe under scope `a`. Any answer must itself be a bounded JSON object, and the
+backend asserts that no call outside the grant, and no write, ever reaches it. The bytes also go to the
+bounded JSON reader alone. Seeds in `seeds/mcp_message/` cover ping, initialize, initialized, discover,
+tools/list, an allowed read, a denied write, a subscribe, a batch, scope traversal, an unsupported
+version, JSON-RPC text inside an argument, a duplicate key, deep nesting and invalid UTF-8. The target is
+not yet in the nightly, weekly or 24-hour matrices (workflows are not edited in this change).
