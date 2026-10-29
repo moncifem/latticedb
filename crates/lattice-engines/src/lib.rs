@@ -21,3 +21,6 @@ pub const LAYER: u8 = 4;
 
 /// Row-store policy enforcement and cooperative statement-limit primitives.
 pub mod limits;
+
+#[cfg(feature = "row")]
+pub mod feed_emit;
