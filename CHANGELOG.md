@@ -144,6 +144,8 @@ between minor versions; format changes are called out explicitly.
   `fenced`), resumable watch streams and turn events, with 13 worked transcripts. `lattice-sdk` gains a
   strict, bounded codec for it, a conformance suite with a reference plugin and one broken plugin per rule,
   and a `plugin_jsonl` fuzz target (not yet in the scheduled fuzz matrices). No plugin talks to a server yet.
+- `lattice_sdk::client`: sans-I/O sync client state machine (handshake and version negotiation,
+  subscribe, batched acks, resume without gaps or duplicates, logical-clock ping timeouts).
 
 ### Changed
 
