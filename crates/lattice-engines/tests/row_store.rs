@@ -13,6 +13,7 @@ use lattice_engines::index::IndexDef;
 use lattice_engines::store::{RowError, RowStore};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
 use lattice_testkit::scenario::{SharedClock, SharedIo};
+use std::ops::Bound;
 use std::rc::Rc;
 
 type Store = RowStore<SharedIo, SharedClock, SeededRng>;
@@ -208,6 +209,45 @@ fn scans_are_ordered_per_table_and_respect_the_snapshot() {
         )
         .unwrap();
     assert_eq!(bounded.len(), 2);
+}
+
+#[test]
+fn inverted_and_equal_excluded_scan_bounds_are_empty_not_a_panic() {
+    let (disk, clock) = fresh();
+    let mut store = open(&disk, &clock, 1).unwrap();
+    for k in ["a", "b", "c"] {
+        put(&mut store, 1, k.as_bytes(), k.as_bytes());
+    }
+    let snap = store.snapshot();
+    let policy = &lattice_engines::limits::AllowAll;
+    let inverted = store
+        .scan_at(snap, 1, b"z".to_vec()..b"a".to_vec(), policy)
+        .unwrap();
+    assert!(inverted.is_empty());
+    let equal_excluded = store
+        .scan_at(
+            snap,
+            1,
+            (
+                Bound::Excluded(b"b".to_vec()),
+                Bound::Excluded(b"b".to_vec()),
+            ),
+            policy,
+        )
+        .unwrap();
+    assert!(equal_excluded.is_empty());
+    let equal_half_open = store
+        .scan_at(
+            snap,
+            1,
+            (
+                Bound::Included(b"b".to_vec()),
+                Bound::Excluded(b"b".to_vec()),
+            ),
+            policy,
+        )
+        .unwrap();
+    assert!(equal_half_open.is_empty());
 }
 
 #[test]

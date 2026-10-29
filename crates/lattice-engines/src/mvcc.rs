@@ -10,7 +10,17 @@
 use lattice_core::ChangeSetId;
 use lattice_core::bugs::{self, Bug};
 use std::collections::BTreeMap;
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
+
+/// True when no key can satisfy both bounds. Matches the cases where `BTreeMap::range` panics.
+fn is_empty_range<K: Ord>(start: Bound<&K>, end: Bound<&K>) -> bool {
+    match (start, end) {
+        (Bound::Included(s), Bound::Included(e)) => s > e,
+        (Bound::Included(s) | Bound::Excluded(s), Bound::Excluded(e))
+        | (Bound::Excluded(s), Bound::Included(e)) => s >= e,
+        _ => false,
+    }
+}
 
 /// A consistent read point: sees every change set applied at or before `as_of`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -206,13 +216,17 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
     }
 
     /// Every live row with a key in `range` as of `snap`, in key order.
-    /// Snapshots below the vacuum floor fail, even for an empty range.
+    /// Snapshots below the vacuum floor fail, even for an empty range. Inverted or equal-excluded
+    /// bounds select nothing; they are not passed on, because `BTreeMap::range` panics on them.
     pub fn range<R: RangeBounds<K>>(
         &self,
         snap: Snapshot,
         range: R,
     ) -> Result<Vec<(&K, &V)>, MvccError> {
         self.check_readable(snap)?;
+        if is_empty_range(range.start_bound(), range.end_bound()) {
+            return Ok(Vec::new());
+        }
         Ok(self
             .rows
             .range(range)
