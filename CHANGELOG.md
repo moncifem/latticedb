@@ -9,6 +9,13 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Seed corpora for every fuzz target under `fuzz/seeds`, read by the nightly, weekly and 24-hour runs. The
+  manual 24-hour campaign ran six targets for 28 hours 20 minutes each with no crash.
+- A failed scheduled nightly opens an issue labelled `nightly-failure` with the failed jobs and the seed,
+  scenario and invariant lines from their logs.
+- A sqllogictest reader, runner, two-engine comparison and seeded query generator in the test-support crate,
+  with scripts for the declared SQL subset. A nightly job checks the scripts' expected values against
+  PostgreSQL 17; no Lattice engine runs them yet.
 - A PostgreSQL wire protocol v3 message codec: strict, bounded decoding of the startup phase and simple
   queries, and encoding of the server messages that answer them. It does no I/O, has no session state and
   never panics on any input; a fuzz target runs in the nightly and weekly fuzz matrices.
