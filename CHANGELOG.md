@@ -9,6 +9,13 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- A tree CRDT with move semantics (`lattice_core::crdt_tree`): stable node ids, moves ordered by the
+  hybrid logical clock with undo and redo of later operations, cycle-forming moves dropped identically
+  on every replica, delete as a move into a tombstone root, idempotent delivery, and a strict 41-byte
+  operation encoding. Convergence and acyclicity are property-tested (I5); the planted defect
+  `TreeCycleCheckSkipped` is caught. Not yet wired to the row engine or sync, and the operation log is
+  not compacted.
+
 - Configured PostgreSQL SCRAM-SHA-256 authentication over mandatory TLS, with bounded account/verifier
   loading, a persistent provisioned unknown-user secret and one absolute startup/authentication deadline.
   Trust mode is restricted to loopback; authenticated mode never falls back to trust or plaintext.

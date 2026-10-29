@@ -76,6 +76,8 @@ pub enum Bug {
     RowPolicyReadSkipped,
     /// A row transaction appends without authorizing all final transitions.
     RowPolicyWriteSkipped,
+    /// The tree CRDT applies a move without checking that it would create a cycle (convergence).
+    TreeCycleCheckSkipped,
 }
 
 impl Bug {
@@ -107,6 +109,9 @@ impl Bug {
 
     /// Authorization defects, detected by the independent public row-policy witness suite.
     pub const POLICY: [Bug; 2] = [Bug::RowPolicyReadSkipped, Bug::RowPolicyWriteSkipped];
+
+    /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
+    pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
 
     /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [
@@ -188,6 +193,7 @@ mod tests {
             .chain(Bug::STORAGE)
             .chain(Bug::VACUUM)
             .chain(Bug::POLICY)
+            .chain(Bug::CRDT)
     }
 
     #[test]
@@ -197,8 +203,9 @@ mod tests {
             .chain(Bug::STORAGE)
             .chain(Bug::VACUUM)
             .chain(Bug::POLICY)
+            .chain(Bug::CRDT)
             .collect();
-        assert_eq!(all.len(), 34);
+        assert_eq!(all.len(), 35);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

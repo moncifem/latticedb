@@ -27,6 +27,7 @@ pub mod chain;
 pub mod changeset;
 pub mod crc;
 pub mod crdt;
+pub mod crdt_tree;
 pub mod hlc;
 pub mod kernel;
 pub mod ledger;
