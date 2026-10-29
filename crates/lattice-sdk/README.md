@@ -42,3 +42,21 @@ caller owns the socket, the frame codec and the clock: it passes decoded `Frame`
 that owns the codec converts. No unsafe, no panics from network input. Tests cover scripted scenarios, a
 property test against a randomised cursor-honouring server, and a deliberately buggy server that makes the
 property fail.
+
+## Offline outbox
+
+`outbox::Outbox` is a sans-I/O write queue for offline use (P3-04). `enqueue(turn, kind, body)` returns a stable
+record id `<client id>-<counter>` (the counter is stored with the queue; no time, no randomness). The queue is
+bounded by item count and body bytes and answers an explicit `Full` error. `poll(now, jitter)` returns the next
+`Batch` (one turn, at most `max_batch` records, in enqueue order); one batch is in flight at a time and is resent
+when its deadline passes, with `base_delay << attempt` capped at `max_delay` plus a caller-supplied jitter, all on
+a logical clock. `on_receipts` clears `recorded` and `duplicate` writes; `fenced` drops every queued write of that
+turn, returns them to the application and refuses the turn from then on. `connection_lost` keeps every unacked
+write and resends it at the next poll.
+
+`to_bytes` / `from_bytes` store the queue: magic, version 1, client id, next counter, fenced turns, items, CRC-32,
+with one canonical encoding, bounded sizes and no panic on any input. A write is only sent after the application
+has stored it and called `mark_persisted(next_counter)`, so a crash can neither reuse an id for a different write
+nor lose one; a crash between persist and ack just resends under the same id and the server answers `duplicate`.
+Tests (`tests/outbox.rs`) cover scripted scenarios, a crash/restart property against a server that applies each
+id once, and two deliberately broken variants that make it fail. Fuzz target: `outbox_decode`.

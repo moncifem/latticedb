@@ -70,3 +70,14 @@ JSON reader alone. Seeds in `seeds/mcp_message/` cover ping, initialize, initial
 tools/list, a missing and a mistyped `_meta`, an allowed read, a denied write, a subscribe, a batch, scope traversal, an unsupported
 version, JSON-RPC text inside an argument, a duplicate key, deep nesting and invalid UTF-8. The target is
 registered in the nightly, weekly and manual 24-hour matrices.
+
+not yet in the nightly, weekly or 24-hour matrices (workflows are not edited in this change).
+
+## Outbox decode target
+
+`outbox_decode` feeds arbitrary bytes to `lattice_sdk::outbox::Outbox::from_bytes`. Input that decodes must
+re-encode to exactly the same bytes (one canonical form), restore again to the same queue, and drain through
+`poll` and `on_receipts`. Seeds in `seeds/outbox_decode/` cover an empty queue, each record kind, fenced turns,
+sparse counters, a bad checksum, truncation, a wrong version and magic, a trailing byte, unsorted counters, a
+counter beyond the next one, an item on a fenced turn, an unknown kind and invalid UTF-8. The target is not yet
+in the nightly, weekly or 24-hour matrices.
