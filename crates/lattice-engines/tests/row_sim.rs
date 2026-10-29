@@ -253,3 +253,183 @@ fn each_row_planted_bug_is_detected() {
         eprintln!("{bug:?}: caught at seed {seed}: {why}");
     }
 }
+
+fn model_at(history: &[(u64, Rows)], lsn: u64) -> Rows {
+    history
+        .iter()
+        .rev()
+        .find(|(l, _)| *l <= lsn)
+        .map(|(_, m)| m.clone())
+        .unwrap_or_default()
+}
+
+/// Commits, vacuums at random horizons, restarts, and after each step checks every snapshot at or
+/// after the vacuum floor against the model. Returns the first violation.
+fn run_vacuum(seed: u64, steps: usize) -> Option<String> {
+    let disk = SharedIo::new(SimIo::new(seed, FaultProfile::clean()));
+    let clock = Rc::new(SimClock::new(1_000));
+    let mut rng = SeededRng::new(seed ^ 0x7ac0);
+    let mut store = open(&disk, &clock, seed);
+    let mut reopen_seed = seed.wrapping_mul(17);
+    let mut history: Vec<(u64, Rows)> = vec![(0, Rows::new())];
+    let mut snapshots: Vec<Snapshot> = vec![];
+    let mut floor = 0u64;
+    let mut last_horizon = 0u64;
+    let check = |store: &Store, snapshots: &[Snapshot], floor: u64, history: &[(u64, Rows)]| {
+        let mut all: Vec<Snapshot> = snapshots
+            .iter()
+            .copied()
+            .filter(|s| s.as_of >= floor)
+            .collect();
+        all.push(Snapshot { as_of: floor });
+        all.push(store.snapshot());
+        all.into_iter()
+            .find_map(|snap| compare(store, snap, &model_at(history, snap.as_of)))
+    };
+    for step in 0..steps {
+        match rng.below(100) {
+            0..=54 => {
+                let n = 1 + rng.below(3);
+                let writes = random_writes(&mut rng, n);
+                let tx = stage(&store, &writes);
+                match store.commit(tx) {
+                    Ok(lsn) => {
+                        let mut next = history.last().unwrap().1.clone();
+                        fold(&mut next, &writes);
+                        history.push((lsn, next));
+                    }
+                    Err(e) => return Some(format!("step {step}: a lone commit failed: {e:?}")),
+                }
+                if rng.below(2) == 0 {
+                    snapshots.push(store.snapshot());
+                }
+            }
+            55..=84 => {
+                let applied = store.applied_lsn();
+                let horizon = rng.below(applied + 1);
+                let mut stale = store.begin();
+                let stats = store.vacuum(horizon);
+                floor = floor.max(horizon.min(applied));
+                last_horizon = floor;
+                if stats.horizon != floor || store.oldest_snapshot().as_of != floor {
+                    return Some(format!("step {step}: floor {floor}, store says {stats:?}"));
+                }
+                if let Some(d) = check(&store, &snapshots, floor, &history) {
+                    return Some(format!("step {step}: after vacuum({horizon}), {d}"));
+                }
+                // A transaction begun before the vacuum is fine at the floor or above it; below it
+                // the store must refuse it rather than misread.
+                stale.put((0, vec![0]), vec![1, 1]);
+                let before = stale.snapshot().as_of;
+                match store.commit(stale) {
+                    Err(RowError::SnapshotTooOld { .. }) if before < floor => {}
+                    Err(RowError::SnapshotTooOld { .. }) => {
+                        return Some(format!(
+                            "step {step}: snapshot {before} refused at floor {floor}"
+                        ));
+                    }
+                    Err(RowError::Conflict { .. }) => {}
+                    Ok(_) if before < floor => {
+                        return Some(format!("step {step}: committed below the floor"));
+                    }
+                    Ok(lsn) => {
+                        let mut next = history.last().unwrap().1.clone();
+                        fold(&mut next, &[((0, vec![0]), Some(vec![1, 1]))]);
+                        history.push((lsn, next));
+                    }
+                    Err(e) => return Some(format!("step {step}: unexpected {e:?}")),
+                }
+            }
+            _ => {
+                drop(store);
+                reopen_seed = reopen_seed.wrapping_add(1);
+                store = open(&disk, &clock, reopen_seed);
+                // The log keeps all history, so every remembered snapshot reads again.
+                if let Some(d) = check(&store, &snapshots, 0, &history) {
+                    return Some(format!("step {step}: after reopening, {d}"));
+                }
+                // Replay then vacuum must match the model at the old horizon too.
+                store.vacuum(last_horizon);
+                floor = last_horizon.min(store.applied_lsn());
+                if let Some(d) = check(&store, &snapshots, floor, &history) {
+                    return Some(format!("step {step}: after reopening and vacuuming, {d}"));
+                }
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn vacuum_keeps_every_snapshot_at_or_after_the_horizon_on_every_seed() {
+    for seed in 0..120 {
+        if let Some(v) = run_vacuum(seed, 80) {
+            panic!("seed {seed}: {v}");
+        }
+    }
+}
+
+#[test]
+fn each_vacuum_planted_bug_is_detected() {
+    for bug in Bug::VACUUM {
+        bugs::enable(bug);
+        let found = (0..120).find_map(|seed| run_vacuum(seed, 80).map(|v| (seed, v)));
+        bugs::clear();
+        let (seed, why) = found.unwrap_or_else(|| panic!("{bug:?} was not detected in 120 seeds"));
+        eprintln!("{bug:?}: caught at seed {seed}: {why}");
+    }
+}
+
+#[test]
+fn vacuum_is_bounded_by_open_transactions_and_retention_and_expires_as_of() {
+    let disk = SharedIo::new(SimIo::new(3, FaultProfile::clean()));
+    let clock = Rc::new(SimClock::new(1_000));
+    let mut store = open(&disk, &clock, 3);
+    let mut ids = vec![];
+    for i in 0..6u8 {
+        let mut tx = store.begin();
+        tx.put((0, vec![0]), vec![i, 0]);
+        let lsn = store.commit(tx).unwrap();
+        ids.push((lsn, store.changeset_id_at(lsn).unwrap()));
+    }
+    let applied = store.applied_lsn();
+    let open_tx = {
+        let mut tx = store.begin();
+        tx.put((0, vec![1]), vec![9, 9]);
+        tx
+    };
+    assert_eq!(store.vacuum_horizon(None, 2), applied - 2);
+    assert_eq!(store.vacuum_horizon(Some(Snapshot { as_of: 1 }), 2), 1);
+    assert_eq!(store.vacuum_horizon(None, 100), 0);
+    let stats = store.vacuum(applied - 2);
+    assert_eq!(stats.horizon, applied - 2);
+    assert!(stats.row_versions > 0 && stats.index_versions > 0);
+    // Inside the window AS OF still resolves and reads; outside it expires instead of misreading.
+    let (keep_lsn, keep_id) = ids[ids.len() - 1];
+    assert_eq!(
+        store.snapshot_as_of_changeset(keep_id),
+        Some(Snapshot { as_of: keep_lsn })
+    );
+    let (old_lsn, old_id) = ids[0];
+    assert!(old_lsn < applied - 2);
+    assert_eq!(store.snapshot_as_of_changeset(old_id), None);
+    assert!(matches!(
+        store.check_snapshot(Snapshot { as_of: old_lsn }),
+        Err(RowError::SnapshotTooOld { .. })
+    ));
+    assert!(
+        store
+            .check_snapshot(Snapshot { as_of: applied - 2 })
+            .is_ok()
+    );
+    // A transaction opened at the newest snapshot is unaffected.
+    assert!(store.commit(open_tx).is_ok());
+    // A restart brings the whole history back.
+    drop(store);
+    let store = open(&disk, &clock, 4);
+    assert!(store.snapshot_as_of_changeset(old_id).is_some());
+    assert_eq!(
+        store.get_at(Snapshot { as_of: old_lsn }, 0, &[0]),
+        Some(&vec![0, 0])
+    );
+}

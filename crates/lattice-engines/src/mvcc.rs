@@ -34,6 +34,11 @@ pub enum MvccError {
         /// The LSN of the newer write.
         newer_lsn: u64,
     },
+    /// The snapshot is older than the vacuum floor: versions it needs may be gone.
+    SnapshotTooOld {
+        /// The oldest snapshot that can still be read.
+        floor: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +54,8 @@ struct Version<V> {
 pub struct Table<K: Ord, V> {
     rows: BTreeMap<K, Vec<Version<V>>>,
     applied: u64,
+    /// Vacuum horizon: snapshots below it may have lost versions.
+    floor: u64,
 }
 
 impl<K: Ord, V> Default for Table<K, V> {
@@ -56,6 +63,7 @@ impl<K: Ord, V> Default for Table<K, V> {
         Self {
             rows: BTreeMap::new(),
             applied: 0,
+            floor: 0,
         }
     }
 }
@@ -104,6 +112,58 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
         }
         self.applied = lsn;
         Ok(())
+    }
+
+    /// The oldest snapshot that is still complete: nothing at or after it has been vacuumed.
+    pub fn floor(&self) -> u64 {
+        self.floor
+    }
+
+    /// Fails with `SnapshotTooOld` if vacuum may have removed versions `snap` needs.
+    pub fn check_readable(&self, snap: Snapshot) -> Result<(), MvccError> {
+        if snap.as_of < self.floor {
+            Err(MvccError::SnapshotTooOld { floor: self.floor })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Drops the versions no snapshot at or after `horizon` can see and returns how many went.
+    ///
+    /// For every key the newest version at or before the horizon stays (it is what a snapshot at the
+    /// horizon reads), as does everything newer. A deletion that is the newest version at or before
+    /// the horizon is dropped too, because every reader then sees the key as absent, with or without
+    /// it. The horizon is clamped to the last applied LSN, and it never moves back. Reads at a
+    /// snapshot below the new floor are no longer guaranteed, see [`Table::check_readable`].
+    pub fn vacuum(&mut self, horizon: u64) -> usize {
+        let horizon = horizon.min(self.applied).max(self.floor);
+        self.floor = horizon;
+        let mut removed = 0;
+        self.rows.retain(|_, versions| {
+            let end = versions.partition_point(|v| v.lsn <= horizon);
+            let Some(base) = end.checked_sub(1) else {
+                return true;
+            };
+            let base_is_deletion = versions.get(base).is_some_and(|v| v.value.is_none());
+            let keep_from = if base_is_deletion || bugs::active(Bug::VacuumDropsVisibleVersion) {
+                end
+            } else {
+                base
+            };
+            removed += keep_from;
+            versions.drain(..keep_from);
+            !versions.is_empty()
+        });
+        removed
+    }
+
+    /// Every version as `(key, lsn, value)`, for comparing two tables in tests.
+    #[cfg(test)]
+    fn dump(&self) -> Vec<(K, u64, Option<V>)> {
+        self.rows
+            .iter()
+            .flat_map(|(k, vs)| vs.iter().map(|v| (k.clone(), v.lsn, v.value.clone())))
+            .collect()
     }
 
     fn visible(versions: &[Version<V>], snap: Snapshot) -> Option<&Version<V>> {
@@ -193,6 +253,7 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
     /// Checks the conflict rule without committing: fails if another change set wrote any row this
     /// transaction wrote after its snapshot (first committer wins).
     pub fn check(&self, table: &Table<K, V>) -> Result<(), MvccError> {
+        table.check_readable(self.snapshot)?;
         for key in self.writes.keys() {
             if let Some(newer) = table.newest_lsn(key)
                 && newer > self.snapshot.as_of
@@ -221,13 +282,7 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
         lsn: u64,
         cs: ChangeSetId,
     ) -> Result<(), MvccError> {
-        for key in self.writes.keys() {
-            if let Some(newer) = table.newest_lsn(key)
-                && newer > self.snapshot.as_of
-            {
-                return Err(MvccError::Conflict { newer_lsn: newer });
-            }
-        }
+        self.check(table)?;
         table.apply(lsn, cs, self.writes.into_iter().collect())
     }
 }
@@ -456,6 +511,142 @@ mod tests {
                             history.push(next);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vacuum_keeps_the_version_at_the_horizon_and_everything_newer() {
+        let mut t: Table<u8, &str> = Table::new();
+        t.apply(1, cs(1), vec![(1, Some("a"))]).unwrap();
+        t.apply(2, cs(2), vec![(1, Some("b"))]).unwrap();
+        t.apply(3, cs(3), vec![(1, Some("c"))]).unwrap();
+        t.apply(4, cs(4), vec![(1, Some("d"))]).unwrap();
+        assert_eq!(
+            t.vacuum(3),
+            2,
+            "versions at lsn 1 and 2 are invisible from 3 on"
+        );
+        for (as_of, want) in [(3, "c"), (4, "d")] {
+            assert_eq!(t.get(Snapshot { as_of }, &1), Some(&want));
+        }
+        assert_eq!(t.written_by(Snapshot { as_of: 3 }, &1), Some(cs(3)));
+        assert_eq!(t.vacuum(3), 0, "vacuum is idempotent");
+    }
+
+    #[test]
+    fn vacuum_drops_a_deleted_row_but_not_a_row_deleted_after_the_horizon() {
+        let mut t: Table<u8, u8> = Table::new();
+        t.apply(1, cs(1), vec![(1, Some(1)), (2, Some(2))]).unwrap();
+        t.apply(2, cs(2), vec![(1, None)]).unwrap();
+        t.apply(3, cs(3), vec![(2, None)]).unwrap();
+        assert_eq!(
+            t.vacuum(2),
+            2,
+            "key 1: its insert and its tombstone; key 2 keeps lsn 1"
+        );
+        assert_eq!(t.get(Snapshot { as_of: 2 }, &1), None);
+        assert_eq!(t.get(Snapshot { as_of: 2 }, &2), Some(&2));
+        assert_eq!(t.get(Snapshot { as_of: 3 }, &2), None);
+        assert_eq!(t.newest_lsn(&1), None);
+        assert_eq!(t.newest_lsn(&2), Some(3));
+    }
+
+    #[test]
+    fn vacuum_clamps_the_horizon_and_never_moves_the_floor_back() {
+        let mut t: Table<u8, u8> = Table::new();
+        t.apply(1, cs(1), vec![(1, Some(1))]).unwrap();
+        t.apply(2, cs(2), vec![(1, Some(2))]).unwrap();
+        assert_eq!(t.vacuum(99), 1);
+        assert_eq!(t.floor(), 2);
+        assert_eq!(t.vacuum(0), 0);
+        assert_eq!(t.floor(), 2);
+        assert_eq!(t.get(t.snapshot(), &1), Some(&2));
+    }
+
+    #[test]
+    fn a_transaction_older_than_the_floor_is_refused_not_misread() {
+        let mut t: Table<u8, u8> = Table::new();
+        t.apply(1, cs(1), vec![(1, Some(1))]).unwrap();
+        let mut old = Tx::begin(&t);
+        t.apply(2, cs(2), vec![(1, Some(2))]).unwrap();
+        t.apply(3, cs(3), vec![(2, Some(3))]).unwrap();
+        t.vacuum(2);
+        old.put(5, 5);
+        assert_eq!(old.check(&t), Err(MvccError::SnapshotTooOld { floor: 2 }));
+        assert_eq!(
+            old.commit(&mut t, 4, cs(4)),
+            Err(MvccError::SnapshotTooOld { floor: 2 })
+        );
+        assert_eq!(t.get(t.snapshot(), &5), None);
+        let mut at_floor = Tx::begin(&t);
+        at_floor.snapshot = Snapshot { as_of: 2 };
+        at_floor.put(1, 9);
+        at_floor.commit(&mut t, 4, cs(4)).unwrap();
+        assert_eq!(t.get(t.snapshot(), &1), Some(&9));
+    }
+
+    fn history_of(steps: &[Vec<(u8, Option<u8>)>]) -> (Table<u8, u8>, Vec<BTreeMap<u8, u8>>) {
+        let mut t: Table<u8, u8> = Table::new();
+        let mut history = vec![BTreeMap::new()];
+        for (i, writes) in steps.iter().enumerate() {
+            let lsn = i as u64 + 1;
+            t.apply(lsn, cs(lsn as u8), writes.clone()).unwrap();
+            let mut next = history.last().unwrap().clone();
+            for (k, v) in writes {
+                match v {
+                    Some(v) => {
+                        next.insert(*k, *v);
+                    }
+                    None => {
+                        next.remove(k);
+                    }
+                }
+            }
+            history.push(next);
+        }
+        (t, history)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// After a vacuum at `h` (reached in one step or two), every snapshot from `h` on reads and
+        /// scans exactly what the model says, and both ways leave identical versions behind.
+        #[test]
+        fn vacuum_preserves_every_snapshot_at_or_after_the_horizon(
+            steps in proptest::collection::vec(
+                proptest::collection::vec((0u8..6, proptest::option::of(0u8..50)), 1..4),
+                1..30,
+            ),
+            h1 in 0u64..40,
+            h2 in 0u64..40,
+        ) {
+            let (mut t, history) = history_of(&steps);
+            let (lo, hi) = (h1.min(h2), h1.max(h2));
+            let mut direct = t.clone();
+            direct.vacuum(hi);
+            t.vacuum(lo);
+            t.vacuum(hi);
+            prop_assert_eq!(t.dump(), direct.dump());
+            let applied = steps.len() as u64;
+            for as_of in hi.min(applied)..=applied {
+                let snap = Snapshot { as_of };
+                let model = &history[as_of as usize];
+                for k in 0u8..6 {
+                    prop_assert_eq!(t.get(snap, &k), model.get(&k));
+                }
+                let got: Vec<(u8, u8)> = t.range(snap, ..).into_iter().map(|(k, v)| (*k, *v)).collect();
+                let want: Vec<(u8, u8)> = model.iter().map(|(k, v)| (*k, *v)).collect();
+                prop_assert_eq!(got, want);
+            }
+            // Nothing newer than the horizon version is ever dropped: each key keeps at most one
+            // version at or below the floor, and none of them is a deletion.
+            for (k, lsn, value) in t.dump() {
+                if lsn <= t.floor() {
+                    prop_assert!(value.is_some(), "key {k} kept a tombstone at {lsn}");
+                    prop_assert_eq!(t.dump().iter().filter(|(k2, l2, _)| *k2 == k && *l2 <= t.floor()).count(), 1);
                 }
             }
         }

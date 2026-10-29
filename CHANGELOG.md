@@ -12,6 +12,10 @@ between minor versions; format changes are called out explicitly.
 - A PostgreSQL wire protocol v3 message codec: strict, bounded decoding of the startup phase and simple
   queries, and encoding of the server messages that answer them. It does no I/O, has no session state and
   never panics on any input; a fuzz target runs in the nightly and weekly fuzz matrices.
+- Version vacuum for the row store (`RowStore::vacuum`, P2-19): drops row and index versions no snapshot at
+  or after a horizon can see, keeps the newest version at the horizon, refuses transactions older than the
+  floor with `snapshot too old`, and leaves the log (and so recovery) untouched. A planted bug and a seeded
+  workload check it against a model.
 - `AS OF` on the row store: a snapshot at a change set id or at a timestamp, rebuilt on recovery.
 - A sharded weekly mutation campaign over the core, LSL, evalkit, simulator, seams, CLI and bench crates
   (70 shards of about 24 mutants). Its first full run found 230 survivors; the real ones were closed with

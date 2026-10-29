@@ -72,8 +72,10 @@ both transactions touch (a guard row), which turns the skew into a write-write c
 
 `lattice_engines::mvcc` implements today: snapshots as the last applied LSN, newest-version-at-or-before
 reads, deletions as tombstones, first-committer-wins per row, and the write-skew behaviour pinned by the
-test `write_skew_is_allowed_as_documented`. Not implemented yet: SQLSTATE mapping, `AS OF`, branches,
-the check order with fences and dedupe at the log, snapshot-too-old, and the history checks below.
+test `write_skew_is_allowed_as_documented`. Not implemented yet: SQLSTATE mapping, branches,
+the check order with fences and dedupe at the log, and the history checks below. Vacuum
+(`RowStore::vacuum`) keeps the newest version at the horizon and everything newer, and a transaction below
+the vacuum floor fails to commit with `snapshot too old`.
 
 ## Versioning and compatibility
 

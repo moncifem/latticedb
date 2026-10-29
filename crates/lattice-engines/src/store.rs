@@ -38,6 +38,12 @@ pub enum RowError {
     InDoubt(TxnError),
     /// An earlier ambiguous failure left this store behind the log; reopen it.
     Stale,
+    /// The snapshot is older than the vacuum floor, so row versions it needs may be gone. History in
+    /// the log is intact: reopen the store to read it.
+    SnapshotTooOld {
+        /// The oldest snapshot that can still be read.
+        floor: u64,
+    },
     /// The log holds a row change set this code cannot read.
     Corrupt(String),
     /// The index definitions cannot identify their entries unambiguously.
@@ -54,6 +60,12 @@ impl fmt::Display for RowError {
             }
             RowError::Rejected(e) => write!(f, "rejected: {e}"),
             RowError::InDoubt(e) => write!(f, "commit outcome unknown: {e}"),
+            RowError::SnapshotTooOld { floor } => {
+                write!(
+                    f,
+                    "snapshot too old: versions below lsn {floor} were vacuumed"
+                )
+            }
             RowError::Stale => write!(f, "store is stale after an ambiguous failure; reopen it"),
             RowError::Corrupt(why) => write!(f, "row data corrupt: {why}"),
             RowError::InvalidIndexes(why) => write!(f, "invalid index definitions: {why}"),
@@ -67,10 +79,22 @@ impl Classify for RowError {
         match self {
             RowError::Conflict { .. } | RowError::Stale => ErrorClass::Retryable,
             RowError::Rejected(e) | RowError::InDoubt(e) => e.class(),
+            RowError::SnapshotTooOld { .. } => ErrorClass::Rejected,
             RowError::Corrupt(_) => ErrorClass::Fatal,
             RowError::Encode(_) | RowError::InvalidIndexes(_) => ErrorClass::Rejected,
         }
     }
+}
+
+/// What one [`RowStore::vacuum`] removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VacuumStats {
+    /// The horizon that was applied (clamped to the applied LSN and never below an earlier one).
+    pub horizon: u64,
+    /// Row versions removed.
+    pub row_versions: usize,
+    /// Index entry versions removed.
+    pub index_versions: usize,
 }
 
 /// Rows over the kernel.
@@ -245,10 +269,54 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.check_indexes_at(self.snapshot())
     }
 
+    /// The oldest snapshot that is still complete. Reads below it can miss versions that vacuum
+    /// removed; a reopened store has every version again (the log keeps all history).
+    pub fn oldest_snapshot(&self) -> Snapshot {
+        Snapshot {
+            as_of: self.table.floor(),
+        }
+    }
+
+    /// Fails with `SnapshotTooOld` if `snap` is below the vacuum floor. Call it before trusting a
+    /// read at a snapshot that may have outlived a vacuum, such as an `AS OF` outside the window.
+    pub fn check_snapshot(&self, snap: Snapshot) -> Result<(), RowError> {
+        self.table.check_readable(snap).map_err(|e| match e {
+            MvccError::SnapshotTooOld { floor } => RowError::SnapshotTooOld { floor },
+            _ => RowError::Stale,
+        })
+    }
+
+    /// The horizon to vacuum to: no newer than the oldest snapshot an open transaction still reads
+    /// (`oldest_open`), and keeping the last `retain_lsns` commits readable for `AS OF`. Pass the
+    /// result to [`RowStore::vacuum`].
+    pub fn vacuum_horizon(&self, oldest_open: Option<Snapshot>, retain_lsns: u64) -> u64 {
+        let by_retention = self.applied_lsn().saturating_sub(retain_lsns);
+        oldest_open.map_or(by_retention, |s| s.as_of.min(by_retention))
+    }
+
+    /// Removes row and index versions that no snapshot at or after `horizon` can see. The newest
+    /// version visible at the horizon is always kept, so every read at a snapshot from `horizon` on
+    /// returns what it returned before. The log is untouched, which is why recovery followed by a
+    /// vacuum gives the same state. Open transactions below the horizon are refused at commit with
+    /// `SnapshotTooOld`; compute the horizon with [`RowStore::vacuum_horizon`] to avoid that.
+    pub fn vacuum(&mut self, horizon: u64) -> VacuumStats {
+        let row_versions = self.table.vacuum(horizon);
+        let applied_horizon = self.table.floor();
+        let index_versions = self.indexes.vacuum(applied_horizon);
+        VacuumStats {
+            horizon: applied_horizon,
+            row_versions,
+            index_versions,
+        }
+    }
+
     /// `AS OF CHANGESET c`: the snapshot that sees everything up to and including change set `id`, or
     /// `None` if no row change set with that id was committed.
     pub fn snapshot_as_of_changeset(&self, id: ChangeSetId) -> Option<Snapshot> {
-        self.commit_lsn.get(&id).map(|lsn| Snapshot { as_of: *lsn })
+        self.commit_lsn
+            .get(&id)
+            .filter(|lsn| **lsn >= self.table.floor())
+            .map(|lsn| Snapshot { as_of: *lsn })
     }
 
     /// `AS OF TIMESTAMP t`: the snapshot at the newest row change set whose timestamp is not after
@@ -297,6 +365,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         if !bugs::active(Bug::RowConflictCheckSkipped) {
             tx.check(&self.table).map_err(|e| match e {
                 MvccError::Conflict { newer_lsn } => RowError::Conflict { newer_lsn },
+                MvccError::SnapshotTooOld { floor } => RowError::SnapshotTooOld { floor },
                 MvccError::OutOfOrder { .. } => RowError::Stale,
             })?;
         }

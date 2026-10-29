@@ -70,6 +70,8 @@ pub enum Bug {
     RowIndexMissingInsert,
     /// An index equality lookup matches keys with the requested prefix.
     RowIndexPrefixLookup,
+    /// Vacuum also drops the newest version at the horizon, so a snapshot there reads nothing.
+    VacuumDropsVisibleVersion,
 }
 
 impl Bug {
@@ -95,6 +97,9 @@ impl Bug {
         Bug::RowIndexMissingInsert,
         Bug::RowIndexPrefixLookup,
     ];
+
+    /// Vacuum defects, detected by the vacuum workload in the row simulation.
+    pub const VACUUM: [Bug; 1] = [Bug::VacuumDropsVisibleVersion];
 
     /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [
@@ -170,16 +175,24 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    fn all_bugs() -> impl Iterator<Item = Bug> {
+        Bug::ALL.into_iter().chain(Bug::STORAGE).chain(Bug::VACUUM)
+    }
+
     #[test]
     fn every_log_and_storage_guard_has_a_distinct_mask_bit() {
-        let all: BTreeSet<_> = Bug::ALL.into_iter().chain(Bug::STORAGE).collect();
-        assert_eq!(all.len(), 31);
+        let all: BTreeSet<_> = Bug::ALL
+            .into_iter()
+            .chain(Bug::STORAGE)
+            .chain(Bug::VACUUM)
+            .collect();
+        assert_eq!(all.len(), 32);
         for bug in all {
             assert!((bug as u32) < u32::BITS, "guard mask exhausted: {bug:?}");
             clear();
             enable(bug);
             assert!(active(bug));
-            for other in Bug::ALL.into_iter().chain(Bug::STORAGE) {
+            for other in all_bugs() {
                 assert_eq!(active(other), bug == other);
             }
         }

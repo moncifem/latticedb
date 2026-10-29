@@ -110,6 +110,11 @@ impl Indexes {
         self.entries.apply(lsn, cs, changes)
     }
 
+    /// Drops index entry versions no snapshot at or after `horizon` can see; returns how many.
+    pub fn vacuum(&mut self, horizon: u64) -> usize {
+        self.entries.vacuum(horizon)
+    }
+
     /// The primary keys of the rows whose index key is exactly `ikey`, as of `snap`, in key order.
     pub fn lookup(&self, snap: Snapshot, index: u32, ikey: &[u8]) -> Vec<Vec<u8>> {
         if bugs::active(Bug::RowIndexPrefixLookup) {
