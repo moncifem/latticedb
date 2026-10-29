@@ -32,3 +32,14 @@ The focused integration test and strict lint pass locally. Fresh hosted mutation
 these four metadata survivors remains pending; passing ordinary tests does not establish a kill.
 The earlier failed planning run 40896129210 produced no mutation evidence. Its cache-output fix
 is merged as PR 221, and this completed run used run/attempt-specific temporary output paths.
+
+
+## Completed focused verification
+
+[Run 40900457911](https://github.com/moncifem/latticedb/actions/runs/40900457911), attempt 1 at
+`83590cf893440698e844604bb4e76aed730fddd2`, tested seven selected regressions with cargo-mutants
+27.1.0: **seven caught, zero missed, zero timed out, zero unviable**. This includes all four metadata
+arithmetic survivors above and the three prior scan/successor cases. Both package baselines passed.
+The [compact proof record](evidence/verification-2026-10-29.json) preserves exact source and independently
+verified plan/shard ZIP digests. The separate framing precheck candidate and full weekly campaign
+remain unresolved; no complete project score or phase-gate pass follows from this selection.

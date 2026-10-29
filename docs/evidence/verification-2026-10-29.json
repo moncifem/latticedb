@@ -1,0 +1,36 @@
+{
+  "scope": "Two bounded proofs; no phase-gate signature or global mutation score",
+  "runs": [
+    {
+      "run_id": 40900457911,
+      "attempt": 1,
+      "revision": "83590cf893440698e844604bb4e76aed730fddd2",
+      "conclusion": "success",
+      "artifacts": [
+        {
+          "name": "focused-mutation-shard-0",
+          "artifact_id": 12909511608,
+          "sha256": "cbcf8c5b6e6e1c2f9eac261c6d20378bcf2f49e73b0537a8b7c978d8c76e8b7c"
+        },
+        {
+          "name": "focused-mutation-plan",
+          "artifact_id": 12909491120,
+          "sha256": "32ee922b0273cff31f027ed77860ca6d169294df8c2380b1b1601d0024d57564"
+        }
+      ]
+    },
+    {
+      "run_id": 40898872693,
+      "attempt": 1,
+      "revision": "498050234d942ef4dfbfc8a53fa8bb8256aeb3b0",
+      "conclusion": "success",
+      "artifacts": [
+        {
+          "name": "evidence-cancel-loom",
+          "artifact_id": 12908231934,
+          "sha256": "39e17bc2b0d6ebd77ea76b1d58166a236550da639838c60a5ca12f3ed86e6031"
+        }
+      ]
+    }
+  ]
+}

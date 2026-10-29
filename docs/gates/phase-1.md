@@ -65,7 +65,7 @@ the harness before the kernel fixes in PR 61; the nightly run is the current evi
 | E1-10 | Format ADR accepted, corpus read in CI | Met for the WAL and change set |
 | E1-11 | TLC passes four models | Met for the abstractions: Commit, Hlc, Fence, SetConvergence pass TLC, and Fence, Hlc and SetConvergence were shown to fail when the protection is removed (fence guard, counter advance, tombstone rule). Each header states what it does not model; run nightly by `tla/check-all.sh` |
 | E1-12 | Runtime ADR with benchmark data | Met: ADR 0011 records portable macOS/Linux measurements and the opt-in Linux portable/Tokio/io_uring comparison. [Run 40789753956](https://github.com/moncifem/latticedb/actions/runs/40789753956) passed all three backends, 36 measurement rows, conformance/recovery checks and the completion-error regression. Raw JSON is committed; the synchronous production runtime is unchanged |
-| E1-13 | Unsafe discipline, Miri, loom | Partial: no unsafe outside `lattice-sys`. Its opt-in Linux runtime prototype has one reviewed submission block, covered by Linux conformance and a completion-error regression, not a Miri syscall proof. Miri still runs the abi/core tests; the threaded listener and cancellation tokens now need shared-memory evidence; bounded registry models are being added (scope below), and host admission/engine concurrency remain separate |
+| E1-13 | Unsafe discipline, Miri, loom | Partial: no unsafe outside `lattice-sys`. Its opt-in Linux runtime prototype has one reviewed submission block, covered by Linux conformance and a completion-error regression, not a Miri syscall proof. Miri still runs the abi/core tests; the threaded listener and cancellation tokens now need shared-memory evidence; bounded registry lifecycle models passed (scope below), and host admission/engine concurrency remain separate |
 | E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3 has early row snapshot tests but still needs full Phase 2 evidence. I7, I10, I11 and I14 belong to later phases |
 | E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs, then `lattice ledger check` fails when the latest simulation run has violations, no runs or mostly unverified runs and reports the streak and trend over the last seven simulation runs; nightly artifact/ledger ingestion and ten observed-or-missing sections are implemented, with retained-history provenance and completed-fuzz summaries. Integrated nightly validation is still pending; mutation/eval ingestion is implemented with exact producer fields, but completed project producer evidence, reviewed risk/coverage classifications and product dogfood measures remain incomplete |
 | E1-16 | Gate review package | Review not met: `cargo xtask gate --phase 1` now collects declared criteria, source/document provenance, invariant traceability and optional raw/verified ledger snapshots. Every criterion stays unverified until reviewed; no signature or phase-pass decision is generated |
@@ -88,7 +88,26 @@ substituting instrumented Arc/AtomicBool and an external model mutex. The standa
 compiles the actual source by path and keeps its dependencies outside the shipped workspace. They cover cancellation versus
 query replacement, unregister versus query start, stale keys versus slot reuse, and a negative control
 that must find a lost cancel action. Model selection is checked before CI execution; no execution or
-preemption subset is configured. Hosted execution evidence remains pending until its run completes.
+preemption subset is configured. [Hosted run 40898872693](https://github.com/moncifem/latticedb/actions/runs/40898872693),
+attempt 1 at `498050234d942ef4dfbfc8a53fa8bb8256aeb3b0`, passed all four selected models, including
+the required negative control. The isolated tool dependency audit passed too. Its retained artifact
+SHA256 was independently verified against GitHub metadata; see the [proof record](../evidence/verification-2026-10-29.json).
 
 This does not model sockets, the host closing/admission latch, or engine concurrency and does not
 sign the gate. The kernel and pipeline remain synchronous; their existing Miri/unsafe checks stand.
+
+
+## Targeted recovery mutation follow-up (2026-10-29)
+
+[Run 40900457911](https://github.com/moncifem/latticedb/actions/runs/40900457911), attempt 1 at
+`83590cf893440698e844604bb4e76aed730fddd2`, tested seven selected default-feature `lattice-core`
+mutations with cargo-mutants 27.1.0: **seven caught, zero missed, zero timed out, zero unviable**.
+The explicit package baseline and internal unmutated baseline passed. These pin small-offset scan,
+immediate-successor refusal, exact torn-tail repair counts and recovered durable-LSN behavior after
+PRs 218/224. Plan and shard artifact digests were checked against GitHub metadata and are retained
+in the proof record above. The earlier 40-selection result and failures remain documented in
+[the metadata follow-up](../mutation-recovery-metadata.md).
+
+This closes those seven measured gaps, not WP17 or the full E1-7 criterion. The full weekly campaign,
+new runtime/engine coverage and the separate redundant-framing-precheck candidate remain open. No
+mutation exclusion, timeout budget, simulation threshold or gate signature changed.
