@@ -10,3 +10,9 @@ enforced with a repository ruleset using the same CODEOWNERS paths.
 Current settings: pull request required, the seven checks above must pass, linear history, no force pushes or
 deletions, conversations resolved. Approvals are set to 0 while there is a single maintainer; raise
 `required_approving_review_count` and enable code owner review when more maintainers join.
+
+## Required checks
+
+`gate (ubuntu-latest)` runs the whole gate; `gate (ubuntu-24.04-arm)` runs the portable tests. The macOS gate
+is deliberately not required: macOS runners queue for minutes, so it runs on every push to `main`
+(`gate-macos` in `.github/workflows/pr.yml`) and a macOS-only failure is caught right after the merge.
