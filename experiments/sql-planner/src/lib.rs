@@ -61,3 +61,59 @@ pub fn negatives() -> Vec<(String, String, String)> {
         })
         .collect()
 }
+
+/// Version the experiment transport separately from the internal AST/trace serde representation.
+pub const RESULT_CODEC: &str = "json-scalars-v1";
+pub fn scalar_rows(rows: &[Vec<ast::Value>]) -> serde_json::Value {
+    serde_json::Value::Array(
+        rows.iter()
+            .map(|row| {
+                serde_json::Value::Array(
+                    row.iter()
+                        .map(|value| match value {
+                            ast::Value::Null => serde_json::Value::Null,
+                            ast::Value::Int(n) => serde_json::Value::from(*n),
+                            ast::Value::Text(text) => serde_json::Value::from(text.clone()),
+                            ast::Value::Bool(b) => serde_json::Value::from(*b),
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+    #[test]
+    fn scalar_codec_preserves_null_boolean_signed_integer_and_escaped_text() {
+        let rows = vec![
+            vec![
+                ast::Value::Null,
+                ast::Value::Bool(true),
+                ast::Value::Int(i64::MIN),
+                ast::Value::Int(i64::MAX),
+                ast::Value::Text("quote\"\nλ".into()),
+            ],
+            vec![],
+        ];
+        let encoded = serde_json::to_string(&scalar_rows(&rows)).unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded,
+            serde_json::json!([
+                [
+                    null,
+                    true,
+                    -9223372036854775808i64,
+                    9223372036854775807i64,
+                    "quote\"\nλ"
+                ],
+                []
+            ])
+        );
+        assert_eq!(decoded[0][1].as_bool(), Some(true));
+        assert_eq!(decoded[0][2].as_i64(), Some(i64::MIN));
+    }
+}

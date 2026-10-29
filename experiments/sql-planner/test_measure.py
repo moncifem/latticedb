@@ -61,4 +61,14 @@ class CriterionAssessment(unittest.TestCase):
         self.assertEqual(row['C4']['same_runner_postgres_3x'],'passed')
         self.assertEqual(row['C4']['status'],'unresolved')
 
+class ScalarCodec(unittest.TestCase):
+    def test_native_values_and_cell_types_preserved(self):
+        rows=[[None,True,False,-(2**63),2**63-1,'quote"\\nλ'],[]]
+        self.assertIs(measure.scalar_rows(rows),rows)
+        self.assertTrue(measure.same_rows(rows,rows))
+        self.assertFalse(measure.same_rows([[True]],[[1]]))
+        self.assertFalse(measure.same_rows([[None]],[[]]))
+        for invalid in ([[1.0]],[[{'Int':1}]],[[2**63]],[[['nested']]],{'rows':[]}):
+            with self.assertRaises(ValueError):measure.scalar_rows(invalid)
+
 if __name__=='__main__':unittest.main()

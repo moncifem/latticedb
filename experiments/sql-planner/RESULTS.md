@@ -114,3 +114,11 @@ production dependency change is introduced. Original failed ratios above remain 
 `criteria.json` recomputes median ratios from raw samples and records all C1–C7 evidence limits. It
 never accepts ADR 0013. New remote measurements and independent review remain necessary; C1's absent
 budget and unrecorded historical effort-days remain unresolved, and C7 remains qualified.
+
+The subsequent transport revision uses `json-scalars-v1` uniformly for all three persistent
+prototype clients. It removes internal enum wrappers from each result cell, retaining signed bigint,
+text, boolean and NULL values. JSON decoding stays in client-round-trip timing; independent shape,
+integer-bound and exact type/value comparisons run afterward, as do PostgreSQL oracle assertions.
+The report records the codec version. PostgreSQL still uses its distinct libpq/TCP transport.
+Historical enum-codec ratios above are retained; neither codec change nor source implementation is a
+new measured result.

@@ -114,8 +114,9 @@ The fixed data has 20,000 tickets and 100 users. Point read, a 10,000-row range,
 group-by use identical data, ordered output and full result comparisons. There are two warmups and
 nine measured samples with alternating acquisition order. Medians/p95 and all samples are retained.
 The Python coordinator times **full persistent-client round trips**, including transport and result
-decoding: PostgreSQL uses psycopg/libpq over localhost TCP; Lattice uses a persistent child with JSON
-pipes. Their codecs and connection boundaries differ. Lattice separately reports in-process
+decoding: PostgreSQL uses psycopg/libpq over localhost TCP; Lattice uses a persistent child with versioned native-scalar JSON
+pipes (`json-scalars-v1` for all three candidates). Their codecs and connection boundaries differ. All row values, NULLs and cell types are checked
+against PostgreSQL; oracle assertions are outside the timing window for both clients. Lattice separately reports in-process
 parse/plan/execute time; it is not compared to PG server-only time as if they were equivalent.
 The 3x ratio is reported against C4, not used to change the production gate. There is no comparable
 Phase 1 SQL baseline; “no regression over Phase 1” stays unproven.

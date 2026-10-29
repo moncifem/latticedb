@@ -234,7 +234,7 @@ fn serve(candidate: Candidate, root: &Path, rows: usize) {
     let mut session = Session::default();
     let mut driver = Driver::new(candidate, false);
     let mut out = std::io::stdout();
-    writeln!(out,"{}",json!({"ready":true,"rows":rows,"fault_hooks":cfg!(feature="fault-hooks"),"durability":"StdIo fsync per commit; no group commit; WAL only; no checkpoint","receipts":db.receipts.iter().map(|r|json!({"lsn":r.lsn,"changeset":r.changeset})).collect::<Vec<_>>()})).unwrap();
+    writeln!(out,"{}",json!({"ready":true,"result_codec":lattice_sql_planner_spike::RESULT_CODEC,"rows":rows,"fault_hooks":cfg!(feature="fault-hooks"),"durability":"StdIo fsync per commit; no group commit; WAL only; no checkpoint","receipts":db.receipts.iter().map(|r|json!({"lsn":r.lsn,"changeset":r.changeset})).collect::<Vec<_>>()})).unwrap();
     out.flush().unwrap();
     for line in std::io::stdin().lock().lines() {
         let request: Json = serde_json::from_str(&line.unwrap()).unwrap();
@@ -260,6 +260,7 @@ fn serve(candidate: Candidate, root: &Path, rows: usize) {
             request["prepared"].as_bool().unwrap_or(false),
         );
         let elapsed = start.elapsed().as_nanos();
+        let result = result.map(|rows| lattice_sql_planner_spike::scalar_rows(&rows));
         writeln!(
             out,
             "{}",

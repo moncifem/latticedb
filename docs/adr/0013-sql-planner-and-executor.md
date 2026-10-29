@@ -69,3 +69,27 @@ Deciding late costs a week and keeps the engine free of a dependency we might re
 risks building the table interface around one planner's assumptions. The pivot trigger (native coverage
 cannot reach the declared subset at acceptable cost) is evaluated from C1 and C6 at the end of the
 spike.
+
+
+## Recorded evidence; decision still pending
+
+The criteria above remain unchanged. The isolated comparison and source audit live under
+`experiments/sql-planner/`; [RESULTS.md](../../experiments/sql-planner/RESULTS.md) records exact run
+revisions and artifact provenance. The first clean run and its explicitly cached functional retry
+establish these bounded observations, without selecting a planner:
+
+| Criterion | Current evidence and remaining gap |
+|---|---|
+| C1 | Five representative constructs executed across all three options. The stated budget is absent and historical effort-days were not recorded; full-subset cost is unresolved. |
+| C2 | Custom/parser paths have matching observable simulator traces and bounded source review. The pinned DataFusion integration reaches host clocks and randomized optimizer hashing, failing the strict condition; ordered output does not repair this. |
+| C3 | All candidates passed three process-kill/reopen cases, receipt/WAL-envelope checks and row/index/log scrub on the recorded corpus. These cover staged precommit statements, not a kill inside the durability protocol or hardware power loss. |
+| C4 | All candidates failed the 3x PostgreSQL client-ratio threshold on point, range, join and group queries in the retained retry. No comparable Phase 1 SQL baseline exists. Prototype optimization and a versioned uniform result codec await fresh measurement; old failures remain recorded. |
+| C5 | First clean added build costs were 8.82s custom, 47.97s parser and 881.38s DataFusion. The retry failed own-package license metadata checks for all candidates and additional DataFusion dependency advisories. Corrected metadata/pins need fresh policy evidence; no exceptions or clean-build claims arise from a functional retry. |
+| C6 | All three matched the nine negative prototype fixtures in the functional retry. This is bounded error-fidelity coverage, not the complete declared subset. |
+| C7 | Written assessments identify required correlated-scope binding and window operators for custom/parser, and snapshot/write/determinism integration work for DataFusion. The assessment remains qualified; no prototype demonstrates the no-rewrite threshold. |
+
+C1, the Phase 1 baseline part of C4 and full-subset feasibility remain open. In particular, no
+historical effort-days are inferred from commit timestamps or CI durations. New measurements must
+retain candidate failures, full result/type checks, the fixed PostgreSQL workload and the original
+thresholds. ADR status remains **proposed**; neither a green workflow nor these bounded tests accepts
+it or evaluates the pivot trigger conclusively.

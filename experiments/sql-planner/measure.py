@@ -6,6 +6,7 @@ from criteria import assess
 
 HERE = pathlib.Path(__file__).resolve().parent
 MANIFEST = HERE / 'Cargo.toml'
+RESULT_CODEC = 'json-scalars-v1'
 FEATURES = {'custom': [], 'parser': ['parser'], 'datafusion': ['datafusion']}
 QUERIES = {
     'point': 'SELECT id, owner, priority FROM tickets WHERE id = 1234',
@@ -67,8 +68,20 @@ def source_hints(metadata_path, output):
     save(output,value)
     return {'status':'manual call-path review required','hint_file':output.name,'total_matching_lines':total,'truncated':value['truncated']}
 
-def unpack(rows):
-    return [[None if v == 'Null' else next(iter(v.values())) for v in row] for row in rows]
+def scalar_rows(rows):
+    if type(rows) is not list or any(type(row) is not list for row in rows):
+        raise ValueError('result must be a complete row array')
+    if any(type(value) not in (type(None), int, str, bool) for row in rows for value in row):
+        raise ValueError('unexpected scalar result type')
+    if any(type(value) is int and not -(2**63) <= value < 2**63 for row in rows for value in row):
+        raise ValueError('result integer exceeds signed bigint')
+    return rows
+
+
+def same_rows(actual, expected):
+    return (len(actual) == len(expected) and all(
+        len(left) == len(right) and all(type(a) is type(b) and a == b for a,b in zip(left,right))
+        for left,right in zip(actual,expected)))
 
 class Host:
     def __init__(self, binary, candidate, root, rows, log):
@@ -90,6 +103,8 @@ class Host:
         self.reader.start()
         try:
             self.ready = self.receive()
+            if self.ready.get('result_codec') != RESULT_CODEC:
+                raise RuntimeError('candidate result codec differs from coordinator')
             if not self.ready.get('ready'):
                 raise RuntimeError(f'no ready message: {self.ready}')
         except BaseException:
@@ -111,8 +126,9 @@ class Host:
         start=time.perf_counter_ns();self.submit(sql,params,prepared);reply=self.receive()
         if 'Err' in reply['result']:
             raise RuntimeError(reply['result']['Err'])
-        rows=unpack(reply['result']['Ok'])
-        return rows,time.perf_counter_ns()-start,reply['engine_ns']
+        elapsed=time.perf_counter_ns()-start
+        rows=scalar_rows(reply['result']['Ok'])
+        return rows,elapsed,reply['engine_ns']
     def kill_group(self):
         if self.proc.poll() is None:
             if os.name=='posix':os.killpg(self.proc.pid,signal.SIGKILL)
@@ -164,7 +180,7 @@ def representatives(binary,candidate,root,output,dsn,rows):
                 pgsql=re.sub(r'\$(\d+)',placeholder,reference)
                 cursor=pg.execute(pgsql,positions or None,prepare=prepared)
                 expected=[list(r)for r in cursor.fetchall()] if cursor.description else []
-                assert actual==expected,(candidate,name,actual[:5],expected[:5])
+                assert same_rows(actual,expected),(candidate,name,actual[:5],expected[:5])
                 cases.append({'construct':name,'sql':sql,'postgres_sql':reference,'params':params,'prepared':prepared,'client_ns':elapsed,'engine_ns':engine,'row_count':len(actual),'results_match':True})
             run('join_filter','SELECT tickets.id, users.name FROM tickets INNER JOIN users ON tickets.owner = users.id WHERE tickets.priority >= $1 ORDER BY tickets.id LIMIT 5',(5,))
             run('group_having','SELECT owner, COUNT(*) FROM tickets GROUP BY owner HAVING COUNT(*) >= $1 ORDER BY owner',(1,))
@@ -202,20 +218,20 @@ def benchmark(binary,candidate,root,output,dsn,rows):
             for name,sql in QUERIES.items():
                 expected=[list(row) for row in pg.execute(sql,prepare=False).fetchall()]
                 for _ in range(2):
-                    actual,_,_=host.execute(sql);assert actual==expected,(candidate,name,'warmup mismatch')
-                    assert [list(r) for r in pg.execute(sql,prepare=False).fetchall()]==expected
+                    actual,_,_=host.execute(sql);assert same_rows(actual,expected),(candidate,name,'warmup mismatch')
+                    assert same_rows([list(r) for r in pg.execute(sql,prepare=False).fetchall()],expected)
                 client,engine,postgres=[],[],[]
                 # Alternate acquisition order to avoid always giving one candidate the warmest cache.
                 for n in range(9):
                     def lattice():
-                        actual,outer,inner=host.execute(sql);assert actual==expected,(candidate,name,'result mismatch');client.append(outer);engine.append(inner)
+                        actual,outer,inner=host.execute(sql);assert same_rows(actual,expected),(candidate,name,'result mismatch');client.append(outer);engine.append(inner)
                     def reference():
-                        start=time.perf_counter_ns();actual=[list(r) for r in pg.execute(sql,prepare=False).fetchall()];postgres.append(time.perf_counter_ns()-start);assert actual==expected
+                        start=time.perf_counter_ns();actual=[list(r) for r in pg.execute(sql,prepare=False).fetchall()];postgres.append(time.perf_counter_ns()-start);assert same_rows(actual,expected)
                     if n%2:reference();lattice()
                     else:lattice();reference()
                 ratio=statistics.median(client)/statistics.median(postgres)
                 results.append({'query':name,'sql':sql,'rows':len(expected),'lattice_client':summary(client),'lattice_engine_parse_execute':summary(engine),'postgres_client':summary(postgres),'client_ratio':ratio,'C4_within_3x_pg':ratio<=3})
-    return {'postgres_config':config,'lattice_ready':host.ready,'queries':results,'transport':{'postgres':'persistent psycopg/libpq over TCP localhost, including server execution, wire transfer, decoding and Python row-list materialization','lattice':'persistent child JSON pipe including request serialization, engine execution, serde JSON response, pipe transfer, Python JSON/enum decoding and list materialization','engine_ns':'separate in-process parse/plan/execute; not compared to PG server-only execution','planning':'C4 ad-hoc queries: PostgreSQL prepare=False; Lattice prepared=false; DataFusion creates snapshot context/provider each statement and includes batch conversion cost','caveat':'protocols and codecs differ; full client numbers are reported alongside, not mislabeled as equal pure executor cost'},'durability':'PostgreSQL fsync+synchronous_commit+full_page_writes; Lattice StdIo fsync WAL commit, no checkpoint/heap/fsync group commit; not equivalent storage designs','phase1_baseline_comparison':'not established: no comparable Phase1 SQL workload baseline'}
+    return {'postgres_config':config,'lattice_ready':host.ready,'queries':results,'transport':{'postgres':'persistent psycopg/libpq over TCP localhost, including server execution, wire transfer, decoding and Python row-list materialization','lattice':'persistent child JSON pipe including request serialization, engine execution, serde JSON response, pipe transfer, Python native scalar JSON decoding (json-scalars-v1); exact cell-type/value oracle','engine_ns':'separate in-process parse/plan/execute; not compared to PG server-only execution','planning':'C4 ad-hoc queries: PostgreSQL prepare=False; Lattice prepared=false; DataFusion creates snapshot context/provider each statement and includes batch conversion cost','caveat':'protocols and codecs differ; full client numbers are reported alongside, not mislabeled as equal pure executor cost'},'durability':'PostgreSQL fsync+synchronous_commit+full_page_writes; Lattice StdIo fsync WAL commit, no checkpoint/heap/fsync group commit; not equivalent storage designs','phase1_baseline_comparison':'not established: no comparable Phase1 SQL workload baseline'}
 
 def kill_case(binary,candidate,root,output,seed):
     host=Host(binary,candidate,root,2000,output/f'{candidate}-kill-{seed}.stderr')
@@ -284,7 +300,7 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);parser.add_argument('--target-root',type=pathlib.Path,required=True);parser.add_argument('--dsn',required=True);parser.add_argument('--functional-retry',action='store_true');args=parser.parse_args()
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True);target=args.target_root.resolve();target.mkdir(parents=True,exist_ok=True)
     if not args.functional_retry and any(target.iterdir()):raise RuntimeError('clean build requires an empty target root')
-    report={'schema_version':2,'measurement_mode':'functional_retry' if args.functional_retry else 'clean_build','clean_build_evidence':not args.functional_retry,'functional_cache_hit':os.environ.get('FUNCTIONAL_CACHE_HIT') if args.functional_retry else None,'ADR_status':'proposed','criteria':{'C1':{'effort_days':None,'budget':None,'status':'unresolved: missing ADR budget and no retrospective effort estimate'},'C2':{'source_audit':'required; matching observable traces does not prove no randomized hashing'},'C7':{'status':'written hypothesis in README; full-subset feasibility remains unproven'}},'runner':{'platform':platform.platform(),'python':sys.version,'cpu_count':os.cpu_count()},'candidates':{},'failures':[]}
+    report={'schema_version':3,'result_codec':RESULT_CODEC,'measurement_mode':'functional_retry' if args.functional_retry else 'clean_build','clean_build_evidence':not args.functional_retry,'functional_cache_hit':os.environ.get('FUNCTIONAL_CACHE_HIT') if args.functional_retry else None,'ADR_status':'proposed','criteria':{'C1':{'effort_days':None,'budget':None,'status':'unresolved: missing ADR budget and no retrospective effort estimate'},'C2':{'source_audit':'required; matching observable traces does not prove no randomized hashing'},'C7':{'status':'written hypothesis in README; full-subset feasibility remains unproven'}},'runner':{'platform':platform.platform(),'python':sys.version,'cpu_count':os.cpu_count()},'candidates':{},'failures':[]}
     data_root=pathlib.Path(tempfile.mkdtemp(prefix='lattice-planner-run-data-'))
     try:
         inputs=[p for p in HERE.rglob('*') if p.is_file() and not {'target','functional-target','__pycache__'}.intersection(p.parts)]
