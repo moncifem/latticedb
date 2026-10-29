@@ -20,6 +20,10 @@ exclude_re = [
     # The first comparison (`at > *t`) is not excluded: its `>=` lets a smaller value win a tie, and a
     # test catches it.
     "crdt\\.rs:\\d+:64: replace > with >= in LwwRegister<T>::set",
+    # `bugs::active` has two bodies. The one used by the tests exists only with the `planted-bugs` feature,
+    # which the workspace always enables; the other, for builds without it, returns false and is not
+    # compiled into any build that runs the tests, so a mutant of it cannot be caught. Lines 150 and up.
+    "bugs\\.rs:1[5-9]\\d:\\d+: replace imp::active -> bool with true",
     # `read_from` loops `while off < data.len() && ...`. At `off == data.len()` the decode finds no
     # record and the loop breaks on the next line, so `<=` here reads nothing extra. The other `<`
     # operands in the function (the read limit and the segment bounds) are tested.

@@ -583,3 +583,151 @@ fn a_last_segment_as_long_as_a_header_but_not_one_is_corruption_not_a_torn_creat
         .unwrap();
     assert!(lattice_core::Log::open(disk.clone(), "wal", 400).is_err());
 }
+
+#[test]
+fn a_transaction_from_a_kernel_with_another_owner_is_refused_at_prepare() {
+    let (disk_a, clock) = fresh();
+    let (disk_b, _) = fresh();
+    let mut a = kernel(&disk_a, &clock);
+    let (mut b, _) = Kernel::open(
+        disk_b.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(99),
+        &config(),
+    )
+    .unwrap();
+    let id = a.new_id();
+    let txn = a
+        .begin(ChangeSet::new(id, vec![1]))
+        .validate(&AllowAll)
+        .unwrap()
+        .authorize(&AllowAll)
+        .unwrap();
+    assert!(matches!(b.prepare(txn), Err(TxnError::ForeignTransaction)));
+}
+
+/// A checkpoint makes three claims: its position, how many change sets precede it, and a checksum of
+/// the state. Recovery must refuse it if any one of them is wrong, however right the other two are.
+#[test]
+fn recovery_refuses_a_checkpoint_when_any_one_claim_is_wrong() {
+    use lattice_core::changeset::state_crc;
+    use std::collections::{BTreeMap, BTreeSet};
+    for case in 0..4 {
+        let (disk, clock) = fresh();
+        let mut k = kernel(&disk, &clock);
+        let mut ids = BTreeSet::new();
+        for _ in 0..3 {
+            let id = k.new_id();
+            k.commit(ChangeSet::new(id, vec![1; 20])).unwrap();
+            ids.insert(id);
+        }
+        drop(k);
+        let good = Checkpoint {
+            through_lsn: 3,
+            change_sets: 3,
+            state_crc: state_crc(&ids, &BTreeMap::new()),
+        };
+        let checkpoint = match case {
+            0 => good,
+            1 => Checkpoint {
+                through_lsn: 7,
+                ..good
+            },
+            2 => Checkpoint {
+                change_sets: 99,
+                ..good
+            },
+            _ => Checkpoint {
+                state_crc: good.state_crc ^ 1,
+                ..good
+            },
+        };
+        let (mut log, _) = Log::open(disk.clone(), "wal", 400).unwrap();
+        log.append(RecordType::Checkpoint as u8, &encode_checkpoint(checkpoint))
+            .unwrap();
+        log.sync().unwrap();
+        drop(log);
+        let opened = Kernel::open(
+            disk.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(5),
+            &config(),
+        );
+        assert_eq!(opened.is_err(), case != 0, "case {case}");
+    }
+}
+
+#[test]
+fn the_ledger_lives_in_its_own_directory_and_does_not_rotate_early() {
+    let (disk, clock) = fresh();
+    for n in 0..6u64 {
+        lattice_core::ledger::append(
+            disk.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(n + 1),
+            "sim",
+            "{}",
+        )
+        .unwrap();
+    }
+    let segments = disk
+        .list("ledger")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .count();
+    assert_eq!(segments, 1, "six small entries fit in one segment");
+}
+
+#[test]
+fn queued_change_sets_get_consecutive_tickets() {
+    use lattice_core::ChangeSetId;
+    use lattice_core::pipeline::{Pipeline, Ticket};
+    let (disk, clock) = fresh();
+    let mut pipeline = Pipeline::new(kernel(&disk, &clock), 8, 4);
+    let tickets: Vec<Ticket> = (0..3u64)
+        .map(|n| {
+            pipeline
+                .submit(ChangeSet::new(ChangeSetId::from_parts(1, n, 0), vec![1]))
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(tickets, vec![Ticket(0), Ticket(1), Ticket(2)]);
+}
+
+#[test]
+fn the_scrub_does_not_accept_a_valid_record_that_is_out_of_sequence() {
+    use lattice_core::record::{Decoded, SEGMENT_HEADER_LEN, decode_record};
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    for _ in 0..2 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![1; 20])).unwrap();
+    }
+    drop(k);
+    let path = "wal/00000000000000000001.seg";
+    let data = disk.read(path).unwrap();
+    let Decoded::Record(_, end) = decode_record(&data, SEGMENT_HEADER_LEN) else {
+        panic!("the first record should decode");
+    };
+    // The first record's bytes again, after the second: valid on their own, wrong in this place.
+    let mut io = disk.clone();
+    io.append(path, &data[SEGMENT_HEADER_LEN..end]).unwrap();
+    assert_eq!(scrub(&disk, "wal").unwrap().records, 2);
+}
+
+#[test]
+fn a_full_simulated_disk_counts_each_refused_append() {
+    let mut io = SimIo::new(
+        1,
+        FaultProfile {
+            disk_full_after: Some(10),
+            ..FaultProfile::clean()
+        },
+    );
+    assert_eq!(io.no_space_events(), 0);
+    assert!(io.append("f", &[0u8; 100]).is_err());
+    assert_eq!(io.no_space_events(), 1);
+    assert!(io.append("f", &[0u8; 100]).is_err());
+    assert_eq!(io.no_space_events(), 2);
+}
