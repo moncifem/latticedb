@@ -113,3 +113,11 @@ Filtered results establish evidence only for the recorded selection. This manual
 is outside weekly ingestion and cannot establish a global passing mutation score. Its
 explicit package baseline does not retroactively establish a matching workspace baseline
 for older weekly runs; inspect the actual baseline and mutant test arguments separately.
+
+
+Mutation diagnostic plans and shard outputs live under `runner.temp`, in run/attempt-specific
+paths, outside the restored Cargo build cache. A stale cached `target/focused-plan` or
+`target/focused-shard` cannot become current evidence or prevent a new output directory from
+being created. The helper still refuses pre-existing output paths, and downloaded plans retain
+source/run/attempt/digest validation. Run 40896129210 stopped at planning because the old output
+path was restored from cache; it produced no mutation result and is not replacement proof.
