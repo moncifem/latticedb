@@ -60,3 +60,29 @@ jobs:
             wal-admission-build-inputs.sha256
             wal-admission-toolchain.txt
           if-no-files-found: error
+  recovery-measurement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: moncifem/latticedb
+          ref: 743b0fb52a495a3f875490268d604ed543be9e64
+          path: frozen
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - name: Compile identical host template against actual old and new Log APIs
+        run: |
+          python3 tools/wal-admission/test_measurement.py
+          python3 tools/wal-admission/prepare_measurement.py
+          cargo build --locked --release -p lattice-bench --example admission_measure
+          cargo build --manifest-path frozen/Cargo.toml --locked --release -p lattice-bench --example admission_measure --target-dir target/frozen-old
+      - name: Warm-cache recovery time, process peak RSS and bounded prefix controls
+        run: python3 tools/wal-admission/measure.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: evidence-wal-admission-measurement
+          path: wal-admission-measurement.json
+          if-no-files-found: error

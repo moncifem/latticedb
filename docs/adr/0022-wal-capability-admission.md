@@ -36,5 +36,10 @@ The draft implementation requires bounded `Io::read_prefix` without a whole-file
 migrates shipped adapters/wrappers. This is an explicit source API break for unpublished seam
 implementations, not a WAL v1 byte change. Experimental async adapters use their bounded synchronous
 metadata path. Codec/context tests and independent global vectors are present; frozen-reader and
-upgrade-cut execution remain hosted evidence pending exact-head success. LCIX engine activation
-is still disabled pending acceptance and the unwaived review holds.
+upgrade-cut execution passed at `a132a36bbe9a1d0472f1bb0bc989c8e8bc7c7ff7` in
+[run 40906145857](https://github.com/moncifem/latticedb/actions/runs/40906145857). A separate hosted
+measurement compares the actual frozen and proposed legacy Log paths and the proposed guarded path,
+with source hashes, warm-cache timings, process peak RSS and bounded prefix/read counters. Its raw
+results must be reviewed before acceptance; buffer maxima and process RSS are not complete recovery
+allocation bounds. LCIX engine activation is still disabled pending acceptance and the unwaived
+review holds.

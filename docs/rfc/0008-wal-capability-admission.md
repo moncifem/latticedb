@@ -170,8 +170,10 @@ Independent header/full-ChangeSet fixtures, normal codec/context/denial tests an
 witness are implemented. The bounded all-operation upgrade sweep is ignored locally and selected
 explicitly by the hosted compatibility workflow. That workflow also builds the frozen old source
 with its original lockfile, retains executable/source/harness hashes and exact before/after byte
-manifests. No completed hosted evidence, large fault campaign or measured recovery overhead is
-claimed until the corresponding exact-head jobs and measurements finish.
+manifests. The exact-head hosted proof at `a132a36bbe9a1d0472f1bb0bc989c8e8bc7c7ff7`
+passed in [run 40906145857](https://github.com/moncifem/latticedb/actions/runs/40906145857).
+This bounded proof does not imply a large fault campaign or format acceptance. Recovery measurements
+remain pending until their separately retained hosted artifact completes.
 
 ## Independent review corrections and expanded hosted matrix
 
@@ -210,3 +212,33 @@ normal test pins the literal fields and every recovered matrix history also pass
 scrubber. Frozen-reader evidence checks tracked worktree/index cleanliness before build and after
 execution setup, permits only the reviewed untracked harness, verifies original lock/toolchain
 bytes against the immutable revision, and records their hashes plus verbose rustc/Cargo versions.
+
+
+## Bounded hosted preflight measurement
+
+The separate `recovery-measurement` job compiles the same reviewed host template against the actual
+frozen `743b0fb52a495a3f875490268d604ed543be9e64` Log and the proposed Log, both in release mode
+with their original lockfiles. Source preparation supplies only the actual API call and, in the new
+harness, the required bounded-prefix seam method. It does not copy a decoder or modify tracked frozen
+source. It compares both readers on identical independently framed legacy files; a third case uses
+the new reader on guarded files with byte-identical record bodies. There is one valid ChangeSet per
+segment, with strictly increasing literal IDs, clocks and LSNs. Cases vary 1/32/256 segments and
+64/65,536-byte row values. This isolates streaming Log recovery, not full Kernel or RowStore rebuild.
+
+One warmup and five samples per mode retain raw process output, internal monotonic open time and
+GNU time whole-process peak RSS. Segment files are explicitly read into the OS cache before every
+sample; old/new execution order alternates. These are warm-cache observations, not cold-disk
+latencies. No regression threshold is invented. The artifact retains exact commands, build settings,
+source/binary/lockfile/toolchain/dataset hashes, CPU/memory context and every sample. It checks no
+clean file changes during recovery and independently checks record/body/segment/full-read counts.
+
+The CountIo wrapper delegates to the shipped StdIo and records prefix calls, returned bytes and
+request/return/Vec-capacity maxima. All new-reader samples must show one 32-byte prefix per segment,
+all maxima at most 32, and one full-file read per segment; old-reader prefix counts must be zero.
+This measures the shipped bounded buffer path without unsafe allocator instrumentation. The seam
+contract and existing adapter tests cover exact `min(limit, length)` reads; these observations do not
+prove a bound for arbitrary third-party adapters. Preflight retains one small prefix per segment,
+plus names, parsed headers and container metadata; full recovery also holds actual segment/record
+buffers. Peak RSS includes the whole process. Neither the prefix maximum nor RSS is a complete
+allocation bound or a checkpoint-memory result. Owner acceptance still requires reviewing the
+measured results and these limits, independent review, and the unwaived review period.
