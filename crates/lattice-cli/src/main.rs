@@ -182,7 +182,11 @@ fn trend(sims: &[Option<SimRun>]) -> String {
         let share = |rs: &[&SimRun]| {
             let total: u64 = rs.iter().map(|r| r.runs).sum();
             let inc: u64 = rs.iter().map(|r| r.incomplete).sum();
-            (total > 0).then(|| inc as f64 / total as f64)
+            if total == 0 {
+                None
+            } else {
+                Some(inc as f64 / total as f64)
+            }
         };
         if let (Some(now), Some(before)) = (share(&[latest]), share(earlier))
             && now > 0.1
