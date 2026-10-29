@@ -108,6 +108,14 @@ owner has applied the `no-changelog` label (Dependabot is exempt). Releases comp
 [#315](https://github.com/moncifem/latticedb/issues/315): every pull request used to edit the same
 `[Unreleased]` block, and strict up-to-date merging then needed a manual rebase each time.
 
+**A pull request opened before this rule that still edits `CHANGELOG.md`:** rebase it onto `main`, take
+`main`'s version of `CHANGELOG.md` (`git checkout origin/main -- CHANGELOG.md`, so the file is no
+longer part of your diff), then put the lines you had added into one new fragment of the right kind,
+without the leading `- `. If they cover several kinds, keep the main one in the fragment and say the
+rest in its text, since one pull request adds one fragment. Commit both changes, push with
+`--force-with-lease`, and check that `python3 tools/changelog.py check` passes. Never resolve the
+conflict by keeping both sides of `[Unreleased]`: that is the conflict this rule removes.
+
 ## Before opening a pull request
 
 ```bash
