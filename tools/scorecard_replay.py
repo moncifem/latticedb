@@ -86,6 +86,14 @@ def fetch_json(endpoint, output, paginate=False):
     return scorecard.load(output)
 
 
+def run_context(run, code_revision, replay_url=None):
+    """Describe a completed source and a successful collection without rewriting either result."""
+    return {'original_run': {'id': run['id'], 'url': run['html_url'], 'conclusion': run['conclusion'],
+                             'attempt': run['run_attempt'], 'revision': run['head_sha']},
+            'replay': {'conclusion': 'success', 'code_revision': code_revision, 'url': replay_url,
+                       'scope': 'retained evidence collection only; original outcome unchanged'}}
+
+
 def replay(args):
     require(re.fullmatch(r'[\w.-]+/[\w.-]+', args.repository), 'invalid repository')
     require(re.fullmatch(r'[a-f0-9]{40}', args.code_revision), 'invalid replay code revision')
@@ -121,17 +129,20 @@ def replay(args):
     ledger = output / 'ledger'
     scorecard.ingest(SimpleNamespace(history=None, history_provenance=None, ledger=ledger, lattice=args.lattice,
         jobs=output / 'jobs.json', artifacts=observations, repository=args.repository,
-        run=str(run['id']), attempt=str(run['run_attempt']), revision=run['head_sha']))
+        run=str(run['id']), attempt=str(run['run_attempt']), revision=run['head_sha'],
+        include_completed_collector=True))
     entries = scorecard.export_ledger(ledger, args.lattice)
     # Re-ingestion of the same source must be idempotent.
     scorecard.ingest(SimpleNamespace(history=None, history_provenance=None, ledger=ledger, lattice=args.lattice,
         jobs=output / 'jobs.json', artifacts=observations, repository=args.repository,
-        run=str(run['id']), attempt=str(run['run_attempt']), revision=run['head_sha']))
+        run=str(run['id']), attempt=str(run['run_attempt']), revision=run['head_sha'],
+        include_completed_collector=True))
     require(entries == scorecard.export_ledger(ledger, args.lattice), 'replay ingestion was not idempotent')
     value = scorecard.report(entries)
     require(not value['invalid_evidence'], 'invalid replay evidence')
     check = scorecard.cli(args.lattice, 'ledger', 'check', '--dir', str(ledger))
     (output / 'thresholds.txt').write_text(check)
+    value['run_context'] = run_context(run, args.code_revision, args.replay_run_url)
     provenance = {'source_run': run, 'source_artifacts': selected, 'replay_code_revision': args.code_revision,
                   'ledger_cli_sha256': hashlib.sha256(Path(args.lattice).read_bytes()).hexdigest(),
                   'replay_worktree_clean': True,
@@ -151,6 +162,7 @@ def replay(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-run', required=True, type=positive)
+    parser.add_argument('--replay-run-url')
     for name in ('repository', 'branch', 'lattice', 'output', 'code-revision'):
         parser.add_argument('--' + name, required=True)
     replay(parser.parse_args())

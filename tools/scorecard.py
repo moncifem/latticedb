@@ -188,6 +188,13 @@ def report(entries, root=ROOT):
 
 def markdown(value):
     lines = ['# Project scorecard', '', value['review_status'], '', value['history_scope'], '']
+    context = value.get('run_context')
+    if context:
+        original, replay = context['original_run'], context['replay']
+        lines += [f'Original workflow outcome: **{original["conclusion"].upper()}** '
+                  f'([run {original["id"]}]({original["url"]})).', '',
+                  f'Replay outcome: **{replay["conclusion"].upper()}**. '
+                  'Evidence collection only; the original workflow outcome is unchanged.', '']
     if value['invalid_evidence']:
         lines += ['Invalid evidence: ' + '; '.join(value['invalid_evidence']), '']
     lines += ['Observed retained totals:', '', '```json', json.dumps(value['observed_totals'], indent=2), '```', '']
@@ -238,8 +245,10 @@ def ingest(args):
             seen.add(key)
     base = f'{args.repository}/{args.run}/{args.attempt}'
     for job in jobs:
-        # The collector cannot honestly observe its own final status while running.
-        if job['name'] == 'scorecard':
+        # Live collection cannot observe its own final outcome. Replay may retain the completed
+        # historical collector, whose failure is part of the source run's engineering history.
+        if job['name'] == 'scorecard' and not (
+                getattr(args, 'include_completed_collector', False) and job['status'] == 'completed'):
             continue
         source = {'key': f'{base}/{job["id"]}', 'repository': args.repository,
                   'run_id': args.run, 'attempt': args.attempt, 'job_id': job['id'],

@@ -121,6 +121,27 @@ class RealLedgerTests(unittest.TestCase):
             self.assertEqual(value['sections']['fuzz']['status'], 'missing')
             self.assertEqual(value['invalid_evidence'], [])
 
+    def test_replay_keeps_failed_historical_collector_but_skips_unfinished_self(self):
+        for include, status, expected in [(False, 'completed', 0), (True, 'in_progress', 0),
+                                          (True, 'completed', 1)]:
+            with self.subTest(include=include, status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                job = {'id': 9, 'name': 'scorecard', 'status': status, 'conclusion': 'failure' if status == 'completed' else None,
+                       'html_url': 'https://example.test/job/9'}
+                (root / 'jobs.json').write_text(json.dumps({'jobs': [job]}))
+                args = SimpleNamespace(history=None, history_provenance=None, ledger=root / 'ledger', lattice=self.binary,
+                    jobs=root / 'jobs.json', artifacts=root / 'artifacts', repository='owner/repo', run='7',
+                    attempt='1', revision='a' * 40, include_completed_collector=include)
+                scorecard.ingest(args)
+                first = scorecard.export_ledger(args.ledger, self.binary)
+                self.assertEqual(len(first), expected)
+                scorecard.ingest(args)
+                self.assertEqual(first, scorecard.export_ledger(args.ledger, self.binary))
+                if expected:
+                    observations = scorecard.report(first)['sections']['engineering_health']['observations']
+                    self.assertEqual(observations[0]['name'], 'scorecard')
+                    self.assertEqual(observations[0]['conclusion'], 'failure')
+
     def test_snapshot_rejects_repair_and_never_modifies_original(self):
         with tempfile.TemporaryDirectory() as tmp:
             scorecard.record(self.binary, tmp, 'sim', {'runs': 1, 'failing': 0, 'incomplete': 0})
@@ -370,6 +391,21 @@ class ReplayEvidenceTests(unittest.TestCase):
             digest = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
             with self.assertRaises(ValueError):
                 replay.unpack(path, {'digest': digest}, root / 'bad')
+
+    def test_json_and_markdown_keep_original_failure_separate_from_successful_replay(self):
+        run = {'id': 7, 'html_url': 'https://github.com/owner/repo/actions/runs/7', 'conclusion': 'failure',
+               'run_attempt': 1, 'head_sha': 'a' * 40}
+        value = scorecard.report([])
+        value['run_context'] = replay.run_context(run, 'b' * 40, 'https://github.com/owner/repo/actions/runs/8')
+        encoded = json.loads(json.dumps(value))
+        self.assertEqual(encoded['run_context']['original_run']['conclusion'], 'failure')
+        self.assertEqual(encoded['run_context']['replay']['conclusion'], 'success')
+        self.assertEqual(encoded['run_context']['original_run']['url'], run['html_url'])
+        rendered = scorecard.markdown(value)
+        self.assertIn('Original workflow outcome: **FAILURE**', rendered)
+        self.assertIn('Replay outcome: **SUCCESS**', rendered)
+        self.assertIn(run['html_url'], rendered)
+        self.assertIn('original workflow outcome is unchanged', rendered)
 
     def test_replay_source_run_is_positive_numeric(self):
         self.assertEqual(replay.positive('40794782229'), '40794782229')
