@@ -12,6 +12,10 @@ between minor versions; format changes are called out explicitly.
 - Phase review evidence packages from `cargo xtask gate`, with declared criteria, source provenance,
   invariant traceability and optional ledger diagnostics, without inferring or signing a gate pass.
 
+- A row/index fault-history oracle covering all five disk profiles, actual injected-fault quotas,
+  deterministic replay and exhaustive rotation/recovery cut points. Rot-censored histories are
+  reported separately from verified histories; this does not claim the Phase 2 soak gate.
+
 - Typed-row layouts and a canonical codec with an overflow area for fields unknown to the encoding
   layout. Decoding requires the original layout; catalog integration and schema migration remain open.
 
