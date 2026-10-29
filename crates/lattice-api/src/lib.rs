@@ -13,3 +13,5 @@ pub const LAYER: u8 = 6;
 pub mod cancel;
 
 pub mod scram;
+
+pub mod auth;

@@ -7,7 +7,8 @@
 //! any sequence of messages.
 //!
 //! What it does:
-//! - startup: refuses SSL and GSS encryption with `N`, then trust authentication
+//! - startup: leaves host encryption to the caller and offers development trust or an explicit
+//!   configured SCRAM exchange before successful startup
 //!   (`AuthenticationOk`, `ParameterStatus` for `server_version` and `client_encoding`,
 //!   `BackendKeyData`, `ReadyForQuery`);
 //! - simple query: one `Q` message runs through a [`QueryHandler`] and ends with `ReadyForQuery`;
@@ -26,7 +27,8 @@ use std::collections::{BTreeMap, VecDeque};
 use crate::cancel::CancellationToken;
 
 use crate::pgwire::{
-    Backend, Column, ENCRYPTION_DECLINED, Frontend, ProtoError, Startup, Target, TxStatus,
+    Backend, Column, ENCRYPTION_DECLINED, Frontend, ProtoError, SaslPhase, Startup, Target,
+    TxStatus,
 };
 
 /// The `server_version` reported to clients. Drivers parse it to pick features.
@@ -118,6 +120,8 @@ pub struct Outcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     AwaitingStartup,
+    SaslInitial,
+    SaslFinal,
     Ready,
     Closed,
 }
@@ -150,6 +154,7 @@ pub struct Session<H> {
     pid: i32,
     secret: i32,
     phase: Phase,
+    authentication: Option<(crate::scram::ScramServer, bool)>,
     tx: TxStatus,
     /// After an error in the extended flow: ignore everything up to the next `Sync`.
     discarding: bool,
@@ -165,10 +170,35 @@ impl<H: QueryHandler> Session<H> {
             pid,
             secret,
             phase: Phase::AwaitingStartup,
+            authentication: None,
             tx: TxStatus::Idle,
             discarding: false,
             statements: BTreeMap::new(),
             portals: BTreeMap::new(),
+        }
+    }
+
+    /// Requires a configured SCRAM exchange before any query or successful startup output.
+    /// The host must select the verifier from the startup user and provide protected transport.
+    /// `known_account` is false for a synthetic unknown-user verifier, which must never succeed.
+    pub fn with_scram(
+        handler: H,
+        pid: i32,
+        secret: i32,
+        exchange: crate::scram::ScramServer,
+        known_account: bool,
+    ) -> Self {
+        let mut session = Self::new(handler, pid, secret);
+        session.authentication = Some((exchange, known_account));
+        session
+    }
+
+    /// The only permitted frontend password layout during an authentication exchange.
+    pub fn sasl_phase(&self) -> Option<SaslPhase> {
+        match self.phase {
+            Phase::SaslInitial => Some(SaslPhase::InitialResponse),
+            Phase::SaslFinal => Some(SaslPhase::Response),
+            _ => None,
         }
     }
 
@@ -222,26 +252,79 @@ impl<H: QueryHandler> Session<H> {
                         "no user name specified in the startup packet".to_string(),
                     );
                 }
-                self.phase = Phase::Ready;
+                if self.authentication.is_some() {
+                    self.phase = Phase::SaslInitial;
+                    Outcome {
+                        messages: vec![crate::scram::ScramServer::offer()],
+                        ..Outcome::default()
+                    }
+                } else {
+                    self.startup_success()
+                }
+            }
+        }
+    }
+
+    fn startup_success(&mut self) -> Outcome {
+        self.phase = Phase::Ready;
+        Outcome {
+            messages: vec![
+                Backend::AuthenticationOk,
+                Backend::ParameterStatus {
+                    name: "server_version".into(),
+                    value: SERVER_VERSION.into(),
+                },
+                Backend::ParameterStatus {
+                    name: "client_encoding".into(),
+                    value: "UTF8".into(),
+                },
+                Backend::BackendKeyData {
+                    pid: self.pid,
+                    secret: self.secret,
+                },
+                Backend::ReadyForQuery(self.tx),
+            ],
+            ..Outcome::default()
+        }
+    }
+
+    fn authenticate(&mut self, message: Frontend) -> Outcome {
+        if matches!(message, Frontend::Terminate) {
+            self.authentication = None;
+            self.phase = Phase::Closed;
+            return closed();
+        }
+        let Some((exchange, known)) = self.authentication.as_mut() else {
+            return self.fatal("28P01", "password authentication failed".into());
+        };
+        let result = match (self.phase, message) {
+            (
+                Phase::SaslInitial,
+                Frontend::SaslInitialResponse {
+                    mechanism,
+                    data: Some(data),
+                },
+            ) => exchange.initial(&mechanism, &data),
+            (Phase::SaslFinal, Frontend::SaslResponse(data)) => exchange.finish(&data),
+            _ => Err(crate::scram::ScramError::InvalidState),
+        };
+        match result {
+            Ok(message) if self.phase == Phase::SaslInitial => {
+                self.phase = Phase::SaslFinal;
                 Outcome {
-                    messages: vec![
-                        Backend::AuthenticationOk,
-                        Backend::ParameterStatus {
-                            name: "server_version".into(),
-                            value: SERVER_VERSION.into(),
-                        },
-                        Backend::ParameterStatus {
-                            name: "client_encoding".into(),
-                            value: "UTF8".into(),
-                        },
-                        Backend::BackendKeyData {
-                            pid: self.pid,
-                            secret: self.secret,
-                        },
-                        Backend::ReadyForQuery(self.tx),
-                    ],
+                    messages: vec![message],
                     ..Outcome::default()
                 }
+            }
+            Ok(message) if *known && exchange.is_authenticated() => {
+                self.authentication = None;
+                let mut outcome = self.startup_success();
+                outcome.messages.insert(0, message);
+                outcome
+            }
+            _ => {
+                self.authentication = None;
+                self.fatal("28P01", "password authentication failed".into())
             }
         }
     }
@@ -266,6 +349,7 @@ impl<H: QueryHandler> Session<H> {
             Phase::AwaitingStartup => {
                 return self.fatal("08P01", "expected a startup message".to_string());
             }
+            Phase::SaslInitial | Phase::SaslFinal => return self.authenticate(msg),
             Phase::Ready => {}
         }
         let mut out = Vec::new();
@@ -306,6 +390,7 @@ impl<H: QueryHandler> Session<H> {
     }
 
     fn fatal(&mut self, code: &str, message: String) -> Outcome {
+        self.authentication = None;
         self.phase = Phase::Closed;
         Outcome {
             messages: vec![Backend::ErrorResponse {
@@ -1500,5 +1585,100 @@ mod tests {
         );
         assert_eq!(session.handler().calls, 1);
         assert_eq!(session.tx_status(), TxStatus::Idle);
+    }
+
+    fn scram_session(known: bool) -> Session<Fake> {
+        // Published RFC7677 account, independently provisioned verifier in auth tests.
+        let verifier = crate::scram::Verifier::from_prepared_password(
+            b"pencil",
+            &[
+                91, 109, 153, 104, 157, 18, 53, 142, 236, 160, 75, 20, 18, 54, 250, 129,
+            ],
+            4096,
+        )
+        .unwrap();
+        let exchange = crate::scram::ScramServer::with_nonce_suffix(
+            verifier,
+            "%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0",
+        )
+        .unwrap();
+        Session::with_scram(Fake::default(), 17, 23, exchange, known)
+    }
+    fn scram_first() -> Frontend {
+        Frontend::SaslInitialResponse {
+            mechanism: "SCRAM-SHA-256".into(),
+            data: Some(b"n,,n=user,r=rOprNGfwEbeRWgbNEkqO".to_vec()),
+        }
+    }
+    fn scram_final() -> Frontend {
+        Frontend::SaslResponse(b"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=".to_vec())
+    }
+    #[test]
+    fn scram_success_orders_final_before_startup_and_gates_query_handler() {
+        let mut session = scram_session(true);
+        let offer = session.on_startup(Startup::Params(vec![("user".into(), "user".into())]));
+        assert_eq!(
+            offer.messages,
+            [Backend::AuthenticationSasl(vec!["SCRAM-SHA-256".into()])]
+        );
+        assert_eq!(session.sasl_phase(), Some(SaslPhase::InitialResponse));
+        let first = session.on_message(scram_first());
+        assert_eq!(first.messages.len(), 1);
+        assert!(matches!(
+            first.messages.first(),
+            Some(Backend::AuthenticationSaslContinue(_))
+        ));
+        assert!(session.handler().executed.is_empty());
+        let final_out = session.on_message(scram_final());
+        assert_eq!(
+            final_out.messages.first(),
+            Some(&Backend::AuthenticationSaslFinal(
+                b"v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=".to_vec()
+            ))
+        );
+        assert_eq!(final_out.messages.get(1), Some(&Backend::AuthenticationOk));
+        assert!(final_out.messages.contains(&Backend::BackendKeyData {
+            pid: 17,
+            secret: 23
+        }));
+        assert_eq!(session.sasl_phase(), None);
+        assert!(!final_out.close);
+        session.on_message(q("SELECT 1"));
+        assert_eq!(session.handler().executed, ["SELECT 1"]);
+    }
+    #[test]
+    fn scram_early_queries_wrong_order_and_unknown_proof_are_terminal() {
+        for input in [
+            q("SELECT 1"),
+            Frontend::Sync,
+            Frontend::Password(b"pencil".to_vec()),
+            scram_final(),
+            Frontend::SaslInitialResponse {
+                mechanism: "SCRAM-SHA-256-PLUS".into(),
+                data: Some(vec![]),
+            },
+        ] {
+            let mut session = scram_session(true);
+            session.on_startup(Startup::Params(vec![("user".into(), "user".into())]));
+            let out = session.on_message(input);
+            assert!(out.close);
+            assert_eq!(err_code(&out.messages[0]), "28P01");
+            assert!(session.handler().executed.is_empty());
+            assert!(session.on_message(scram_first()).messages.is_empty());
+        }
+        // Even a mathematically valid decoy proof must never authenticate an unknown account.
+        let mut session = scram_session(false);
+        session.on_startup(Startup::Params(vec![("user".into(), "missing".into())]));
+        session.on_message(scram_first());
+        let out = session.on_message(scram_final());
+        assert!(out.close);
+        assert_eq!(
+            out.messages,
+            [Backend::ErrorResponse {
+                severity: "FATAL".into(),
+                code: "28P01".into(),
+                message: "password authentication failed".into()
+            }]
+        );
     }
 }
