@@ -35,9 +35,27 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 |---|---|
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
 | Row engine | Snapshot reads, `AS OF` a change set or a timestamp, write conflicts, a versioned catalog and secondary indexes rebuilt from the log |
-| Wire protocol | A fuzzed PostgreSQL v3 message codec (startup and simple query). There is no server loop or SQL yet |
+| Wire protocol | A fuzzed PostgreSQL v3 message codec (startup, simple and extended query). There is no server loop or SQL yet |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
 | Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
+
+```mermaid
+flowchart TB
+  subgraph ahead["Not built yet"]
+    direction LR
+    sql["SQL server"] ~~~ pol["Agent policy"] ~~~ sync["Live sync"] ~~~ ws["Team workspace"]
+  end
+  subgraph have["Works today"]
+    direction TB
+    ifc["Interfaces: wire codec, CLI, LSL schemas"]
+    eng["Storage engine: row engine, AS OF reads, indexes, catalog"]
+    ker["Durable kernel: WAL, recovery, commit logic, checkpoints"]
+    ver["Verification: simulator, fuzzing, mutation tests, TLA+, Miri, ASan"]
+    ifc --> eng --> ker
+    ver -.-> ker
+  end
+  ahead -.-> have
+```
 
 SQL, PostgreSQL clients, live sync, policy enforcement and the connected workspace are still ahead.
 See the [delivery plan](docs/spec/README.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
