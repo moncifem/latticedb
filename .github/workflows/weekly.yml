@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, wal_record, sync_frame]
+        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, sql_parse, wal_record, row_ops, catalog_decode, typed_row_decode, sync_frame, plugin_jsonl, feed_decode]
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -24,9 +24,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with: { toolchain: nightly }
+        with: { toolchain: nightly-2026-10-27 }
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
-        with: { tool: cargo-fuzz }
+        with: { tool: cargo-fuzz@0.13.2 }
       - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: fuzz/corpus/${{ matrix.target }}
@@ -34,7 +34,7 @@ jobs:
           key: fuzz-corpus-${{ github.ref_name }}-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ github.ref_name }}-${{ matrix.target }}-
       - name: fuzz ${{ matrix.target }} for 5 hours (the corpus carries over between weeks)
-        run: cd fuzz && mkdir -p corpus/${{ matrix.target }} && cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=18000
+        run: cd fuzz && mkdir -p corpus/${{ matrix.target }} && cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=18000
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:

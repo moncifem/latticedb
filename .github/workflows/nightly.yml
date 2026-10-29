@@ -55,25 +55,42 @@ jobs:
         run: cargo test -p lattice-core -p lattice-abi -p lattice-lsl --release
         env:
           PROPTEST_CASES: "1000000"
+  proptest-sql:
+    # The SQL print/parse round-trip properties run at 1,000,000 cases. Its own job, so a timeout here
+    # cannot hide the codec properties above. lattice-engines is deliberately not included: its
+    # model_based and managed_indexes properties open real stores and write files for every case, and
+    # no 1,000,000-case run of them has been measured (an estimate of hours, not minutes). Add it only
+    # after a measured run fits a job budget, or after the case count is set per test.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: SQL property tests at 1,000,000 cases
+        run: cargo test -p lattice-sql --release
+        env:
+          PROPTEST_CASES: "1000000"
   fuzz:
     strategy:
       fail-fast: false
       matrix:
-        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, wal_record, row_ops, catalog_decode, typed_row_decode, sync_frame]
+        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, sql_parse, wal_record, row_ops, catalog_decode, typed_row_decode, sync_frame, plugin_jsonl, feed_decode]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with: { toolchain: nightly }
+        with: { toolchain: nightly-2026-10-27 }
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
-        with: { tool: cargo-fuzz }
+        with: { tool: cargo-fuzz@0.13.2 }
       - name: fuzz ${{ matrix.target }} for 10 minutes
         run: |
           set -o pipefail
           cd fuzz
-          mkdir -p corpus/${{ matrix.target }} && cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=600 2>&1 | tee fuzz.log
+          mkdir -p corpus/${{ matrix.target }} && cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=600 2>&1 | tee fuzz.log
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -95,9 +112,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with: { toolchain: nightly, components: miri }
+        with: { toolchain: nightly-2026-10-27, components: miri }
       - name: miri on deterministic core and engine libraries (few property cases; the interpreter is slow)
-        run: cargo +nightly miri test -p lattice-abi -p lattice-core -p lattice-engines --lib
+        run: cargo +nightly-2026-10-27 miri test -p lattice-abi -p lattice-core -p lattice-engines --lib
         env:
           PROPTEST_CASES: "4"
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-disable-isolation"
@@ -109,12 +126,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with: { toolchain: nightly, components: rust-src }
+        with: { toolchain: nightly-2026-10-27, components: rust-src }
       - name: AddressSanitizer (memory errors and leaks) over the unit and simulator tests
         run: >
-          cargo +nightly test -p lattice-abi -p lattice-core -p lattice-sim -p lattice-engines -p lattice-api --lib
+          cargo +nightly-2026-10-27 test -p lattice-abi -p lattice-core -p lattice-sim -p lattice-engines -p lattice-api --lib
           --target x86_64-unknown-linux-gnu -Zbuild-std &&
-          cargo +nightly test -p lattice-testkit --test scrub --test kernel_lifecycle --test power_cut_sweep
+          cargo +nightly-2026-10-27 test -p lattice-testkit --test scrub --test kernel_lifecycle --test power_cut_sweep
           --test convergence --test fuzz_lite --target x86_64-unknown-linux-gnu -Zbuild-std
         env:
           RUSTFLAGS: "-Zsanitizer=address"
@@ -272,7 +289,7 @@ jobs:
     # no concurrency group, so nothing cancels a job on purpose; a run an owner cancels by hand also
     # stops this job, and so opens nothing.
     if: always() && github.event_name == 'schedule'
-    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, scorecard, row-faults, cancel-loom]
+    needs: [sim, determinism-and-planted-bugs, proptest-sql, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, scorecard, row-faults, cancel-loom]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
