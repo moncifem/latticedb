@@ -1,0 +1,38 @@
+name: kani
+# Bounded model checking with Kani. Heavy, so it runs weekly and on demand, never on a pull request.
+# The unwind bound of every harness is recorded next to it with #[kani::unwind]; docs/verification.md
+# lists what each proof covers and what it does not.
+on:
+  schedule: [{ cron: "0 4 * * 0" }]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  KANI_VERSION: "0.65.0"
+jobs:
+  kani:
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [lattice-core, lattice-api, lattice-sdk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: cache the Kani install
+        id: kani-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-kani
+            ~/.cargo/bin/kani
+            ~/.kani
+          key: kani-${{ env.KANI_VERSION }}-${{ runner.os }}
+      - name: install kani-verifier ${{ env.KANI_VERSION }}
+        if: steps.kani-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked kani-verifier --version "${KANI_VERSION}"
+          cargo kani setup
+      - name: prove ${{ matrix.package }}
+        run: cargo kani -p ${{ matrix.package }} --harness-timeout 20m

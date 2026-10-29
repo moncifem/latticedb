@@ -1,0 +1,85 @@
+# Verification with Kani
+
+[Kani](https://github.com/model-checking/kani) is a bounded model checker for Rust. A harness
+(`#[kani::proof]`) runs a function on symbolic inputs and checks that no assertion, panic,
+overflow or out-of-bounds access can happen, for every input inside the stated bounds.
+
+**A bounded proof is not a full proof.** Each harness below holds for the inputs it covers and says
+nothing about larger ones. The unwind bound, which must exceed the largest loop in the harness, is
+recorded with `#[kani::unwind(N)]` next to each harness, together with the input bound in its doc
+comment. These proofs complement, and do not replace, the unit, property, fuzz and simulation tests.
+
+The harnesses live in a `#[cfg(kani)] mod proofs` at the end of each source file, so they are not
+compiled by ordinary builds. The `kani` cfg is declared in the workspace `unexpected_cfgs` lint.
+
+## Running
+
+The `kani` workflow (`.github/workflows/kani.yml`) runs weekly and on demand; it is not part of the
+pull-request gate because it is heavy. It installs the pinned `kani-verifier` with
+`cargo install --locked`, caches the install, and runs `cargo kani -p <package>` for
+`lattice-core`, `lattice-api` and `lattice-sdk` with `--harness-timeout 20m`. To run one locally:
+
+```bash
+cargo install --locked kani-verifier --version 0.65.0 && cargo kani setup
+cargo kani -p lattice-core --harness cursor_round_trips
+```
+
+## Proofs
+
+| Harness | File | Input bound | Unwind | Establishes |
+| --- | --- | --- | --- | --- |
+| `cursor_round_trips` | `lattice-core/src/feed.rs` | all `u64` lsn, all `u32` index | 14 | `Cursor::new` then `to_bytes` then `from_bytes` returns the same cursor for every nonzero lsn; the origin round trips; lsn 0 is refused by `new`. |
+| `cursor_order_matches_lsn_index_and_bytes` | `lattice-core/src/feed.rs` | all pairs of nonzero cursors | 14 | Cursor order equals `(lsn, index)` order, and equals the order of the encoded 12 bytes compared as unsigned strings. |
+| `cursor_decode_never_panics` | `lattice-core/src/feed.rs` | slices of 0 to 14 bytes | 16 | `Cursor::from_bytes` never panics; it accepts only 12 byte inputs and re-encodes what it accepts to the same bytes. |
+| `event_decode_never_panics` | `lattice-core/src/feed.rs` | slices of 0 to 80 bytes | 82 | `ChangeEvent::decode` never panics, including past the fixed header into the key and operation tag. |
+| `frame_decode_never_panics` | `lattice-api/src/sync.rs` | slices of 0 to 24 bytes | 26 | `sync::decode` never panics, and a returned frame length is within the input and at least the header. |
+| `frame_decode_with_limit_never_panics` | `lattice-api/src/sync.rs` | 0 to 24 bytes, any payload limit | 26 | The same for `decode_with_limit`, and the payload length never exceeds the limit or `MAX_PAYLOAD`. |
+| `framer_bounds_hold` | `lattice-sdk/src/contract.rs` | 6 bytes in two arbitrary pushes | 10 | `Framer::push` never panics, yields one result per newline, returns no line holding a newline or longer than its input, and never buffers more than `MAX_LINE_BYTES`. |
+| `framer_finish_resets` | `lattice-sdk/src/contract.rs` | 0 to 6 bytes | 10 | `Framer::finish` never panics and leaves the framer empty and not skipping. |
+| `move_into_own_subtree_is_a_no_op` | `lattice-core/src/crdt_tree.rs` | two-node chain, one later move, any position | 8 | A move of a node under itself or its descendant is `Skipped`, leaves the snapshot unchanged and the tree acyclic. |
+| `would_cycle_matches_ancestry` | `lattice-core/src/crdt_tree.rs` | the same chain, all node pairs 0 to 3 | 8 | `would_cycle(node, parent)` is true exactly when `node` is `parent` or an ancestor of it. |
+
+## What these do not establish
+
+- Larger inputs. The decoders are proved up to 24 to 80 bytes. Maximum-size keys, values, texts and
+  event lists are beyond the bound; they stay with the property tests and the fuzz targets.
+- The line splitter's over-long-line branch. `MAX_LINE_BYTES` is 1 MiB, far beyond any bound Kani can
+  unroll, so `framer_bounds_hold` shows the invariants on short inputs only; the limit itself is
+  covered by unit tests.
+- Convergence of the tree CRDT under reordering and duplication. The tree proof covers the cycle check
+  on a two-node chain, not deep trees or the undo/redo replay; the property tests and the simulator
+  cover convergence.
+- Anything outside the harnessed functions, such as storage, the write-ahead log or concurrency.
+
+## Status of the runs
+
+The harnesses were written and type-checked against the normal build (cfg off), but Kani was not
+executed on the machine they were written on: it is heavy and the owner's rule is to leave long jobs to CI.
+The first scheduled or manual run of the `kani` workflow is the first execution; a harness that
+fails there, or exceeds its timeout, needs its bound lowered or the harness fixed before this document
+can claim it passes. The version pin (`0.65.0`) should be checked against the release list on that run.
+
+## Demonstration that a proof can fail
+
+The check is that a deliberately broken variant of a function makes its harness fail. The planned
+variant, not committed and not yet run, drops the cycle check from `Tree::perform` in
+`crates/lattice-core/src/crdt_tree.rs`:
+
+```diff
+-        let valid = parent_known
+-            && (bugs::active(Bug::TreeCycleCheckSkipped) || !self.would_cycle(op.node, op.parent));
++        let valid = parent_known;
+```
+
+With it, `move_into_own_subtree_is_a_no_op` must fail: the move of node 2 under itself is applied,
+so the outcome is `Applied` and the first assertion is violated. Record the Kani output here when the
+demonstration has been run:
+
+```bash
+# apply the diff above locally, then
+cargo kani -p lattice-core --harness move_into_own_subtree_is_a_no_op   # expected: VERIFICATION:- FAILED
+```
+
+A second variant for the cursor proofs: change `to_be_bytes` to `to_le_bytes` for the lsn in
+`Cursor::to_bytes`; `cursor_order_matches_lsn_index_and_bytes` must fail, and
+`cursor_round_trips` too, because the decoder reads big endian.

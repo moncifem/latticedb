@@ -1,0 +1,1 @@
+Kani proof harnesses (`cfg(kani)`, in `proofs.rs` files) for the change feed cursor, the sync frame decoder, the plugin contract line splitter and the tree CRDT cycle check, a weekly `kani` workflow, and `docs/verification.md` with the bound of each proof. The harnesses have not been executed yet.
