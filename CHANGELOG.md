@@ -150,6 +150,10 @@ between minor versions; format changes are called out explicitly.
   and a `plugin_jsonl` fuzz target (not yet in the scheduled fuzz matrices). No plugin talks to a server yet.
 - `lattice_sdk::client`: sans-I/O sync client state machine (handshake and version negotiation,
   subscribe, batched acks, resume without gaps or duplicates, logical-clock ping timeouts).
+- `lattice-testkit::convergence`: N-replica (2 to 5) convergence harness for the register, set and tree CRDTs
+  over a simulated network driven by the five fault profile names, with a checker for identical digests, no
+  lost acknowledged write and an acyclic tree, a seed sweep, an ignored 100,000-seed volume test and planted
+  defects in harness replicas. Not yet in the nightly shards.
 
 ### Changed
 

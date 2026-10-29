@@ -46,3 +46,12 @@ the plugin contract reference plugin, because `layers.toml` does not let `lattic
 `lattice-sdk`. A 100,000 seed per profile volume test exists as an ignored test and has not been run.
 One ignored test records a divergence: the kernel answers `Duplicate` where the plugin contract says `fenced`
 for a late retry of an already stored write.
+Verification evidence, not an exit criterion: `lattice-testkit::convergence` (WP45, issue #247) runs 2 to 5
+replicas of the register, set and tree CRDTs over a simulated network (delay, reorder, duplication, drops with
+retransmit) chosen from the five fault profile names (clean, crash-heavy, disk-faulty, hostile, everything).
+One local run of `cargo test -p lattice-testkit --test convergence_replicas`: 200 seeds x 5 profiles x 3 families
+(3,000 simulations, 146,822 acknowledged writes) produced 0 violations of identical digests, no lost
+acknowledged write and an acyclic tree. Seven planted defects in harness wrapper replicas (overwriting merge,
+lost local write, lost remote operation, missing duplicate detection, skipped cycle check, for the three
+families) were each detected within the same 200 seeds. The 100,000-seed volume test is `#[ignore]` and was not
+run locally. Not wired into the nightly shards, ledger or scorecard yet.
