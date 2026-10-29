@@ -105,3 +105,55 @@ fn a_change_the_kernel_rejects_is_rejected_and_leaves_the_store_usable() {
     tx.put((1, b"small".to_vec()), b"v".to_vec());
     assert!(store.commit(tx).is_ok());
 }
+
+#[test]
+fn ranges_that_select_nothing_return_nothing_and_a_single_key_range_returns_that_key() {
+    use std::ops::Bound::{Excluded, Included};
+    let mut table: Table<u32, u32> = Table::new();
+    table
+        .apply(
+            1,
+            ChangeSetId::from_parts(1, 1, 1),
+            (1..=9).map(|k| (k, Some(k * 10))).collect(),
+        )
+        .unwrap();
+    let snap = table.snapshot();
+    let keys = |rows: Vec<(&u32, &u32)>| rows.into_iter().map(|(k, _)| *k).collect::<Vec<_>>();
+    // Inverted or empty bounds select nothing, whatever mix of inclusive and exclusive ends.
+    assert!(
+        table
+            .range(snap, (Included(5), Included(3)))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(table.range(snap, 5..5).unwrap().is_empty());
+    assert!(
+        table
+            .range(snap, (Excluded(5), Included(5)))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        table
+            .range(snap, (Excluded(5), Excluded(5)))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        table
+            .range(snap, (Included(6), Excluded(5)))
+            .unwrap()
+            .is_empty()
+    );
+    // A one-key range is not empty, and neighbouring exclusive bounds are plain ranges.
+    assert_eq!(keys(table.range(snap, 5..=5).unwrap()), vec![5]);
+    assert_eq!(
+        keys(table.range(snap, (Included(5), Excluded(6))).unwrap()),
+        vec![5]
+    );
+    assert_eq!(
+        keys(table.range(snap, (Excluded(4), Included(5))).unwrap()),
+        vec![5]
+    );
+    assert_eq!(keys(table.range(snap, 3..=5).unwrap()), vec![3, 4, 5]);
+}
