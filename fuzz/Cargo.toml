@@ -105,3 +105,10 @@ path = "fuzz_targets/plugin_jsonl.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "feed_decode"
+path = "fuzz_targets/feed_decode.rs"
+test = false
+doc = false
+bench = false

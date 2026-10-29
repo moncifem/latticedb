@@ -9,6 +9,12 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- A typed change feed model (`lattice_core::feed`): one `ChangeEvent` per entity change of a committed
+  change set, and a `Cursor` of `(lsn, index)` whose order is commit order and does not depend on
+  restarts. Strict bounded decoding that accepts only canonical bytes, specified with worked byte examples
+  in `formats/change-feed-v1.md`, and a `feed_decode` fuzz target. Not yet connected to the log, the
+  engines or any subscription, and not yet in the fuzz workflow matrices.
+
 - A tree CRDT with move semantics (`lattice_core::crdt_tree`): stable node ids, moves ordered by the
   hybrid logical clock with undo and redo of later operations, cycle-forming moves dropped identically
   on every replica, delete as a move into a tombstone root, idempotent delivery, and a strict 41-byte

@@ -1,6 +1,6 @@
 # fuzz
 
-`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire`, `sql_parse`, `wal_record`, `row_ops`, `catalog_decode` and `typed_row_decode`.
+`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire`, `sql_parse`, `wal_record`, `row_ops`, `catalog_decode`, `typed_row_decode` and `feed_decode`.
 
 ```sh
 cd fuzz
@@ -40,3 +40,12 @@ No local fuzz execution is needed to build-check these targets with `cargo check
 `fuzz/`. Linux CI runs cargo-fuzz with the GNU target; a native build check on another platform is
 not evidence of a Linux sanitizer build or a completed fuzz duration. Crash discoveries still need
 minimized seed inputs and focused regressions beside the affected decoder.
+
+## Change feed target
+
+`feed_decode` feeds arbitrary bytes to the change feed event decoder and the cursor decoder
+(`lattice_core::feed`). Anything that decodes must re-encode to exactly the input bytes, which checks
+that only canonical encodings are accepted. Seeds in `seeds/feed_decode/` cover each operation, a turn,
+the extreme cursor and index values, the origin cursor, and malformed inputs (lsn 0, index past the set,
+wrong version, trailing byte, oversized length, truncation). The target is not yet in the nightly,
+weekly or 24-hour matrices.
