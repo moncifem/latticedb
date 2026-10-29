@@ -548,7 +548,7 @@ mod tests {
             let at = data.len();
             data.extend_from_slice(&[0xFF; 20]);
             data.extend_from_slice(&encode_record(4, 1, &vec![7; pad]));
-            if data.len() % RECORD_HEADER_LEN == 0 {
+            if data.len().is_multiple_of(RECORD_HEADER_LEN) {
                 assert!(valid_record_after(&data, at, 1), "pad {pad}");
                 found = true;
             }
