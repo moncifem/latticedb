@@ -10,8 +10,11 @@ pub const GUARDED_MAGIC: &[u8; 8] = b"LATCAP02";
 pub const GUARDED_HEADER_LEN: usize = 32;
 /// Required capability for managed compound catalog/index/row payloads.
 pub const MANAGED_COMPOUND: u64 = 1;
-/// All required capabilities understood by this format.
-pub const KNOWN_CAPABILITIES: u64 = MANAGED_COMPOUND;
+/// Proposed persisted typed-schema validation capability (RFC 0001 / ADR 0015, not accepted).
+/// Bit 1 remains unknown/reserved to preserve the accepted negative admission fixture.
+pub const TYPED_SCHEMA: u64 = 1 << 2;
+/// Required capabilities recognized by this implementation; recognition is not format acceptance.
+pub const KNOWN_CAPABILITIES: u64 = MANAGED_COMPOUND | TYPED_SCHEMA;
 
 /// Segment provenance supplied to a recovery consumer, separate from record bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -65,7 +65,7 @@ waiving review. Preserve the original six commits for provenance: `035038e`, `ac
 `515767f`, `6ea7a49`, `0d7cc69`. The original branch and worktree remain untouched.
 
 The integration targets the current accepted guarded-WAL and managed-index implementation. It
-proposes a distinct typed-schema capability at bit 1 (value 2); accepted managed compounds keep
+proposes a distinct typed-schema capability at bit 2 (value 4); accepted managed compounds keep
 bit 0 (value 1). Typed schema adoption and typed writes must require the new capability. Only an
 engine that actually decodes and validates typed schemas and rows may advertise it; legacy callback
 mode remains at zero. Default core-only and catalog-only consumers must refuse typed history.

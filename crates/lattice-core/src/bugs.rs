@@ -84,6 +84,8 @@ pub enum Bug {
     ManagedIndexesNotRecovered,
     /// Strict HLC history resolution silently substitutes the vacuum floor for an expired view.
     HlcSnapshotClamped,
+    /// Raw typed-table writes skip their persisted schema and writer-layout validation.
+    TypedSchemaValidationSkipped,
 }
 
 impl Bug {
@@ -120,6 +122,9 @@ impl Bug {
 
     /// Strict HLC snapshot defects, detected by the focused retention witness.
     pub const HLC_SNAPSHOT: [Bug; 1] = [Bug::HlcSnapshotClamped];
+
+    /// Persisted typed-row validation defects, detected by the common-boundary witness.
+    pub const TYPED_ROWS: [Bug; 1] = [Bug::TypedSchemaValidationSkipped];
 
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
@@ -210,6 +215,7 @@ mod tests {
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
+            .chain(Bug::TYPED_ROWS)
     }
 
     #[test]
@@ -223,8 +229,9 @@ mod tests {
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
+            .chain(Bug::TYPED_ROWS)
             .collect();
-        assert_eq!(all.len(), 38);
+        assert_eq!(all.len(), 39);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

@@ -7,16 +7,21 @@
 //! Layout (little endian): magic `LCAT`, a version byte, a `u32` count, then per operation a kind byte
 //! (1 create, 2 rename, 3 drop), a `u32` table id and, for create and rename, a `u32` name length and
 //! the UTF-8 name. Those version 1 bytes remain unchanged. The separately identified `LCIX`
-//! version 1 envelope adds managed index definitions and optional row mutations at one commit LSN;
-//! it does not reuse the reserved typed-catalog version 2. See RFC 0005 for upgrade restrictions.
+//! version 1 envelope adds managed index definitions and optional row mutations at one commit LSN.
+//! Its nested table block remains LCAT v1. Proposed LCIX v2 nests the separate LCAT v2 schema
+//! extension under its own typed capability (draft RFC 0001 / proposed ADR 0015). Accepted LCIX v1
+//! bytes and meaning are unchanged; see RFC 0005 and the typed proposal for admission boundaries.
 
 use crate::index::{IndexKey, ManagedIndexDef, ManagedIndexes};
 use crate::rowops::{self, RowWrite};
+use crate::typed::{self, TableLayout};
 use lattice_abi::{Classify, ErrorClass};
 use lattice_core::admission::MANAGED_COMPOUND;
 use lattice_core::changeset::ChangeSet;
 use lattice_core::record::RecordType;
 use lattice_core::{Config, Kernel, Receipt, TxnError};
+use lattice_lsl::check::{self, Compiled};
+use lattice_lsl::{format, parser};
 use lattice_seams::{Clock, Io, Rng};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -49,6 +54,15 @@ pub enum CatalogOp {
         /// The table.
         table: u32,
     },
+    /// Installs checked schema text and its exact type-to-table mapping atomically.
+    DefineSchema {
+        /// Monotonically increasing schema version, never reused.
+        version: u64,
+        /// The LSL source; parsing and checking happen before logging and on replay.
+        source: String,
+        /// One stable physical table id per type in the schema.
+        tables: BTreeMap<u32, String>,
+    },
 }
 
 /// Why a catalog change or payload was refused.
@@ -74,6 +88,14 @@ pub enum CatalogError {
     UnsupportedVersion(u8),
     /// Bytes remain after the last operation.
     Trailing,
+    /// The schema text is invalid or not canonical LSL.
+    InvalidSchema(String),
+    /// The schema version is zero or not newer than the last installed version.
+    SchemaVersion(u64),
+    /// The table mapping does not identify every schema type exactly once.
+    InvalidMapping,
+    /// An id or format length is exhausted.
+    Exhausted,
     /// A managed index id was already used, even if the index was dropped.
     IndexIdUsed(u32),
     /// An index does not exist in the current catalog.
@@ -101,19 +123,64 @@ pub fn is_catalog_payload(payload: &[u8]) -> bool {
     payload.get(..4) == Some(MAGIC.as_slice())
 }
 
+pub(crate) fn has_schema(ops: &[CatalogOp]) -> bool {
+    ops.iter()
+        .any(|op| matches!(op, CatalogOp::DefineSchema { .. }))
+}
+
 /// Encodes operations.
 pub fn encode(ops: &[CatalogOp]) -> Result<Vec<u8>, CatalogError> {
     if ops.is_empty() {
         return Err(CatalogError::Empty);
     }
     let mut out = MAGIC.to_vec();
-    out.push(VERSION);
-    out.extend_from_slice(&(ops.len() as u32).to_le_bytes());
+    let schema_payload = ops
+        .iter()
+        .any(|op| matches!(op, CatalogOp::DefineSchema { .. }));
+    out.push(if schema_payload { 2 } else { VERSION });
+    out.extend_from_slice(
+        &u32::try_from(ops.len())
+            .map_err(|_| CatalogError::Exhausted)?
+            .to_le_bytes(),
+    );
     for op in ops {
+        if let CatalogOp::DefineSchema {
+            version,
+            source,
+            tables,
+        } = op
+        {
+            if source.len() > parser::MAX_SCHEMA_BYTES {
+                return Err(CatalogError::Exhausted);
+            }
+            out.push(4);
+            out.extend_from_slice(&version.to_le_bytes());
+            out.extend_from_slice(
+                &u32::try_from(source.len())
+                    .map_err(|_| CatalogError::Exhausted)?
+                    .to_le_bytes(),
+            );
+            out.extend_from_slice(source.as_bytes());
+            out.extend_from_slice(
+                &u32::try_from(tables.len())
+                    .map_err(|_| CatalogError::Exhausted)?
+                    .to_le_bytes(),
+            );
+            for (table, name) in tables {
+                if name.is_empty() || name.len() > MAX_NAME {
+                    return Err(CatalogError::BadName);
+                }
+                out.extend_from_slice(&table.to_le_bytes());
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+            }
+            continue;
+        }
         let (kind, table, name) = match op {
             CatalogOp::Create { table, name } => (1u8, *table, Some(name)),
             CatalogOp::Rename { table, name } => (2, *table, Some(name)),
             CatalogOp::Drop { table } => (3, *table, None),
+            CatalogOp::DefineSchema { .. } => return Err(CatalogError::InvalidMapping),
         };
         out.push(kind);
         out.extend_from_slice(&table.to_le_bytes());
@@ -172,17 +239,46 @@ pub fn decode(payload: &[u8]) -> Result<Vec<CatalogOp>, CatalogError> {
     if r.take(4)? != MAGIC.as_slice() {
         return Err(CatalogError::Truncated);
     }
-    match r.u8()? {
-        VERSION => {}
-        v => return Err(CatalogError::UnsupportedVersion(v)),
+    let version = r.u8()?;
+    if version != VERSION && version != 2 {
+        return Err(CatalogError::UnsupportedVersion(version));
     }
     let count = r.u32()?;
     if count == 0 {
         return Err(CatalogError::Empty);
     }
     let mut ops = Vec::new();
+    let mut has_schema = false;
     for _ in 0..count {
         let kind = r.u8()?;
+        if kind == 4 && version == 2 {
+            has_schema = true;
+            let bytes: [u8; 8] = r.take(8)?.try_into().map_err(|_| CatalogError::Truncated)?;
+            let schema_version = u64::from_le_bytes(bytes);
+            let len = r.u32()? as usize;
+            if len > parser::MAX_SCHEMA_BYTES {
+                return Err(CatalogError::Exhausted);
+            }
+            let source = String::from_utf8(r.take(len)?.to_vec())
+                .map_err(|_| CatalogError::InvalidSchema("invalid UTF-8".into()))?;
+            let n = r.u32()?;
+            let mut tables = BTreeMap::new();
+            let mut previous = None;
+            for _ in 0..n {
+                let table = r.u32()?;
+                if previous.is_some_and(|id| id >= table) {
+                    return Err(CatalogError::InvalidMapping);
+                }
+                previous = Some(table);
+                tables.insert(table, r.name()?);
+            }
+            ops.push(CatalogOp::DefineSchema {
+                version: schema_version,
+                source,
+                tables,
+            });
+            continue;
+        }
         let table = r.u32()?;
         ops.push(match kind {
             1 => CatalogOp::Create {
@@ -199,6 +295,9 @@ pub fn decode(payload: &[u8]) -> Result<Vec<CatalogOp>, CatalogError> {
     }
     if !r.rest.is_empty() {
         return Err(CatalogError::Trailing);
+    }
+    if version == 2 && !has_schema {
+        return Err(CatalogError::InvalidMapping);
     }
     Ok(ops)
 }
@@ -265,7 +364,7 @@ pub fn encode_compound(change: &CompoundChange) -> Result<Vec<u8>, CatalogError>
         rowops::encode(&change.rows).map_err(|_| CatalogError::TooLarge)?
     };
     let mut out = INDEX_MAGIC.to_vec();
-    out.push(1);
+    out.push(if has_schema(&change.tables) { 2 } else { 1 });
     put_block(&mut out, &tables)?;
     out.extend_from_slice(
         &u32::try_from(change.indexes.len())
@@ -316,9 +415,9 @@ pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
     if r.take(4)? != INDEX_MAGIC {
         return Err(CatalogError::BadCompound("magic"));
     }
-    match r.u8()? {
-        1 => {}
-        version => return Err(CatalogError::UnsupportedVersion(version)),
+    let compound_version = r.u8()?;
+    if compound_version != 1 && compound_version != 2 {
+        return Err(CatalogError::UnsupportedVersion(compound_version));
     }
     let table_len = r.u32()? as usize;
     let tables = if table_len == 0 {
@@ -331,15 +430,18 @@ pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
         if header.take(4)? != MAGIC.as_slice() {
             return Err(CatalogError::Truncated);
         }
-        match header.u8()? {
-            VERSION => {}
-            version => return Err(CatalogError::UnsupportedVersion(version)),
+        let nested_version = header.u8()?;
+        if nested_version != VERSION && !(compound_version == 2 && nested_version == 2) {
+            return Err(CatalogError::UnsupportedVersion(nested_version));
         }
         if header.u32()? as usize > MAX_INDEX_OPS {
             return Err(CatalogError::TooLarge);
         }
         decode(nested)?
     };
+    if (compound_version == 2) != has_schema(&tables) {
+        return Err(CatalogError::BadCompound("typed compound version"));
+    }
     let count = r.u32()? as usize;
     if count > MAX_INDEX_OPS {
         return Err(CatalogError::TooLarge);
@@ -400,6 +502,21 @@ pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
 /// The tables that exist at one version: id to name.
 pub type Tables = BTreeMap<u32, String>;
 
+/// A persisted checked schema and the physical layouts it owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaVersion {
+    /// Stable version, also stamped into typed row values.
+    pub version: u64,
+    /// The LSN at which this schema became visible.
+    pub installed_lsn: u64,
+    /// Canonical LSL source, retained in the catalog log.
+    pub source: String,
+    /// Checked field constraints used before encoding.
+    pub compiled: Compiled,
+    /// Stable physical table id to typed layout.
+    pub layouts: BTreeMap<u32, TableLayout>,
+}
+
 /// Every version of the catalog.
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
@@ -407,6 +524,7 @@ pub struct Catalog {
     versions: Vec<(u64, Tables)>,
     /// Every id ever created, live or dropped.
     used: BTreeSet<u32>,
+    schemas: BTreeMap<u64, SchemaVersion>,
     index_versions: Vec<(u64, ManagedIndexes)>,
     used_indexes: BTreeSet<u32>,
 }
@@ -446,10 +564,61 @@ impl Catalog {
         self.versions.last().map_or(0, |(l, _)| *l)
     }
 
+    /// The next never-used physical table id.
+    pub fn next_table_id(&self) -> Result<u32, CatalogError> {
+        self.used
+            .last()
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(CatalogError::Exhausted)
+    }
+
+    /// The next never-used schema version.
+    pub fn next_schema_version(&self) -> Result<u64, CatalogError> {
+        self.schemas
+            .last_key_value()
+            .map_or(0, |(v, _)| *v)
+            .checked_add(1)
+            .ok_or(CatalogError::Exhausted)
+    }
+
+    /// An original writer schema, retained even after later schemas or drops.
+    pub fn schema(&self, version: u64) -> Option<&SchemaVersion> {
+        self.schemas.get(&version)
+    }
+
+    /// The schema and layout governing a physical table at `lsn`.
+    pub fn layout_at(&self, table: u32, lsn: u64) -> Option<(&SchemaVersion, &TableLayout)> {
+        if !self.as_of(lsn).contains_key(&table) {
+            return None;
+        }
+        self.schemas
+            .values()
+            .rev()
+            .filter(|s| s.installed_lsn <= lsn)
+            .find_map(|schema| schema.layouts.get(&table).map(|layout| (schema, layout)))
+    }
+
+    pub(crate) fn has_typed_history(&self, table: u32) -> bool {
+        self.schemas
+            .values()
+            .any(|schema| schema.layouts.contains_key(&table))
+    }
+
     /// Checks the operations against the current catalog without changing it.
     fn check_tables(&self, ops: &[CatalogOp]) -> Result<Tables, CatalogError> {
+        self.prepare_tables(ops).map(|(tables, _, _)| tables)
+    }
+
+    fn prepare_tables(
+        &self,
+        ops: &[CatalogOp],
+    ) -> Result<(Tables, BTreeSet<u32>, Vec<SchemaVersion>), CatalogError> {
         let mut tables = self.current();
         let mut used = self.used.clone();
+        let mut schemas = Vec::new();
+        let mut latest = self.schemas.last_key_value().map_or(0, |(v, _)| *v);
         for op in ops {
             match op {
                 CatalogOp::Create { table, name } => {
@@ -481,9 +650,67 @@ impl Catalog {
                         return Err(CatalogError::NoSuchTable(*table));
                     }
                 }
+                CatalogOp::DefineSchema {
+                    version,
+                    source,
+                    tables: mapping,
+                } => {
+                    if *version == 0 || *version <= latest {
+                        return Err(CatalogError::SchemaVersion(*version));
+                    }
+                    let ast = parser::parse(source)
+                        .map_err(|e| CatalogError::InvalidSchema(format!("{e:?}")))?;
+                    let compiled = check::check(&ast)
+                        .map_err(|e| CatalogError::InvalidSchema(format!("{e:?}")))?;
+                    if format::format(&ast) != *source {
+                        return Err(CatalogError::InvalidSchema(
+                            "source must be canonical LSL".into(),
+                        ));
+                    }
+                    let layouts_by_name = typed::layouts(&compiled);
+                    let names: BTreeSet<_> = mapping.values().cloned().collect();
+                    if mapping.is_empty()
+                        || mapping.len() != names.len()
+                        || names != compiled.types.keys().cloned().collect()
+                    {
+                        return Err(CatalogError::InvalidMapping);
+                    }
+                    let mut layouts = BTreeMap::new();
+                    for (id, name) in mapping {
+                        if name.is_empty() || name.len() > MAX_NAME {
+                            return Err(CatalogError::BadName);
+                        }
+                        match tables.get(id) {
+                            Some(existing) if existing == name => {}
+                            Some(_) => return Err(CatalogError::IdUsed(*id)),
+                            None => {
+                                if !used.insert(*id) {
+                                    return Err(CatalogError::IdUsed(*id));
+                                }
+                                if tables.values().any(|n| n == name) {
+                                    return Err(CatalogError::NameTaken(name.clone()));
+                                }
+                                tables.insert(*id, name.clone());
+                            }
+                        }
+                        let layout = layouts_by_name
+                            .get(name)
+                            .cloned()
+                            .ok_or(CatalogError::InvalidMapping)?;
+                        layouts.insert(*id, layout);
+                    }
+                    latest = *version;
+                    schemas.push(SchemaVersion {
+                        version: *version,
+                        installed_lsn: 0,
+                        source: source.clone(),
+                        compiled,
+                        layouts,
+                    });
+                }
             }
         }
-        Ok(tables)
+        Ok((tables, used, schemas))
     }
 
     /// Live managed definitions as of `lsn`; definition history is retained independently of rows.
@@ -570,10 +797,11 @@ impl Catalog {
             return Err(CatalogError::OutOfOrder);
         }
         let (tables, indexes) = self.check_change(ops, changes)?;
-        for op in ops {
-            if let CatalogOp::Create { table, .. } = op {
-                self.used.insert(*table);
-            }
+        let (_, used, schemas) = self.prepare_tables(ops)?;
+        self.used = used;
+        for mut schema in schemas {
+            schema.installed_lsn = lsn;
+            self.schemas.insert(schema.version, schema);
         }
         for change in changes {
             if let IndexOp::Create(def) = change {
@@ -661,6 +889,11 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
                         return;
                     }
                     match decode_compound(&cs.payload).and_then(|change| {
+                        if has_schema(&change.tables) {
+                            return Err(CatalogError::BadCompound(
+                                "typed schemas require RowStore",
+                            ));
+                        }
                         catalog.apply_change(r.lsn, &change.tables, &change.indexes)
                     }) {
                         Ok(()) => {}
@@ -678,6 +911,11 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
                 }
                 match decode(&cs.payload) {
                     Ok(ops) => {
+                        if has_schema(&ops) {
+                            failure =
+                                Some(StoreError::Corrupt("typed schemas require RowStore".into()));
+                            return;
+                        }
                         if let Err(e) = catalog.apply(r.lsn, &ops) {
                             failure = Some(StoreError::Corrupt(format!("lsn {}: {e}", r.lsn)));
                         }
@@ -715,6 +953,11 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
     ) -> Result<u64, StoreError> {
         if self.stale {
             return Err(StoreError::Stale);
+        }
+        if has_schema(&tables) {
+            return Err(StoreError::Invalid(CatalogError::BadCompound(
+                "typed schemas require RowStore",
+            )));
         }
         self.catalog
             .check_change(&tables, &indexes)
@@ -755,6 +998,11 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
     pub fn commit(&mut self, ops: Vec<CatalogOp>) -> Result<u64, StoreError> {
         if self.stale {
             return Err(StoreError::Stale);
+        }
+        if has_schema(&ops) {
+            return Err(StoreError::Invalid(CatalogError::BadCompound(
+                "typed schemas require RowStore",
+            )));
         }
         self.catalog.check(&ops).map_err(StoreError::Invalid)?;
         let payload = encode(&ops).map_err(StoreError::Invalid)?;
