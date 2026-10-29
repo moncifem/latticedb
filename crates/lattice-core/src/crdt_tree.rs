@@ -32,14 +32,34 @@
 //!   at or below it can ever be undone or redone again. Their effect is already in the materialised
 //!   tree and stays there; only the undo records are discarded. Every later operation is ordered
 //!   after all dropped ones, so it produces the same tree on every replica, compacted or not.
-//! - Re-delivery of a dropped operation (a duplicate) is still harmless: `apply` answers
-//!   [`Outcome::Duplicate`] for any id at or below the frontier without comparing content, so a
-//!   reused id with different content below the frontier is no longer detected.
-//! - The frontier only moves forward; a lower `stable` is a no-op.
+//! - An arrival at or below the frontier is answered [`Outcome::BelowFrontier`] and ignored. Its id
+//!   is no longer known, so a harmless re-delivery of a dropped op and a genuine contract violation
+//!   (an op that was never seen, which would have changed the tree) look the same here. Each one
+//!   increments [`Tree::below_frontier_arrivals`]; a sync layer that tracks what it has delivered
+//!   must treat an arrival it never delivered before as a stability bug and raise an alarm. Content
+//!   is not compared, so a reused id with different content below the frontier is not detected.
+//! - The frontier only moves forward; a lower `stable` is a no-op. `stable` must come from trusted
+//!   replica state, never from a peer's unchecked claim: [`Tree::compact`] refuses a `stable` greater
+//!   than every id this replica knows ([`TreeError::FrontierBeyondLog`]), but any smaller wrong value
+//!   would be accepted and could make replicas diverge.
 //!
-//! A tree also has a cap on the live op count ([`Tree::with_op_limit`], default
+//! # The cap, and why it can stall writes
+//!
+//! A tree has a cap on the live (uncompacted) op count ([`Tree::with_op_limit`], default
 //! [`DEFAULT_OP_LIMIT`]). A new operation that would exceed it is refused with
-//! [`TreeError::OpLimitReached`]; nothing is dropped silently. Compact and retry.
+//! [`TreeError::OpLimitReached`]; nothing is dropped silently. The cost of a late op is the number of
+//! live ops ordered after it, so the worst case is bounded only by the cap. Plainly:
+//!
+//! - One offline or silent replica holds the stable frontier back, so the log cannot shrink and the
+//!   cap can be reached. Writes then stall until that replica catches up, is removed from the
+//!   frontier computation by the caller's membership rules, or the cap is raised.
+//! - A remote peer can fill the log (about 41 MB of ops for 2^20 entries). To keep local writes
+//!   alive, [`Tree::apply`] (remote ops) is refused once the log holds `cap - reserve` ops, while
+//!   [`Tree::apply_local`] may use the reserved headroom up to `cap`. The default reserve is 1/16 of
+//!   the cap; see [`Tree::with_op_limit_and_reserve`]. This is a single shared pool, not a quota per
+//!   origin.
+//! - A refused remote op is lost unless it is delivered again. The sync layer must retry it after
+//!   compaction; the tree keeps no queue. The caller owns both retrying and compacting.
 //!
 //! # Operation encoding (version 1, little endian, 41 bytes)
 //!
@@ -112,6 +132,9 @@ pub enum TreeError {
     /// An operation with this id was already applied with different content.
     #[error("operation id reused with different content")]
     ConflictingOpId,
+    /// `compact` was given a frontier greater than every id this replica knows.
+    #[error("stable frontier is beyond every known operation id")]
+    FrontierBeyondLog,
     /// The live op log is at its cap; compact below a stable frontier and retry.
     #[error("tree op log is full ({limit} live ops); compact below a stable frontier")]
     OpLimitReached {
@@ -129,6 +152,10 @@ pub enum Outcome {
     Skipped,
     /// The operation id was already known; nothing changed.
     Duplicate,
+    /// The id is at or below the compaction frontier: ignored. Either a re-delivery of a dropped
+    /// op or a violation of the stability contract; see the module docs and
+    /// [`Tree::below_frontier_arrivals`].
+    BelowFrontier,
 }
 
 const VERSION: u8 = 1;
@@ -234,7 +261,12 @@ pub struct Tree {
     floor: Option<Hlc>,
     /// Cap on `log.len()`; `0` is treated as unset and means [`DEFAULT_OP_LIMIT`].
     limit: usize,
-    /// Ops undone and redone so far (late-op cost counter).
+    /// Slots of the cap kept for local ops; only meaningful when `limit` is set.
+    reserve: usize,
+    /// Arrivals at or below the frontier.
+    below: u64,
+    /// Ops undone and redone so far (late-op cost counter, tests only).
+    #[cfg(test)]
     replayed: u64,
     parents: BTreeMap<NodeId, (NodeId, u64)>,
     /// `(parent, pos, node)`, for ordered children.
@@ -247,10 +279,20 @@ impl Tree {
         Self::default()
     }
 
-    /// An empty tree whose live op log may hold at most `limit` ops (at least 1).
+    /// An empty tree whose live op log may hold at most `limit` ops (at least 1). One sixteenth of
+    /// the cap is reserved for local ops.
     pub fn with_op_limit(limit: usize) -> Self {
+        let limit = limit.max(1);
+        Self::with_op_limit_and_reserve(limit, limit / 16)
+    }
+
+    /// Like [`Tree::with_op_limit`], with `reserve` slots (clamped below the cap) that only
+    /// [`Tree::apply_local`] may fill.
+    pub fn with_op_limit_and_reserve(limit: usize, reserve: usize) -> Self {
+        let limit = limit.max(1);
         Self {
-            limit: limit.max(1),
+            limit,
+            reserve: reserve.min(limit - 1),
             ..Self::default()
         }
     }
@@ -263,51 +305,67 @@ impl Tree {
         }
     }
 
+    fn reserved(&self) -> usize {
+        if self.limit == 0 {
+            DEFAULT_OP_LIMIT / 16
+        } else {
+            self.reserve
+        }
+    }
+
     /// The stable frontier passed to [`Tree::compact`] so far, if any.
     pub fn stable_frontier(&self) -> Option<Hlc> {
         self.floor
     }
 
+    /// How many arrivals were ignored for being at or below the frontier. Re-deliveries count too;
+    /// see the module docs.
+    pub fn below_frontier_arrivals(&self) -> u64 {
+        self.below
+    }
+
     /// Total ops undone and redone by late arrivals so far.
-    pub fn replayed_ops(&self) -> u64 {
+    #[cfg(test)]
+    fn replayed_ops(&self) -> u64 {
         self.replayed
     }
 
     /// Drops logged ops with `id <= stable` and returns how many were dropped. The visible tree
     /// does not change. See the module docs: the caller guarantees every replica has applied all
-    /// ops ordered at or before `stable`, so none of them can arrive late.
-    pub fn compact(&mut self, stable: Hlc) -> usize {
+    /// ops ordered at or before `stable`, so none of them can arrive late, and `stable` comes from
+    /// trusted state. A `stable` greater than every id this replica has seen is refused with
+    /// [`TreeError::FrontierBeyondLog`]. A `stable` at or below the current frontier is a no-op.
+    pub fn compact(&mut self, stable: Hlc) -> Result<usize, TreeError> {
+        let newest = self.log.keys().next_back().copied().max(self.floor);
+        if newest.is_none_or(|n| stable > n) {
+            return Err(TreeError::FrontierBeyondLog);
+        }
         if self.floor.is_some_and(|f| f >= stable) {
-            return 0;
+            return Ok(0);
         }
         self.floor = Some(stable);
-        let keep = self.log.split_off(&Self::just_after(stable));
-        let dropped = self.log.len();
-        self.log = keep;
-        dropped
-    }
-
-    /// The smallest id strictly greater than `id` (ids are totally ordered by their fields).
-    fn just_after(id: Hlc) -> Hlc {
-        match id.node.checked_add(1) {
-            Some(node) => Hlc { node, ..id },
-            None => match id.counter.checked_add(1) {
-                Some(counter) => Hlc {
-                    counter,
-                    node: 0,
-                    ..id
-                },
-                None => Hlc {
-                    wall_ms: id.wall_ms.saturating_add(1),
-                    counter: 0,
-                    node: 0,
-                },
-            },
+        let mut keep = self.log.split_off(&stable);
+        let mut dropped = self.log.len();
+        if keep.remove(&stable).is_some() {
+            dropped += 1;
         }
+        self.log = keep;
+        Ok(dropped)
     }
 
-    /// Applies an operation in any delivery order, any number of times.
+    /// Applies an operation received from a peer, in any delivery order, any number of times.
+    /// Refused with [`TreeError::OpLimitReached`] once the log is within the local reserve of the cap.
     pub fn apply(&mut self, op: Op) -> Result<Outcome, TreeError> {
+        let room = self.cap().saturating_sub(self.reserved());
+        self.apply_within(op, room.max(1))
+    }
+
+    /// Applies an operation issued by this replica; may use the headroom reserved for local ops.
+    pub fn apply_local(&mut self, op: Op) -> Result<Outcome, TreeError> {
+        self.apply_within(op, self.cap())
+    }
+
+    fn apply_within(&mut self, op: Op, room: usize) -> Result<Outcome, TreeError> {
         if op.node.is_reserved() {
             return Err(TreeError::ReservedNode);
         }
@@ -319,10 +377,11 @@ impl Tree {
             };
         }
         if self.floor.is_some_and(|f| op.id <= f) {
-            // Already applied everywhere and compacted away (see the module docs).
-            return Ok(Outcome::Duplicate);
+            // Dropped by compaction: a re-delivery, or a contract violation (see the module docs).
+            self.below += 1;
+            return Ok(Outcome::BelowFrontier);
         }
-        if self.log.len() >= self.cap() {
+        if self.log.len() >= room {
             return Err(TreeError::OpLimitReached { limit: self.cap() });
         }
         let later: Vec<Hlc> = self
@@ -330,7 +389,10 @@ impl Tree {
             .range((Bound::Excluded(op.id), Bound::Unbounded))
             .map(|(k, _)| *k)
             .collect();
-        self.replayed += later.len() as u64;
+        #[cfg(test)]
+        {
+            self.replayed += later.len() as u64;
+        }
         for k in later.iter().rev() {
             self.undo(*k);
         }
@@ -973,8 +1035,9 @@ mod tests {
         frontier
     }
 
-    /// Like `run_script`, but replicas compact at random honest stable points. Ids come from a
-    /// clock that strictly increases per step. Ends with shuffled, duplicated delivery of every op
+    /// Like `run_script`, but replicas compact at random honest stable points (so replicas sit at
+    /// different frontiers and exchange ops across them). Ids come from per-replica skewed clocks
+    /// merged hybrid-logical-clock style. Ends with shuffled, duplicated delivery of every op
     /// everywhere (including to compacted replicas) and compares with the uncompacted oracle.
     fn run_compacting_script(replicas: usize, steps: &[CStep], shuffle: u64) -> Result<(), String> {
         let mut trees: Vec<Tree> = (0..replicas).map(|_| Tree::new()).collect();
@@ -996,9 +1059,20 @@ mod tests {
                     };
                     let snap = tree.snapshot();
                     let node_choice = pick(&snap, *a, false);
+                    // Skewed physical clocks, merged like a hybrid logical clock: a new id is
+                    // above everything this replica has applied, so no future op of this replica
+                    // is ordered at or below a frontier it has reached.
+                    let skew = (shuffle >> (8 * (r % 8))) & 0x3f;
+                    let top = seen[r].iter().next_back().copied().unwrap_or_default();
+                    let phys = clock + skew;
+                    let (wall_ms, counter) = if phys > top.wall_ms {
+                        (phys, 0)
+                    } else {
+                        (top.wall_ms, top.counter + 1)
+                    };
                     let id = Hlc {
-                        wall_ms: clock,
-                        counter: 0,
+                        wall_ms,
+                        counter,
                         node: u32::try_from(r).unwrap_or(0),
                     };
                     let op = match kind % 3 {
@@ -1013,7 +1087,7 @@ mod tests {
                         _ if node_choice != NodeId::ROOT => Op::delete(id, node_choice),
                         _ => continue,
                     };
-                    tree.apply(op).map_err(|e| e.to_string())?;
+                    tree.apply_local(op).map_err(|e| e.to_string())?;
                     seen[r].insert(op.id);
                     issued.push(op);
                 }
@@ -1036,7 +1110,7 @@ mod tests {
                     for (r, tree) in trees.iter_mut().enumerate() {
                         if mask & (1 << (r % 8)) != 0 {
                             let before = tree.snapshot();
-                            tree.compact(stable);
+                            tree.compact(stable).map_err(|e| e.to_string())?;
                             if tree.snapshot() != before {
                                 return Err("compaction changed the visible tree".into());
                             }
@@ -1106,16 +1180,18 @@ mod tests {
         let ops = chain(50);
         let mut tree = build(&ops);
         let before = tree.snapshot();
-        assert_eq!(tree.compact(t(30, 0)), 30);
+        assert_eq!(tree.compact(t(30, 0)), Ok(30));
         assert_eq!(tree.op_count(), 20);
         assert_eq!(tree.snapshot(), before);
         assert_eq!(tree.stable_frontier(), Some(t(30, 0)));
         // A lower frontier is a no-op; the frontier never moves back.
-        assert_eq!(tree.compact(t(10, 0)), 0);
+        assert_eq!(tree.compact(t(10, 0)), Ok(0));
         assert_eq!(tree.stable_frontier(), Some(t(30, 0)));
-        // Duplicates of dropped ops and of kept ops are ignored.
-        assert_eq!(tree.apply(ops[0]), Ok(Outcome::Duplicate));
+        // Dropped ops are reported as below the frontier; kept ops are exact duplicates.
+        assert_eq!(tree.apply(ops[0]), Ok(Outcome::BelowFrontier));
+        assert_eq!(tree.below_frontier_arrivals(), 1);
         assert_eq!(tree.apply(ops[40]), Ok(Outcome::Duplicate));
+        assert_eq!(tree.below_frontier_arrivals(), 1);
         assert_eq!(tree.snapshot(), before);
         assert_eq!(tree.op_count(), 20);
         // A late op above the frontier still orders correctly among the kept ops.
@@ -1125,7 +1201,7 @@ mod tests {
         plain.apply(late).unwrap();
         assert_eq!(tree.snapshot(), plain.snapshot());
         // Compacting everything leaves the tree intact and the log empty.
-        tree.compact(t(100, 0));
+        assert_eq!(tree.compact(t(50, 0)), Ok(21));
         assert_eq!(tree.op_count(), 0);
         assert_eq!(tree.snapshot(), plain.snapshot());
     }
@@ -1146,12 +1222,93 @@ mod tests {
         assert_eq!(tree.op_count(), 3);
         // Duplicates are still accepted at the cap.
         assert_eq!(tree.apply(ops[0]), Ok(Outcome::Duplicate));
-        tree.compact(t(2, 0));
+        tree.compact(t(2, 0)).unwrap();
         tree.apply(ops[3]).unwrap();
         tree.apply(ops[4]).unwrap();
         assert_eq!(tree.op_count(), 3);
         assert_eq!(tree.parent(n(5)), Some(n(4)));
         assert_eq!(Tree::new().cap(), DEFAULT_OP_LIMIT);
+    }
+
+    fn max_hlc() -> Hlc {
+        Hlc {
+            wall_ms: u64::MAX,
+            counter: u32::MAX,
+            node: u32::MAX,
+        }
+    }
+
+    #[test]
+    fn a_nonsense_frontier_is_refused_and_the_maximum_id_is_dropped() {
+        let mut tree = build(&chain(5));
+        let before = tree.snapshot();
+        assert_eq!(tree.compact(max_hlc()), Err(TreeError::FrontierBeyondLog));
+        assert_eq!(tree.compact(t(6, 0)), Err(TreeError::FrontierBeyondLog));
+        assert_eq!(tree.op_count(), 5);
+        assert_eq!(tree.stable_frontier(), None);
+        assert_eq!(
+            Tree::new().compact(t(1, 0)),
+            Err(TreeError::FrontierBeyondLog)
+        );
+        // An op whose id is the largest possible id must not survive a compaction at that id.
+        let top = Op::new(max_hlc(), n(9), NodeId::ROOT, 0);
+        tree.apply(top).unwrap();
+        assert_eq!(tree.compact(max_hlc()), Ok(6));
+        assert_eq!(tree.op_count(), 0);
+        assert_eq!(tree.apply(top), Ok(Outcome::BelowFrontier));
+        assert_eq!(tree.parent(n(9)), Some(NodeId::ROOT));
+        assert!(tree.snapshot().entries.len() > before.entries.len());
+        // The frontier is now the maximum: nothing new can be ordered after it.
+        assert_eq!(tree.compact(max_hlc()), Ok(0));
+    }
+
+    #[test]
+    fn local_ops_may_use_the_reserved_headroom_remote_ops_may_not() {
+        let ops = chain(20);
+        let mut tree = Tree::with_op_limit_and_reserve(16, 2);
+        for op in &ops[..14] {
+            tree.apply(*op).unwrap();
+        }
+        let full = tree.snapshot();
+        assert_eq!(
+            tree.apply(ops[14]),
+            Err(TreeError::OpLimitReached { limit: 16 })
+        );
+        assert_eq!(tree.snapshot(), full, "a refused remote op changes nothing");
+        assert_eq!(tree.apply_local(ops[14]), Ok(Outcome::Applied));
+        assert_eq!(tree.apply_local(ops[15]), Ok(Outcome::Applied));
+        assert_eq!(
+            tree.apply_local(ops[16]),
+            Err(TreeError::OpLimitReached { limit: 16 })
+        );
+        // The refused remote op is lost until delivered again; after compaction it goes through.
+        tree.compact(t(10, 0)).unwrap();
+        assert_eq!(tree.apply(ops[16]), Ok(Outcome::Applied));
+        assert_eq!(tree.parent(n(17)), Some(n(16)));
+    }
+
+    /// A dishonest frontier (an op below it was never seen) is visible: the late op is reported as
+    /// below the frontier, and the replica really does diverge from an uncompacted one.
+    #[test]
+    fn a_dishonest_frontier_is_detected_by_the_below_frontier_signal() {
+        let create = Op::new(t(1, 0), n(1), NodeId::ROOT, 0);
+        let late_create = Op::new(t(5, 1), n(2), NodeId::ROOT, 0); // replica 1, not yet delivered
+        let into = Op::new(t(9, 0), n(1), n(2), 0); // moves node 1 under node 2
+        let mut honest = build(&[create, late_create, into]);
+        let mut dishonest = build(&[create, into]);
+        // Frontier t(9): replica 1's op at t(5) was never seen here, so the contract is broken.
+        dishonest.compact(t(9, 0)).unwrap();
+        assert_eq!(dishonest.below_frontier_arrivals(), 0);
+        assert_eq!(dishonest.apply(late_create), Ok(Outcome::BelowFrontier));
+        assert_eq!(dishonest.below_frontier_arrivals(), 1, "the alarm fires");
+        honest.apply(late_create).unwrap();
+        assert_ne!(
+            dishonest.snapshot(),
+            honest.snapshot(),
+            "and the replicas really diverge"
+        );
+        assert_eq!(honest.parent(n(1)), Some(n(2)));
+        assert_eq!(dishonest.parent(n(1)), Some(NodeId::ROOT));
     }
 
     /// Late-op cost before and after compaction; run with `--nocapture` to see the numbers.
@@ -1176,7 +1333,7 @@ mod tests {
         let run = |compact_at: Option<u64>, late: &[Op]| {
             let mut tree = build(&base);
             if let Some(w) = compact_at {
-                tree.compact(t(w, 0));
+                tree.compact(t(w, 0)).unwrap();
             }
             let live = tree.op_count();
             let start = tree.replayed_ops();

@@ -167,7 +167,9 @@ between minor versions; format changes are called out explicitly.
 - `lattice-core` tree CRDT: `Tree::compact(stable)` drops applied ops at or below a causal-stability
   frontier (contract stated in the module docs), `Tree::with_op_limit` caps the live op count and a full log
   returns `TreeError::OpLimitReached` instead of dropping anything (default cap `DEFAULT_OP_LIMIT`). The 41-byte op
-  encoding is unchanged. Not yet wired to sync; computing the frontier is the caller's job (issue 308).
+  encoding is unchanged. A reserve of the cap is kept for `Tree::apply_local`; `Outcome::BelowFrontier` and
+  `below_frontier_arrivals()` flag arrivals at or below the frontier; `compact` returns a `Result` and refuses a
+  frontier beyond every known id. Not yet wired to sync; computing the frontier is the caller's job (issue 308).
 
 ### Changed
 
