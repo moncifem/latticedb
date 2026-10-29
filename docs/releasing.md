@@ -256,3 +256,11 @@ toolchain text and exact before/after manifests. The
 source and finite scope. Fresh final-head checks are required after replay. The owner's
 [specific managed-format acceptance/waiver](evidence/managed-index-owner-decision-2026-10-29.md) is
 separate from the WAL guard decision and grants no checkpoint, release or phase-gate approval.
+
+### Manual paired foundation diagnostic
+
+`foundation-comparison.yml` builds the original Phase 1 reference and fixed candidate on the same
+host, with one warmup each and nine alternating pairs at scale 5. Raw ledgers, commands, source/binary
+hashes and failure receipts accompany diagnostic ratio/dispersion summaries. It changes no regression
+budget and supplies no historical SQL baseline or ADR C4 verdict. Hosted execution is pending; see
+[the protocol](foundation-comparison.md) before dispatching or interpreting results.

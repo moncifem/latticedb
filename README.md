@@ -129,3 +129,7 @@ as it lands. Progress is tracked in the [public roadmap](https://github.com/user
 and [changelog](CHANGELOG.md).
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+A [manual same-host foundation diagnostic](docs/foundation-comparison.md) compares the original Phase 1
+benchmark binary with a fixed current candidate. It is not yet measured and cannot establish a
+historical SQL baseline or accept the planner ADR.

@@ -1,0 +1,41 @@
+name: foundation-comparison
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  paired:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: control
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 96d409f7ecfc8b36418edcf1ceb2478030f68236
+          path: baseline
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 45926c7fc1f6fa71a7a69ac858c805ab1d9679b0
+          path: candidate
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - name: Build original binaries and collect alternating same-host samples
+        env:
+          CARGO_BUILD_JOBS: '2'
+        run: >-
+          python3 control/tools/foundation_comparison.py
+          --baseline "$GITHUB_WORKSPACE/baseline"
+          --candidate "$GITHUB_WORKSPACE/candidate"
+          --output "$RUNNER_TEMP/foundation-comparison"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: foundation-comparison-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/foundation-comparison/**
+            !${{ runner.temp }}/foundation-comparison/build/**
+          if-no-files-found: error
+          retention-days: 30

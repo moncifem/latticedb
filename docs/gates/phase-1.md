@@ -111,3 +111,7 @@ in the proof record above. The earlier 40-selection result and failures remain d
 This closes those seven measured gaps, not WP17 or the full E1-7 criterion. The full weekly campaign,
 new runtime/engine coverage and the separate redundant-framing-precheck candidate remain open. No
 mutation exclusion, timeout budget, simulation threshold or gate signature changed.
+
+A [manual paired foundation diagnostic](../foundation-comparison.md) is available to compare the
+original reference and fixed candidate on one host. Its new workflow has no measured result yet; it
+does not change E1-9, sign a gate, or fill the missing Phase 1 SQL comparison in ADR 0013.

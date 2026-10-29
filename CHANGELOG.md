@@ -10,6 +10,9 @@ between minor versions; format changes are called out explicitly.
 ### Added
 
 - `docs/agent-workflow.md`: contributor and agent workflow guide with an onboarding checklist.
+- A manual same-host foundation benchmark diagnostic with nine alternating sample pairs and raw
+  evidence retention; it does not change benchmark thresholds or decide SQL planner criteria.
+
 - Managed physical-byte index definitions and create/drop/recreate history persisted in atomic LCIX
   catalog/row changes. Default managed opens rebuild without callbacks; explicit callback mode remains
   legacy-only. Compound writes require the accepted WAL capability guard and actual replay context;
