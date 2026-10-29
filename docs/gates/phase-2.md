@@ -105,6 +105,21 @@ cache and is not power loss. The simulated fault suites above supply complementa
 The tests do not guarantee that every kill landed inside a commit, prove soak volume, or cover the new
 typed-schema/checkpoint formats still in review. Branch histories remain pending.
 
+## Model-based row tests (P2-03, P2-04, P2-07)
+
+`cargo test -p lattice-engines --test model_based` drives the row store and a small in-memory reference
+model with the same generated operation sequences: up to four open transactions with writes, deletes,
+reads, commits and aborts, clock moves (including backwards), remembered snapshots, `AS OF CHANGESET`,
+`AS OF TIMESTAMP` (with counter and node tiebreaks), range scans with every bound kind, and clean
+reopens. After every step it compares rows, scans, three secondary indexes, conflict LSNs and commit
+metadata; at the end it re-reads every historical snapshot. Eight deliberately wrong model variants
+(for example no conflict check, `<` instead of `<=` for timestamps, an excluded scan end read as
+included) are each caught within 600 generated histories. In the deterministic 300-history coverage
+run the generator produced 587 commits, 24 conflicts, 304 reopens, 354 `AS OF CHANGESET` and 243
+non-empty `AS OF TIMESTAMP` lookups. It ran clean at 10,000 cases per property on one machine. The model
+does not cover crashes or injected faults (see the fault suites above) and the bug-injection
+(planted bug) suite is separate.
+
 ## Still missing
 
 Catalog-backed index definitions; completed typed-table integration; checkpoint-based recovery with
