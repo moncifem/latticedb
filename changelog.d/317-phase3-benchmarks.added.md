@@ -1,0 +1,1 @@
+`lattice-bench` example `phase3_bench` (WP53, #255, first slice): fixed-seed benchmarks for tree CRDT apply, set and register merge, change-feed and sync frame codecs and fan-out to 1, 100 and 10,000 subscriber queues, with a local baseline and a smoke test. No numbers recorded; E3-4 stays open.

@@ -431,6 +431,7 @@ name = "lattice-bench"
 version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
+ "lattice-api",
  "lattice-core",
  "lattice-engines",
  "lattice-lsl",

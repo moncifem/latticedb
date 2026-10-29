@@ -56,3 +56,21 @@ microbenchmark.
 For a tiny functional smoke, use `--rows 4 --reads 8 --samples 1 --profile smoke --write-baseline`.
 The runner's unit tests use this bounded workload; long benchmark campaigns belong on a controlled
 host rather than the development laptop.
+
+## Phase 3 benchmarks
+
+`cargo run --release -p lattice-bench --example phase3_bench -- --profile my-machine --write-baseline`
+records a local baseline (WP53, issue #255, first slice); repeat without `--write-baseline` to compare
+with the existing comparator (25 percent tolerance by default). Options: `--scale` (default 8, sizes
+derive from it), `--samples` (5), `--tolerance`. The seed is fixed. Human-readable lines go to stderr
+and one JSON report (`metadata` plus `cases` with `ns_per_op`, `ops_per_s` and `ops`) goes to stdout.
+The baseline is `benches/baselines/local/phase3-<profile>.json` in the usual name-to-ns format.
+Long runs belong on CI or a controlled host; a tiny smoke test runs in `cargo test -p lattice-bench --example phase3_bench`.
+
+Cases: tree CRDT apply in order and late (undo and redo); sequence CRDT insert (`Rga`); set and
+register merge; change-feed cursor and event encode and decode; sync frame encode and decode (a
+32-event frame and an ack); fan-out of one event to 1, 100 and 10,000 bounded subscriber queues where
+every tenth subscriber never drains (the run asserts the writer finished and only those subscribers
+lagged). Not covered yet: tree compaction, the text CRDT with compaction and the backpressure module
+(not on main when this was written); fan-out uses a minimal local queue. Reconnect storms and the CI
+baseline workflow are follow-ups.

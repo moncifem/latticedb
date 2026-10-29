@@ -18,6 +18,7 @@ serde_json.workspace = true
 [dev-dependencies]
 lattice-testkit = { path = "../lattice-testkit" }
 lattice-engines = { path = "../lattice-engines", default-features = false, features = ["row"] }
+lattice-api = { path = "../lattice-api" }
 
 [features]
 default = []
@@ -42,4 +43,9 @@ test = true
 [[example]]
 name = "row_fault_runner"
 path = "examples/row_fault_runner.rs"
+test = true
+
+[[example]]
+name = "phase3_bench"
+path = "examples/phase3_bench.rs"
 test = true

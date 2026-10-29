@@ -90,3 +90,9 @@ P3-05 fact: I5 for column merge holds only while the union of changes fits the b
 elements, 4 096 tags); beyond them `merge_rows` refuses and a replica can diverge, so I5 is open there until
 compaction exists. Row delete uses the interim rule in RFC 0011. Row-store wiring, persisted CRDT state and
 simulator-level N-replica checks are not done.
+
+Benchmark programs for E3-4 (WP53, issue #255, first slice), list only, no measurements recorded:
+`cargo run --release -p lattice-bench --example phase3_bench` covers tree CRDT apply (in order, late),
+sequence CRDT insert, set and register merge, change-feed cursor and event codec, sync frame codec and
+fan-out to 1, 100 and 10,000 subscriber queues with slow subscribers. Tree and text compaction, the
+backpressure module, reconnect storms and the CI baseline wiring are not covered yet. E3-4 stays open.
