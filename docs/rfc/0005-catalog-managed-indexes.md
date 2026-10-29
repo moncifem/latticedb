@@ -186,8 +186,11 @@ The independent examples are now in `formats/corpus/` with `.golden.toml` accept
 bytes. The structural corpus check covers their metadata; codec tests pin the independent bytes and
 literal semantics. The owner accepted these format bytes without changing WAL v1. The mandatory
 WAL guard was accepted separately; neither corpus metadata nor a test result supplies acceptance by
-itself. Compound row writes also retain their bound host policy from PR 215;
-metadata APIs remain privileged host operations and do not implement SQL catalog authorization.
+itself. Compound row writes also retain their bound host policy from PR 215.
+Follow-up (issues 234 and 307, awaiting review): `RowStore::commit_with_catalog` now asks the
+transaction's `PolicyEvaluator::authorize_ddl` first, denied by default; `AllowAll` (so `begin()`)
+grants it, and `RowStore::commit_catalog` and `CatalogStore::commit`/`commit_managed` remain
+host-only paths without an actor. This is a store hook, not SQL catalog authorization.
 
 
 ## Accepted guard integration and actual-engine evidence

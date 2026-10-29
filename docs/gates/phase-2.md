@@ -300,18 +300,22 @@ guard (`an_omitted_guard_on_actual_compound_commit_is_caught_by_engine_recovery`
 
 - Issue 307: the empty-tail guard rewrite stages the new header in a fresh `.guard` file before the
   truncate. The crash-point sweep (SimIo power cuts at every mutating operation of the rewrite, a
-  disk that persists a truncate at once, clean and crash-heavy profiles, four seeds) passes, and with
-  `Bug::GuardRewriteUnstaged` (the old in-place rewrite) it loses the durable bit. This amends
-  RFC 0008's promotion step; the amendment awaits the owner. The hosted guarded-upgrade matrix was not
-  re-run locally.
-- Issue 234: every engine append of an unguarded kernel commit asserts it cannot carry LCIX
-  (`catalog::check_guard`, unit test). Recovery validates each catalog record against the recovered
-  catalog by borrow and applies it once; a test counts whole-catalog copies during replay (zero; the
-  old code made one per record). Per-version snapshots are still stored, so memory remains linear in
-  the number of versions times the live catalog.
-- DDL through `commit_with_catalog` now needs `PolicyEvaluator::authorize_ddl`, denied by default
-  (`AllowAll` grants it; `commit_catalog` is the host path and binds `AllowAll`). Witnessed with
-  `Bug::DdlPolicySkipped`. Index builds still read every row; the DDL grant is the control.
+  disk that persists a truncate at once, clean, crash-heavy and garbage-tail profiles, four seeds)
+  passes, and with `Bug::GuardRewriteUnstaged` (the old in-place rewrite) it loses the durable bit.
+  Recovery also repairs an invalid (zero-filled or garbage) newest header from a valid stage, refuses
+  when no valid stage exists, when the stage does not decode, or when the invalid header sits over
+  records; only files named 20 digits plus `.guard` are cleaned up. This amends RFC 0008's promotion
+  step; the amendment awaits the owner. The hosted guarded-upgrade matrix was not re-run locally.
+- Issue 234: recovery validates each catalog record against the recovered catalog by borrow and
+  applies it once; a test counts `Catalog::clone` calls during replay (zero; the old code made one per
+  record). That is all that is measured: live tables and indexes are still cloned per change,
+  `check_change` runs twice per record, and per-version snapshots are still stored, so no linear
+  replay cost is claimed.
+- DDL through `commit_with_catalog` now needs `PolicyEvaluator::authorize_ddl`, denied by default and
+  checked before any other error (`AllowAll` grants it, so `begin()` transactions can run DDL;
+  `commit_catalog`, `CatalogStore::commit` and `commit_managed` are host-only paths with no actor).
+  Witnessed with `Bug::DdlPolicySkipped`. Index builds still read every row; the DDL grant is the
+  control.
 - A test replays a hand-framed pre-guard log with LCAT records through the managed, catalog-only and
   callback readers and checks the bytes are unchanged; another documents that a rule-breaking LCAT
   record still refuses recovery.

@@ -191,10 +191,14 @@ between minor versions; format changes are called out explicitly.
 - Optimize test builds of workspace crates so the deterministic simulator runs faster in every
   platform gate, retaining debug assertions, overflow checks, test cases and seed budgets.
 - **Breaking (engines API):** `RowStore::commit_with_catalog` with table or index changes now requires
-  the transaction's `PolicyEvaluator::authorize_ddl`, which denies by default; `AllowAll` grants it.
-  `commit_catalog` (host path) is unchanged. Format change: while an empty WAL tail's guard header is
-  rewritten, a transient `<first lsn>.guard` file exists in the WAL directory (not a segment; readers
-  ignore it); the RFC 0008 amendment awaits owner acceptance.
+  the transaction's `PolicyEvaluator::authorize_ddl`, which denies by default, and is checked before any
+  other error. `AllowAll` grants it, so `RowStore::begin()` transactions can still run DDL: they are for
+  the trusted host only. `RowStore::commit_catalog`, `CatalogStore::commit` and
+  `CatalogStore::commit_managed` carry no actor and bypass the check; they are host-only paths.
+- **Format change (awaiting owner acceptance):** while an empty WAL tail's guard header is rewritten, a
+  transient `<20-digit first lsn>.guard` file exists in the WAL directory (not a segment; readers ignore
+  it). Rollback consequence: a crash during an upgrade followed by a restart on an older build refuses
+  with `UnsupportedCapabilities` where the old in-place rewrite could have lost the bits instead.
 
 ### Fixed
 

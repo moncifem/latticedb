@@ -102,7 +102,13 @@ directory. Staged files are not segments: every reader ignores them, so shipped 
 preflight are unaffected. Recovery of a torn newest header takes the union of the previous segment's
 bits and a valid staged header for the same first LSN (admitted against the caller's support before
 any callback or repair), then removes every staged file after repair. Nonempty tails and rollover
-are unchanged: they already create a new segment before any bit is lost.
+are unchanged: they already create a new segment before any bit is lost. Recovery also consults the
+stage when the newest header is complete but invalid (a torn rewrite followed by zero fill or garbage)
+and no record follows it; a staged file that does not decode refuses, and only names of exactly 20
+decimal digits plus `.guard` are removed. Rollback consequence: a crash during an upgrade, followed by
+a restart on an older build, refuses with `UnsupportedCapabilities` when the staged or rewritten
+header carries a bit that build does not know, where the old in-place rewrite could instead have lost
+the bits silently.
 
 A crash after a durable guard but before the first LCIX record may conservatively prohibit downgrade.
 A crash during a short empty-header rewrite may let an old reader restore an empty v1 tail, but no
