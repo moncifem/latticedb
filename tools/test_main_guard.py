@@ -330,11 +330,17 @@ class Rehearsal(unittest.TestCase):
                 str(self.origin),
                 "log",
                 "-1",
-                "--format=%an%n%ae%n%B",
+                "--format=%an%n%ae%n%cn%n%ce%n%B",
                 candidate,
             ]
         )
-        self.assertIn("github-actions[bot]", author)
+        identity = author.splitlines()
+        self.assertEqual(identity[0], "Moncif")
+        self.assertEqual(identity[2], "Moncif")
+        self.assertEqual(
+            identity[1], "41898282+github-actions[bot]@users.noreply.github.com"
+        )
+        self.assertEqual(identity[3], identity[1])
         self.assertNotIn("fixture-owner@example.invalid", author)
         self.assertIn("This reverts commit " + self.bad, author)
         writes = self.state["writes"]

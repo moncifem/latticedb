@@ -62,7 +62,8 @@ API issue creation is not an atomic uniqueness operation across separate concurr
 
 A candidate is built in a disposable private Git worktree at the verified failing head, with hooks
 and signing disabled. Only the staged reverse patch paths are committed. Author and committer use
-an explicit public automation identity, overriding ambient identity variables; no original private
+the owner's specified name (`Moncif`) and generic public automation noreply address, overriding
+ambient identity variables; no original private
 email, subject trailers or credentials are copied to the commit/issue. The script reads log text for
 classification but never copies raw logs or token values into tracking reports.
 
