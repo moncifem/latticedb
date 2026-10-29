@@ -9,6 +9,10 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Validated mutation and eval scorecard observations, with explicit tested/planned coverage, mutation
+  denominator exclusions, exact eval gate fields and retained weekly producer provenance. Legacy eval
+  reports without complete thresholds remain unverified.
+
 - Unsigned scorecards with ten observed-or-missing sections, bounded ledger JSON interchange,
   retained nightly producer provenance and completed-fuzz summaries. Benchmark ledger entries now
   include the actual comparison verdict; missing measures remain explicit.
