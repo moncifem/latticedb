@@ -19,7 +19,7 @@ lists the same paths. Keep the three in step.
 | auth | `crates/lattice-api/**` files named `auth*` or `scram*` |
 | layers | `layers.toml` |
 | workflows | `.github/**` |
-| protection | `tools/branch-protection.json`, `tools/pr_governance.py`, `tools/test_pr_governance.py` |
+| protection | `tools/branch-protection.json`, `tools/pr_governance.py`, `tools/test_pr_governance.py`, `tools/changelog.py`, `tools/test_changelog.py` |
 | rfc-adr | `docs/rfc/**`, `docs/adr/**` |
 | dependencies | `Cargo.toml`, `Cargo.lock`, `deny.toml` (root files only) |
 

@@ -73,10 +73,26 @@ class PrTests(unittest.TestCase):
         ]
         self.assertEqual(c.fragments_added(changed), ["changelog.d/1-a.added.md", "changelog.d/5-e.fixed.md"])
 
+    def test_added_keeps_dotfiles_and_nested_paths(self):
+        changed = [("added", "changelog.d/.x"), ("added", "changelog.d/sub/1-a.added.md")]
+        self.assertEqual(c.fragments_added(changed), ["changelog.d/.x", "changelog.d/sub/1-a.added.md"])
+
     def test_one_required(self):
-        self.assertEqual(c.check_pr(["x"], []), [])
+        one = "changelog.d/1-a.added.md"
+        self.assertEqual(c.check_pr([one], []), [])
         self.assertTrue(c.check_pr([], []))
-        self.assertTrue(c.check_pr(["x", "y"], []))
+        self.assertTrue(c.check_pr([one, "changelog.d/2-b.fixed.md"], []))
+
+    def test_misnamed_files_do_not_count_as_the_fragment(self):
+        for bad in ["changelog.d/.x", "changelog.d/x.md", "changelog.d/1-a.bogus.md", "changelog.d/sub/1-a.added.md"]:
+            with self.subTest(path=bad):
+                self.assertTrue(c.check_pr([bad], []))
+                # Even next to a valid fragment: the PR is reported, not silently accepted.
+                self.assertTrue(c.check_pr(["changelog.d/1-a.added.md", bad], []))
+                self.assertTrue(c.check_pr([bad], [], "dependabot[bot]"))
+
+    def test_escape_data(self):
+        self.assertEqual(c.escape_data("a%b\r\nc"), "a%25b%0D%0Ac")
 
     def test_label(self):
         self.assertEqual(c.check_pr([], ["no-changelog"]), [])
@@ -154,6 +170,11 @@ Intro.
         with self.assertRaises(ValueError):
             c.compile_changelog("# C\n", "0.0.2", "d", {})
 
+    def test_duplicate_legacy_headings_fail(self):
+        dup = "# C\n\n## [Unreleased]\n\n### Added\n\n- a\n\n### Added\n\n- b\n\n## [0.0.1]\n"
+        with self.assertRaises(ValueError):
+            c.compile_changelog(dup, "0.0.2", "d", {})
+
     def test_heading_matches_release_workflow_lookup(self):
         # release.yml and package.yml look for a line that starts with `## [<version>]`.
         out = c.compile_changelog(OLD, "1.2.3", "2026-01-01", self.FR)
@@ -190,6 +211,17 @@ class FilesTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(frag, "README.md")))
             with open(log) as f:
                 self.assertIn("## [0.3.0] - 2026-01-01", f.read())
+
+    def test_check_fails_on_dotfile_and_subdirectory(self):
+        for name in [".x", "sub"]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, name)
+                if name == "sub":
+                    os.mkdir(path)
+                else:
+                    with open(path, "w") as f:
+                        f.write("x\n")
+                self.assertEqual(c.main(["--dir", d, "check"]), 1)
 
     def test_check_fails_on_bad_fragment(self):
         with tempfile.TemporaryDirectory() as d:

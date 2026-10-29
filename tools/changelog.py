@@ -76,6 +76,11 @@ def check_text(text):
     return problems
 
 
+def escape_data(text):
+    """Escape a workflow-command message (GitHub's %, CR and LF rules) so a file name cannot inject commands."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def check_fragments(files):
     """Validate {filename: text}. Returns a list of 'filename: problem' strings."""
     errors = []
@@ -93,19 +98,34 @@ def check_fragments(files):
 
 
 def fragments_added(changed):
-    """Fragment paths among [(status, path)] that a PR adds or renames into changelog.d."""
-    out = []
-    for status, path in changed:
-        if status not in ("added", "renamed"):
-            continue
-        head, _, name = path.rpartition("/")
-        if head == FRAGMENT_DIR and name != "README.md":
-            out.append(path)
-    return sorted(out)
+    """Every path among [(status, path)] that a PR adds or renames anywhere under changelog.d.
+
+    Nothing is filtered by name here: a misnamed file, a dotfile or a nested path must reach
+    check_pr, which reports it, instead of silently counting as (or not counting as) the fragment.
+    """
+    prefix = FRAGMENT_DIR + "/"
+    return sorted(
+        path
+        for status, path in changed
+        if status in ("added", "renamed")
+        and path.startswith(prefix)
+        and path != prefix + "README.md"
+    )
+
+
+def _is_fragment_path(path):
+    rest = path[len(FRAGMENT_DIR) + 1 :]
+    return "/" not in rest and parse_name(rest) is not None
 
 
 def check_pr(added, labels, author=""):
-    """Rules for a PR: exactly one new fragment unless it is labelled no-changelog."""
+    """Rules for a PR: exactly one new, well-named fragment unless it is labelled no-changelog."""
+    bad = [p for p in added if not _is_fragment_path(p)]
+    if bad:
+        return [
+            f"adds {', '.join(bad)}, which is not a fragment name; use "
+            f"{FRAGMENT_DIR}/<number>-<slug>.<kind>.md (kinds: {', '.join(KINDS)}), no dotfiles or subdirectories"
+        ]
     if NO_CHANGELOG_LABEL in set(labels):
         if added:
             return [f"has the `{NO_CHANGELOG_LABEL}` label but adds {', '.join(added)}; drop one of them"]
@@ -151,6 +171,10 @@ def split_headings(body):
     if not ms:
         return body, []
     parts = []
+    names = [m.group("name") for m in ms]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ValueError(f"[Unreleased] has duplicate headings: {', '.join(dupes)}; merge them first")
     for i, m in enumerate(ms):
         stop = ms[i + 1].start() if i + 1 < len(ms) else len(body)
         parts.append((m.group("name"), body[m.end() : stop].strip("\n")))
@@ -208,9 +232,13 @@ def read_fragments(directory):
     if not os.path.isdir(directory):
         return files
     for name in sorted(os.listdir(directory)):
-        if name == "README.md" or name.startswith("."):
+        path = os.path.join(directory, name)
+        if name == "README.md":
             continue
-        with open(os.path.join(directory, name), encoding="utf-8", newline="") as f:
+        if os.path.isdir(path):
+            files[name + "/"] = ""  # reported by check_fragments: not a fragment name
+            continue
+        with open(path, encoding="utf-8", newline="") as f:
             files[name] = f.read()
     return files
 
@@ -234,7 +262,7 @@ def cmd_check(args):
         added = fragments_added(pr_changed(args.repo, args.pr))
         errors += [f"pull request {p}" for p in check_pr(added, json.loads(args.labels_json), args.author)]
     for e in errors:
-        print(f"::error title=Changelog fragment::{e}")
+        print(f"::error title=Changelog fragment::{escape_data(e)}")
     if errors:
         print(f"{len(errors)} problem(s). Convention: {FRAGMENT_DIR}/README.md")
         return 1

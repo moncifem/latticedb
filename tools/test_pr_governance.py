@@ -54,6 +54,12 @@ class ClassifyRisk(unittest.TestCase):
                 self.assertEqual(g.classify_risk([path]), set())
         self.assertEqual(g.classify_risk(["crates/lattice-core/Cargo.toml"]), {"kernel"})
 
+    def test_changelog_tool_is_protection(self):
+        # The changelog job runs the pull request's own copy of these files.
+        for path in ["tools/changelog.py", "tools/test_changelog.py"]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {"protection"})
+
     def test_not_risky(self):
         for path in [
             "crates/lattice-api/src/session.rs",
@@ -207,6 +213,8 @@ class CodeownersMatchesClassifier(unittest.TestCase):
         "tools/branch-protection.json": "tools/branch-protection.json",
         "tools/pr_governance.py": "tools/pr_governance.py",
         "tools/test_pr_governance.py": "tools/test_pr_governance.py",
+        "tools/changelog.py": "tools/changelog.py",
+        "tools/test_changelog.py": "tools/test_changelog.py",
         "docs/rfc/**": "docs/rfc/0001-x.md",
         "docs/adr/**": "docs/adr/0001-x.md",
         "Cargo.toml": "Cargo.toml",

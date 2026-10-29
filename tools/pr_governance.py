@@ -44,6 +44,8 @@ RISK_RULES = (
             "tools/branch-protection.json",
             "tools/pr_governance.py",
             "tools/test_pr_governance.py",
+            "tools/changelog.py",
+            "tools/test_changelog.py",
         ),
     ),
     ("rfc-adr", ("docs/rfc/**", "docs/adr/**")),
