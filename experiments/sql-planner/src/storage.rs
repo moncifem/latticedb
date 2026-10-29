@@ -32,6 +32,9 @@ impl<I: Io> Io for Shared<I> {
     fn read(&self, p: &str) -> std::result::Result<Vec<u8>, IoError> {
         self.0.borrow().read(p)
     }
+    fn read_prefix(&self, p: &str, max: usize) -> std::result::Result<Vec<u8>, IoError> {
+        self.0.borrow().read_prefix(p, max)
+    }
     fn append(&mut self, p: &str, b: &[u8]) -> std::result::Result<(), IoError> {
         self.0.borrow_mut().append(p, b)
     }
