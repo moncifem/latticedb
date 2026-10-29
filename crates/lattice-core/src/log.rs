@@ -90,6 +90,8 @@ fn first_lsn_of(name: &str) -> Option<u64> {
 /// hold records) and a length that fits before its checksum is computed, which bounds the work.
 /// The scan is conservative: an opaque payload that happens to embed a valid record makes recovery
 /// refuse, never silently lose data (see ADR 0007).
+/// `from` is an in-bounds byte offset, including offsets before a segment header would end;
+/// this helper scans record bytes and does not interpret or require a segment header.
 pub(crate) fn valid_record_after(data: &[u8], from: usize, min_lsn: u64) -> bool {
     let max_gap = (data.len() / RECORD_HEADER_LEN) as u64 + 1;
     let mut off = from + 1;
@@ -674,5 +676,38 @@ mod tests {
         beyond.push(0xFF);
         beyond.extend_from_slice(&encode_record(4, 1, b""));
         assert!(!valid_record_after(&beyond, damage, 0));
+    }
+
+    #[test]
+    fn damage_scan_accepts_byte_offsets_without_a_segment_header() {
+        for from in 0..16 {
+            let mut data = vec![0xFF; from + 1];
+            data.extend_from_slice(&encode_record(1, 1, b"intact"));
+            assert!(valid_record_after(&data, from, 0), "offset {from}");
+            assert!(!valid_record_after(&data, from, 1), "offset {from}");
+        }
+    }
+
+    #[test]
+    fn recovery_preserves_the_immediate_successor_after_a_damaged_byte() {
+        let mut io = lattice_sim::SimIo::new(1, lattice_sim::FaultProfile::clean());
+        let mut data = segment_header();
+        data.extend_from_slice(&encode_record(1, 1, b"first"));
+        data.push(0xFF);
+        data.extend_from_slice(&encode_record(2, 1, b"second"));
+        let path = "wal/00000000000000000001.seg";
+        io.create_dir_all("wal").unwrap();
+        io.append(path, &data).unwrap();
+        io.sync(path).unwrap();
+        io.sync_dir("wal").unwrap();
+        let result = recover(&mut io, "wal", &mut |_| {});
+        assert!(
+            matches!(result, Err(LogError::Corrupt(ref why)) if why.contains("valid records follow"))
+        );
+        assert_eq!(
+            io.read(path).unwrap(),
+            data,
+            "valid LSN 2 must survive refusal"
+        );
     }
 }
