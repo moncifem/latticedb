@@ -88,3 +88,28 @@ cargo test -p lattice-engines --release --test row_faults gate_shards::crash_hea
 
 Run high-volume simulation, Miri and sanitizer jobs on hosted CI rather than the development laptop.
 The Phase 1 sign-off and Phase 2 exit requirements remain independent of this pipeline configuration.
+
+### Manual package mutation diagnostics
+
+`mutation-crate.yml` defaults to the whole selected package and at most 16 nonempty
+round-robin shards. `max_shards` accepts 1, 2, 4, 8 or 16; `filter_regex` optionally
+selects mutant names for a focused diagnostic. For example:
+
+```sh
+gh workflow run mutation-crate.yml -f package=lattice-core -f max_shards=1 \
+  -f 'filter_regex=Pipeline<I, C, R>::(drain|queued)'
+```
+
+The planner rejects unknown workspace packages and empty selections. Artifacts preserve
+full and selected listings, exact assignments, SHA256 digests, run/attempt/source identity,
+tool version and argument arrays. Every shard regenerates and checks its universe and
+assignment, then runs `cargo test --package PACKAGE` before mutation execution. Baseline
+command, status and logs are separate records; raw mutation outcomes and logs are uploaded
+on failure as well. A started command without a terminal status is incomplete evidence.
+Cargo-mutants stays pinned to 27.1.0 with a 120-second mutation timeout, two workers and a
+350-minute job budget. A failed package baseline prevents mutation execution.
+
+Filtered results establish evidence only for the recorded selection. This manual helper
+is outside weekly ingestion and cannot establish a global passing mutation score. Its
+explicit package baseline does not retroactively establish a matching workspace baseline
+for older weekly runs; inspect the actual baseline and mutant test arguments separately.
