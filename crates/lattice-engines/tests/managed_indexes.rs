@@ -1251,9 +1251,27 @@ fn ddl_is_denied_by_default_to_an_actor_and_leaves_no_trace() {
             vec![table(8)],
             vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))],
         );
+        // Invalid changes (reused id, missing table, unknown index) from a restricted actor must
+        // be denied before any catalog rule can answer, or errors would leak catalog contents.
+        let invalid = [
+            (vec![table(7)], vec![]),
+            (vec![CatalogOp::Drop { table: 99 }], vec![]),
+            (vec![], vec![IndexOp::Drop { id: 99 }]),
+        ];
+        let invalid_results: Vec<_> = invalid
+            .into_iter()
+            .map(|(t, i)| store.commit_with_catalog(store.begin_with_policy(RowsOnly), t, i))
+            .collect();
         let tx = store.begin_with_policy(RowsOnly);
         let result = store.commit_with_catalog(tx, change.0.clone(), change.1.clone());
         drop(guard);
+        for r in &invalid_results {
+            if mutated {
+                assert!(matches!(r, Err(RowError::InvalidCatalog(_))), "{r:?}");
+            } else {
+                assert_eq!(r, &Err(RowError::PermissionDenied));
+            }
+        }
         if mutated {
             // The planted bug lets an actor with only row access create tables and indexes.
             assert!(result.is_ok(), "{result:?}");
@@ -1848,7 +1866,14 @@ fn denied_first_compound_allocates_no_id_and_installs_no_guard_or_metadata() {
     let mut store = RowStore::open(disk.clone(), SharedClock(clock), rng, &config()).unwrap();
     let before = wal(&disk);
     let before_rng = calls.get();
-    let mut denied = store.begin_with_policy(lattice_engines::limits::DenyAll);
+    // DDL is allowed, so only the row write can be what stops the commit.
+    struct DdlOnly;
+    impl lattice_engines::limits::PolicyEvaluator for DdlOnly {
+        fn authorize_ddl(&self, _change: lattice_engines::catalog::DdlRef<'_>) -> bool {
+            true
+        }
+    }
+    let mut denied = store.begin_with_policy(DdlOnly);
     denied.put((7, b"a".to_vec()), b"x".to_vec());
     assert_eq!(
         store.commit_with_catalog(

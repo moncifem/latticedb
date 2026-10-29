@@ -147,6 +147,8 @@ fn sweep<I: Io + Clone>(wrap: impl Fn(Disk) -> I + Copy) -> Vec<String> {
             garbage_tail: false,
             ..FaultProfile::crash_heavy()
         },
+        // Torn header appends followed by random bytes: the header may be complete but invalid.
+        FaultProfile::crash_heavy(),
     ] {
         for seed in 0..4 {
             let mut cut = 0;
@@ -175,6 +177,139 @@ fn no_crash_point_of_an_empty_tail_guard_rewrite_loses_a_durable_bit() {
     for violations in [sweep(|d| d), sweep(EagerTruncate)] {
         assert!(violations.is_empty(), "{violations:#?}");
     }
+}
+
+/// Segment 1 legacy with one record, segment 2 an empty tail guarded with bit A.
+fn empty_guarded_tail() -> Disk {
+    let disk = Disk::new();
+    let mut seen = Vec::new();
+    let mut log = open_wide(disk.clone(), &mut seen).unwrap();
+    log.append(42, b"one").unwrap();
+    log.sync().unwrap();
+    log.append_with_capabilities(42, b"two", 1).unwrap();
+    drop(log);
+    disk
+}
+
+const STAGE: &str = "wal/00000000000000000002.guard";
+
+/// Replaces the tail with `tail` and optionally leaves a staged header, as a cut rewrite would.
+fn torn_rewrite(disk: &Disk, tail: &[u8], stage: Option<Vec<u8>>) {
+    let mut io = disk.clone();
+    io.truncate(SECOND, 0).unwrap();
+    io.append(SECOND, tail).unwrap();
+    io.sync(SECOND).unwrap();
+    if let Some(stage) = stage {
+        io.append(STAGE, &stage).unwrap();
+        io.sync(STAGE).unwrap();
+    }
+    io.sync_dir("wal").unwrap();
+}
+
+#[test]
+fn a_zero_filled_or_garbage_header_is_repaired_from_a_valid_stage_and_refused_without_one() {
+    let _wide = Wide::new();
+    let staged = admission::guarded_header(3).unwrap();
+    let mut half = staged[..20].to_vec();
+    half.extend_from_slice(&[0xAB; 12]);
+    for tail in [vec![0u8; 64], vec![0u8; 32], half] {
+        let disk = empty_guarded_tail();
+        torn_rewrite(&disk, &tail, Some(staged.clone()));
+        let mut seen = Vec::new();
+        let log = open_wide(disk.clone(), &mut seen).expect("a valid stage repairs the header");
+        assert_eq!(log.required_capabilities(), 3);
+        assert_eq!(seen, vec![(1, 0)]);
+        assert!(
+            !disk
+                .list("wal")
+                .unwrap()
+                .iter()
+                .any(|n| n.ends_with(".guard"))
+        );
+        drop(log);
+        // No stage: the same bytes are damage and must refuse, without touching the file.
+        let disk = empty_guarded_tail();
+        torn_rewrite(&disk, &tail, None);
+        let before = disk.read(SECOND).unwrap();
+        assert!(matches!(
+            open_wide(disk.clone(), &mut Vec::new()),
+            Err(LogError::Corrupt(_))
+        ));
+        assert_eq!(disk.read(SECOND).unwrap(), before);
+    }
+}
+
+#[test]
+fn a_stage_that_does_not_decode_refuses_instead_of_being_ignored() {
+    let _wide = Wide::new();
+    let mut bad = admission::guarded_header(3).unwrap();
+    bad[20] ^= 1;
+    for (tail, stage) in [
+        (vec![0u8; 5], bad.clone()),
+        (vec![0u8; 64], bad.clone()),
+        (vec![0u8; 5], vec![1, 2, 3]),
+    ] {
+        let disk = empty_guarded_tail();
+        torn_rewrite(&disk, &tail, Some(stage));
+        let before = disk.read(SECOND).unwrap();
+        assert!(matches!(
+            open_wide(disk.clone(), &mut Vec::new()),
+            Err(LogError::Corrupt(m)) if m.contains("staged guard header")
+        ));
+        assert_eq!(disk.read(SECOND).unwrap(), before);
+    }
+}
+
+#[test]
+fn an_invalid_header_over_real_records_is_never_rewritten_from_a_stale_stage() {
+    let _wide = Wide::new();
+    let disk = empty_guarded_tail();
+    let mut log = open_wide(disk.clone(), &mut Vec::new()).unwrap();
+    log.append(42, b"three").unwrap();
+    log.sync().unwrap();
+    drop(log);
+    let mut io = disk.clone();
+    io.append(STAGE, &admission::guarded_header(3).unwrap())
+        .unwrap();
+    io.sync(STAGE).unwrap();
+    // Corrupt the tail's header only; its record stays.
+    let mut bytes = disk.read(SECOND).unwrap();
+    bytes[20] ^= 1;
+    io.truncate(SECOND, 0).unwrap();
+    io.append(SECOND, &bytes).unwrap();
+    io.sync(SECOND).unwrap();
+    let before = disk.read(SECOND).unwrap();
+    assert!(matches!(
+        open_wide(disk.clone(), &mut Vec::new()),
+        Err(LogError::Corrupt(_))
+    ));
+    assert_eq!(disk.read(SECOND).unwrap(), before);
+}
+
+#[test]
+fn recovery_removes_only_files_named_exactly_twenty_digits_and_dot_guard() {
+    let _wide = Wide::new();
+    let disk = empty_guarded_tail();
+    let mut io = disk.clone();
+    let keep = [
+        "+5.guard",
+        "5.guard",
+        "0000000000000000000a.guard",
+        "00000000000000000002.guard.bak",
+        "notes.guard",
+    ];
+    for name in keep.iter().chain(&["00000000000000000007.guard"]) {
+        let path = format!("wal/{name}");
+        io.append(&path, b"x").unwrap();
+        io.sync(&path).unwrap();
+    }
+    io.sync_dir("wal").unwrap();
+    drop(open_wide(disk.clone(), &mut Vec::new()).unwrap());
+    let left = disk.list("wal").unwrap();
+    for name in keep {
+        assert!(left.iter().any(|n| n == name), "{name} must not be removed");
+    }
+    assert!(!left.iter().any(|n| n == "00000000000000000007.guard"));
 }
 
 #[cfg(feature = "planted-bugs")]

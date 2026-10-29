@@ -442,6 +442,17 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         if tables.is_empty() && indexes.is_empty() {
             return self.commit(tx);
         }
+        // DDL needs its own grant: row access never implies it, and an index build reads rows the
+        // actor may not be allowed to see. Checked first, so an unauthorized actor learns nothing
+        // about store state (stale, mode, snapshot floor, conflicts, catalog contents).
+        if !bugs::active(Bug::DdlPolicySkipped)
+            && !tx.policy.authorize_ddl(DdlRef {
+                tables: &tables,
+                indexes: &indexes,
+            })
+        {
+            return Err(RowError::PermissionDenied);
+        }
         if self.stale {
             return Err(RowError::Stale);
         }
@@ -454,16 +465,6 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.authorize_staged(&tx)?;
         if !bugs::active(Bug::RowConflictCheckSkipped) {
             tx.inner.check(&self.table).map_err(mvcc_error)?;
-        }
-        // DDL needs its own grant: row access never implies it, and an index build reads rows the
-        // actor may not be allowed to see. Checked before catalog state can leak through errors.
-        if !bugs::active(Bug::DdlPolicySkipped)
-            && !tx.policy.authorize_ddl(DdlRef {
-                tables: &tables,
-                indexes: &indexes,
-            })
-        {
-            return Err(RowError::PermissionDenied);
         }
         let (_, definitions) = self
             .catalog
@@ -522,6 +523,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     }
 
     /// Starts a transaction on the newest snapshot with Phase 2's explicit allow-all policy.
+    /// [`AllowAll`] also grants DDL (`authorize_ddl`), so a transaction from `begin` may create,
+    /// rename and drop tables and indexes: it is for the trusted host only.
     /// Request handlers with actor context must use [`Self::begin_with_policy`] instead.
     pub fn begin(&self) -> RowTx {
         self.begin_with_policy(AllowAll)
@@ -919,8 +922,6 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
-        // `Kernel::commit` appends with no required capabilities, so it must never carry LCIX.
-        catalog::check_guard(&payload, 0).map_err(|e| RowError::Corrupt(e.into()))?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {
             Ok(Receipt::Recorded { lsn, hlc }) => {

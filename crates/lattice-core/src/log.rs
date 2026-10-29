@@ -98,6 +98,12 @@ fn guard_stage_name(dir: &str, first_lsn: u64) -> String {
     format!("{dir}/{first_lsn:020}.guard")
 }
 
+/// Exactly the names the writer creates: 20 decimal digits and `.guard`. Nothing else is removed.
+fn is_stage_name(name: &str) -> bool {
+    name.strip_suffix(".guard")
+        .is_some_and(|n| n.len() == 20 && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn first_lsn_of(name: &str) -> Option<u64> {
     name.strip_suffix(".seg")?.parse().ok()
 }
@@ -116,6 +122,32 @@ struct PreflightHeader {
     prefix: Vec<u8>,
     file_len: u64,
     header: Option<SegmentHeader>,
+    /// The header is invalid but a valid staged copy exists, so recovery may rewrite it.
+    staged: bool,
+}
+
+/// The required bits of a valid staged header for the segment starting at `first`, if one exists.
+/// A staged file that does not decode is damage, not absence: it refuses.
+fn read_stage<I: Io>(
+    io: &I,
+    dir: &str,
+    first: u64,
+    supported: u64,
+) -> Result<Option<u64>, LogError> {
+    let stage = guard_stage_name(dir, first);
+    if !io.exists(&stage) {
+        return Ok(None);
+    }
+    let bytes = io.read_prefix(&stage, admission::GUARDED_HEADER_LEN)?;
+    match admission::decode_header(&bytes) {
+        Ok(header) => {
+            admit(header.required_capabilities, supported)?;
+            Ok(Some(header.required_capabilities))
+        }
+        Err(error) => Err(LogError::Corrupt(format!(
+            "staged guard header for segment {first}: {error:?}"
+        ))),
+    }
 }
 
 impl PreflightHeader {
@@ -130,6 +162,7 @@ impl PreflightHeader {
         let header = match admission::decode_header(data) {
             Ok(header) => Some(header),
             Err(HeaderError::Incomplete) => None,
+            Err(HeaderError::Invalid(_)) if self.staged => None,
             Err(error) => {
                 return Err(LogError::Corrupt(format!(
                     "header changed after admission: {error:?}"
@@ -178,6 +211,7 @@ fn preflight<I: Io>(
                     prefix: bytes,
                     file_len,
                     header: Some(header),
+                    staged: false,
                 });
             }
             Err(HeaderError::Incomplete) if idx + 1 == names.len() => {
@@ -185,9 +219,25 @@ fn preflight<I: Io>(
                     prefix: bytes,
                     file_len,
                     header: None,
+                    staged: false,
                 })
             }
             Err(error) => {
+                // A torn rewrite of the newest empty tail can leave an invalid header (garbage or
+                // zero fill after the header append). Only a valid staged copy proves that was
+                // a rewrite of this segment rather than damage.
+                if idx + 1 == names.len()
+                    && let Some((first, _)) = names.get(idx)
+                    && read_stage(io, dir, *first, supported)?.is_some()
+                {
+                    headers.push(PreflightHeader {
+                        prefix: bytes,
+                        file_len,
+                        header: None,
+                        staged: true,
+                    });
+                    continue;
+                }
                 return Err(LogError::Corrupt(format!(
                     "segment {name} header: {error:?}"
                 )));
@@ -302,14 +352,8 @@ fn recover<I: Io>(
     if let (Some(last), Some((first, _))) = (headers.last(), names.last())
         && last.header.is_none()
     {
-        let stage = guard_stage_name(dir, *first);
-        if io.exists(&stage)
-            && let Ok(staged) =
-                admission::decode_header(&io.read_prefix(&stage, admission::GUARDED_HEADER_LEN)?)
-        {
-            admit(staged.required_capabilities, supported)?;
-            staged_bits = staged.required_capabilities;
-        }
+        // A staged file that fails to decode refuses; it is never silently ignored.
+        staged_bits = read_stage(io, dir, *first, supported)?.unwrap_or(0);
     }
     // One record is held back so the last one can still be dropped by the planted recovery bug.
     let mut pending: Option<(Record, RecoveryContext)> = None;
@@ -343,6 +387,11 @@ fn recover<I: Io>(
             header_len = header.length;
         } else {
             // Only an incomplete newest creation is repaired. Keep prior required bits.
+            if admitted.staged && valid_record_after(&data, 0, first.saturating_sub(1)) {
+                return Err(LogError::Corrupt(format!(
+                    "segment {name} has an invalid header but holds records: refusing to rewrite"
+                )));
+            }
             required |= staged_bits;
             let bytes = header_bytes(required)?;
             io.truncate(&path, 0)?;
@@ -412,10 +461,7 @@ fn recover<I: Io>(
     }
     // Staged headers are only ever needed to repair the newest segment, which is done by now.
     for name in io.list(dir)? {
-        if name
-            .strip_suffix(".guard")
-            .is_some_and(|n| n.parse::<u64>().is_ok())
-        {
+        if is_stage_name(&name) {
             io.remove(&format!("{dir}/{name}"))?;
         }
     }
