@@ -1,11 +1,14 @@
-# ADR 0025: Recommendation for the SQL planner
+# ADR 0025: SQL planner: build in house
 
-Status: proposed
+Status: accepted (2026-10-29)
 
-Requirement P2-10. This ADR does not decide anything yet: it states a recommendation and the
-decision the owner has to make. [ADR 0013](0013-sql-planner-and-executor.md) holds the criteria
-C1 to C7 and the measured spike; it stays **proposed** and is not superseded until the owner accepts
-a choice here.
+Decided by the tech lead under the owner's delegation of 2026-10-29. The conditions below are part of
+the decision. Requirement P2-10.
+
+[ADR 0013](0013-sql-planner-and-executor.md) holds the criteria C1 to C7 and the measured spike. It
+keeps its own status (**proposed**): its C1 (effort-days) and the Phase 1 SQL baseline part of C4 are
+still unresolved, and condition 4 below is where they get recorded. This ADR selects the planner
+direction; it does not close those criteria.
 
 ## Context
 
@@ -17,7 +20,9 @@ snapshots. The choice is between:
 - **(a) An in-house planner and executor** for the declared subset in `docs/sql-subset.md`, built on
   the merged parser, binder and plan IR.
 - **(b) An existing planner library**, in practice Apache DataFusion with `sqlparser` (the spike also
-  measured `sqlparser` as a parser only, with our own planner, which is a variant of (a)).
+  measured `sqlparser` as a parser only, with our own planner, which is a variant of (a)). The spike
+  pins `datafusion =55.2.0` and `sqlparser =0.63.0` (`experiments/sql-planner/Cargo.toml`), the
+  latest stable releases when it was written.
 
 ## Decision criteria
 
@@ -51,59 +56,46 @@ against a Phase 1 SQL baseline (none exists), the cost of correlated subqueries 
 prototype executor without a join optimiser; it says what the prototype did, not what a planner we
 build with hash joins would do, and it must not be read as proof either way.
 
-Facts about the candidate libraries from public sources, checked 2026-10-29 and inconsistent across
-the pages found, so treat them as a pointer and not as pinned versions:
+The library versions measured are the ones the spike pins: `datafusion =55.2.0` and
+`sqlparser =0.63.0`. Public pages found while writing this ADR (docs.rs, the ASF release catalog,
+an ecosyste.ms index) showed older or inconsistent version numbers, so no version claim here relies
+on them; the pins in the experiment are the only versions this ADR speaks about.
 
-- `sqlparser` 0.61.0 is the newest release visible on docs.rs, and its manifest lists the Apache
-  DataFusion team as publisher ([docs.rs](https://docs.rs/crate/sqlparser/0.61.0/source/Cargo.toml));
-  an ecosyste.ms index synced in March 2026 still showed 0.60.0
-  ([ecosyste.ms](https://packages.ecosyste.ms/api/v1/registries/crates.io/packages/sqlparser)).
-- DataFusion 54.1.0 is listed as released 2026-07-21 in the ASF release catalog
-  ([release catalog](https://release-catalog.apache.org/datafusion/54.1.0/index.html)). The spike
-  measured an older pinned version; re-measuring on 54.x would be needed before relying on its numbers.
-- A third route, `pg_query` wrapping PostgreSQL's own parser, builds vendored C source through
-  `build.rs` ([docs.rs build script](https://docs.rs/crate/pg_query/6.1.1/source/build.rs)). It would
-  give exact PostgreSQL syntax but adds a C toolchain and a native dependency to a project that
-  otherwise builds as pure Rust, and it replaces only the parser we already have. It is not
-  recommended.
+A third route, `pg_query` wrapping PostgreSQL's own parser, builds vendored C source through
+`build.rs` ([docs.rs build script](https://docs.rs/crate/pg_query/6.1.1/source/build.rs)). It would
+give exact PostgreSQL syntax but adds a C toolchain and a native dependency to a project that
+otherwise builds as pure Rust, and it replaces only the parser we already have. It was not chosen.
 
-## Recommendation
+## Decision
 
-Choose **(a): an in-house planner and executor for the declared subset**, built on the merged parser
-and the plan IR in this change, with the following conditions:
+Build **(a): an in-house planner and executor for the declared subset**, on the merged parser and the
+plan IR in `crates/lattice-sql`. Conditions:
 
-1. Extend the IR operator by operator (joins, aggregation, `DISTINCT`, subqueries), each with
-   PostgreSQL differential tests and the `0A000` rejection for what is not yet there.
-2. Keep `lattice-sql` free of storage dependencies; execution lives in a higher layer behind the
-   `CatalogView` and scan interfaces so the simulator can run it without threads, clocks or random hashing.
-3. Record the join and group ratios again once a hash join exists, keeping the failing run in the
-   evidence. If ratios stay above 3 after that, or if correlated subqueries and window functions
-   (C7) force a rewrite of the IR, reopen this decision.
-4. Revisit adopting a library if the effort for the full subset, now uncapped per the owner's note on
-   issue #119, turns out far larger than expected. The measured DataFusion failures on determinism,
-   dependency policy and build time are the reasons not to start there.
+1. **Scope freeze.** No window functions, correlated subqueries or recursive CTEs until a later phase
+   decides them in an ADR. Other additions follow `docs/sql-subset.md`: documented change plus tests.
+2. **Semantics authority.** The PostgreSQL differential sqllogictest harness (WP29) decides what is
+   correct. Any disagreement is a bug unless the construct is marked `# differs-from-postgres` in the
+   scripts, with the reason in `docs/sql-subset.md`.
+3. **Reopen trigger.** Reopen this decision if, after the Phase 2 gate review, the in-house planner and
+   executor has more than 3 unresolved P1 or P2 semantic bugs from differential runs, or if
+   join-heavy fixtures stay above the 3x PostgreSQL ratio threshold after the executor exists.
+4. **Measure before the gate.** Binary size, memory bounds and effort-days are measured before the
+   Phase 2 gate review and recorded in `docs/gates/phase-2.md`. Until then those three criteria are
+   open, not passed.
+5. Keep `lattice-sql` free of storage dependencies; execution lives in a higher layer behind the
+   `CatalogView` and scan interfaces so the simulator can run it without threads, clocks or random
+   hashing. A bound plan is valid only for the catalog version it was bound against.
 
-Why not (b) now: it failed the determinism audit, dependency policy and the build-time threshold in
-the measured run, and it would force the policy and snapshot rules to be enforced through a columnar
-provider interface the engine does not share. Why not stay undecided: the binder and IR are being
-built regardless, so the longer the choice is open, the more the IR risks bending toward one library.
-
-## Owner decision needed
-
-The owner has to say which of these holds, in chat, before this ADR can be accepted:
-
-1. Accept (a) as recommended; or
-2. Accept (a) but require the missing measurements first (binary size, memory bounds, a re-run with
-   hash join); or
-3. Choose (b), or ask for a re-measurement of DataFusion 54.x before deciding.
-
-Until then this ADR is advisory. No planner is selected, the Phase 2 gate is not touched, and ADR 0013
-keeps its status.
+Why not (b) now: in the measured run it failed the determinism audit, dependency policy and the
+build-time threshold, and it would force the policy and snapshot rules to be enforced through a
+columnar provider interface the engine does not share. If a library is ever reconsidered, it must be
+re-measured at the versions then current, starting from the pins above (`datafusion =55.2.0`,
+`sqlparser =0.63.0`), against the same thresholds and with the failing runs kept.
 
 ## Consequences
 
-If accepted, the cost is writing and testing every operator ourselves, and keeping the PostgreSQL
+The cost is writing and testing every operator ourselves, and keeping the PostgreSQL
 differential harness the authority on semantics. The benefit is a deterministic, streaming executor
-whose scans cannot bypass the row policy, with a small dependency tree. If rejected in favour of (b),
-the IR in `plan.rs` is still useful as the bound form handed to the library, but the binder's type
-rules would have to be reconciled with the library's.
+whose scans cannot bypass the row policy, with a small dependency tree. If the decision is reopened in favour
+of a library, the IR in `plan.rs` is still useful as the bound form handed to it, but the binder's
+type rules would have to be reconciled with the library's.
