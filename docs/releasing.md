@@ -227,4 +227,6 @@ for bounded coverage and remaining gaps.
 The `sync_frame` target is registered in nightly (ten minutes), weekly (five hours), and the manual
 24-hour workflow (five shards of 5h40m). Those entries enable future execution; no completed fuzz
 campaign or phase-gate evidence follows from adding the matrix rows. Codec bytes remain experimental
-under RFC 0010 / proposed ADR 0024 pending format review and owner disposition.
+under RFC 0010 / proposed ADR 0024. The owner authorized experimental publication after final green
+CI while keeping the format proposed; encoding acceptance, freeze and runtime activation remain
+separate decisions.

@@ -9,8 +9,11 @@ Decision ADR: none yet (proposed ADR 0024)
 P3-01/P3-02 need a bounded, independently testable framing layer for live synchronization. This
 proposal reviews the candidate codec in PR #264 and its [format table](../../formats/sync-protocol-v1.md).
 It does not implement transport, authentication, subscriptions or a handshake state machine. No format
-acceptance or owner waiver is assumed. The seven-day comment period starts on 2026-10-29; ADR 0024 is
-proposed. The separate change-feed candidate is under RFC 0009 / ADR 0023 in PR #267.
+acceptance is implied. The seven-day format comment period starts on 2026-10-29 and still ends
+2026-11-05; ADR 0024 remains proposed. On 2026-10-29 the owner explicitly authorized PR #264:
+"Merge experimental codec; keep format proposed", waiving only the seven-day PR publication hold
+after final green CI. This scoped publication permission does not accept or freeze the encoding,
+activate a runtime protocol, close the format comment period, or waive another proposal's hold. The separate change-feed candidate is under RFC 0009 / ADR 0023 in PR #267.
 
 ## Proposal
 

@@ -2,8 +2,10 @@
 
 Status: experimental candidate, unaccepted. Proposed in
 [RFC 0010](../docs/rfc/0010-sync-protocol-framing.md) and
-[ADR 0024](../docs/adr/0024-sync-protocol-framing.md); no owner format acceptance or review-period
-waiver is assumed. Requirements P3-01 and P3-02; the codec is `lattice_api::sync`; the fuzz target is `fuzz/fuzz_targets/sync_frame.rs`.
+[ADR 0024](../docs/adr/0024-sync-protocol-framing.md). The owner authorized PR #264 to publish the
+experimental codec after final green CI, waiving only its seven-day PR publication hold. The format
+remains unaccepted/proposed and its comment period still ends 2026-11-05; no freeze or runtime
+activation is authorized by that publication decision. Requirements P3-01 and P3-02; the codec is `lattice_api::sync`; the fuzz target is `fuzz/fuzz_targets/sync_frame.rs`.
 
 A client (an SDK, a plugin) keeps a connection to a server and receives the changes in the scopes it
 subscribes to. This document is the framing and the message set of that connection over any ordered,

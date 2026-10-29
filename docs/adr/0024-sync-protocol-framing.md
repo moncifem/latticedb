@@ -6,7 +6,10 @@ Status: proposed
 
 P3-01/P3-02 need a sans-I/O sync message model with bounded canonical framing. PR #264 implements a
 candidate codec but no server, transport or session state machine. [RFC 0010](../rfc/0010-sync-protocol-framing.md)
-opens format review with a comment period ending 2026-11-05. No owner acceptance or waiver is assumed.
+opens format review with a comment period ending 2026-11-05. On 2026-10-29 the owner explicitly
+authorized PR #264: "Merge experimental codec; keep format proposed", waiving only its seven-day PR
+publication hold after final green CI. The format comment period remains open; this is not encoding
+acceptance, a freeze, runtime activation or a waiver for any other proposal.
 
 ## Decision
 
@@ -19,7 +22,8 @@ codes, invalid text, out-of-range values and unconsumed payload bytes are refuse
 The pure codec must neither perform I/O nor suppress deterministic lint rules. Fixture tests embed
 committed bytes at compile time. A future session, not this codec, must enforce handshake ordering,
 selected-version dispatch, direction and close-on-refusal. No live sync or storage behavior is enabled.
-This decision remains proposed pending independent review and owner disposition.
+This decision remains proposed. Independent review of the experimental codec and permission to publish
+it do not replace a future owner decision accepting the encoding.
 
 ## Consequences
 
