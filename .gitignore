@@ -15,3 +15,5 @@ __pycache__/
 
 # Local operating manual for development agents
 /AGENTS.md
+/clients/typescript/node_modules
+/clients/typescript/dist
