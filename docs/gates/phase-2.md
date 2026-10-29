@@ -350,7 +350,10 @@ The binder tests (table of goldens, error-code table, the five sqllogictest scri
 property test that binding never panics and leaves no untyped expression) were run locally for
 `lattice-sql` only, at default proptest case counts. Mutation, Miri and larger case counts were left to CI.
 
-[ADR 0025](../adr/0025-sql-planner-recommendation.md) recommends an in-house planner and is
-**proposed**: it needs the owner's decision, and ADR 0013 stays proposed. P2-10 is not complete and
-the subset document stays draft. Binary size and memory bounds were not measured.
-
+[ADR 0025](../adr/0025-sql-planner-in-house.md) is **accepted** (2026-10-29, tech lead under the owner's
+delegation): the planner is built in house, with a scope freeze (no window functions, correlated
+subqueries or recursive CTEs), the PostgreSQL differential harness as the semantics authority, and a
+numeric reopen trigger. ADR 0013 stays proposed because its effort-days (C1) and Phase 1 SQL
+baseline (C4) are unresolved. **Open before the Phase 2 gate review:** binary size, memory bounds and
+effort-days are not measured and must be recorded on this page. P2-10 is not complete and the subset
+document stays draft.

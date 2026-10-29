@@ -148,3 +148,40 @@ Codes never change meaning once released; new situations get new codes.
 - Correlated subqueries and `EXISTS` are the most likely first additions; they depend on the planner
   choice (see the planner ADR, P2-10).
 - Collations other than binary are a Phase 7 concern (search) and are out of scope here.
+
+## Known differences from PostgreSQL in the binder
+
+The binder (`crates/lattice-sql/src/binder.rs`) is the first stage of the planner chosen in
+[ADR 0025](adr/0025-sql-planner-in-house.md). The differential harness is the authority on
+semantics: a disagreement with PostgreSQL is a bug unless it is listed here as `differs-from-postgres`
+with its reason.
+
+| Behaviour | PostgreSQL | Lattice binder | Reason |
+|---|---|---|---|
+| Operand type mismatch (`int = text`, `text + int`) | `42883` (no such operator) | `42804` | one datatype-mismatch code for every operand check |
+| `||` | accepts any type next to text | only `text \|\| text` and `bytea \|\| bytea` | smaller subset; others are `42804` |
+| Assigning `integer` (or any non-text type) to a `text` column | assignment cast through text I/O is allowed | `42804` | stricter on purpose; use `CAST(x AS text)` |
+| `NOT NULL` | raised when a row is written, so never for a statement that touches no rows | raised at bind time for a `NULL` literal or an omitted column with no default (`23502`) | decided without reading data; a statement that would fail on its first row fails earlier |
+| Repeated assignment target in `UPDATE` | `42601` | `42601` | same |
+| Repeated column in an `INSERT` column list | `42701` | `42701` | same |
+| `ORDER BY name` where two outputs share the name | `42702` unless they are the same expression | `42702` unless they are the same expression | same |
+| Constant integer arithmetic | evaluated while planning, so overflow and division by zero fail the statement | folded while binding: `2147483647 + 1` is `22003`, `1 / 0` is `22012`, even inside a branch that a function such as `coalesce(1, 1 / 0)` would never evaluate | cheap and deterministic; PostgreSQL also folds constants, but the cases a short-circuit skips are not matched and are not tested |
+| `CAST` to `numeric(p, s)` or `varchar(n)` | applies the modifier | refused with `0A000` | the plan does not carry type modifiers yet |
+| Parameter typing | a parameter takes the type of its first use; a conflicting later use is `42P08` | same, and a parameter that already has a type is an operand of that type in later comparisons, arithmetic and `coalesce` | |
+| Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
+
+### Contract with the host catalog
+
+The binder reads tables only through `CatalogView`. The host must: return case-folded names;
+return one consistent catalog for all lookups of one bind; keep column order equal to stored order
+(plans refer to columns by position); give each table a stable `id`; and change `version()` whenever
+any table, column, type or index changes. A bound plan carries the table ids and the catalog
+version. An executor must refuse to run a plan whose version differs from the catalog it runs against
+and must re-bind instead. Prepared statements keep their SQL text, not their plan, across schema
+changes for the same reason.
+
+### Scope freeze
+
+No window functions, correlated subqueries or recursive CTEs until a later phase decides them in an
+ADR (ADR 0025, condition 1).
+
