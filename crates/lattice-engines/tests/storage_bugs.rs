@@ -124,6 +124,7 @@ fn witness(bug: Bug) -> Option<Violation> {
             let got = f
                 .store
                 .scan_at(f.store.snapshot(), 1, ..)
+                .unwrap()
                 .into_iter()
                 .map(|(k, v)| (k.to_vec(), v.clone()))
                 .collect::<BTreeMap<_, _>>();
@@ -133,17 +134,18 @@ fn witness(bug: Bug) -> Option<Violation> {
             f.write(&[(b"a", Some(b"old"))]);
             f.write(&[(b"a", None)]);
             // Validate that the deletion is visible before restart too.
-            assert_eq!(f.store.get_at(f.store.snapshot(), 1, b"a"), None);
+            assert_eq!(f.store.get_at(f.store.snapshot(), 1, b"a").unwrap(), None);
             f = f.reopen();
             f.store
                 .get_at(f.store.snapshot(), 1, b"a")
+                .unwrap()
                 .is_some()
                 .then_some(Violation::RecoveryResurrection)
         }
         Bug::RowIndexStaleEntries => {
             f.write(&[(b"a", Some(b"old"))]);
             f.write(&[(b"a", Some(b"new"))]);
-            let stale = f.store.lookup_at(f.store.snapshot(), 9, b"old");
+            let stale = f.store.lookup_at(f.store.snapshot(), 9, b"old").unwrap();
             let inconsistent = f.store.check_indexes().is_err();
             (!stale.is_empty() && inconsistent).then_some(Violation::StaleIndex)
         }
@@ -155,10 +157,11 @@ fn witness(bug: Bug) -> Option<Violation> {
             assert_eq!(
                 f.store
                     .get_at(f.store.snapshot(), 1, b"a")
+                    .unwrap()
                     .map(Vec::as_slice),
                 Some(b"new".as_slice())
             );
-            (f.store.get_at(old, 1, b"a").map(Vec::as_slice) != Some(b"old".as_slice()))
+            (f.store.get_at(old, 1, b"a").unwrap().map(Vec::as_slice) != Some(b"old".as_slice()))
                 .then_some(Violation::MutableSnapshot)
         }
         Bug::RowTombstoneSkipped => {
@@ -166,11 +169,12 @@ fn witness(bug: Bug) -> Option<Violation> {
             let live = f.store.snapshot();
             f.write(&[(b"a", None)]);
             assert_eq!(
-                f.store.get_at(live, 1, b"a").map(Vec::as_slice),
+                f.store.get_at(live, 1, b"a").unwrap().map(Vec::as_slice),
                 Some(b"old".as_slice())
             );
             f.store
                 .get_at(f.store.snapshot(), 1, b"a")
+                .unwrap()
                 .is_some()
                 .then_some(Violation::TombstoneResurrection)
         }
@@ -182,7 +186,8 @@ fn witness(bug: Bug) -> Option<Violation> {
             tx.delete((1, b"b".to_vec()));
             tx.put((1, b"c".to_vec()), b"insert".to_vec());
             let expected = [Some(b"own".as_slice()), None, Some(b"insert".as_slice())];
-            let got = [b"a", b"b", b"c"].map(|k| f.store.get(&tx, 1, k).map(Vec::as_slice));
+            let got =
+                [b"a", b"b", b"c"].map(|k| f.store.get(&tx, 1, k).unwrap().map(Vec::as_slice));
             assert_eq!(f.store.snapshot(), snap, "buffered writes must not commit");
             (got != expected).then_some(Violation::ReadOwnWrites)
         }
@@ -222,6 +227,7 @@ fn witness(bug: Bug) -> Option<Violation> {
                 let got = f
                     .store
                     .scan_at(f.store.snapshot(), 1, (lo, hi))
+                    .unwrap()
                     .into_iter()
                     .map(|(k, v)| (k.to_vec(), v.clone()))
                     .collect::<Vec<_>>();
@@ -232,7 +238,7 @@ fn witness(bug: Bug) -> Option<Violation> {
         Bug::RowIndexMissingInsert => {
             f.write(&[(b"a", Some(b"same")), (b"b", Some(b"same"))]);
             let expected = vec![b"a".to_vec(), b"b".to_vec()];
-            let missing = f.store.lookup_at(f.store.snapshot(), 9, b"same") != expected;
+            let missing = f.store.lookup_at(f.store.snapshot(), 9, b"same").unwrap() != expected;
             let inconsistent = f.store.check_indexes().is_err();
             (missing && inconsistent).then_some(Violation::MissingIndex)
         }
@@ -269,7 +275,7 @@ fn witness(bug: Bug) -> Option<Violation> {
                     .filter(|(_, v)| **v == probe)
                     .map(|(k, _)| k.clone())
                     .collect::<Vec<_>>();
-                differs |= f.store.lookup_at(f.store.snapshot(), 9, &probe) != expected;
+                differs |= f.store.lookup_at(f.store.snapshot(), 9, &probe).unwrap() != expected;
             }
             // The data and index maintenance agree: this defect is specifically the read predicate.
             assert!(f.store.check_indexes().is_ok());

@@ -19,7 +19,7 @@ pub struct Snapshot {
     pub as_of: u64,
 }
 
-/// Why a write was refused.
+/// Why a row read or write was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MvccError {
     /// Change sets must be applied in increasing LSN order.
@@ -49,7 +49,7 @@ struct Version<V> {
     value: Option<V>,
 }
 
-/// A keyed table with every version of every row.
+/// A keyed table with every retained version of every row.
 #[derive(Debug, Clone)]
 pub struct Table<K: Ord, V> {
     rows: BTreeMap<K, Vec<Version<V>>>,
@@ -77,6 +77,11 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
     /// The last LSN applied.
     pub fn applied_lsn(&self) -> u64 {
         self.applied
+    }
+
+    /// Number of retained row versions, including tombstones. Counting visits each distinct key.
+    pub fn version_count(&self) -> usize {
+        self.rows.values().map(Vec::len).sum()
     }
 
     /// A snapshot of everything applied so far.
@@ -134,7 +139,7 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
     /// horizon reads), as does everything newer. A deletion that is the newest version at or before
     /// the horizon is dropped too, because every reader then sees the key as absent, with or without
     /// it. The horizon is clamped to the last applied LSN, and it never moves back. Reads at a
-    /// snapshot below the new floor are no longer guaranteed, see [`Table::check_readable`].
+    /// snapshot below the new floor fail with `SnapshotTooOld`.
     pub fn vacuum(&mut self, horizon: u64) -> usize {
         let horizon = horizon.min(self.applied).max(self.floor);
         self.floor = horizon;
@@ -179,27 +184,44 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
     }
 
     /// The value of `key` as of `snap`, or `None` if it did not exist or was deleted.
-    pub fn get(&self, snap: Snapshot, key: &K) -> Option<&V> {
-        let versions = self.rows.get(key)?;
-        Self::visible(versions, snap)?.value.as_ref()
+    /// Snapshots below the vacuum floor fail, including reads of absent keys.
+    pub fn get(&self, snap: Snapshot, key: &K) -> Result<Option<&V>, MvccError> {
+        self.check_readable(snap)?;
+        Ok(self
+            .rows
+            .get(key)
+            .and_then(|versions| Self::visible(versions, snap))
+            .and_then(|v| v.value.as_ref()))
     }
 
     /// The change set that wrote the version of `key` visible at `snap`, even if it was a deletion.
-    pub fn written_by(&self, snap: Snapshot, key: &K) -> Option<ChangeSetId> {
-        let versions = self.rows.get(key)?;
-        Self::visible(versions, snap).map(|v| v.cs)
+    /// Snapshots below the vacuum floor fail.
+    pub fn written_by(&self, snap: Snapshot, key: &K) -> Result<Option<ChangeSetId>, MvccError> {
+        self.check_readable(snap)?;
+        Ok(self
+            .rows
+            .get(key)
+            .and_then(|versions| Self::visible(versions, snap))
+            .map(|v| v.cs))
     }
 
     /// Every live row with a key in `range` as of `snap`, in key order.
-    pub fn range<R: RangeBounds<K>>(&self, snap: Snapshot, range: R) -> Vec<(&K, &V)> {
-        self.rows
+    /// Snapshots below the vacuum floor fail, even for an empty range.
+    pub fn range<R: RangeBounds<K>>(
+        &self,
+        snap: Snapshot,
+        range: R,
+    ) -> Result<Vec<(&K, &V)>, MvccError> {
+        self.check_readable(snap)?;
+        Ok(self
+            .rows
             .range(range)
             .filter_map(|(k, versions)| {
                 Self::visible(versions, snap)
                     .and_then(|v| v.value.as_ref())
                     .map(|v| (k, v))
             })
-            .collect()
+            .collect())
     }
 
     /// The LSN of the newest write to `key`, if any.
@@ -229,13 +251,15 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
         self.snapshot
     }
 
-    /// Reads a row, seeing this transaction's own writes first.
-    pub fn get<'a>(&'a self, table: &'a Table<K, V>, key: &K) -> Option<&'a V> {
+    /// Reads a row, seeing this transaction's own writes first. An expired transaction fails even
+    /// when it has its own buffered value for the key.
+    pub fn get<'a>(&'a self, table: &'a Table<K, V>, key: &K) -> Result<Option<&'a V>, MvccError> {
+        table.check_readable(self.snapshot)?;
         if bugs::active(Bug::RowReadOwnWriteIgnored) {
             return table.get(self.snapshot, key);
         }
         match self.writes.get(key) {
-            Some(own) => own.as_ref(),
+            Some(own) => Ok(own.as_ref()),
             None => table.get(self.snapshot, key),
         }
     }
@@ -310,13 +334,13 @@ mod tests {
         t.apply(2, cs(2), vec![(1, Some("b")), (2, Some("c"))])
             .unwrap();
         t.apply(3, cs(3), vec![(1, None)]).unwrap();
-        assert_eq!(t.get(old, &1), Some(&"a"));
-        assert_eq!(t.get(old, &2), None);
-        assert_eq!(t.get(t.snapshot(), &1), None);
-        assert_eq!(t.get(t.snapshot(), &2), Some(&"c"));
-        assert_eq!(t.written_by(old, &1), Some(cs(1)));
+        assert_eq!(t.get(old, &1).unwrap(), Some(&"a"));
+        assert_eq!(t.get(old, &2).unwrap(), None);
+        assert_eq!(t.get(t.snapshot(), &1).unwrap(), None);
+        assert_eq!(t.get(t.snapshot(), &2).unwrap(), Some(&"c"));
+        assert_eq!(t.written_by(old, &1).unwrap(), Some(cs(1)));
         assert_eq!(
-            t.written_by(t.snapshot(), &1),
+            t.written_by(t.snapshot(), &1).unwrap(),
             Some(cs(3)),
             "a deletion is a version too"
         );
@@ -331,7 +355,9 @@ mod tests {
         }
         for as_of in 0..=20u64 {
             let snap = Snapshot { as_of };
-            let seen: Vec<Option<u8>> = (0..5u8).map(|k| t.get(snap, &k).copied()).collect();
+            let seen: Vec<Option<u8>> = (0..5u8)
+                .map(|k| t.get(snap, &k).unwrap().copied())
+                .collect();
             assert!(
                 seen.iter().all(|v| *v == seen[0]),
                 "snapshot {as_of} saw a partial change set: {seen:?}"
@@ -350,7 +376,7 @@ mod tests {
                 Err(MvccError::OutOfOrder { lsn, applied: 5 })
             );
         }
-        assert_eq!(t.get(t.snapshot(), &1), Some(&1));
+        assert_eq!(t.get(t.snapshot(), &1).unwrap(), Some(&1));
         assert_eq!(t.applied_lsn(), 5);
     }
 
@@ -363,7 +389,7 @@ mod tests {
             vec![(1, Some(1)), (1, Some(2)), (1, None), (1, Some(3))],
         )
         .unwrap();
-        assert_eq!(t.get(t.snapshot(), &1), Some(&3));
+        assert_eq!(t.get(t.snapshot(), &1).unwrap(), Some(&3));
     }
 
     #[test]
@@ -382,8 +408,8 @@ mod tests {
             Err(MvccError::Conflict { newer_lsn: 2 })
         );
         c.commit(&mut t, 3, cs(3)).unwrap();
-        assert_eq!(t.get(t.snapshot(), &1), Some(&10));
-        assert_eq!(t.get(t.snapshot(), &2), Some(&30));
+        assert_eq!(t.get(t.snapshot(), &1).unwrap(), Some(&10));
+        assert_eq!(t.get(t.snapshot(), &2).unwrap(), Some(&30));
     }
 
     #[test]
@@ -393,14 +419,14 @@ mod tests {
         t.apply(1, cs(1), vec![(1, Some(1)), (2, Some(1))]).unwrap();
         let mut a = Tx::begin(&t);
         let mut b = Tx::begin(&t);
-        assert_eq!(a.get(&t, &2), Some(&1));
-        assert_eq!(b.get(&t, &1), Some(&1));
+        assert_eq!(a.get(&t, &2).unwrap(), Some(&1));
+        assert_eq!(b.get(&t, &1).unwrap(), Some(&1));
         a.put(1, 0);
         b.put(2, 0);
         a.commit(&mut t, 2, cs(2)).unwrap();
         b.commit(&mut t, 3, cs(3)).unwrap();
-        assert_eq!(t.get(t.snapshot(), &1), Some(&0));
-        assert_eq!(t.get(t.snapshot(), &2), Some(&0));
+        assert_eq!(t.get(t.snapshot(), &1).unwrap(), Some(&0));
+        assert_eq!(t.get(t.snapshot(), &2).unwrap(), Some(&0));
     }
 
     #[test]
@@ -410,14 +436,14 @@ mod tests {
         let mut tx = Tx::begin(&t);
         tx.put(1, 5);
         tx.put(2, 6);
-        assert_eq!(tx.get(&t, &1), Some(&5));
+        assert_eq!(tx.get(&t, &1).unwrap(), Some(&5));
         tx.delete(2);
-        assert_eq!(tx.get(&t, &2), None);
+        assert_eq!(tx.get(&t, &2).unwrap(), None);
         t.apply(2, cs(2), vec![(1, Some(2))]).unwrap();
         let before = t.snapshot();
         assert!(tx.commit(&mut t, 3, cs(3)).is_err());
         assert_eq!(t.snapshot(), before);
-        assert_eq!(t.get(t.snapshot(), &2), None);
+        assert_eq!(t.get(t.snapshot(), &2).unwrap(), None);
     }
 
     #[derive(Debug, Clone)]
@@ -476,14 +502,14 @@ mod tests {
                     }
                     Op::Probe { back, key } => {
                         let i = snap_back(&history, back);
-                        let got = table.get(Snapshot { as_of: i as u64 }, &key).copied();
+                        let got = table.get(Snapshot { as_of: i as u64 }, &key).unwrap().copied();
                         prop_assert_eq!(got, history[i].get(&key).copied());
                     }
                     Op::Scan { back, lo, hi } => {
                         let i = snap_back(&history, back);
                         let (lo, hi) = (lo.min(hi), lo.max(hi));
                         let got: Vec<(u8, u8)> = table
-                            .range(Snapshot { as_of: i as u64 }, lo..hi)
+                            .range(Snapshot { as_of: i as u64 }, lo..hi).unwrap()
                             .into_iter().map(|(k, v)| (*k, *v)).collect();
                         let want: Vec<(u8, u8)> = history[i].range(lo..hi).map(|(k, v)| (*k, *v)).collect();
                         prop_assert_eq!(got, want);
@@ -529,9 +555,12 @@ mod tests {
             "versions at lsn 1 and 2 are invisible from 3 on"
         );
         for (as_of, want) in [(3, "c"), (4, "d")] {
-            assert_eq!(t.get(Snapshot { as_of }, &1), Some(&want));
+            assert_eq!(t.get(Snapshot { as_of }, &1).unwrap(), Some(&want));
         }
-        assert_eq!(t.written_by(Snapshot { as_of: 3 }, &1), Some(cs(3)));
+        assert_eq!(
+            t.written_by(Snapshot { as_of: 3 }, &1).unwrap(),
+            Some(cs(3))
+        );
         assert_eq!(t.vacuum(3), 0, "vacuum is idempotent");
     }
 
@@ -546,9 +575,9 @@ mod tests {
             2,
             "key 1: its insert and its tombstone; key 2 keeps lsn 1"
         );
-        assert_eq!(t.get(Snapshot { as_of: 2 }, &1), None);
-        assert_eq!(t.get(Snapshot { as_of: 2 }, &2), Some(&2));
-        assert_eq!(t.get(Snapshot { as_of: 3 }, &2), None);
+        assert_eq!(t.get(Snapshot { as_of: 2 }, &1).unwrap(), None);
+        assert_eq!(t.get(Snapshot { as_of: 2 }, &2).unwrap(), Some(&2));
+        assert_eq!(t.get(Snapshot { as_of: 3 }, &2).unwrap(), None);
         assert_eq!(t.newest_lsn(&1), None);
         assert_eq!(t.newest_lsn(&2), Some(3));
     }
@@ -562,7 +591,7 @@ mod tests {
         assert_eq!(t.floor(), 2);
         assert_eq!(t.vacuum(0), 0);
         assert_eq!(t.floor(), 2);
-        assert_eq!(t.get(t.snapshot(), &1), Some(&2));
+        assert_eq!(t.get(t.snapshot(), &1).unwrap(), Some(&2));
     }
 
     #[test]
@@ -579,12 +608,12 @@ mod tests {
             old.commit(&mut t, 4, cs(4)),
             Err(MvccError::SnapshotTooOld { floor: 2 })
         );
-        assert_eq!(t.get(t.snapshot(), &5), None);
+        assert_eq!(t.get(t.snapshot(), &5).unwrap(), None);
         let mut at_floor = Tx::begin(&t);
         at_floor.snapshot = Snapshot { as_of: 2 };
         at_floor.put(1, 9);
         at_floor.commit(&mut t, 4, cs(4)).unwrap();
-        assert_eq!(t.get(t.snapshot(), &1), Some(&9));
+        assert_eq!(t.get(t.snapshot(), &1).unwrap(), Some(&9));
     }
 
     fn history_of(steps: &[Vec<(u8, Option<u8>)>]) -> (Table<u8, u8>, Vec<BTreeMap<u8, u8>>) {
@@ -635,9 +664,9 @@ mod tests {
                 let snap = Snapshot { as_of };
                 let model = &history[as_of as usize];
                 for k in 0u8..6 {
-                    prop_assert_eq!(t.get(snap, &k), model.get(&k));
+                    prop_assert_eq!(t.get(snap, &k).unwrap(), model.get(&k));
                 }
-                let got: Vec<(u8, u8)> = t.range(snap, ..).into_iter().map(|(k, v)| (*k, *v)).collect();
+                let got: Vec<(u8, u8)> = t.range(snap, ..).unwrap().into_iter().map(|(k, v)| (*k, *v)).collect();
                 let want: Vec<(u8, u8)> = model.iter().map(|(k, v)| (*k, *v)).collect();
                 prop_assert_eq!(got, want);
             }
@@ -650,5 +679,67 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn all_table_and_transaction_reads_reject_a_snapshot_below_the_floor() {
+        let mut table: Table<u8, u8> = Table::new();
+        table
+            .apply(1, cs(1), vec![(1, Some(10)), (2, Some(20))])
+            .unwrap();
+        let old = table.snapshot();
+        let mut tx = Tx::begin(&table);
+        tx.put(1, 99);
+        table
+            .apply(2, cs(2), vec![(1, Some(11)), (2, None)])
+            .unwrap();
+        assert_eq!(table.version_count(), 4);
+        table.vacuum(2);
+        assert_eq!(table.version_count(), 1);
+        let expired = Err(MvccError::SnapshotTooOld { floor: 2 });
+        assert_eq!(table.get(old, &1), expired);
+        assert_eq!(
+            table.get(old, &200),
+            expired,
+            "an absent key cannot hide an expired snapshot"
+        );
+        assert_eq!(
+            table.written_by(old, &1),
+            Err(MvccError::SnapshotTooOld { floor: 2 })
+        );
+        assert_eq!(
+            table.range(old, ..),
+            Err(MvccError::SnapshotTooOld { floor: 2 })
+        );
+        assert_eq!(
+            tx.get(&table, &1),
+            expired,
+            "own writes cannot revive an expired transaction"
+        );
+        assert_eq!(table.get(table.snapshot(), &1), Ok(Some(&11)));
+        assert_eq!(table.get(table.snapshot(), &2), Ok(None));
+    }
+
+    #[test]
+    fn the_vacuum_planted_bug_loses_the_exact_floor_version() {
+        struct ClearBug;
+        impl Drop for ClearBug {
+            fn drop(&mut self) {
+                bugs::clear();
+            }
+        }
+        let mut table: Table<u8, u8> = Table::new();
+        table.apply(1, cs(1), vec![(1, Some(10))]).unwrap();
+        table.apply(2, cs(2), vec![(1, Some(20))]).unwrap();
+        table.apply(3, cs(3), vec![(1, Some(30))]).unwrap();
+        let mut control = table.clone();
+        control.vacuum(2);
+        assert_eq!(control.get(Snapshot { as_of: 2 }, &1), Ok(Some(&20)));
+        bugs::enable(Bug::VacuumDropsVisibleVersion);
+        let guard = ClearBug;
+        table.vacuum(2);
+        drop(guard);
+        assert_eq!(table.get(Snapshot { as_of: 2 }, &1), Ok(None));
+        assert_eq!(table.get(Snapshot { as_of: 3 }, &1), Ok(Some(&30)));
     }
 }

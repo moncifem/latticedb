@@ -475,7 +475,7 @@ fn check_at(store: &Store, model: &Model, as_of: u64) -> Result<(), String> {
     let rows = model.rows_at(as_of);
     for table in 0..TABLES {
         for key in KEYS {
-            let got = store.get_at(snap, table, key);
+            let got = store.get_at(snap, table, key).unwrap();
             let want = rows.get(&(table, key.to_vec()));
             ensure!(
                 got == want,
@@ -484,6 +484,7 @@ fn check_at(store: &Store, model: &Model, as_of: u64) -> Result<(), String> {
         }
         let got: Vec<(Vec<u8>, Vec<u8>)> = store
             .scan_at(snap, table, ..)
+            .unwrap()
             .into_iter()
             .map(|(k, v)| (k.to_vec(), v.clone()))
             .collect();
@@ -495,7 +496,7 @@ fn check_at(store: &Store, model: &Model, as_of: u64) -> Result<(), String> {
     }
     for (idx, table) in INDEXES {
         for ikey in Model::index_universe(idx) {
-            let got = store.lookup_at(snap, idx, &ikey);
+            let got = store.lookup_at(snap, idx, &ikey).unwrap();
             let want = model.lookup(as_of, idx, table, &ikey);
             ensure!(
                 got == want,
@@ -653,7 +654,7 @@ fn run(ops: &[Op], flaw: Flaw) -> Result<Stats, String> {
                 let i = usize::from(tx) % open_txs.len();
                 let k = key_of(table, key);
                 let (rtx, mtx) = &open_txs[i];
-                let got = store.get(rtx, k.0, &k.1);
+                let got = store.get(rtx, k.0, &k.1).unwrap();
                 let want = model.tx_get(mtx, &k);
                 ensure!(
                     got == want,
@@ -735,7 +736,7 @@ fn run(ops: &[Op], flaw: Flaw) -> Result<Stats, String> {
             Op::ReadAt { sel, table, key } => {
                 let as_of = pick_snapshot(sel, &model, &remembered, store.snapshot().as_of);
                 let k = key_of(table, key);
-                let got = store.get_at(Snapshot { as_of }, k.0, &k.1);
+                let got = store.get_at(Snapshot { as_of }, k.0, &k.1).unwrap();
                 let want = model.rows_at(as_of).get(&k);
                 ensure!(
                     got == want,
@@ -773,6 +774,7 @@ fn run(ops: &[Op], flaw: Flaw) -> Result<Stats, String> {
                         u32::from(table),
                         (lob.clone(), hib.clone()),
                     )
+                    .unwrap()
                     .into_iter()
                     .map(|(k, v)| (k.to_vec(), v.clone()))
                     .collect();

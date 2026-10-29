@@ -26,6 +26,9 @@ pub struct IndexDef {
 type EntryKey = (u32, Vec<u8>);
 type EntryWrite = (EntryKey, Option<Vec<u8>>);
 
+/// Live index entries keyed by index id and encoded index/primary key.
+pub type IndexEntries = BTreeMap<(u32, Vec<u8>), Vec<u8>>;
+
 /// Order-preserving encoding of an index key: a zero byte is escaped and the key ends with a
 /// terminator that sorts below every continuation, so entries sort by index key, then by primary key.
 fn encode_key(ikey: &[u8]) -> Vec<u8> {
@@ -67,7 +70,7 @@ impl Indexes {
         &self,
         rows: &Table<RowKey, Vec<u8>>,
         writes: &[RowWrite],
-    ) -> Vec<EntryWrite> {
+    ) -> Result<Vec<EntryWrite>, MvccError> {
         let before = rows.snapshot();
         // Rows written twice in one change set: the last write wins, so each step starts from the
         // value the previous step left.
@@ -76,7 +79,7 @@ impl Indexes {
         for (key, new) in writes {
             let old: Option<&Vec<u8>> = match current.get(key) {
                 Some(v) => *v,
-                None => rows.get(before, key),
+                None => rows.get(before, key)?,
             };
             for def in self.defs.iter().filter(|d| d.table == key.0) {
                 let old_k = old.and_then(|v| (def.extract)(v));
@@ -97,7 +100,7 @@ impl Indexes {
             }
             current.insert(key, new.as_ref());
         }
-        out
+        Ok(out)
     }
 
     /// Applies index changes at the commit LSN of the row writes that caused them.
@@ -116,17 +119,22 @@ impl Indexes {
     }
 
     /// The primary keys of the rows whose index key is exactly `ikey`, as of `snap`, in key order.
-    pub fn lookup(&self, snap: Snapshot, index: u32, ikey: &[u8]) -> Vec<Vec<u8>> {
+    pub fn lookup(
+        &self,
+        snap: Snapshot,
+        index: u32,
+        ikey: &[u8],
+    ) -> Result<Vec<Vec<u8>>, MvccError> {
         if bugs::active(Bug::RowIndexPrefixLookup) {
             let mut prefix = encode_key(ikey);
             prefix.truncate(prefix.len().saturating_sub(2));
-            return self
+            return Ok(self
                 .entries
-                .range(snap, ..)
+                .range(snap, ..)?
                 .into_iter()
                 .filter(|((id, encoded), _)| *id == index && encoded.starts_with(&prefix))
                 .map(|(_, pk)| pk.clone())
-                .collect();
+                .collect());
         }
         let lo = (index, encode_key(ikey));
         let mut hi_bytes = lo.1.clone();
@@ -135,20 +143,22 @@ impl Indexes {
             *last = 2;
         }
         let hi = (index, hi_bytes);
-        self.entries
-            .range(snap, lo..hi)
+        Ok(self
+            .entries
+            .range(snap, lo..hi)?
             .into_iter()
             .map(|(_, pk)| pk.clone())
-            .collect()
+            .collect())
     }
 
     /// Every live entry of every index as of `snap`, for consistency checks.
-    pub fn live_entries(&self, snap: Snapshot) -> BTreeMap<(u32, Vec<u8>), Vec<u8>> {
-        self.entries
-            .range(snap, ..)
+    pub fn live_entries(&self, snap: Snapshot) -> Result<IndexEntries, MvccError> {
+        Ok(self
+            .entries
+            .range(snap, ..)?
             .into_iter()
             .map(|((id, k), pk)| ((*id, k.clone()), pk.clone()))
-            .collect()
+            .collect())
     }
 
     /// The entries the rows imply at `snap`, computed from scratch.
@@ -156,16 +166,16 @@ impl Indexes {
         &self,
         rows: &Table<RowKey, Vec<u8>>,
         snap: Snapshot,
-    ) -> BTreeMap<(u32, Vec<u8>), Vec<u8>> {
+    ) -> Result<IndexEntries, MvccError> {
         let mut out = BTreeMap::new();
-        for ((table, pk), value) in rows.range(snap, ..) {
+        for ((table, pk), value) in rows.range(snap, ..)? {
             for def in self.defs.iter().filter(|d| d.table == *table) {
                 if let Some(ik) = (def.extract)(value) {
                     out.insert(entry_key(def.id, &ik, pk), pk.clone());
                 }
             }
         }
-        out
+        Ok(out)
     }
 }
 
@@ -226,8 +236,8 @@ mod tests {
             .unwrap();
         let snap = rows.snapshot();
         assert_ne!(
-            indexes.live_entries(snap),
-            indexes.expected_entries(&rows, snap)
+            indexes.live_entries(snap).unwrap(),
+            indexes.expected_entries(&rows, snap).unwrap()
         );
     }
 }

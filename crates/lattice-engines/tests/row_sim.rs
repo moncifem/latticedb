@@ -109,7 +109,7 @@ fn compare(store: &Store, snap: Snapshot, model: &Rows) -> Option<String> {
                 .filter(|((t, _), v)| *t == table && v.first() == Some(&value))
                 .map(|((_, key), _)| key.clone())
                 .collect();
-            let got = store.lookup_at(snap, table, &[value]);
+            let got = store.lookup_at(snap, table, &[value]).unwrap();
             if got != expected {
                 return Some(format!(
                     "I9 at snapshot {}: index {table} value {value}, got {got:?}, expected {expected:?}",
@@ -121,7 +121,7 @@ fn compare(store: &Store, snap: Snapshot, model: &Rows) -> Option<String> {
     for table in 0..TABLES {
         for key in 0..KEYS {
             let want = model.get(&(table, vec![key]));
-            let got = store.get_at(snap, table, &[key]);
+            let got = store.get_at(snap, table, &[key]).unwrap();
             if got != want {
                 return Some(format!(
                     "at snapshot {} table {table} key {key}: store {got:?}, model {want:?}",
@@ -429,7 +429,7 @@ fn vacuum_is_bounded_by_open_transactions_and_retention_and_expires_as_of() {
     let store = open(&disk, &clock, 4);
     assert!(store.snapshot_as_of_changeset(old_id).is_some());
     assert_eq!(
-        store.get_at(Snapshot { as_of: old_lsn }, 0, &[0]),
+        store.get_at(Snapshot { as_of: old_lsn }, 0, &[0]).unwrap(),
         Some(&vec![0, 0])
     );
 }

@@ -320,6 +320,7 @@ fn compare(store: &Store, snap: Snapshot, expected: &Rows) -> Result<(), String>
             .collect();
         let got: Vec<_> = store
             .scan_at(snap, table, ..)
+            .unwrap()
             .into_iter()
             .map(|(k, v)| (k.to_vec(), v.clone()))
             .collect();
@@ -330,7 +331,7 @@ fn compare(store: &Store, snap: Snapshot, expected: &Rows) -> Result<(), String>
             ));
         }
         for (key, value) in &want {
-            if store.get_at(snap, table, key) != Some(value) {
+            if store.get_at(snap, table, key).unwrap() != Some(value) {
                 return Err("point read differs from range scan".into());
             }
         }
@@ -342,7 +343,7 @@ fn compare(store: &Store, snap: Snapshot, expected: &Rows) -> Result<(), String>
                     .filter(|((t, _), v)| *t == table && v.first() == Some(&value))
                     .map(|((_, k), _)| k.clone())
                     .collect();
-                if store.lookup_at(snap, table, &[value]) != want {
+                if store.lookup_at(snap, table, &[value]).unwrap() != want {
                     return Err(format!(
                         "I9: index {table} value {value} differs at {}",
                         snap.as_of

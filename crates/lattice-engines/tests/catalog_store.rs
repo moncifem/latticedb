@@ -120,7 +120,10 @@ fn the_catalog_and_the_row_store_share_one_log_without_reading_each_others_chang
         &config(),
     )
     .unwrap();
-    assert_eq!(rows.get_at(rows.snapshot(), 1, b"k"), Some(&b"v".to_vec()));
+    assert_eq!(
+        rows.get_at(rows.snapshot(), 1, b"k").unwrap(),
+        Some(&b"v".to_vec())
+    );
     drop(rows); // one writer at a time holds the log
     let cat = open(&disk, &clock, 5).unwrap();
     assert_eq!(cat.catalog().current().len(), 2);

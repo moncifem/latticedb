@@ -22,6 +22,9 @@ use std::ops::{Bound, RangeBounds};
 /// A transaction on the store.
 pub type RowTx = Tx<RowKey, Vec<u8>>;
 
+/// Borrowed rows returned by a snapshot scan, in primary-key order.
+pub type ScanRows<'a> = Vec<(&'a [u8], &'a Vec<u8>)>;
+
 /// Why a store operation failed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowError {
@@ -86,6 +89,14 @@ impl Classify for RowError {
     }
 }
 
+fn mvcc_error(error: MvccError) -> RowError {
+    match error {
+        MvccError::Conflict { newer_lsn } => RowError::Conflict { newer_lsn },
+        MvccError::SnapshotTooOld { floor } => RowError::SnapshotTooOld { floor },
+        MvccError::OutOfOrder { .. } => RowError::Stale,
+    }
+}
+
 /// What one [`RowStore::vacuum`] removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VacuumStats {
@@ -102,8 +113,8 @@ pub struct RowStore<I: Io, C: Clock, R: Rng> {
     kernel: Kernel<I, C, R>,
     table: Table<RowKey, Vec<u8>>,
     indexes: Indexes,
-    /// Commit LSN of every row change set by id, and its timestamp in log order (the HLC grows with
-    /// the LSN), so `AS OF` can name a point in history by change set or by time.
+    /// Commit LSN and timestamp of each row change set at or above the vacuum floor. The HLC grows
+    /// with the LSN, so `AS OF` can name a retained point by change set or by time.
     commit_lsn: std::collections::BTreeMap<ChangeSetId, u64>,
     commit_times: Vec<(Hlc, u64, ChangeSetId)>,
     stale: bool,
@@ -157,10 +168,11 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                         writes.retain(|(_, value)| value.is_some());
                     }
                     let changes = indexes.changes_for(&table, &writes);
-                    if let Err(e) = table
-                        .apply(r.lsn, cs.id, writes)
-                        .and_then(|()| indexes.apply(r.lsn, cs.id, changes))
-                    {
+                    if let Err(e) = changes.and_then(|changes| {
+                        table
+                            .apply(r.lsn, cs.id, writes)
+                            .and_then(|()| indexes.apply(r.lsn, cs.id, changes))
+                    }) {
                         failure = Some(RowError::Corrupt(format!("lsn {}: {e:?}", r.lsn)));
                     } else {
                         commit_lsn.insert(cs.id, r.lsn);
@@ -199,14 +211,28 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.table.snapshot()
     }
 
-    /// Reads a row inside a transaction: its own writes first, then its snapshot.
-    pub fn get<'a>(&'a self, tx: &'a RowTx, table: u32, key: &[u8]) -> Option<&'a Vec<u8>> {
+    /// Reads a row inside a transaction: its own writes first, then its snapshot. An expired
+    /// transaction fails even if the requested value is buffered in its own writes.
+    pub fn get<'a>(
+        &'a self,
+        tx: &'a RowTx,
+        table: u32,
+        key: &[u8],
+    ) -> Result<Option<&'a Vec<u8>>, RowError> {
         tx.get(&self.table, &(table, key.to_vec()))
+            .map_err(mvcc_error)
     }
 
-    /// Reads a row as of a snapshot.
-    pub fn get_at(&self, snap: Snapshot, table: u32, key: &[u8]) -> Option<&Vec<u8>> {
-        self.table.get(snap, &(table, key.to_vec()))
+    /// Reads a row as of a snapshot, refusing snapshots below the vacuum floor.
+    pub fn get_at(
+        &self,
+        snap: Snapshot,
+        table: u32,
+        key: &[u8],
+    ) -> Result<Option<&Vec<u8>>, RowError> {
+        self.table
+            .get(snap, &(table, key.to_vec()))
+            .map_err(mvcc_error)
     }
 
     /// Every live row of `table` with a key in `range` as of `snap`, in key order.
@@ -215,7 +241,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         snap: Snapshot,
         table: u32,
         range: B,
-    ) -> Vec<(&[u8], &Vec<u8>)> {
+    ) -> Result<ScanRows<'_>, RowError> {
+        self.check_snapshot(snap)?;
         let lo = match range.start_bound() {
             Bound::Included(k) => Bound::Included((table, k.clone())),
             Bound::Excluded(k) => Bound::Excluded((table, k.clone())),
@@ -232,22 +259,37 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 None => Bound::Unbounded,
             },
         };
-        self.table
+        Ok(self
+            .table
             .range(snap, (lo, hi))
+            .map_err(mvcc_error)?
             .into_iter()
             .map(|((_, k), v)| (k.as_slice(), v))
-            .collect()
+            .collect())
     }
 
     /// Primary keys whose extracted index key equals `key` at `snap`, in primary-key order.
-    pub fn lookup_at(&self, snap: Snapshot, index: u32, key: &[u8]) -> Vec<Vec<u8>> {
-        self.indexes.lookup(snap, index, key)
+    pub fn lookup_at(
+        &self,
+        snap: Snapshot,
+        index: u32,
+        key: &[u8],
+    ) -> Result<Vec<Vec<u8>>, RowError> {
+        self.check_snapshot(snap)?;
+        self.indexes.lookup(snap, index, key).map_err(mvcc_error)
     }
 
     /// Rebuilds expected index entries from the rows at `snap` and reports any difference (I9).
     pub fn check_indexes_at(&self, snap: Snapshot) -> Result<(), String> {
-        let live = self.indexes.live_entries(snap);
-        let expected = self.indexes.expected_entries(&self.table, snap);
+        self.check_snapshot(snap).map_err(|e| e.to_string())?;
+        let live = self
+            .indexes
+            .live_entries(snap)
+            .map_err(|e| format!("{e:?}"))?;
+        let expected = self
+            .indexes
+            .expected_entries(&self.table, snap)
+            .map_err(|e| format!("{e:?}"))?;
         if live == expected {
             Ok(())
         } else {
@@ -269,16 +311,16 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.check_indexes_at(self.snapshot())
     }
 
-    /// The oldest snapshot that is still complete. Reads below it can miss versions that vacuum
-    /// removed; a reopened store has every version again (the log keeps all history).
+    /// The oldest snapshot that is still complete. Reads below it fail with `SnapshotTooOld`;
+    /// a reopened store has every version again because the log keeps all history.
     pub fn oldest_snapshot(&self) -> Snapshot {
         Snapshot {
             as_of: self.table.floor(),
         }
     }
 
-    /// Fails with `SnapshotTooOld` if `snap` is below the vacuum floor. Call it before trusting a
-    /// read at a snapshot that may have outlived a vacuum, such as an `AS OF` outside the window.
+    /// Fails with `SnapshotTooOld` if `snap` is below the vacuum floor. Reads already enforce this;
+    /// callers can use the same check to reject an expired `AS OF` before starting other work.
     pub fn check_snapshot(&self, snap: Snapshot) -> Result<(), RowError> {
         self.table.check_readable(snap).map_err(|e| match e {
             MvccError::SnapshotTooOld { floor } => RowError::SnapshotTooOld { floor },
@@ -303,6 +345,14 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let row_versions = self.table.vacuum(horizon);
         let applied_horizon = self.table.floor();
         let index_versions = self.indexes.vacuum(applied_horizon);
+        self.commit_lsn.retain(|_, lsn| *lsn >= applied_horizon);
+        let before_floor = self
+            .commit_times
+            .partition_point(|(_, lsn, _)| *lsn < applied_horizon);
+        if before_floor != 0 {
+            self.commit_times.drain(..before_floor);
+            self.commit_times.shrink_to_fit();
+        }
         VacuumStats {
             horizon: applied_horizon,
             row_versions,
@@ -310,8 +360,25 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         }
     }
 
+    /// Vacuums once retained row versions reach `version_threshold`; returns `None` below it.
+    ///
+    /// The threshold includes tombstones and is based on rows, not the number of index entries.
+    /// The horizon respects the oldest open snapshot and the retention window. This is an explicit
+    /// maintenance call, not a background worker; zero requests a vacuum even for an empty store.
+    pub fn vacuum_if_needed(
+        &mut self,
+        oldest_open: Option<Snapshot>,
+        retain_lsns: u64,
+        version_threshold: usize,
+    ) -> Option<VacuumStats> {
+        if self.table.version_count() < version_threshold {
+            return None;
+        }
+        Some(self.vacuum(self.vacuum_horizon(oldest_open, retain_lsns)))
+    }
+
     /// `AS OF CHANGESET c`: the snapshot that sees everything up to and including change set `id`, or
-    /// `None` if no row change set with that id was committed.
+    /// `None` if no row change set with that id is retained at or above the vacuum floor.
     pub fn snapshot_as_of_changeset(&self, id: ChangeSetId) -> Option<Snapshot> {
         self.commit_lsn
             .get(&id)
@@ -320,17 +387,20 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     }
 
     /// `AS OF TIMESTAMP t`: the snapshot at the newest row change set whose timestamp is not after
-    /// `t`; the empty snapshot if `t` is before the first commit.
+    /// `t`, clamped to the vacuum floor when that history has expired. Before any vacuum it is
+    /// the empty snapshot if `t` is before the first commit.
     pub fn snapshot_as_of_hlc(&self, t: Hlc) -> Snapshot {
         let end = self.commit_times.partition_point(|(h, _, _)| *h <= t);
         let as_of = end
             .checked_sub(1)
             .and_then(|i| self.commit_times.get(i))
             .map_or(0, |(_, lsn, _)| *lsn);
-        Snapshot { as_of }
+        Snapshot {
+            as_of: as_of.max(self.table.floor()),
+        }
     }
 
-    /// The id of the row change set committed at `lsn`, if there is one.
+    /// The id of the row change set committed at `lsn`, if retained at or above the vacuum floor.
     pub fn changeset_id_at(&self, lsn: u64) -> Option<ChangeSetId> {
         let i = self
             .commit_times
@@ -339,7 +409,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.commit_times.get(i).map(|(_, _, id)| *id)
     }
 
-    /// The timestamp of the row change set committed at `lsn`, if there is one.
+    /// The timestamp of the row change set at `lsn`, if retained at or above the vacuum floor.
     pub fn commit_time_at(&self, lsn: u64) -> Option<Hlc> {
         let i = self
             .commit_times
@@ -359,6 +429,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         if self.stale {
             return Err(RowError::Stale);
         }
+        self.check_snapshot(tx.snapshot())?;
         if tx.is_read_only() {
             return Ok(tx.snapshot().as_of);
         }
@@ -379,7 +450,10 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 } else {
                     writes
                 };
-                let changes = self.indexes.changes_for(&self.table, &writes);
+                let changes = self
+                    .indexes
+                    .changes_for(&self.table, &writes)
+                    .map_err(mvcc_error)?;
                 self.table
                     .apply(lsn, id, writes)
                     .and_then(|()| self.indexes.apply(lsn, id, changes))
@@ -400,6 +474,235 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 self.stale = true;
                 Err(RowError::InDoubt(e))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod vacuum_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
+    use super::*;
+    use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
+    use lattice_testkit::scenario::{SharedClock, SharedIo};
+    use std::rc::Rc;
+
+    type Store = RowStore<SharedIo, SharedClock, SeededRng>;
+
+    fn open(disk: &SharedIo, clock: &Rc<SimClock>) -> Store {
+        RowStore::open_with_indexes(
+            disk.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(17),
+            &Config {
+                segment_limit: 256,
+                ..Config::default()
+            },
+            vec![IndexDef {
+                id: 9,
+                table: 1,
+                extract: |v| Some(v.to_vec()),
+            }],
+        )
+        .unwrap()
+    }
+
+    fn fixture() -> (SharedIo, Rc<SimClock>, Store) {
+        let disk = SharedIo::new(SimIo::new(17, FaultProfile::clean()));
+        let clock = Rc::new(SimClock::new(1_000));
+        let mut store = open(&disk, &clock);
+        for (a, other_key, other) in [
+            (1, b"b", Some(9)),
+            (2, b"b", None),
+            (3, b"c", Some(7)),
+            (4, b"c", None),
+        ] {
+            clock.advance(1);
+            let mut tx = store.begin();
+            tx.put((1, b"a".to_vec()), vec![a]);
+            match other {
+                Some(value) => tx.put((1, other_key.to_vec()), vec![value]),
+                None => tx.delete((1, other_key.to_vec())),
+            }
+            store.commit(tx).unwrap();
+        }
+        (disk, clock, store)
+    }
+
+    #[test]
+    fn vacuum_prunes_commit_metadata_and_timestamp_snapshots_stop_at_the_floor() {
+        let (_, _, mut store) = fixture();
+        let commits = store.commit_times.clone();
+        let stats = store.vacuum(3);
+        assert_eq!(stats.horizon, 3);
+        assert_eq!(store.commit_times.len(), 2);
+        assert_eq!(store.commit_lsn.len(), 2);
+        for (_, _, id) in &commits {
+            assert!(
+                store.kernel.contains(id),
+                "vacuum must not prune kernel deduplication state"
+            );
+        }
+        assert_eq!(store.commit_time_at(1), None);
+        assert_eq!(store.changeset_id_at(2), None);
+        assert_eq!(store.snapshot_as_of_changeset(commits[0].2), None);
+        assert_eq!(store.commit_time_at(3), Some(commits[2].0));
+        assert_eq!(store.changeset_id_at(4), Some(commits[3].2));
+        assert_eq!(
+            store.snapshot_as_of_hlc(Hlc::default()),
+            Snapshot { as_of: 3 }
+        );
+        assert_eq!(
+            store.snapshot_as_of_hlc(commits[0].0),
+            Snapshot { as_of: 3 }
+        );
+        assert_eq!(
+            store.snapshot_as_of_hlc(commits[2].0),
+            Snapshot { as_of: 3 }
+        );
+        assert_eq!(
+            store.snapshot_as_of_hlc(commits[3].0),
+            Snapshot { as_of: 4 }
+        );
+        assert_eq!(
+            store.get_at(Snapshot { as_of: 3 }, 1, b"a"),
+            Ok(Some(&vec![3]))
+        );
+        store.check_indexes_at(Snapshot { as_of: 3 }).unwrap();
+        let repeat = store.vacuum(1);
+        assert_eq!(repeat.horizon, 3);
+        assert_eq!(repeat.row_versions, 0);
+        assert_eq!(store.commit_times.len(), 2);
+    }
+
+    #[test]
+    fn all_store_read_paths_reject_expired_snapshots_and_transactions() {
+        let disk = SharedIo::new(SimIo::new(2, FaultProfile::clean()));
+        let clock = Rc::new(SimClock::new(1_000));
+        let mut store = open(&disk, &clock);
+        let old = store.snapshot();
+        let read_only = store.begin();
+        let mut own_write = store.begin();
+        own_write.put((1, b"staged".to_vec()), vec![8]);
+        let mut committed = store.begin();
+        committed.put((1, b"a".to_vec()), vec![3]);
+        store.commit(committed).unwrap();
+        store.vacuum(1);
+        let expired = Err(RowError::SnapshotTooOld { floor: 1 });
+        assert_eq!(store.get_at(old, 1, b"a"), expired);
+        assert_eq!(store.get_at(old, 1, b"missing"), expired);
+        assert_eq!(store.get(&own_write, 1, b"staged"), expired);
+        assert_eq!(
+            store.scan_at(old, 1, ..),
+            Err(RowError::SnapshotTooOld { floor: 1 })
+        );
+        assert_eq!(
+            store.lookup_at(old, 9, &[3]),
+            Err(RowError::SnapshotTooOld { floor: 1 })
+        );
+        assert_eq!(
+            store.indexes.lookup(old, 9, &[3]),
+            Err(MvccError::SnapshotTooOld { floor: 1 })
+        );
+        assert_eq!(
+            store.indexes.live_entries(old),
+            Err(MvccError::SnapshotTooOld { floor: 1 })
+        );
+        assert_eq!(
+            store.indexes.expected_entries(&store.table, old),
+            Err(MvccError::SnapshotTooOld { floor: 1 })
+        );
+        assert!(
+            store
+                .check_indexes_at(old)
+                .unwrap_err()
+                .contains("snapshot too old")
+        );
+        assert_eq!(
+            store.commit(read_only),
+            Err(RowError::SnapshotTooOld { floor: 1 })
+        );
+        assert_eq!(
+            store.commit(own_write),
+            Err(RowError::SnapshotTooOld { floor: 1 })
+        );
+    }
+
+    #[test]
+    fn threshold_vacuum_respects_open_snapshots_and_retention() {
+        let (_, _, mut store) = fixture();
+        assert_eq!(store.table.version_count(), 8);
+        assert_eq!(store.vacuum_if_needed(None, 0, 9), None);
+        assert_eq!(store.oldest_snapshot().as_of, 0);
+        let stats = store
+            .vacuum_if_needed(Some(Snapshot { as_of: 2 }), 1, 8)
+            .unwrap();
+        assert_eq!(stats.horizon, 2);
+        assert_eq!(
+            store.get_at(Snapshot { as_of: 2 }, 1, b"a"),
+            Ok(Some(&vec![2]))
+        );
+        assert_eq!(store.vacuum_if_needed(None, 0, usize::MAX), None);
+        let stats = store.vacuum_if_needed(None, 0, 0).unwrap();
+        assert_eq!(stats.horizon, 4);
+        assert_eq!(store.table.version_count(), 1);
+        assert_eq!(store.commit_times.len(), 1);
+        assert_eq!(store.commit_lsn.len(), 1);
+    }
+
+    #[test]
+    fn replay_then_vacuum_reproduces_live_rows_indexes_and_metadata_without_changing_wal() {
+        let (disk, clock, mut live) = fixture();
+        let segments: Vec<_> = disk
+            .list("wal")
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.ends_with(".seg"))
+            .map(|p| {
+                let bytes = disk.read(&format!("wal/{p}")).unwrap();
+                (p, bytes)
+            })
+            .collect();
+        live.vacuum(2);
+        live.vacuum(3);
+        let times = live.commit_times.clone();
+        let ids = live.commit_lsn.clone();
+        let rows: Vec<_> = (3..=4)
+            .map(|as_of| {
+                let snap = Snapshot { as_of };
+                live.check_indexes_at(snap).unwrap();
+                live.scan_at(snap, 1, ..)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(k, v)| (k.to_vec(), v.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        drop(live);
+        disk.crash();
+        let mut replayed = open(&disk, &clock);
+        assert_eq!(replayed.oldest_snapshot().as_of, 0);
+        assert_eq!(replayed.commit_times.len(), 4);
+        replayed.vacuum(3);
+        assert_eq!(replayed.commit_times, times);
+        assert_eq!(replayed.commit_lsn, ids);
+        for (as_of, expected) in (3..=4).zip(rows) {
+            let snap = Snapshot { as_of };
+            replayed.check_indexes_at(snap).unwrap();
+            let got: Vec<_> = replayed
+                .scan_at(snap, 1, ..)
+                .unwrap()
+                .into_iter()
+                .map(|(k, v)| (k.to_vec(), v.clone()))
+                .collect();
+            assert_eq!(got, expected);
+        }
+        for (name, before) in segments {
+            assert_eq!(disk.read(&format!("wal/{name}")).unwrap(), before);
         }
     }
 }
