@@ -228,13 +228,10 @@ enum AcceptFailure {
 /// Classifies by `ErrorKind` only. Fatal kinds mean the listening socket itself is unusable or
 /// misconfigured; everything else (EMFILE, ENOMEM, firewall refusal) may clear by itself.
 fn classify(error: &io::Error) -> AcceptFailure {
-    use io::ErrorKind::{
-        AddrInUse, AddrNotAvailable, InvalidData, InvalidInput, NotConnected, Unsupported,
-    };
-    if matches!(
-        error.kind(),
-        InvalidInput | InvalidData | NotConnected | Unsupported | AddrInUse | AddrNotAvailable
-    ) {
+    use io::ErrorKind::{InvalidData, InvalidInput, NotConnected};
+    // accept(2) documents EOPNOTSUPP, ENETDOWN, EPROTO, ENOPROTOOPT, EHOSTDOWN, ENONET,
+    // EHOSTUNREACH and ENETUNREACH as "retry like EAGAIN", so those stay transient.
+    if matches!(error.kind(), InvalidInput | InvalidData | NotConnected) {
         AcceptFailure::Fatal
     } else {
         AcceptFailure::Transient
@@ -1034,8 +1031,7 @@ mod tests {
         for kind in [
             io::ErrorKind::InvalidInput,
             io::ErrorKind::NotConnected,
-            io::ErrorKind::Unsupported,
-            io::ErrorKind::AddrInUse,
+            io::ErrorKind::InvalidData,
         ] {
             assert_eq!(classify(&io::Error::from(kind)), AcceptFailure::Fatal);
         }
@@ -1044,6 +1040,11 @@ mod tests {
             io::ErrorKind::PermissionDenied,
             io::ErrorKind::Other,
             io::ErrorKind::TimedOut,
+            io::ErrorKind::Unsupported,
+            io::ErrorKind::NetworkDown,
+            io::ErrorKind::NetworkUnreachable,
+            io::ErrorKind::HostUnreachable,
+            io::ErrorKind::AddrInUse,
         ] {
             assert_eq!(classify(&io::Error::from(kind)), AcceptFailure::Transient);
         }
