@@ -1,0 +1,33 @@
+# ADR 0022: Required engine capabilities at WAL admission
+
+Status: proposed
+
+## Context
+
+Old RowStore readers skip unknown engine payloads. The proposed LCIX compound encoding can therefore
+hide committed rows from them. On 2026-10-29 the owner required enforced old-reader refusal and
+rejected operational-only upgrade. Existing WAL v1 reserved bits and unknown records cannot enforce
+that requirement in already shipped readers.
+
+## Decision
+
+Proposed in RFC 0008, not accepted: introduce a distinct guarded segment header with a version,
+required-engine capability mask and header CRC, preserving legacy v1 bytes. Candidate header bytes
+and bit assignments are draft only. Require explicit supported capabilities from the actual engine,
+preflight the whole header chain before repair/publication, preserve cumulative required bits through
+rollover, and durably install the guard before any append needing it. Promote only an empty legacy
+tail in place; acknowledged legacy history remains unchanged.
+
+Managed LCIX activation depends on implementation and independent acceptance of this admission path.
+A frozen old-reader harness and independently framed fixtures must prove intact upgraded directories
+are rejected without mutation. An exhaustive bounded upgrade/crash matrix must show no acknowledged
+or adopted LCIX record can exist without its guard.
+
+## Consequences
+
+This proposed design adds header preflight and explicit engine capability plumbing without changing
+record framing. Unsupported, damaged or downgraded headers refuse. A durable empty guard can prevent
+downgrade even before any LCIX commit; rollback requires a verified pre-upgrade backup. No converter,
+release assignment, checkpoint format decision or gate sign-off is supplied. Both this RFC's review
+period and PR 209's seven-full-day hold remain unwaived. Owner selection of enforced refusal does
+not accept this encoding or authorize LCIX activation.
