@@ -8,6 +8,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+lattice-engines = { path = "../crates/lattice-engines", default-features = false, features = ["row"] }
 libfuzzer-sys = "0.4"
 lattice-core = { path = "../crates/lattice-core" }
 lattice-lsl = { path = "../crates/lattice-lsl" }
@@ -72,6 +73,27 @@ bench = false
 [[bin]]
 name = "sql_parse"
 path = "fuzz_targets/sql_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "row_ops"
+path = "fuzz_targets/row_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "catalog_decode"
+path = "fuzz_targets/catalog_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typed_row_decode"
+path = "fuzz_targets/typed_row_decode.rs"
 test = false
 doc = false
 bench = false

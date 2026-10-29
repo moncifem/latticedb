@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, wal_record]
+        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, wal_record, row_ops, catalog_decode, typed_row_decode]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

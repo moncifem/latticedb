@@ -139,6 +139,7 @@ dependencies = [
  "lattice-abi",
  "lattice-api",
  "lattice-core",
+ "lattice-engines",
  "lattice-lsl",
  "lattice-seams",
  "lattice-sim",
