@@ -159,6 +159,26 @@ fn sql_order(left: &[Value], right: &[Value]) -> std::cmp::Ordering {
     }
     left.len().cmp(&right.len())
 }
+/// Prevent equality-index selection from hiding a mixed-type error by finding no matching keys.
+/// The fixed experiment schema has one text column, users.name; every other column is bigint.
+fn join_types(e: &Expr) -> Result<()> {
+    if let Expr::Binary(a, op, b) = e {
+        if ["=", "<", ">", "<=", ">="].contains(&op.as_str())
+            && let (Expr::Col(a), Expr::Col(b)) = (a.as_ref(), b.as_ref())
+        {
+            let text = |name: &str| name == "name" || name == "users.name";
+            if text(a) != text(b) {
+                return Err(Error::unsupported(
+                    "mixed-type join columns require an unsupported cast",
+                ));
+            }
+        }
+        join_types(a)?;
+        join_types(b)?;
+    }
+    Ok(())
+}
+
 fn grouped(e: &Expr, keys: &[Expr]) -> bool {
     if keys.contains(e) {
         return true;
@@ -559,6 +579,11 @@ pub fn bind(plan: &Plan) -> Result<()> {
         Plan::Select(q) => {
             let mut cols = columns(&q.table)?;
             if let Some((join, on)) = &q.join {
+                if join == &q.table {
+                    return Err(Error::unsupported(
+                        "self joins require unsupported table aliases",
+                    ));
+                }
                 let other = columns(join)?;
                 let duplicate = cols
                     .intersection(&other)
@@ -570,6 +595,7 @@ pub fn bind(plan: &Plan) -> Result<()> {
                     cols.remove(&c);
                 }
                 validate(on, &cols)?;
+                join_types(on)?;
                 if on.count() {
                     return Err(Error::unsupported("aggregate in JOIN ON"));
                 }

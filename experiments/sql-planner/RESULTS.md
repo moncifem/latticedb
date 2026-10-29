@@ -181,3 +181,33 @@ The continuation adds explicit NULLS LAST comparison, PostgreSQL/literal regress
 boolean expressions, and explicit rejection fixtures for ungrouped aggregate references. These
 changes await fresh conformance and measurements; the recorded timings above are not results for
 the subsequent source.
+
+## Ordered scan merge and predicate pushdown comparison
+
+[Run 40903066476](https://github.com/moncifem/latticedb/actions/runs/40903066476), source
+`45969c88dbfa1a0bb3ddfa09b1cd087cd157e5b1`, completed release conformance, thirteen negative
+fixtures, repeated simulator traces, PostgreSQL semantic checks and all three process-kill/reopen
+checks for each candidate. Artifact `12909674931` was verified against ZIP SHA256
+`392d801cd602bc0020b6e0dcd0736e821ed71df29537eb0c332bc7d87368a288`.
+
+| Candidate | Point ratio | 10,000-row range ratio | Join ratio | Group ratio |
+|---|---:|---:|---:|---:|
+| custom | 0.5147 | 1.7984 | 2.9703 | 2.6819 |
+| sqlparser + custom | 0.5197 | 2.0114 | 2.9703 | 2.7551 |
+| DataFusion | 2.3839 | 1.6692 | 2.5695 | 2.6379 |
+
+**All twelve ratios meet the unchanged 3x PostgreSQL part of C4 in this run.** The custom/parser
+join margin is small; this is one recorded runner result, not a robust performance headroom claim.
+The separate Phase 1 SQL regression comparison remains unestablished. Custom/parser policy checks
+passed; DataFusion's zstd findings remain the sole recorded workflow failure. Its strict C2 and
+historical clean-build C5 failures remain independent disqualifying evidence for this integration.
+No functional-retry compiler timing replaces the first clean measurement.
+
+Subsequent static review identified two additional unsupported shapes that must be refused before
+execution: a self join without supported aliases, and mixed-type column joins whose equality index
+could otherwise return no rows without reporting the type mismatch. Explicit binding guards and two
+negative fixtures address those cases. The nullable-boolean PostgreSQL case now returns both NULL
+and non-NULL client cells, rather than only testing their placement before a limit. These final
+semantic checks need their own fresh confirmation; no ratios above are attributed to an unmeasured
+source. C1 effort/budget, the Phase 1 baseline, C7's qualified assessment and independent final review
+remain unresolved. ADR 0013 stays proposed.

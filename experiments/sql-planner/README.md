@@ -3,9 +3,9 @@
 This is an isolated, unfinished experiment for P2-10 / issue #119. ADR 0013 remains **proposed**.
 Its seven criteria are fixed in `../../docs/adr/0013-sql-planner-and-executor.md`; this directory does
 not replace them or select a winner. Historical clean-build and simulator observations, including a failed first harness run, are recorded
-in [RESULTS.md](RESULTS.md). The retained functional retry failed all C4 ratios. A verified optimized run meets point/range
-ratios but still fails joins/groups, and DataFusion still fails dependency policy; see RESULTS.md.
-Further scan/predicate and semantic fixes await fresh measurements; effort-days remain unknown. A workflow or source implementation
+in [RESULTS.md](RESULTS.md). The retained functional retry failed all C4 ratios. The verified ordered-scan/predicate run meets all
+twelve PostgreSQL ratios, but DataFusion still fails strict C2 and dependency policy; see RESULTS.md.
+Final binding guards await fresh confirmation; effort-days remain unknown. A workflow or source implementation
 is not successful execution evidence.
 
 The nested `[workspace]` and lockfile keep all experiment dependencies out of the production graph

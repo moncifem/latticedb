@@ -39,3 +39,10 @@ SELECT id FROM tickets ORDER BY COUNT(*)
 
 statement error 0A000 LSQL-0002
 SELECT id FROM tickets HAVING id = 1
+
+
+statement error 0A000 LSQL-0002
+SELECT tickets.id FROM tickets INNER JOIN tickets ON tickets.id = tickets.id
+
+statement error 0A000 LSQL-0002
+SELECT tickets.id FROM tickets INNER JOIN users ON tickets.owner = users.name
