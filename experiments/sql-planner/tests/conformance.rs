@@ -260,6 +260,7 @@ fn optimized_relational_edges(parse: Parse) {
         "SELECT id FROM tickets HAVING id = 1",
         "SELECT tickets.id FROM tickets INNER JOIN tickets ON tickets.id = tickets.id",
         "SELECT tickets.id FROM tickets INNER JOIN users ON tickets.owner = users.name",
+        "SELECT tickets.id FROM tickets INNER JOIN users ON 1",
     ] {
         let error = execute(&mut db, &mut session, &parse(sql).unwrap(), &[]).unwrap_err();
         assert_eq!(

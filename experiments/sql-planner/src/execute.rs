@@ -135,11 +135,23 @@ fn matches(
 ) -> Result<bool> {
     match filter {
         None => Ok(true),
-        Some(e) => match eval(e, row, count, params)? {
-            Value::Bool(b) => Ok(b),
-            Value::Null => Ok(false),
-            _ => Err(Error::unsupported("predicate must be boolean")),
-        },
+        Some(e) => predicate(e, row, count, params),
+    }
+}
+
+fn predicate(e: &Expr, row: &impl RowLookup, count: usize, params: &[Value]) -> Result<bool> {
+    match eval(e, row, count, params)? {
+        Value::Bool(b) => Ok(b),
+        Value::Null => Ok(false),
+        _ => Err(Error::unsupported("predicate must be boolean")),
+    }
+}
+fn boolean_shape(e: &Expr) -> bool {
+    match e {
+        Expr::Binary(a, op, b) if op == "and" || op == "or" => boolean_shape(a) && boolean_shape(b),
+        Expr::Binary(_, op, _) => ["=", "<", ">", "<=", ">="].contains(&op.as_str()),
+        Expr::Lit(Value::Bool(_) | Value::Null) | Expr::Param(_) => true,
+        _ => false,
     }
 }
 
@@ -416,8 +428,7 @@ fn inner<I: Io, C: Clock, R: Rng>(
                             positions: &positions,
                             values: &joined,
                         };
-                        if eval(on, &view, 0, params)? == Value::Bool(true)
-                            && matches(&q.filter, &view, 0, params)?
+                        if predicate(on, &view, 0, params)? && matches(&q.filter, &view, 0, params)?
                         {
                             rows.push(joined);
                         }
@@ -596,6 +607,9 @@ pub fn bind(plan: &Plan) -> Result<()> {
                 }
                 validate(on, &cols)?;
                 join_types(on)?;
+                if !boolean_shape(on) {
+                    return Err(Error::unsupported("JOIN ON predicate must be boolean"));
+                }
                 if on.count() {
                     return Err(Error::unsupported("aggregate in JOIN ON"));
                 }
@@ -609,6 +623,13 @@ pub fn bind(plan: &Plan) -> Result<()> {
                 .chain(q.order.iter())
             {
                 validate(e, &cols)?;
+            }
+            if q.filter
+                .iter()
+                .chain(q.having.iter())
+                .any(|e| !boolean_shape(e))
+            {
+                return Err(Error::unsupported("WHERE/HAVING predicate must be boolean"));
             }
             let aggregate = !q.group.is_empty()
                 || q.columns.iter().any(Expr::count)
