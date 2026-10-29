@@ -188,6 +188,9 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         };
         let hi = match range.end_bound() {
             Bound::Included(k) => Bound::Included((table, k.clone())),
+            Bound::Excluded(k) if bugs::active(Bug::RowScanUpperBoundIncluded) => {
+                Bound::Included((table, k.clone()))
+            }
             Bound::Excluded(k) => Bound::Excluded((table, k.clone())),
             Bound::Unbounded => match table.checked_add(1) {
                 Some(next) => Bound::Excluded((next, Vec::new())),

@@ -58,6 +58,18 @@ pub enum Bug {
     RowRecoveryDropsDeletes,
     /// An index keeps the entry for a row's previous value after an update or deletion.
     RowIndexStaleEntries,
+    /// Updating a row discards its older versions (immutable snapshots).
+    RowHistoryOverwritten,
+    /// Visibility searches skip deletion versions (deleted rows resurrect).
+    RowTombstoneSkipped,
+    /// Transaction reads ignore their own buffered writes and deletes.
+    RowReadOwnWriteIgnored,
+    /// A row scan treats its exclusive upper bound as inclusive.
+    RowScanUpperBoundIncluded,
+    /// Index maintenance omits newly indexed entries (missing rows).
+    RowIndexMissingInsert,
+    /// An index equality lookup matches keys with the requested prefix.
+    RowIndexPrefixLookup,
 }
 
 impl Bug {
@@ -69,7 +81,22 @@ impl Bug {
         Bug::RowIndexStaleEntries,
     ];
 
-    /// Every defect, for the detection suite.
+    /// Storage defects exercised by the deterministic public-operation witness suite.
+    /// `ROW` remains the four-defect contract of the seeded row simulation workloads.
+    pub const STORAGE: [Bug; 10] = [
+        Bug::RowConflictCheckSkipped,
+        Bug::RowPartialApply,
+        Bug::RowRecoveryDropsDeletes,
+        Bug::RowIndexStaleEntries,
+        Bug::RowHistoryOverwritten,
+        Bug::RowTombstoneSkipped,
+        Bug::RowReadOwnWriteIgnored,
+        Bug::RowScanUpperBoundIncluded,
+        Bug::RowIndexMissingInsert,
+        Bug::RowIndexPrefixLookup,
+    ];
+
+    /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [
         Bug::SkipFsync,
         Bug::NoDedupe,
@@ -137,3 +164,25 @@ mod imp {
 pub use imp::active;
 #[cfg(feature = "planted-bugs")]
 pub use imp::{clear, enable};
+
+#[cfg(all(test, feature = "planted-bugs"))]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn every_log_and_storage_guard_has_a_distinct_mask_bit() {
+        let all: BTreeSet<_> = Bug::ALL.into_iter().chain(Bug::STORAGE).collect();
+        assert_eq!(all.len(), 31);
+        for bug in all {
+            assert!((bug as u32) < u32::BITS, "guard mask exhausted: {bug:?}");
+            clear();
+            enable(bug);
+            assert!(active(bug));
+            for other in Bug::ALL.into_iter().chain(Bug::STORAGE) {
+                assert_eq!(active(other), bug == other);
+            }
+        }
+        clear();
+    }
+}

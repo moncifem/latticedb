@@ -89,7 +89,9 @@ impl Indexes {
                 {
                     out.push((entry_key(def.id, &o, &key.1), None));
                 }
-                if let Some(n) = new_k {
+                if let Some(n) = new_k
+                    && !bugs::active(Bug::RowIndexMissingInsert)
+                {
                     out.push((entry_key(def.id, &n, &key.1), Some(key.1.clone())));
                 }
             }
@@ -110,6 +112,17 @@ impl Indexes {
 
     /// The primary keys of the rows whose index key is exactly `ikey`, as of `snap`, in key order.
     pub fn lookup(&self, snap: Snapshot, index: u32, ikey: &[u8]) -> Vec<Vec<u8>> {
+        if bugs::active(Bug::RowIndexPrefixLookup) {
+            let mut prefix = encode_key(ikey);
+            prefix.truncate(prefix.len().saturating_sub(2));
+            return self
+                .entries
+                .range(snap, ..)
+                .into_iter()
+                .filter(|((id, encoded), _)| *id == index && encoded.starts_with(&prefix))
+                .map(|(_, pk)| pk.clone())
+                .collect();
+        }
         let lo = (index, encode_key(ikey));
         let mut hi_bytes = lo.1.clone();
         // The terminator ends in 1; bumping it gives the first key past every entry with this prefix.

@@ -8,6 +8,7 @@
 //! This is the in-memory core. Persistence, indexes and SQL sit on top of it in later work packages.
 
 use lattice_core::ChangeSetId;
+use lattice_core::bugs::{self, Bug};
 use std::collections::BTreeMap;
 use std::ops::RangeBounds;
 
@@ -93,6 +94,9 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
         }
         for (key, value) in writes {
             let versions = self.rows.entry(key).or_default();
+            if bugs::active(Bug::RowHistoryOverwritten) {
+                versions.clear();
+            }
             match versions.last_mut() {
                 Some(last) if last.lsn == lsn => last.value = value,
                 _ => versions.push(Version { lsn, cs, value }),
@@ -103,6 +107,12 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
     }
 
     fn visible(versions: &[Version<V>], snap: Snapshot) -> Option<&Version<V>> {
+        if bugs::active(Bug::RowTombstoneSkipped) {
+            return versions
+                .iter()
+                .rev()
+                .find(|v| v.lsn <= snap.as_of && v.value.is_some());
+        }
         // Versions are in increasing LSN order; the last one at or before the snapshot wins.
         let end = versions.partition_point(|v| v.lsn <= snap.as_of);
         end.checked_sub(1).and_then(|i| versions.get(i))
@@ -161,6 +171,9 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
 
     /// Reads a row, seeing this transaction's own writes first.
     pub fn get<'a>(&'a self, table: &'a Table<K, V>, key: &K) -> Option<&'a V> {
+        if bugs::active(Bug::RowReadOwnWriteIgnored) {
+            return table.get(self.snapshot, key);
+        }
         match self.writes.get(key) {
             Some(own) => own.as_ref(),
             None => table.get(self.snapshot, key),
