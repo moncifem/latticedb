@@ -48,11 +48,10 @@ pub fn read<I: Io, C: Clock, R: Rng>(
     clock: C,
     rng: R,
 ) -> Result<Vec<LedgerEntry>, TxnError> {
-    let (_, recovery) = Kernel::open(io, clock, rng, &config())?;
     let mut out = Vec::new();
-    for r in recovery.records {
+    let _ = Kernel::open_streaming(io, clock, rng, &config(), |r| {
         if RecordType::from_u8(r.rtype) != Some(RecordType::ChangeSet) {
-            continue;
+            return;
         }
         if let Ok(cs) = ChangeSet::decode(&r.payload)
             && let Ok(text) = String::from_utf8(cs.payload)
@@ -65,7 +64,7 @@ pub fn read<I: Io, C: Clock, R: Rng>(
                 json: json.to_string(),
             });
         }
-    }
+    })?;
     Ok(out)
 }
 

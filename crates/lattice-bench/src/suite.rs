@@ -211,9 +211,9 @@ pub fn run_all(scale: u64) -> BTreeMap<String, f64> {
                 SeededRng::new(1),
                 &Config::default(),
             )
-            .map(|(k, rec)| (k, rec.records.len()));
+            .map(|(k, rec)| (k, rec.report.records));
             assert!(
-                reopened.as_ref().is_ok_and(|(_, n)| *n as u64 == records),
+                reopened.as_ref().is_ok_and(|(_, n)| *n == records),
                 "recovery must read every record back"
             );
             let ns = start.elapsed().as_nanos() as f64;

@@ -133,21 +133,23 @@ fn run_cut(seed: u64, cut: Option<u64>, segment_limit: u64) -> (u64, usize) {
     let k = open(&disk, &clock, seed + 1, segment_limit).unwrap_or_else(|e| {
         panic!("seed {seed} cut {cut:?}: recovery failed after a power cut: {e}")
     });
-    // Re-open once more to read the recovered records through the public recovery value.
+    // Re-open once more and capture the same recovery trace for the unchanged oracle.
     drop(k);
     let config = Config {
         dir: "wal".into(),
         segment_limit,
         node: 1,
     };
-    let (mut k2, rec) = Kernel::open(
+    let mut records = Vec::new();
+    let (mut k2, _, _) = Kernel::open_streaming(
         disk.clone(),
         SharedClock(clock.clone()),
         SeededRng::new(seed + 2),
         &config,
+        |record| records.push(record),
     )
     .unwrap();
-    let view = LogView::from_records(&rec.records);
+    let view = LogView::from_records(&records);
     let found = check_all(&view, &oracle);
     assert!(found.is_empty(), "seed {seed} cut {cut:?}: {found:?}");
     // The kernel must be usable after recovery: dedupe survived and new commits work.

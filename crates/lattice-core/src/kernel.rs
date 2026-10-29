@@ -61,8 +61,6 @@ pub enum Receipt {
 /// What opening the kernel recovered.
 #[derive(Debug, Clone)]
 pub struct Recovery {
-    /// Every valid record, in order.
-    pub records: Vec<Record>,
     /// What the log repair did.
     pub report: RecoveryReport,
     /// The newest checkpoint found; it has been checked against the records before it.
@@ -100,21 +98,15 @@ fn corrupt(msg: String) -> TxnError {
 }
 
 impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
-    /// Opens (and recovers) the kernel and returns every valid record. A CRC-valid record of a known
-    /// type that does not decode is corruption, not something to skip: skipping would silently lose a
-    /// fence or a dedupe entry. This keeps the whole log in memory; [`Kernel::open_streaming`] does not.
+    /// Opens and recovers the kernel without retaining a copy of every WAL record. Recovery holds
+    /// the kernel's derived state, segment-name metadata and one actual segment at a time. A known
+    /// record type that does not decode remains corruption: fences and dedupe entries cannot be
+    /// skipped. Use [`Kernel::read_from`] for explicit record reads, or [`Kernel::open_streaming`]
+    /// to fold engine state during recovery. Report counts and the latest checked checkpoint remain
+    /// available without collecting payloads.
     pub fn open(io: I, clock: C, rng: R, config: &Config) -> Result<(Self, Recovery), TxnError> {
-        let mut records = Vec::new();
-        let (kernel, report, checkpoint) =
-            Self::open_streaming(io, clock, rng, config, |r| records.push(r))?;
-        Ok((
-            kernel,
-            Recovery {
-                records,
-                report,
-                checkpoint,
-            },
-        ))
+        let (kernel, report, checkpoint) = Self::open_streaming(io, clock, rng, config, |_| {})?;
+        Ok((kernel, Recovery { report, checkpoint }))
     }
 
     /// Opens the kernel and hands each valid record to `visit` in LSN order instead of collecting

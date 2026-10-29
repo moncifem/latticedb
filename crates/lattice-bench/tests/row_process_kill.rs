@@ -320,13 +320,13 @@ fn compare_rows(store: &Store, snap: Snapshot, expected: &Rows) {
 }
 
 fn verify(root: &Path, observed: &Observed) -> usize {
-    let (kernel, recovery) = Kernel::open(StdIo::new(root), SystemClock, OsRng, &config()).unwrap();
+    let (kernel, _) = Kernel::open(StdIo::new(root), SystemClock, OsRng, &config()).unwrap();
     assert!(kernel.scrub().unwrap().issues.is_empty());
     let mut history = vec![(Snapshot { as_of: 0 }, Rows::new())];
     let mut rows = Rows::new();
     let mut ids = BTreeSet::new();
     let mut recovered = BTreeMap::new();
-    for record in recovery.records {
+    for record in kernel.read_from(1, usize::MAX).unwrap().0 {
         assert_eq!(
             RecordType::from_u8(record.rtype),
             Some(RecordType::ChangeSet)

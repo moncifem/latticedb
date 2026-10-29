@@ -95,7 +95,7 @@ mod linux {
             };
             let (mut kernel, recovered) = Kernel::open(io, SystemClock, OsRng, &Config::default())
                 .map_err(|e| e.to_string())?;
-            if !recovered.records.is_empty() {
+            if recovered.report.records != 0 {
                 return Err("benchmark directory is not fresh".into());
             }
             sync.set(Duration::ZERO);
@@ -130,7 +130,7 @@ mod linux {
             }
             let read_seconds = read_start.elapsed().as_secs_f64();
             drop(kernel);
-            let (kernel, recovered) = Kernel::open(
+            let (kernel, _) = Kernel::open(
                 make(&dir).map_err(|e| e.to_string())?,
                 SystemClock,
                 OsRng,
@@ -138,7 +138,7 @@ mod linux {
             )
             .map_err(|e| e.to_string())?;
             let mut recovered_changes = 0usize;
-            for record in &recovered.records {
+            for record in &kernel.read_from(1, commits).map_err(|e| e.to_string())?.0 {
                 if lattice_core::record::RecordType::from_u8(record.rtype)
                     != Some(lattice_core::record::RecordType::ChangeSet)
                 {

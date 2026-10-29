@@ -233,7 +233,7 @@ fn inv_i2_a_log_cut_inside_a_record_shows_whole_change_sets_only() {
     for cut in 1..30 {
         let mut d = disk.clone();
         d.truncate(seg, (bytes.len() - cut) as u64).unwrap();
-        let (_, rec) = Kernel::open(
+        let (reopened, _) = Kernel::open(
             d.clone(),
             SharedClock(clock.clone()),
             SeededRng::new(6),
@@ -244,8 +244,8 @@ fn inv_i2_a_log_cut_inside_a_record_shows_whole_change_sets_only() {
             },
         )
         .unwrap();
-        let sets: Vec<_> = rec
-            .records
+        let records = reopened.read_from(1, usize::MAX).unwrap().0;
+        let sets: Vec<_> = records
             .iter()
             .filter_map(|r| ChangeSet::decode(&r.payload).ok())
             .collect();
@@ -287,7 +287,7 @@ fn a_checkpoint_is_found_on_recovery_and_a_wrong_one_is_refused() {
     assert!(scrub(&disk, "wal").unwrap().is_clean());
 
     // A checkpoint that claims one change set too many means the log lost something.
-    let (mut log, _, _) = Log::open(disk.clone(), "wal", 400).unwrap();
+    let (mut log, _) = Log::open(disk.clone(), "wal", 400).unwrap();
     let wrong = Checkpoint {
         through_lsn: 4,
         change_sets: 4,

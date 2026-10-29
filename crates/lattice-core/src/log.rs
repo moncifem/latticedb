@@ -282,17 +282,12 @@ fn recover<I: Io>(
 }
 
 impl<I: Io> Log<I> {
-    /// Opens the log in `dir`, repairing a torn tail, and returns it with every valid record.
-    /// Fails if another writer holds the log. This keeps every record in memory; use
-    /// [`Log::open_streaming`] when the log can be large.
-    pub fn open(
-        io: I,
-        dir: &str,
-        segment_limit: u64,
-    ) -> Result<(Self, Vec<Record>, RecoveryReport), LogError> {
-        let mut records = Vec::new();
-        let (log, report) = Self::open_streaming(io, dir, segment_limit, |r| records.push(r))?;
-        Ok((log, records, report))
+    /// Opens the log in `dir`, repairs a torn tail and returns recovery counts without collecting
+    /// record payloads. Fails if another writer holds the log. Recovery retains segment-name
+    /// metadata and one actual segment at a time. Use [`Log::read_from`] for explicit record reads
+    /// or [`Log::open_streaming`] to fold records during the recovery pass.
+    pub fn open(io: I, dir: &str, segment_limit: u64) -> Result<(Self, RecoveryReport), LogError> {
+        Self::open_streaming(io, dir, segment_limit, |_| {})
     }
 
     /// Like [`Log::open`], but hands each valid record to `visit` in LSN order instead of collecting
@@ -494,7 +489,7 @@ mod tests {
 
     fn log_with(n: u64, limit: u64) -> Log<lattice_sim::SimIo> {
         let io = lattice_sim::SimIo::new(1, lattice_sim::FaultProfile::clean());
-        let (mut log, _, _) = Log::open(io, "wal", limit).unwrap();
+        let (mut log, _) = Log::open(io, "wal", limit).unwrap();
         for i in 0..n {
             log.append(1, &[i as u8; 30]).unwrap();
         }

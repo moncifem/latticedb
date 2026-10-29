@@ -133,7 +133,7 @@ fn reading_a_damaged_log_is_an_error_not_a_short_history() {
 }
 
 fn append_raw(disk: &SharedIo, rtype: RecordType, payload: &[u8]) {
-    let (mut log, _, _) = Log::open(disk.clone(), "wal", 400).unwrap();
+    let (mut log, _) = Log::open(disk.clone(), "wal", 400).unwrap();
     log.append(rtype as u8, payload).unwrap();
     log.sync().unwrap();
 }
@@ -310,15 +310,15 @@ fn a_full_disk_refuses_commits_without_losing_or_inventing_acknowledged_ones() {
     drop(k);
     // Whatever the kernel acknowledged is there after a restart, with no space problem now.
     disk.set_profile(FaultProfile::clean());
-    let (_, rec) = Kernel::open(
+    let (reopened, _) = Kernel::open(
         disk.clone(),
         SharedClock(clock.clone()),
         SeededRng::new(1),
         &config(),
     )
     .unwrap();
-    let on_disk: Vec<_> = rec
-        .records
+    let records = reopened.read_from(1, usize::MAX).unwrap().0;
+    let on_disk: Vec<_> = records
         .iter()
         .filter_map(|r| ChangeSet::decode(&r.payload).ok())
         .map(|c| c.id)
@@ -330,7 +330,7 @@ fn a_full_disk_refuses_commits_without_losing_or_inventing_acknowledged_ones() {
 }
 
 #[test]
-fn streaming_recovery_sees_the_same_records_as_collecting_recovery() {
+fn default_recovery_metadata_and_cursor_agree_with_streaming_trace() {
     let (disk, clock) = fresh();
     let mut k = kernel(&disk, &clock);
     k.begin_turn(TurnRef {
@@ -365,18 +365,19 @@ fn streaming_recovery_sees_the_same_records_as_collecting_recovery() {
     )
     .unwrap();
     drop(k1);
-    let (_, rec) = Kernel::open(
+    let (reopened, rec) = Kernel::open(
         disk.clone(),
         SharedClock(clock.clone()),
         SeededRng::new(1),
         &config(),
     )
     .unwrap();
-    assert_eq!(streamed.len(), rec.records.len());
+    let records = reopened.read_from(1, usize::MAX).unwrap().0;
+    assert_eq!(streamed.len(), records.len());
     assert!(
         streamed
             .iter()
-            .zip(&rec.records)
+            .zip(&records)
             .all(|(a, b)| a.lsn == b.lsn && a.rtype == b.rtype && a.payload == b.payload)
     );
     assert_eq!(

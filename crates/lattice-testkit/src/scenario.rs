@@ -203,8 +203,15 @@ fn recover(w: &mut World, disk: &SharedIo, kernel_rng: &mut SeededRng) -> Recove
             disk.arm_power_cut(w.rng.below(6));
         }
         let clock = SharedClock(w.clock.clone());
-        match Kernel::open(disk.clone(), clock, kernel_rng.fork(), &w.config) {
-            Ok((mut k, rec)) => {
+        let mut records = Vec::new();
+        match Kernel::open_streaming(
+            disk.clone(),
+            clock,
+            kernel_rng.fork(),
+            &w.config,
+            |record| records.push(record),
+        ) {
+            Ok((mut k, _, _)) => {
                 w.recoveries += 1;
                 if disk.rot_events() > w.seen_rot {
                     w.seen_rot = disk.rot_events();
@@ -213,7 +220,7 @@ fn recover(w: &mut World, disk: &SharedIo, kernel_rng: &mut SeededRng) -> Recove
                     let sessions: Vec<u64> = w.turns.keys().copied().collect();
                     w.exempt_sessions.extend(sessions);
                 }
-                let view = LogView::from_records(&rec.records);
+                let view = LogView::from_records(&records);
                 // Ids that were in doubt are now resolved by what recovery found. Those present
                 // are durable (recovery syncs what it adopts) and count as acknowledged.
                 let present: Vec<ChangeSetId> =
