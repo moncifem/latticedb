@@ -29,8 +29,8 @@ conflict the same way (second half of #315).
 **What went wrong.** Pull requests that touch risky paths wait for the owner to apply `reviewed`
 ([`docs/review-policy.md`](review-policy.md)). The risk areas include all of `.github/**` and the
 governance tools, so routine workflow and tooling work queues behind format and kernel reviews. The
-`claims` job's `overlap` label was on 16 open pull requests when this was written, so it no longer
-singles anything out. Meanwhile the gate is advisory: `risk-gate` is not a
+`claims` job's `overlap` label was on 17 of the 20 open pull requests on 2026-10-29 (the count
+drifts), so it no longer singles anything out. Meanwhile the gate is advisory: `risk-gate` is not a
 required check, so the label slows honest work down without being able to stop a careless merge.
 
 **Fix (proposed, needs the owner).** Three parts, in
@@ -57,17 +57,20 @@ SQLSTATE, and failed, timed-out and cancelled jobs open the failure issue (open 
 writing). The rule behind it goes into the contributor checklist as a follow-up in #330: every CI or
 evidence script gets a test with empty input and with failing input, next to its happy path. The new
 tools in this batch follow it: `tools/changelog.py` tests the empty, malformed and over-count cases,
-and the `zizmor` job was checked against a scratch workflow with known problems to confirm it exits
-nonzero ([#328](https://github.com/moncifem/latticedb/pull/328)).
+and the `zizmor` check ([#328](https://github.com/moncifem/latticedb/pull/328)) was run on an
+uncommitted scratch workflow with known problems (`zizmor --offline wf/bad.yml`, pinned 1.30.1): eight
+findings and exit status 14.
 
 ### 4. Formats reached `main` as drafts before any review
 
-**What went wrong.** Three draft formats landed on `main` without an RFC, ADR, golden files or
-independent review: the plugin contract
-([#235](https://github.com/moncifem/latticedb/pull/235)), the change feed
+**What went wrong.** Three draft formats landed on `main` before they were reviewed: the plugin
+contract ([#235](https://github.com/moncifem/latticedb/pull/235)), the change feed
 ([#263](https://github.com/moncifem/latticedb/pull/263)) and the sync protocol
-([#264](https://github.com/moncifem/latticedb/pull/264)). Each file says "draft", but merged files get
-read, implemented against and fuzzed as if they were settled, and the review debt is tracked only in
+([#264](https://github.com/moncifem/latticedb/pull/264)). The plugin contract had no RFC or ADR at all.
+The change feed arrived with RFC 0009 and ADR 0023, and sync with RFC 0010 and ADR 0024, but the RFCs are
+drafts and the ADRs are proposed, not accepted. None of the three has golden files or an independent review, and
+the owner has not decided their open choices. Each file says "draft", but a file on `main` is easy to
+read as settled. The review debt is tracked in
 [#265](https://github.com/moncifem/latticedb/issues/265). The risk gate that now covers `formats/**` was
 added after they merged and is still advisory.
 
