@@ -1,0 +1,44 @@
+name: zizmor
+# Static analysis of the workflow files (template injection, excessive permissions, credential
+# persistence, dangerous triggers, unpinned actions, cache poisoning and more). Runs next to actionlint
+# on every change to a workflow, plus weekly so a new audit rule or advisory is noticed without a change.
+# Not a required check yet. Triage record: .github/zizmor.yml. Policy: docs/policies/workflow-security.md.
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/**"
+  schedule:
+    - cron: "43 5 * * 2"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: zizmor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install zizmor (version and hashes pinned in the requirements file)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor-venv"
+          "$RUNNER_TEMP/zizmor-venv/bin/python" -m pip install --require-hashes --no-deps -r .github/requirements-zizmor.txt
+      - name: Audit .github/workflows
+        env:
+          # Read-only token for the online audits (impostor commits, known-vulnerable actions, ref and version checks).
+          GH_TOKEN: ${{ github.token }}
+        # Exit status is nonzero on any finding that is not ignored in .github/zizmor.yml.
+        run: '"$RUNNER_TEMP/zizmor-venv/bin/zizmor" --no-progress --config .github/zizmor.yml .github/workflows'

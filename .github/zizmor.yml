@@ -1,0 +1,15 @@
+# zizmor configuration. Triage record for the findings that are deliberately kept; everything else
+# is fixed. Policy and how to run it locally: docs/policies/workflow-security.md.
+rules:
+  dangerous-triggers:
+    ignore:
+      # main-guard needs workflow_run: it reacts to a failed push run of `pr` on main. It runs no code
+      # from that run: it checks out its own revision (github.workflow_sha), filters on event, branch and
+      # conclusion, is read-only unless the owner sets MAIN_GUARD_ENABLED, and never uses the run's
+      # artifacts. Review it as a workflow-class risk change (docs/review-policy.md). See docs/main-guard.md.
+      - main-guard.yml
+  self-repository:
+    # Style rule for the `$/` syntax GitHub added in July 2026 (runner 2.336.0 or newer). The `./`
+    # form is still valid, and actionlint support for `$/` is not verified, so the four local
+    # references stay as they are until it is.
+    disable: true

@@ -9,3 +9,6 @@ updates:
     groups:
       artifact-actions:
         patterns: ["actions/upload-artifact", "actions/download-artifact"]
+  - package-ecosystem: pip
+    directory: /.github
+    schedule: { interval: weekly }

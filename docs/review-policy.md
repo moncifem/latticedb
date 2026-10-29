@@ -53,7 +53,8 @@ Every review states the head commit it covered and what it did not check.
 - **layers**: each new dependency edge is allowed by the layer rules and justified; no rule is relaxed
   to make a build pass.
 - **workflows**: pinned action SHAs, minimal permissions, no `pull_request_target` running pull request
-  code, no untrusted input in `run:` steps (pass it through `env:`), secrets exposure, and that no
+  code, no untrusted input in `run:` steps (pass it through `env:`), secrets exposure, that the `zizmor` check passes or a new ignore in `.github/zizmor.yml` has a
+  written reason ([`docs/policies/workflow-security.md`](policies/workflow-security.md)), and that no
   required check is weakened.
 - **protection**: the change matches what the owner agreed for branch protection, required checks are
   not removed, and the governance tool and its tests still classify every area above.
