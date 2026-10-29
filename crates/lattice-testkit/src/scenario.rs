@@ -391,6 +391,11 @@ fn record(w: &mut World, id: ChangeSetId, result: &Result<Receipt, TxnError>) {
             }
         }
         Err(e) => match e.class() {
+            // A fenced retry of an id whose first attempt was ambiguous or acknowledged says
+            // nothing about the first attempt: it may legitimately be in the log.
+            ErrorClass::Rejected
+                if matches!(e, TxnError::Fenced { .. } | TxnError::UnknownTurn(_))
+                    && (w.in_doubt.contains(&id) || w.oracle.acked.contains_key(&id)) => {}
             ErrorClass::Rejected => w.oracle.rejected.push(id),
             _ => {
                 w.in_doubt.insert(id);
@@ -755,5 +760,85 @@ fn probe_after_recovery(w: &mut World, k: &mut K, present: &[ChangeSetId]) {
                 ),
             );
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn world(clock: Rc<SimClock>) -> World {
+        World {
+            clock,
+            rng: SeededRng::new(5),
+            oracle: Oracle::default(),
+            expected: BTreeMap::new(),
+            in_doubt: BTreeSet::new(),
+            turns: BTreeMap::new(),
+            uncertain_sessions: BTreeSet::new(),
+            exempt_sessions: BTreeSet::new(),
+            seen_rot: 0,
+            config: Config {
+                dir: "wal".into(),
+                segment_limit: 512,
+                node: 1,
+            },
+            violations: Vec::new(),
+            recoveries: 0,
+        }
+    }
+
+    fn kernel(w: &World) -> K {
+        let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
+        K::open(
+            disk,
+            SharedClock(w.clock.clone()),
+            SeededRng::new(1),
+            &w.config,
+        )
+        .unwrap()
+        .0
+    }
+
+    /// An ambiguously failed turn write that did become durable, then a takeover, then the retry:
+    /// the fenced answer must not make the oracle treat the durable record as rejected.
+    #[test]
+    fn a_fenced_retry_of_a_durable_in_doubt_write_is_not_a_rejection() {
+        let mut w = world(Rc::new(SimClock::new(1_000_000)));
+        let mut k = kernel(&w);
+        let turn = |n| TurnRef {
+            session: 1,
+            turn: n,
+        };
+        k.begin_turn(turn(1)).unwrap();
+        let cs = fresh_cs(&mut w, &mut k, Some(turn(1)));
+        let id = cs.id;
+        assert!(matches!(k.commit(cs), Ok(Receipt::Recorded { .. })));
+        w.in_doubt.insert(id); // the acknowledgement was lost
+        k.begin_turn(turn(2)).unwrap();
+        resubmit_in_doubt(&mut w, &mut k);
+        assert!(w.oracle.rejected.is_empty(), "{:?}", w.oracle.rejected);
+        assert!(w.in_doubt.contains(&id));
+        assert!(w.violations.is_empty());
+    }
+
+    /// A stale-turn repeat of an id in one batch is fenced on its own turn.
+    #[test]
+    fn a_stale_repeat_inside_a_batch_is_fenced() {
+        let mut w = world(Rc::new(SimClock::new(1_000_000)));
+        let mut k = kernel(&w);
+        let turn = |n| TurnRef {
+            session: 1,
+            turn: n,
+        };
+        k.begin_turn(turn(1)).unwrap();
+        k.begin_turn(turn(2)).unwrap();
+        let cs = fresh_cs(&mut w, &mut k, Some(turn(2)));
+        let mut stale = cs.clone();
+        stale.turn = Some(turn(1));
+        let r = k.commit_batch(vec![cs, stale]);
+        assert!(matches!(r[0], Ok(Receipt::Recorded { .. })));
+        assert!(matches!(r[1], Err(TxnError::Fenced { .. })), "{:?}", r[1]);
     }
 }

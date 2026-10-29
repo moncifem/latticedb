@@ -272,26 +272,34 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         }
     }
 
-    /// Early checks: fencing, then duplicates. They are repeated when the change set is logged.
-    pub fn prepare(&mut self, txn: Txn<Authorized>) -> Result<PrepareOutcome, TxnError> {
-        let (cs, owner) = txn.into_parts();
-        self.check_owner(owner)?;
-        // The plugin contract fixes the order: a superseded turn is fenced even for a record id
-        // that is already stored. Nothing is written either way.
+    /// Fence and duplicate checks in the order the plugin contract fixes: a superseded turn is
+    /// fenced even for a record id that is already stored. Returns whether the id is already
+    /// committed (a duplicate). Nothing is written either way.
+    fn check_admission(&self, cs: &ChangeSet) -> Result<bool, TxnError> {
         let fence_first = !bugs::active(Bug::DuplicateBeforeFence);
         if fence_first {
-            self.check_fence(&cs)?;
+            self.check_fence(cs)?;
         }
         if !bugs::active(Bug::NoDedupe) {
             if self.seen.contains(&cs.id) {
-                return Ok(PrepareOutcome::Duplicate(cs.id));
+                return Ok(true);
             }
             if self.in_flight.contains_key(&cs.id) {
                 return Err(TxnError::InFlight(cs.id));
             }
         }
         if !fence_first {
-            self.check_fence(&cs)?;
+            self.check_fence(cs)?;
+        }
+        Ok(false)
+    }
+
+    /// Early checks: fencing, then duplicates. They are repeated when the change set is logged.
+    pub fn prepare(&mut self, txn: Txn<Authorized>) -> Result<PrepareOutcome, TxnError> {
+        let (cs, owner) = txn.into_parts();
+        self.check_owner(owner)?;
+        if self.check_admission(&cs)? {
+            return Ok(PrepareOutcome::Duplicate(cs.id));
         }
         Ok(PrepareOutcome::Ready(Txn::prepared(cs, owner)))
     }
@@ -315,20 +323,8 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         }
         let _span = tracing::debug_span!("log", txn_id = %txn.cs.id).entered();
         let mut cs = txn.cs.clone();
-        let fence_first = !bugs::active(Bug::DuplicateBeforeFence);
-        if fence_first {
-            self.check_fence(&cs)?;
-        }
-        if !bugs::active(Bug::NoDedupe) {
-            if self.seen.contains(&cs.id) {
-                return Err(TxnError::Duplicate(cs.id));
-            }
-            if self.in_flight.contains_key(&cs.id) {
-                return Err(TxnError::InFlight(cs.id));
-            }
-        }
-        if !fence_first {
-            self.check_fence(&cs)?;
+        if self.check_admission(&cs)? {
+            return Err(TxnError::Duplicate(cs.id));
         }
         cs.hlc = self.hlc.tick(self.clock.now_ms())?;
         let encoded = cs.encode()?;
@@ -440,7 +436,13 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             if !bugs::active(Bug::NoDedupe)
                 && let Some(&first) = first_in_batch.get(&cs.id)
             {
-                repeats.push((i, first));
+                // A repeat is fenced on its own turn before it shares the first one's outcome.
+                match self.check_fence(&cs) {
+                    Err(e) if !bugs::active(Bug::DuplicateBeforeFence) => {
+                        set(&mut results, i, Err(e));
+                    }
+                    _ => repeats.push((i, first)),
+                }
                 continue;
             }
             let id = cs.id;
