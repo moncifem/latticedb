@@ -59,3 +59,28 @@ SELECT name + 1 FROM users
 
 statement error 0A000 LSQL-0002
 SELECT id FROM users WHERE name = 1
+
+
+statement error 0A000 LSQL-0002
+SELECT priority FROM tickets ORDER BY 1 LIMIT 2
+
+statement error 0A000 LSQL-0002
+SELECT COUNT(*) FROM tickets GROUP BY 1
+
+statement error 0A000 LSQL-0002
+SELECT priority AS id FROM tickets ORDER BY id LIMIT 2
+
+statement error 0A000 LSQL-0002
+SELECT priority id FROM tickets ORDER BY id LIMIT 2
+
+statement error 0A000 LSQL-0002
+UPDATE tickets SET priority = priority + 1 WHERE id = 2 RETURNING tickets.priority
+
+statement error 0A000 LSQL-0002
+INSERT INTO tickets(id,owner,priority) VALUES(60000,3,4) RETURNING tickets.priority
+
+statement error 0A000 LSQL-0002
+UPDATE tickets SET priority = priority + 1 WHERE id = 2 RETURNING priority AS id
+
+statement error 0A000 LSQL-0002
+INSERT INTO tickets(id,owner,priority) VALUES(60000,3,4) RETURNING priority AS id

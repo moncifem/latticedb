@@ -55,7 +55,7 @@ error; that is a visible integration gap, not evidence that the full transaction
 
 This is **not the complete Phase 2 subset**. It implements a small grammar with bigint, text, NULL,
 parameters, comparisons, integer +/-, AND/OR, COUNT and ascending ordered results. Unsupported AST
-fields, functions and statement tails are rejected rather than ignored. LEFT JOIN, general aliases,
+fields, functions and statement tails are rejected rather than ignored. LEFT JOIN, projection/table aliases, positional ORDER BY/GROUP BY, qualified DML RETURNING,
 other aggregates, decimal/JSON/date types, DDL, DELETE, general prepared statements, PG wire and the
 rest of `docs/sql-subset.md` remain unimplemented. This does not narrow the production target.
 The numeric timestamp form is experiment-only; target timestamp string parsing is not established.

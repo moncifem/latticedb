@@ -431,3 +431,72 @@ fn custom_validates_bounded_types_and_parameters_before_empty_scans() {
 fn sqlparser_validates_bounded_types_and_parameters_before_empty_scans() {
     bounded_type_edges(lattice_sql_planner_spike::parsed::parse);
 }
+
+fn unsupported_binding_edges(parse: Parse) {
+    let mut db = Db::open(
+        SimIo::new(91, FaultProfile::clean()),
+        SimClock::new(1000),
+        SeededRng::new(92),
+    )
+    .unwrap();
+    db.seed(12).unwrap();
+    let mut session = Session::default();
+    let before = db.receipts.len();
+    for sql in [
+        "SELECT priority FROM tickets ORDER BY 1 LIMIT 2",
+        "SELECT COUNT(*) FROM tickets GROUP BY 1",
+        "SELECT owner,COUNT(*) FROM tickets GROUP BY 1 ORDER BY owner",
+        "SELECT priority AS id FROM tickets ORDER BY id LIMIT 2",
+        "SELECT priority id FROM tickets ORDER BY id LIMIT 2",
+        "UPDATE tickets SET priority = priority + 1 WHERE id = 2 RETURNING tickets.priority",
+        "INSERT INTO tickets(id,owner,priority) VALUES(60000,3,4) RETURNING tickets.priority",
+        "UPDATE tickets SET priority = priority + 1 WHERE id = 2 RETURNING priority AS id",
+        "INSERT INTO tickets(id,owner,priority) VALUES(60000,3,4) RETURNING priority AS id",
+    ] {
+        let error = match parse(sql) {
+            Err(error) => error,
+            Ok(plan) => execute(&mut db, &mut session, &plan, &[]).unwrap_err(),
+        };
+        assert_eq!(
+            (error.state.as_str(), error.code.as_str()),
+            ("0A000", "LSQL-0002"),
+            "{sql}"
+        );
+        assert_eq!(
+            db.receipts.len(),
+            before,
+            "unsupported statement appended WAL: {sql}"
+        );
+        assert!(session.tx.is_none());
+        assert!(session.pending.is_empty());
+    }
+    assert_eq!(
+        execute(
+            &mut db,
+            &mut session,
+            &parse("SELECT priority FROM tickets WHERE id = 2").unwrap(),
+            &[]
+        )
+        .unwrap(),
+        vec![vec![Value::Int(2)]]
+    );
+    assert!(
+        execute(
+            &mut db,
+            &mut session,
+            &parse("SELECT id FROM tickets WHERE id = 60000").unwrap(),
+            &[]
+        )
+        .unwrap()
+        .is_empty()
+    );
+}
+#[test]
+fn custom_refuses_unsupported_projection_and_returning_bindings() {
+    unsupported_binding_edges(custom::parse);
+}
+#[cfg(feature = "parser")]
+#[test]
+fn sqlparser_refuses_unsupported_projection_and_returning_bindings() {
+    unsupported_binding_edges(lattice_sql_planner_spike::parsed::parse);
+}

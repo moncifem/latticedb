@@ -259,3 +259,19 @@ was an append in docs/releasing.md, resolved by retaining both sections. No new 
 planned. Final independent review and one frozen-source full confirmation remain before landing;
 ADR acceptance, missing C1 effort/budget, the Phase 1 SQL baseline and C7 limitations are separate
 open decisions, not grounds to relabel research measurements as accepted criteria.
+
+The fresh-main rebase confirmation [40908694603](https://github.com/moncifem/latticedb/actions/runs/40908694603)
+succeeded at `e3d8def3580fcb1f14907a678f4c9ad5a32960f2` with the same explicit custom/parser-only
+semantic scope and no C4/C5 claims. Artifact `12913260904` was verified against ZIP SHA256
+`26d5e720fbf84ea2ae1fee6196db446af2aa08c8b7dc18f6888c8f84c6d5c9fb`; source status and hashes
+remained unchanged.
+
+Final independent review found two remaining binding families: bare ORDER/GROUP ordinals and
+projection aliases were being misbound or discarded, and qualified DML RETURNING leaked a table
+qualifier across DataFusion's derived projection. The bounded prototype now uniformly refuses
+those forms with 0A000 / LSQL-0002, rather than expanding its grammar or returning different rows.
+Literal/no-write regressions and explicit PostgreSQL reference checks pin the unsupported forms,
+including PostgreSQL's ordinal and alias semantics. Those intentional prototype refusals are
+reported separately from matching supported SQL results. The fixed four performance queries
+remain unchanged. One batched semantic confirmation and a frozen-source clean full comparison
+follow these review fixes; no result for that source is inferred here.

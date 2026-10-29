@@ -175,6 +175,7 @@ def summary(samples):
 def representatives(binary,candidate,root,output,dsn,rows):
     import psycopg, re
     cases=[]
+    unsupported=[]
     with psycopg.connect(dsn,autocommit=True) as pg:
         pg.execute('DROP TABLE IF EXISTS tickets,users,tickets_at_seed')
         pg.execute('CREATE TABLE users(id bigint PRIMARY KEY,name text NOT NULL)')
@@ -197,6 +198,34 @@ def representatives(binary,candidate,root,output,dsn,rows):
                 expected=[list(r)for r in cursor.fetchall()] if cursor.description else []
                 assert same_rows(actual,expected),(candidate,name,actual[:5],expected[:5])
                 cases.append({'construct':name,'sql':sql,'postgres_sql':reference,'params':params,'prepared':prepared,'client_ns':elapsed,'engine_ns':engine,'row_count':len(actual),'results_match':True})
+            def refused(name,sql,expected=None,postgres_state=None):
+                host.submit(sql)
+                reply=host.receive()
+                error=reply['result'].get('Err',{})
+                assert (error.get('state'),error.get('code'))==('0A000','LSQL-0002'),(name,reply)
+                pg.execute('BEGIN')
+                try:
+                    if postgres_state:
+                        try:pg.execute(sql)
+                        except psycopg.Error as error:assert error.sqlstate==postgres_state,(name,error.sqlstate)
+                        else:raise AssertionError((name,'PostgreSQL unexpectedly accepted invalid grouping'))
+                        observed=None
+                    else:
+                        observed=[list(row) for row in pg.execute(sql).fetchall()]
+                        assert same_rows(observed,expected),(name,observed,expected)
+                finally:pg.execute('ROLLBACK')
+                unsupported.append({'construct':name,'sql':sql,'prototype_status':'explicitly unsupported',
+                    'prototype_state':'0A000','prototype_code':'LSQL-0002','postgres_rows':observed,
+                    'postgres_state':postgres_state,'literal_reference_checked':True})
+            refused('order_position','SELECT priority FROM tickets ORDER BY 1 LIMIT 2',[[0],[0]])
+            refused('projection_alias','SELECT priority AS id FROM tickets ORDER BY id LIMIT 2',[[0],[0]])
+            refused('implicit_projection_alias','SELECT priority id FROM tickets ORDER BY id LIMIT 2',[[0],[0]])
+            refused('group_position','SELECT owner,COUNT(*) FROM tickets GROUP BY 1 ORDER BY owner LIMIT 2',[[0,200],[1,200]])
+            refused('group_aggregate_position','SELECT COUNT(*) FROM tickets GROUP BY 1',postgres_state='42803')
+            refused('qualified_update_returning','UPDATE tickets SET priority = priority + 1 WHERE id = 2 RETURNING tickets.priority',[[3]])
+            refused('qualified_insert_returning','INSERT INTO tickets(id,owner,priority) VALUES(60000,3,4) RETURNING tickets.priority',[[4]])
+            run('rejected_update_unchanged','SELECT priority FROM tickets WHERE id = 2')
+            run('rejected_insert_absent','SELECT id FROM tickets WHERE id = 60000')
             run('join_filter','SELECT tickets.id, users.name FROM tickets INNER JOIN users ON tickets.owner = users.id WHERE tickets.priority >= $1 ORDER BY tickets.id LIMIT 5',(5,))
             run('boolean_parameter','SELECT id FROM tickets WHERE $1 OR NULL ORDER BY id LIMIT 2',(True,))
             run('null_parameter','SELECT id FROM tickets WHERE $1 ORDER BY id',(None,))
@@ -215,7 +244,7 @@ def representatives(binary,candidate,root,output,dsn,rows):
             run('rollback_write','UPDATE tickets SET priority = 999 WHERE id = 2 RETURNING id,priority')
             run('rollback','ROLLBACK')
             run('rollback_read','SELECT id,priority FROM tickets WHERE id = 2')
-    return {'complete':True,'cases':cases,'as_of_reference':'PostgreSQL frozen table copy at seed version; equivalent row contents, not native PostgreSQL AS OF syntax','prepared_reference':'psycopg prepare=True, persistent connection; Lattice cached logical plan / AST with parameter rebind','C1_effort_days':None,'C1_budget_status':'unresolved'}
+    return {'complete':True,'cases':cases,'unsupported_semantics':unsupported,'as_of_reference':'PostgreSQL frozen table copy at seed version; equivalent row contents, not native PostgreSQL AS OF syntax','prepared_reference':'psycopg prepare=True, persistent connection; Lattice cached logical plan / AST with parameter rebind','C1_effort_days':None,'C1_budget_status':'unresolved'}
 
 def benchmark(binary,candidate,root,output,dsn,rows):
     import psycopg

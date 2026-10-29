@@ -86,7 +86,7 @@ fn projection(items: &[s::SelectItem]) -> Result<Vec<Expr>> {
     items
         .iter()
         .map(|i| match i {
-            s::SelectItem::UnnamedExpr(e) | s::SelectItem::ExprWithAlias { expr: e, .. } => expr(e),
+            s::SelectItem::UnnamedExpr(e) => expr(e),
             _ => Err(unsupported()),
         })
         .collect()

@@ -724,11 +724,28 @@ fn inner<I: Io, C: Clock, R: Rng>(
     }
 }
 
+fn qualified(e: &Expr) -> bool {
+    match e {
+        Expr::Col(name) => name.contains('.'),
+        Expr::Binary(a, _, b) => qualified(a) || qualified(b),
+        _ => false,
+    }
+}
+
 /// The same explicit prototype grammar/column contract applies to every relational backend.
 /// This binder never evaluates a query or substitutes custom execution for DataFusion.
 pub fn bind(plan: &Plan) -> Result<()> {
     match plan {
         Plan::Select(q) => {
+            if q.group
+                .iter()
+                .chain(q.order.iter())
+                .any(|e| matches!(e, Expr::Lit(_)))
+            {
+                return Err(Error::unsupported(
+                    "bare ORDER BY/GROUP BY positions and literals are outside the prototype grammar",
+                ));
+            }
             let mut cols = columns(&q.table)?;
             if let Some((join, on)) = &q.join {
                 if join == &q.table {
@@ -800,6 +817,11 @@ pub fn bind(plan: &Plan) -> Result<()> {
             filter,
             returning,
         } => {
+            if returning.iter().any(qualified) {
+                return Err(Error::unsupported(
+                    "qualified RETURNING expressions are outside the prototype grammar",
+                ));
+            }
             let (_, names) = schema(table)?;
             let cols = columns(table)?;
             let mut seen = BTreeSet::new();
@@ -835,6 +857,11 @@ pub fn bind(plan: &Plan) -> Result<()> {
             values,
             returning,
         } => {
+            if returning.iter().any(qualified) {
+                return Err(Error::unsupported(
+                    "qualified RETURNING expressions are outside the prototype grammar",
+                ));
+            }
             let (_, names) = schema(table)?;
             if fields.len() != values.len() {
                 return Err(Error::syntax("INSERT column/value count differs"));

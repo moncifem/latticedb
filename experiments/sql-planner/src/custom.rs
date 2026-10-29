@@ -181,8 +181,12 @@ impl Parser {
         let mut out = Vec::new();
         loop {
             out.push(self.expr(0)?);
-            if self.eat("as") {
-                self.ident()?;
+            if self.eat("as")
+                || matches!(self.tokens.get(self.n),Some(Token::Word(word)) if word!="from")
+            {
+                return Err(Error::unsupported(
+                    "projection aliases are outside the prototype grammar",
+                ));
             }
             if !self.eat(",") {
                 break;
