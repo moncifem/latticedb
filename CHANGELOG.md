@@ -14,6 +14,10 @@ between minor versions; format changes are called out explicitly.
   restarts. Strict bounded decoding that accepts only canonical bytes, specified with worked byte examples
   in `formats/change-feed-v1.md`, and a `feed_decode` fuzz target. Not yet connected to the log, the
   engines or any subscription, and not yet in the fuzz workflow matrices.
+- A TLA+ model of the tree CRDT move rule (`tla/TreeMove.tla`): acyclicity, reachability of the root or
+  trash, and convergence under delayed, reordered and duplicated delivery, checked on a materialised
+  tree per replica. Negative tests remove the cycle check and the undo/redo of later operations and
+  must make TLC fail (`tla/check-negative.sh`, run by `tla/check-all.sh`).
 
 - A tree CRDT with move semantics (`lattice_core::crdt_tree`): stable node ids, moves ordered by the
   hybrid logical clock with undo and redo of later operations, cycle-forming moves dropped identically

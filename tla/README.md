@@ -8,6 +8,16 @@ TLA+ models checked by TLC. Each header states what the model covers and what it
 | `Hlc` | timestamps strictly increase even when the physical clock goes backwards, and the counter stays bounded |
 | `Fence` | no write from an older turn is accepted once a newer turn has begun |
 | `SetConvergence` | replicas that applied the same operations, in any order, hold the same members (needs the tombstone rule) |
+| `TreeMove` | move-operation tree CRDT with delete as move to trash: no cycles at any replica, every node reaches the root or the trash, and replicas that logged the same operations hold the same tree, under delayed, reordered and duplicated delivery |
 
-Run one with `tla/run-tlc.sh tla/<Model>.tla`, or all with `tla/check-all.sh`. Both need `java` and
+`TreeMove` keeps a materialised tree per replica and updates it with the undo, perform, redo rule of
+`lattice-core/src/crdt_tree.rs`; `Convergent` compares two replicas and `MatchesSerial` compares each
+replica with a fresh replay of its own log. Its checked bounds are 2 replicas, 3 nodes and 4 operations.
+
+Negative tests: each config in `negative/` removes one protection from a model, and
+`check-negative.sh` requires TLC to fail with the named invariant. `TreeMoveNoCycleCheck` must violate
+`Acyclic` and `TreeMoveNoUndoRedo` must violate `Convergent`. A negative run that passes, or fails with
+a different invariant, fails `check-all.sh`.
+
+Run one with `tla/run-tlc.sh tla/<Model>.tla`, or all (models, then the negative tests) with `tla/check-all.sh`. Both need `java` and
 `TLA2TOOLS` pointing at `tla2tools.jar`. Nightly CI runs all of them.

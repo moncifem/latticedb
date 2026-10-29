@@ -19,6 +19,13 @@ Requirements and exit criteria are in [the Phase 3 specification](../spec/03-syn
 None yet. The kernel already has last-writer-wins registers and an observed-remove set
 (`lattice-core::crdt`), which Phase 3 extends.
 
+Verification evidence, not an exit criterion: `tla/TreeMove.tla` (WP43, issue #245) models the tree CRDT
+move rule with 2 replicas, 3 nodes and 4 operations. One local run with a single worker explored
+6,635,881 states (751,243 distinct) in 45 to 48 s (two runs) with no violation of `Acyclic`, `Rooted`, `Convergent` or
+`MatchesSerial`. With the cycle check removed TLC reports `Acyclic` violated, and with undo and redo of
+later-ordered operations removed it reports `Convergent` violated (`tla/check-negative.sh`). Not run
+on CI yet; simulation, row integration and op-log growth measurement of WP43 are still open.
+
 ## Exit criteria
 
 | # | Criterion | State |

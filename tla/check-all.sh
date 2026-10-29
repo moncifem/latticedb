@@ -5,3 +5,4 @@ dir=$(dirname "$0")
 for cfg in "$dir"/*.cfg; do
   "$dir/run-tlc.sh" "${cfg%.cfg}.tla"
 done
+"$dir/check-negative.sh"
