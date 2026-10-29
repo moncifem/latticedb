@@ -601,6 +601,29 @@ mod tests {
     }
 
     #[test]
+    fn every_refused_append_is_counted_once() {
+        let mut io = SimIo::new(
+            1,
+            FaultProfile {
+                disk_full_after: Some(4),
+                ..FaultProfile::clean()
+            },
+        );
+        assert_eq!(io.no_space_events(), 0);
+        io.append("f", b"abcd").unwrap();
+        assert_eq!(
+            io.no_space_events(),
+            0,
+            "an append that fits is not a refusal"
+        );
+        assert_eq!(io.append("f", b"e"), Err(IoError::NoSpace));
+        assert_eq!(io.no_space_events(), 1);
+        assert_eq!(io.append("f", b"e"), Err(IoError::NoSpace));
+        assert_eq!(io.append("g", b"e"), Err(IoError::NoSpace));
+        assert_eq!(io.no_space_events(), 3);
+    }
+
+    #[test]
     fn disk_full_and_error_injection_including_partial_appends() {
         let mut io = SimIo::new(
             1,
