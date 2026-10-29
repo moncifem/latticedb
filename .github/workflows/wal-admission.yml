@@ -32,8 +32,9 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --list > wal-admission-selection.txt
-          test "$(grep -c ': test$' wal-admission-selection.txt)" -eq 6
+          test "$(grep -c ': test$' wal-admission-selection.txt)" -eq 7
           cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --nocapture 2>&1 | tee wal-admission-codec.log
+          rm -rf target/wal-admission-cases
           cargo test -p lattice-core --locked --lib --features planted-bugs guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption -- --ignored --nocapture 2>&1 | tee wal-admission-crashes.log
       - name: Build actual immutable old RowStore and verify admission without mutation
         run: |

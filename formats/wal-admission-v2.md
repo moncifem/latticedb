@@ -27,10 +27,13 @@ the first 28 bytes. Record CRC coverage remains unchanged. Corrupt complete head
 ## Golden files
 
 `corpus/wal-admission-v2-{header,compound,unknown-capability,unknown-version}.golden` and
-`corpus/wal-admission-v1-{legacy,rows}.golden` are independently framed by
+`corpus/wal-admission-v1-{legacy,rows}.golden`, wrong-length/reserved/bad-CRC examples, a
+capability-drop chain (201-byte guarded segment followed by a 16-byte legacy header), and all 32
+strict guarded-header prefixes are independently framed by
 `tools/wal-admission/make_fixtures.py` using a separate bitwise CRC implementation. The compound
 contains literal table 7 `items`, index 9 `by_value`, `(7,a)=x` and delete `(7,b)`; the v1 rows
 fixture contains only the same LROW mutations. Decoder tests pin fields, exact bytes, corrupt-bit
 and truncated-prefix refusal. The hosted job builds a frozen real old RowStore against its original
-lockfile, checks the literal legacy row and guarded refusal, and compares all fixture filenames and
-byte hashes before/after. Hosted evidence is pending until its exact-head job succeeds.
+lockfile, checks the literal legacy row and guarded refusal, then checks every exported raw/recovered
+fault-matrix snapshot with before/after filename and byte-hash manifests. Guarded refusal and
+recovered legacy opens must not mutate bytes; permitted raw legacy-tail repair is recorded. Hosted evidence is pending until its exact-head job succeeds.

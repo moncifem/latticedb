@@ -172,3 +172,33 @@ explicitly by the hosted compatibility workflow. That workflow also builds the f
 with its original lockfile, retains executable/source/harness hashes and exact before/after byte
 manifests. No completed hosted evidence, large fault campaign or measured recovery overhead is
 claimed until the corresponding exact-head jobs and measurements finish.
+
+## Independent review corrections and expanded hosted matrix
+
+Header preflight now requires exactly `min(32, file length)` bytes and stable length across prefix
+collection. It retains those exact bytes and the length. Recovery and contextual raw reads must
+match that admitted view before parsing or any repair; an initially incomplete header must remain
+the identical incomplete full read. A short or changing seam view therefore refuses instead of
+truncating newly visible complete data. Guarded versions are rejected as soon as all four version
+bytes exist (including 12–15-byte headers), before the repairable-incomplete classification.
+Changing-view regressions pin equal-length header swaps, dishonest short prefixes, complete full
+views following short admission, and unknown-version short headers without callbacks or mutation.
+
+The global corpus additionally contains independent wrong-length, reserved-field, bad-CRC and
+capability-drop examples plus every strict guarded-header prefix. The hosted matrix now uses real
+LCIX/LROW ChangeSet bytes in empty-tail promotion, nonempty legacy rotation, and later guarded
+rollover. For four seeds in each of clean and torn-write/lost-directory profiles it observes each
+control operation, cuts at every operation, fails each append with ENOSPC, fails every file/directory
+sync, and injects every append prefix including a full append followed by an error. The torn-write
+profile disables garbage injection; header corruption has separate refusal fixtures. This is a
+bounded scripted matrix, not soak or arbitrary corruption adoption evidence. Each targeted fault
+must be reached. Acknowledged prefixes, exact adopted envelopes, capability contexts and repeat
+recovery are checked; raw and recovered directories are exported for every history.
+
+The frozen old reader runs on each exported directory and records complete before/after filename
+and byte-hash manifests. Refused guarded directories and already-recovered legacy directories must
+remain byte-unchanged. Raw unguarded torn creations may undergo the old reader's documented repair;
+that allowed mutation is recorded explicitly and cannot contain an acknowledged LCIX record.
+The original hosted attempt failed while compiling the old harness because the historical RowError
+did not implement Error; explicit error conversion corrects that harness failure. Expanded hosted
+proof remains pending until its exact-head run completes successfully.

@@ -39,14 +39,24 @@ def vectors():
     envelope = lambda payload: b'\x01' + (1).to_bytes(16, 'big') + struct.pack('<QII', 1, 0, 1) + bytes(16) + b'\x00\x00\x00' + name(payload)
     changeset = envelope(compound)
     legacy = b'LATLOG01' + struct.pack('<II', 1, 0)
-    return {
+    result = {
         'wal-admission-v2-header.golden': header(),
         'wal-admission-v2-compound.golden': header() + record(1, 1, changeset),
         'wal-admission-v2-unknown-capability.golden': header(mask=2),
         'wal-admission-v2-unknown-version.golden': header(version=3),
         'wal-admission-v1-legacy.golden': legacy,
         'wal-admission-v1-rows.golden': legacy + record(1, 1, envelope(rows)),
+        'wal-admission-v2-dropped-capability.golden': header() + record(1, 1, changeset) + legacy,
     }
+    for suffix, offset, value in [('wrong-length', 12, 16), ('reserved', 14, 1), ('bad-crc', 28, 0)]:
+        data = bytearray(header())
+        data[offset] = value if suffix != 'bad-crc' else data[offset] ^ 1
+        if suffix != 'bad-crc':
+            data[28:] = u32(crc(data[:28]))
+        result[f'wal-admission-v2-{suffix}.golden'] = bytes(data)
+    for length in range(32):
+        result[f'wal-admission-v2-prefix-{length:02}.golden'] = header()[:length]
+    return result
 
 
 if __name__ == '__main__':

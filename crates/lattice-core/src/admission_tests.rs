@@ -5,8 +5,8 @@
     clippy::panic,
     clippy::indexing_slicing
 )]
-use crate::admission::{self, MANAGED_COMPOUND, RecoveryContext};
-use crate::record::{self, Record};
+use crate::admission::{self, MANAGED_COMPOUND};
+use crate::record;
 use crate::{ChangeSet, ChangeSetId, Config, Kernel, Log, LogError};
 use lattice_seams::{Io, IoError};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
@@ -117,17 +117,72 @@ fn independent_headers_and_compound_fixture_pin_exact_bytes_and_context() {
         admission::decode_header(&unknown_length),
         Err(admission::HeaderError::Invalid(_))
     ));
+    for bytes in [
+        include_bytes!("../../../formats/corpus/wal-admission-v2-wrong-length.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-reserved.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-bad-crc.golden").as_slice(),
+    ] {
+        assert!(admission::decode_header(bytes).is_err());
+    }
     for bytes in [UNKNOWN_CAP, UNKNOWN_VERSION] {
         assert!(admission::decode_header(bytes).is_err());
     }
-    for n in 0..32 {
-        assert!(admission::decode_header(&HEADER[..n]).is_err());
+    for (n, prefix) in [
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-00.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-01.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-02.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-03.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-04.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-05.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-06.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-07.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-08.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-09.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-10.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-11.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-12.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-13.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-14.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-15.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-16.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-17.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-18.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-19.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-20.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-21.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-22.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-23.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-24.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-25.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-26.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-27.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-28.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-29.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-30.golden").as_slice(),
+        include_bytes!("../../../formats/corpus/wal-admission-v2-prefix-31.golden").as_slice(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(prefix, &HEADER[..n]);
+        assert!(admission::decode_header(prefix).is_err());
     }
     for n in 0..32 {
         let mut b = HEADER.to_vec();
         b[n] ^= 1;
         assert!(admission::decode_header(&b).is_err());
     }
+    let dropped =
+        include_bytes!("../../../formats/corpus/wal-admission-v2-dropped-capability.golden");
+    let mut bad = Disk::new();
+    plant(&mut bad, FIRST, &dropped[..201]);
+    plant(&mut bad, "wal/00000000000000000002.seg", &dropped[201..]);
+    assert!(
+        Log::open_streaming_with_capabilities(bad, "wal", 1000, 1, |_, _| panic!(
+            "downgrade callback"
+        ))
+        .is_err()
+    );
     let mut disk = Disk::new();
     plant(&mut disk, FIRST, COMPOUND);
     let mut observed = Vec::new();
@@ -305,77 +360,8 @@ fn independent_omitted_guard_witness_has_a_clean_control() {
     }
 }
 
-#[test]
-#[ignore = "bounded upgrade power-cut matrix runs on hosted WAL admission CI"]
-fn guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption() {
-    for prefix in [false, true] {
-        let mut observed = 0;
-        let mut next_cut = None;
-        loop {
-            let cut = next_cut;
-            let disk = Disk::new();
-            let mut log = open(&disk);
-            if prefix {
-                log.append(42, b"legacy").unwrap();
-                log.sync().unwrap();
-            }
-            let before = disk.0.borrow().mutating_ops();
-            if let Some(cut) = cut {
-                disk.0.borrow_mut().arm_power_cut(cut);
-            }
-            let ack = log
-                .append_with_capabilities(42, b"protected", 1)
-                .and_then(|_| log.sync())
-                .is_ok();
-            if cut.is_none() {
-                observed = disk.0.borrow().mutating_ops() - before;
-                assert!(observed >= 5);
-            }
-            drop(log);
-            disk.0.borrow_mut().crash();
-            let mut records: Vec<(Record, RecoveryContext)> = Vec::new();
-            let (log, _) =
-                Log::open_streaming_with_capabilities(disk.clone(), "wal", 1 << 20, 1, |r, c| {
-                    records.push((r, c))
-                })
-                .unwrap();
-            assert_eq!(
-                records
-                    .iter()
-                    .filter(|(r, _)| r.payload == b"legacy")
-                    .count(),
-                usize::from(prefix)
-            );
-            let protected: Vec<_> = records
-                .iter()
-                .filter(|(r, _)| r.payload == b"protected")
-                .collect();
-            assert!(protected.len() <= 1);
-            assert!(!ack || protected.len() == 1);
-            for (_, c) in protected {
-                assert_eq!(c.required_capabilities, MANAGED_COMPOUND);
-            }
-            assert_eq!(log.read_from_with_context(1, 10).unwrap(), records);
-            drop(log);
-            let mut second = Vec::new();
-            let (_, _) = Log::open_streaming_with_capabilities(disk, "wal", 1 << 20, 1, |r, c| {
-                second.push((r, c))
-            })
-            .unwrap();
-            assert_eq!(second, records);
-            next_cut = match cut {
-                None => {
-                    eprintln!(
-                        "guard upgrade prefix={prefix}: observed {observed} mutating operations"
-                    );
-                    Some(0)
-                }
-                Some(n) if n < observed => Some(n + 1),
-                Some(_) => break,
-            };
-        }
-    }
-}
+#[path = "admission_matrix_tests.rs"]
+mod matrix;
 
 #[derive(Clone)]
 struct ChangingView {

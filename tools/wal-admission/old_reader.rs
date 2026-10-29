@@ -8,12 +8,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mode = std::env::args().nth(2).ok_or("missing expectation")?;
     let result = RowStore::open(StdIo::new(root), SystemClock, OsRng, &Config::default());
     match (mode.as_str(), result) {
-        ("legacy", Ok(store)) => {
-            let value = store.get_at(store.snapshot(), 7, b"a")?;
-            if value.map(Vec::as_slice) != Some(b"x".as_slice()) {
+        ("legacy" | "legacy-any", Ok(store)) => {
+            let value = store
+                .get_at(store.snapshot(), 7, b"a")
+                .map_err(|error| error.to_string())?;
+            let require_row =
+                mode == "legacy" || std::env::args().nth(3).as_deref() == Some("row-required");
+            if require_row && value.map(Vec::as_slice) != Some(b"x".as_slice()) {
                 return Err("legacy literal row did not survive".into());
             }
-            println!("legacy literal row accepted");
+            println!("legacy store accepted; literal_row_required={require_row}");
         }
         ("guarded", Err(error)) => {
             let message = error.to_string();

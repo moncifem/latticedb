@@ -1,0 +1,4 @@
+format = "wal-admission"
+version = 2
+status = "draft"
+description = "Independent Python framing/CRC32C; RFC 0008 proposed, not accepted"
