@@ -32,7 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --list > wal-admission-selection.txt
-          test "$(grep -c ': test$' wal-admission-selection.txt)" -eq 7
+          test "$(grep -c ': test$' wal-admission-selection.txt)" -eq 8
           cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --nocapture 2>&1 | tee wal-admission-codec.log
           rm -rf target/wal-admission-cases
           cargo test -p lattice-core --locked --lib --features planted-bugs guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption -- --ignored --nocapture 2>&1 | tee wal-admission-crashes.log
@@ -40,6 +40,12 @@ jobs:
         run: |
           mkdir -p frozen/crates/lattice-engines/examples
           cp tools/wal-admission/old_reader.rs frozen/crates/lattice-engines/examples/admission_old_reader.rs
+          git -C frozen diff --exit-code
+          git -C frozen diff --cached --exit-code HEAD
+          test "$(git -C frozen ls-files --others --exclude-standard)" = crates/lattice-engines/examples/admission_old_reader.rs
+          sha256sum frozen/Cargo.lock frozen/rust-toolchain.toml tools/wal-admission/old_reader.rs > wal-admission-build-inputs.sha256
+          rustc -Vv > wal-admission-toolchain.txt
+          cargo -V >> wal-admission-toolchain.txt
           cargo build --manifest-path frozen/Cargo.toml --locked -p lattice-engines --example admission_old_reader --target-dir target/frozen-old
           python3 tools/wal-admission/verify_old_reader.py target/frozen-old/debug/examples/admission_old_reader
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -51,4 +57,6 @@ jobs:
             wal-admission-codec.log
             wal-admission-crashes.log
             wal-admission-old-reader.json
+            wal-admission-build-inputs.sha256
+            wal-admission-toolchain.txt
           if-no-files-found: error

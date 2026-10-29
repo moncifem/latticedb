@@ -24,7 +24,26 @@ if __name__ == '__main__':
     source = subprocess.check_output(['git', '-C', str(ROOT / 'frozen'), 'rev-parse', 'HEAD'], text=True).strip()
     if source != SOURCE:
         raise SystemExit('frozen source revision mismatch')
-    report = {'source_revision': source, 'harness_sha256': sha(ROOT / 'tools/wal-admission/old_reader.rs'),
+    frozen = ROOT / 'frozen'
+    for args in [('diff', '--exit-code'), ('diff', '--cached', '--exit-code', 'HEAD')]:
+        subprocess.run(['git', '-C', str(frozen), *args], check=True, capture_output=True)
+    untracked = subprocess.check_output(['git', '-C', str(frozen), 'ls-files', '--others', '--exclude-standard'], text=True).splitlines()
+    harness_path = 'crates/lattice-engines/examples/admission_old_reader.rs'
+    if untracked != [harness_path]:
+        raise SystemExit(f'unexpected untracked frozen source files: {untracked}')
+    tracked_hashes = {}
+    for filename in ['Cargo.lock', 'rust-toolchain.toml']:
+        original = subprocess.check_output(['git', '-C', str(frozen), 'show', f'HEAD:{filename}'])
+        if original != (frozen / filename).read_bytes():
+            raise SystemExit(f'frozen tracked {filename} differs from immutable source')
+        tracked_hashes[filename] = hashlib.sha256(original).hexdigest()
+    if sha(frozen / harness_path) != sha(ROOT / 'tools/wal-admission/old_reader.rs'):
+        raise SystemExit('compiled harness source differs from reviewed harness')
+    report = {'tracked_source_clean': True, 'allowed_untracked_harness': harness_path,
+              'tracked_source_sha256': tracked_hashes,
+              'rustc_version_verbose': subprocess.check_output(['rustc', '-Vv'], text=True),
+              'cargo_version': subprocess.check_output(['cargo', '-V'], text=True),
+              'source_revision': source, 'harness_sha256': sha(ROOT / 'tools/wal-admission/old_reader.rs'),
               'executable_sha256': sha(binary), 'cases': []}
     for mode, filename in [('legacy', 'wal-admission-v1-rows.golden'), ('guarded', 'wal-admission-v2-compound.golden')]:
         with tempfile.TemporaryDirectory() as tmp:

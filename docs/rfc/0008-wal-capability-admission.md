@@ -202,3 +202,11 @@ that allowed mutation is recorded explicitly and cannot contain an acknowledged 
 The original hosted attempt failed while compiling the old harness because the historical RowError
 did not implement Error; explicit error conversion corrects that harness failure. Expanded hosted
 proof remains pending until its exact-head run completes successfully.
+
+The independent generator emits 42 proposal vectors; together with the unchanged pre-existing WAL
+vector, the global corpus has 43 files. Matrix ChangeSet ids and HLC wall fields are independently
+framed in their specified byte orders, increasing together across each real kernel history. A
+normal test pins the literal fields and every recovered matrix history also passes the kernel
+scrubber. Frozen-reader evidence checks tracked worktree/index cleanliness before build and after
+execution setup, permits only the reviewed untracked harness, verifies original lock/toolchain
+bytes against the immutable revision, and records their hashes plus verbose rustc/Cargo versions.

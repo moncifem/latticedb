@@ -145,6 +145,8 @@ fn payload(id: u128, compound: bool) -> Vec<u8> {
     let offset = if compound { 32 + 17 } else { 16 + 17 };
     let mut bytes = fixture[offset..].to_vec();
     bytes[1..17].copy_from_slice(&id.to_be_bytes());
+    // ChangeSet v1: id is big endian; the following HLC wall is independently framed little endian.
+    bytes[17..25].copy_from_slice(&u64::try_from(id).unwrap().to_le_bytes());
     bytes
 }
 
@@ -240,6 +242,18 @@ fn run(
             );
         }
     }
+    for pair in records.windows(2) {
+        assert!(
+            ChangeSet::decode(&pair[0].0.payload).unwrap().hlc
+                < ChangeSet::decode(&pair[1].0.payload).unwrap().hlc
+        );
+    }
+    assert!(
+        crate::scrub::scrub_with_capabilities(&disk, "wal", 1)
+            .unwrap()
+            .is_clean(),
+        "matrix must be a valid kernel history"
+    );
     assert_eq!(log.read_from_with_context(1, 10).unwrap(), records);
     drop(log);
     export_case(&disk, case, "recovered", &description, scenario == 1);
@@ -290,4 +304,20 @@ fn guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption() {
     eprintln!(
         "guarded WAL expanded matrix verified {case} histories; raw/recovered snapshots exported for frozen old-reader checks"
     );
+}
+
+#[test]
+fn matrix_payloads_independently_frame_strictly_increasing_kernel_timestamps() {
+    for compound in [false, true] {
+        let mut previous = None;
+        for (id, wall) in [(1u128, 1u64), (2, 2), (3, 3)] {
+            let bytes = payload(id, compound);
+            assert_eq!(&bytes[1..17], &id.to_be_bytes());
+            assert_eq!(&bytes[17..25], &wall.to_le_bytes());
+            let cs = ChangeSet::decode(&bytes).unwrap();
+            assert_eq!(cs.hlc.wall_ms, wall);
+            assert!(previous.is_none_or(|older| older < cs.hlc));
+            previous = Some(cs.hlc);
+        }
+    }
 }
