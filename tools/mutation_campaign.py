@@ -18,6 +18,11 @@ GROUPS = {
     'dependent': (['lattice-core', 'lattice-lsl'], True),
     'self': (['lattice-abi', 'lattice-evalkit', 'lattice-sim', 'lattice-seams',
               'lattice-cli', 'lattice-bench', 'lattice-sdk'], False),
+    # The storage, SQL and API crates feed each other and latticed, so a mutant in one is tested by the
+    # whole workspace. They were reachable only through the manual mutation-crate workflow before.
+    'engines': (['lattice-engines', 'lattice-sql', 'lattice-api'], True),
+    # The test kit, the system layer and the daemon binary: each mutant is tested by its own package.
+    'edge': (['lattice-testkit', 'lattice-sys', 'latticed'], False),
 }
 
 
@@ -102,7 +107,8 @@ def write(path, value):
 def make_plan(universes, source):
     require(set(universes) == set(GROUPS), 'missing/extra mutation crate group')
     groups, matrix = {}, []
-    for group, universe in universes.items():
+    # Sorted: load_plan rebuilds the plan from sorted JSON keys, so the matrix order must not depend on GROUPS order.
+    for group, universe in sorted(universes.items()):
         ids = identities(universe)
         require(ids, 'empty mutation group cannot establish coverage')
         total = math.ceil(len(ids) / MAX_PER_SHARD)

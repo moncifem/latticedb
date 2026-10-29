@@ -421,7 +421,8 @@ class ReplayEvidenceTests(unittest.TestCase):
 
 def campaign_fixture(count=50):
     universes = {}
-    for group, package in [('dependent', 'lattice-core'), ('self', 'lattice-abi')]:
+    for group, (packages, _) in campaign.GROUPS.items():
+        package = packages[0]
         _, universe = mutation_fixture(['CaughtMutant'] * count)
         for mutant in universe:
             mutant['package'] = package
@@ -467,8 +468,8 @@ class MutationCampaignTests(unittest.TestCase):
             group, index = row['group'], row['shard']
             assignments[group][index] = shards[f'{group}/{index}']['assigned']
         proof = campaign.partition_proof(plan, assignments)
-        self.assertEqual(proof['expected_mutants'], 100)
-        self.assertEqual(proof['assigned_mutants_observed'], 100)
+        self.assertEqual(proof['expected_mutants'], 50 * len(campaign.GROUPS))
+        self.assertEqual(proof['assigned_mutants_observed'], 50 * len(campaign.GROUPS))
         self.assertTrue(proof['union_equals_full_universe'])
         self.assertTrue(proof['no_duplicates'])
         self.assertTrue(all(row['planned'] <= 24 for row in plan['matrix']['include']))
@@ -499,7 +500,8 @@ class MutationCampaignTests(unittest.TestCase):
         other = copy.deepcopy(universe)
         for mutant in other:
             mutant['package'] = 'different-package'
-        universes = {'dependent': universe, 'self': other}
+        universes = {group: copy.deepcopy(universe) for group in campaign.GROUPS}
+        universes['self'] = other
         with self.assertRaisesRegex(ValueError, 'matrix ceiling'):
             campaign.make_plan(universes, {})
 
@@ -512,11 +514,29 @@ class MutationCampaignTests(unittest.TestCase):
         self.assertEqual(command[-6:], ['--test-workspace=false', '--timeout', '120', '--no-shuffle', '-j', '2'])
         self.assertNotIn('--exclude', command)
 
+    def test_campaign_covers_engines_api_sql_testkit_sys_and_latticed_without_overlap(self):
+        covered = [package for packages, _ in campaign.GROUPS.values() for package in packages]
+        self.assertEqual(len(covered), len(set(covered)), 'a crate is in two mutation groups')
+        for package in ('lattice-engines', 'lattice-api', 'lattice-sql', 'lattice-testkit', 'lattice-sys', 'latticed'):
+            self.assertIn(package, covered)
+        # Dependents run the workspace tests; self-tested groups run their own package.
+        self.assertEqual(campaign.command('engines')[-6], '--test-workspace=true')
+        self.assertEqual(campaign.command('edge')[-6], '--test-workspace=false')
+        self.assertEqual(campaign.baseline_commands('engines', [{'package': 'lattice-sql'}]),
+                         [['cargo', 'test', '--workspace']])
+        self.assertEqual(campaign.baseline_commands('edge', [{'package': 'latticed'}, {'package': 'lattice-sys'}]),
+                         [['cargo', 'test', '--package', 'lattice-sys'], ['cargo', 'test', '--package', 'latticed']])
+
+    def test_plan_matrix_order_does_not_depend_on_group_insertion_order(self):
+        plan, universes, _ = campaign_fixture(count=3)
+        reordered = dict(reversed(list(universes.items())))
+        self.assertEqual(campaign.make_plan(reordered, plan['source'])['matrix'], plan['matrix'])
+
     def test_full_observed_campaign_is_complete_only_after_source_workflow_finishes(self):
         plan, universes, shards = campaign_fixture()
         observed = campaign_results.aggregate(plan, universes, shards, source_complete=True)
         self.assertTrue(observed['proof']['union_equals_full_universe'])
-        self.assertEqual(observed['outcome_counts']['tested'], 100)
+        self.assertEqual(observed['outcome_counts']['tested'], 50 * len(campaign.GROUPS))
         self.assertTrue(all(row['mutation_score'] == 1.0 for row in observed['modules']))
         for row in observed['modules']:
             metrics.validate_record('mutation', row)
@@ -639,7 +659,7 @@ class MutationCampaignTests(unittest.TestCase):
             with patch.object(campaign_results.subprocess, 'run', side_effect=download):
                 result = campaign_results.fetch('owner/repo', 'main', run, workflow, artifacts, jobs)
             self.assertTrue(result['proof']['union_equals_full_universe'])
-            self.assertEqual(result['outcome_counts']['tested'], 52)
+            self.assertEqual(result['outcome_counts']['tested'], 26 * len(campaign.GROUPS))
             self.assertTrue(all(row['source']['authentication'] == 'validated_shard_artifacts_and_complete_universe_plan' for row in result['modules']))
             self.assertTrue(all(row['mutation_score'] == 1.0 for row in result['modules']))
             original = archives[200]
@@ -661,7 +681,7 @@ class MutationCampaignTests(unittest.TestCase):
                                     size_in_bytes=len(archives[200]))
                     with patch.object(campaign_results.subprocess, 'run', side_effect=download):
                         result = campaign_results.fetch('owner/repo', 'main', run, workflow, artifacts, jobs)
-                    self.assertEqual(result['outcome_counts']['tested'], 52)
+                    self.assertEqual(result['outcome_counts']['tested'], 26 * len(campaign.GROUPS))
                     self.assertFalse(result['proof']['all_baseline_scopes_verified'])
                     self.assertTrue(all(row['mutation_score'] is None for row in result['modules']))
             wrong_attempt = dict(run, run_attempt=2)
@@ -757,7 +777,7 @@ class MutationCampaignTests(unittest.TestCase):
                     proof['extra'] = nested
                 result = campaign_results.aggregate(plan, universes, shards, True)
                 self.assertEqual(result['outcome_counts']['survived'], 1)
-                self.assertEqual(result['outcome_counts']['tested'], 4)
+                self.assertEqual(result['outcome_counts']['tested'], 2 * len(campaign.GROUPS))
                 self.assertFalse(result['proof']['all_baseline_scopes_verified'])
                 self.assertFalse(result['proof']['all_baselines_passed'])
                 self.assertTrue(all(row['mutation_score'] is None for row in result['modules']))
