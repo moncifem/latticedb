@@ -11,6 +11,7 @@
 /.github/ @moncifem
 /tools/branch-protection.json @moncifem
 /tools/pr_governance.py @moncifem
+/tools/test_pr_governance.py @moncifem
 /docs/rfc/ @moncifem
 /docs/adr/ @moncifem
 /Cargo.toml @moncifem

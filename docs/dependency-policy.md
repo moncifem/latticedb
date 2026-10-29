@@ -19,6 +19,16 @@ tooling and what by review. It complements [`deny.toml`](../deny.toml), [`layers
 and git sources). Nothing enforces maintainer, `unsafe` or build-script review in the dependency graph;
 that is the checklist below, done by the author and checked by the reviewer.
 
+**Coverage limit of the `dependencies` area.** It matches only the root `Cargo.toml`, `Cargo.lock` and
+`deny.toml`; crate manifests are not in it, because a path pattern cannot tell a dependency-table edit
+from any other manifest edit and listing `crates/*/Cargo.toml` would flag every manifest change. So the
+gate sees a change to a crate's dependencies only when `Cargo.lock` changes with it (a new crate or a
+new resolved version). An edit that leaves the lockfile alone (loosening an `=` pin to a caret
+requirement, turning default features on, enabling another feature of a security-critical crate) is
+not flagged. The reviewer has to read crate manifest diffs, and the pull request template asks for the
+checklist whenever a dependency changes. Content-aware detection would be a change to
+`tools/pr_governance.py` that reads the manifest diff; it is not done.
+
 ## Adding a dependency
 
 Do these before opening the pull request and record the answers in the "New dependencies" section of the
@@ -81,6 +91,24 @@ Rules for the set:
   patch, release notes.
 - The `reviewed` label applies. When the change also touches authentication code, the `auth` review
   items in `docs/review-policy.md` apply as well.
+
+### Current compliance
+
+Checked against the manifests when this page was written. The rules above are the target; these
+declarations do not meet them yet, and this pull request does not change any manifest. The follow-up
+is [#333](https://github.com/moncifem/latticedb/issues/333).
+
+| Manifest | Declaration | Gap |
+|---|---|---|
+| `crates/lattice-abi/Cargo.toml` | `subtle = "2.6.1"` | Caret requirement, not `=2.6.1`; default features on |
+| `crates/latticed/Cargo.toml` (dev-dependencies) | `hmac = "=0.13.0"` | Default features on |
+| `crates/latticed/Cargo.toml` (dev-dependencies) | `sha2 = "=0.11.1"` | Default features on |
+| `crates/latticed/Cargo.toml` (dev-dependencies) | `pbkdf2 = { version = "=0.13.0", features = ["hmac"] }` | Default features on |
+
+Compliant today: `rustls` and `rcgen` in `latticed`, and `hmac`, `pbkdf2`, `sha2` and `subtle` in
+`lattice-api` (exact versions, default features off). `ring` is not declared directly. `Cargo.lock`
+fixes the resolved versions in every case, so the gap is in what a future edit or feature unification
+could change, not in what is built today.
 
 ## Audit notes
 

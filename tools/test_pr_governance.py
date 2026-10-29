@@ -193,5 +193,69 @@ class ApiBoundaries(unittest.TestCase):
                 comment.assert_not_called()
 
 
+class CodeownersMatchesClassifier(unittest.TestCase):
+    """.github/CODEOWNERS and RISK_RULES list the same risky paths (docs/review-policy.md)."""
+
+    # One concrete path per RISK_RULES glob. A new glob without an entry here fails the test.
+    SAMPLES = {
+        "formats/**": "formats/wal-v1.md",
+        "crates/lattice-core/**": "crates/lattice-core/src/wal.rs",
+        "crates/lattice-api/**/auth*": "crates/lattice-api/src/auth.rs",
+        "crates/lattice-api/**/scram*": "crates/lattice-api/src/scram.rs",
+        "layers.toml": "layers.toml",
+        ".github/**": ".github/workflows/pr.yml",
+        "tools/branch-protection.json": "tools/branch-protection.json",
+        "tools/pr_governance.py": "tools/pr_governance.py",
+        "tools/test_pr_governance.py": "tools/test_pr_governance.py",
+        "docs/rfc/**": "docs/rfc/0001-x.md",
+        "docs/adr/**": "docs/adr/0001-x.md",
+        "Cargo.toml": "Cargo.toml",
+        "Cargo.lock": "Cargo.lock",
+        "deny.toml": "deny.toml",
+    }
+
+    @staticmethod
+    def owner_patterns():
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".github", "CODEOWNERS")
+        patterns = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    patterns.append(line.split()[0])
+        return [p for p in patterns if p != "*"]
+
+    @staticmethod
+    def owned(pattern, path):
+        anchored = pattern.lstrip("/")
+        if anchored.endswith("/"):
+            return path.startswith(anchored)
+        return bool(g._glob_regex(anchored).match(path))
+
+    def test_every_classifier_glob_has_a_sample(self):
+        globs = {glob for _, globs in g.RISK_RULES for glob in globs}
+        self.assertEqual(globs, set(self.SAMPLES))
+
+    def test_samples_are_classified(self):
+        for glob, path in self.SAMPLES.items():
+            with self.subTest(glob=glob):
+                self.assertTrue(g.matches(path, [glob]))
+                self.assertTrue(g.classify_risk([path]))
+
+    def test_every_classifier_glob_is_owned(self):
+        patterns = self.owner_patterns()
+        for glob, path in self.SAMPLES.items():
+            with self.subTest(glob=glob):
+                self.assertTrue(any(self.owned(p, path) for p in patterns), f"{path} has no CODEOWNERS entry")
+
+    def test_every_codeowners_entry_is_risky(self):
+        for pattern in self.owner_patterns():
+            sample = pattern.lstrip("/")
+            sample = sample + "x.md" if sample.endswith("/") else sample.replace("*", "x")
+            with self.subTest(pattern=pattern):
+                self.assertTrue(self.owned(pattern, sample))
+                self.assertTrue(g.classify_risk([sample]), f"{pattern} is owned but not classified as risky")
+
+
 if __name__ == "__main__":
     unittest.main()
