@@ -1,0 +1,46 @@
+name: sql-reference
+
+# Checks the sqllogictest scripts against PostgreSQL 17 before a change merges. The same check runs
+# every night in nightly.yml (the job is duplicated here; it could become a reusable workflow).
+on:
+  pull_request:
+    paths:
+      - crates/lattice-testkit/tests/slt/**
+      - tools/slt_reference.py
+      - tools/test_slt_reference.py
+      - .github/workflows/sql-reference.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sql-reference-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sql-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: check the sqllogictest scripts against PostgreSQL 17
+        run: python3 tools/slt_reference.py crates/lattice-testkit/tests/slt/*.test 2>&1 | tee sql-reference-report.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sql-reference-report
+          path: sql-reference-report.txt
+          if-no-files-found: warn
+          retention-days: 14
