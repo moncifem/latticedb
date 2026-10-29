@@ -340,7 +340,7 @@ fn independent_typed_capability_fixtures_decode_and_validate_with_current_engine
 fn export_typed_admission_histories_for_frozen_reader() {
     use std::path::Path;
     fn export(disk: &SharedIo, root: &Path, mode: &str) {
-        let mut host = lattice_seams::StdIo::new(".");
+        let mut host = lattice_seams::StdIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         host.create_dir_all(&root.join("wal").display().to_string())
             .unwrap();
         for (name, bytes) in manifest(disk) {
@@ -356,7 +356,11 @@ fn export_typed_admission_histories_for_frozen_reader() {
         .unwrap();
     }
     let root = Path::new("target/typed-admission-cases");
-    assert!(!root.exists(), "export destination must be new");
+    let host = lattice_seams::StdIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    assert!(
+        !host.exists("target/typed-admission-cases"),
+        "export destination must be new"
+    );
     let (disk, clock) = fresh();
     let mut raw = open(&disk, &clock);
     let mut tx = raw.begin();
