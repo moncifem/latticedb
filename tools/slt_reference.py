@@ -81,7 +81,7 @@ def check(path):
         skip_next = False
         if words[0] == "statement":
             sql = block(False)
-            if skip:
+            if skip or words[1:3] == ["error", "0A000"]:
                 continue
             rc, _, err = psql(sql)
             if words[1] == "ok":
@@ -90,8 +90,6 @@ def check(path):
                     bad += 1
                 continue
             code = words[2] if len(words) > 2 else None
-            if code == "0A000":
-                continue
             if rc == 0:
                 print(f"{path}: expected an error: {sql!r}")
                 bad += 1

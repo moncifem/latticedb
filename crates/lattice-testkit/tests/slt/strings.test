@@ -81,6 +81,7 @@ query T nosort
 SELECT w FROM words WHERE w LIKE '%e' ORDER BY w
 ----
 apple
+applesauce
 
 query T nosort
 SELECT w FROM words WHERE w NOT LIKE '%a%' ORDER BY w
