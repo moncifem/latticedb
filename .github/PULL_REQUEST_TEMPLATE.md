@@ -21,6 +21,8 @@ Part of #  (or Closes #)
 
 ## New dependencies (delete if none)
 
+Checklist and the security-critical set: `docs/dependency-policy.md`.
+
 - Name and version:
 - Why it is needed and why no existing crate or std covers it:
 - Licence (must be in `deny.toml`), size, and maintenance status:

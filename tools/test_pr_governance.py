@@ -22,6 +22,7 @@ class ClassifyRisk(unittest.TestCase):
             "workflows": ".github/workflows/pr.yml",
             "protection": "tools/branch-protection.json",
             "rfc-adr": "docs/adr/0019-managed-indexes.md",
+            "dependencies": "Cargo.toml",
         }
         for area, path in cases.items():
             with self.subTest(area=area):
@@ -33,6 +34,25 @@ class ClassifyRisk(unittest.TestCase):
         self.assertEqual(g.classify_risk(["docs/rfc/0005-x.md"]), {"rfc-adr"})
         self.assertEqual(g.classify_risk([".github/CODEOWNERS"]), {"workflows"})
         self.assertEqual(g.classify_risk(["tools/pr_governance.py"]), {"protection"})
+
+    def test_dependency_files(self):
+        for path in ["Cargo.toml", "Cargo.lock", "deny.toml"]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {"dependencies"})
+        self.assertEqual(g.classify_risk(["Cargo.lock", "docs/x.md"]), {"dependencies"})
+
+    def test_crate_manifests_are_not_dependency_risk(self):
+        # Only the root files are listed; crate manifests follow their crate's own rules.
+        for path in [
+            "crates/lattice-seams/Cargo.toml",
+            "fuzz/Cargo.toml",
+            "xtask/Cargo.toml",
+            "my-deny.toml",
+            "docs/Cargo.lock",
+        ]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), set())
+        self.assertEqual(g.classify_risk(["crates/lattice-core/Cargo.toml"]), {"kernel"})
 
     def test_not_risky(self):
         for path in [

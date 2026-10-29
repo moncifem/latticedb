@@ -21,6 +21,7 @@ lists the same paths. Keep the three in step.
 | workflows | `.github/**` |
 | protection | `tools/branch-protection.json`, `tools/pr_governance.py`, `tools/test_pr_governance.py` |
 | rfc-adr | `docs/rfc/**`, `docs/adr/**` |
+| dependencies | `Cargo.toml`, `Cargo.lock`, `deny.toml` (root files only) |
 
 ## The `reviewed` label
 
@@ -56,6 +57,11 @@ Every review states the head commit it covered and what it did not check.
   required check is weakened.
 - **protection**: the change matches what the owner agreed for branch protection, required checks are
   not removed, and the governance tool and its tests still classify every area above.
+- **dependencies**: the checklist in [`docs/dependency-policy.md`](dependency-policy.md): licence,
+  maintainers, unsafe, build scripts and transitive footprint of anything new; the lockfile diff
+  matches the manifest change; the security-critical crates (`rustls`, `ring`, `subtle`, `sha2`,
+  `pbkdf2`, `hmac`) change only in a dedicated pull request with the audit notes updated; no
+  `deny.toml` rule relaxed to make a build pass.
 - **rfc-adr**: the decision is stated with alternatives, claims match the evidence, and the status
   (proposed, accepted) matches what the owner decided.
 

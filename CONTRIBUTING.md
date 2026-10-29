@@ -9,6 +9,7 @@
 6. Fill in the pull-request template: invariants touched, tests added, eval or benchmark deltas,
    format change flag.
 7. Format or wire changes need an RFC (`docs/rfc`) and an ADR (`docs/adr`).
+8. A new dependency follows `docs/dependency-policy.md`; answer its checklist in the pull request.
 
 See `docs/agent-workflow.md` for the full contributor and agent workflow (claiming work, worktrees, load limits, review and merge).
 

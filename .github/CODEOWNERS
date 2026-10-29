@@ -13,3 +13,6 @@
 /tools/pr_governance.py @moncifem
 /docs/rfc/ @moncifem
 /docs/adr/ @moncifem
+/Cargo.toml @moncifem
+/Cargo.lock @moncifem
+/deny.toml @moncifem

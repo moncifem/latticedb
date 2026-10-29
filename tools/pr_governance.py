@@ -47,6 +47,9 @@ RISK_RULES = (
         ),
     ),
     ("rfc-adr", ("docs/rfc/**", "docs/adr/**")),
+    # Root manifest, lockfile and cargo-deny policy: where dependencies and their licences are
+    # decided (docs/dependency-policy.md). Exact names, so crate manifests are not matched here.
+    ("dependencies", ("Cargo.toml", "Cargo.lock", "deny.toml")),
 )
 
 MAX_OPEN_PRS = 200
