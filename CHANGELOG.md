@@ -50,6 +50,16 @@ between minor versions; format changes are called out explicitly.
 - Secondary index primitives derived from row writes, rebuilt during recovery and readable at old
   snapshots, with consistency checks and a planted stale-index defect to verify the checker.
 
+- A bounded PostgreSQL development TCP listener for `latticed`, driving simple/extended sessions
+  with a `SELECT 1` placeholder, frame deadlines and explicit shutdown. It uses plaintext/trust auth
+  and does not open a database.
+- Bounded cancel-key registration and per-query tokens, plus row-policy hooks, seam-clock deadlines
+  and live-memory reservations. Store, listener and executor enforcement remain separate work.
+- **Breaking (engine API):** snapshot reads now return errors below the vacuum floor, including
+  transaction-local reads and index lookups. Vacuum prunes derived commit metadata; timestamp
+  resolution clamps to the floor and threshold maintenance respects retention/oldest-open inputs.
+  WAL history and kernel deduplication state are retained.
+
 ### Changed
 
 - **Breaking (core API):** `Kernel::open` and `Log::open` no longer return every record. Recovery now holds

@@ -12,8 +12,9 @@ The goal is to connect what the team knows, what it is building and what actuall
 
 **[Explore the architecture](docs/ARCHITECTURE.md) · [Follow the roadmap](https://github.com/users/moncifem/projects/1) · [Get involved](CONTRIBUTING.md)**
 
-> **Pre-alpha.** The storage kernel and early row engine work today. There is no running server,
-> SQL interface or connected team workspace yet. The Phase 1 gate remains open; Phase 2 development
+> **Pre-alpha.** The storage kernel and early row engine work today. A development TCP listener
+> answers `SELECT 1`; storage-backed SQL execution and the connected team workspace are still ahead.
+> The Phase 1 gate remains open; Phase 2 development
 > is proceeding under a [documented waiver](docs/gates/phase-1-review.md). Use test data only.
 
 ## Why build another database?
@@ -34,8 +35,10 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Built | What it does |
 |---|---|
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
-| Row engine | Snapshot reads, `AS OF` a change set or a timestamp, write conflicts, a versioned catalog and secondary indexes rebuilt from the log |
-| Wire protocol | A fuzzed PostgreSQL v3 message codec (startup, simple and extended query). There is no server loop or SQL yet |
+| Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, replayed indexes and in-memory version vacuum; reads below the vacuum floor return an error |
+| Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; trust authentication, plaintext and a `SELECT 1` placeholder handler |
+| SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
+| Statement controls | Row-policy, cancellation, deadline and memory-budget primitives; store/executor enforcement is not wired yet |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
 | Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
 
@@ -47,7 +50,7 @@ flowchart TB
   end
   subgraph have["Works today"]
     direction TB
-    ifc["Interfaces: wire codec, CLI, LSL schemas"]
+    ifc["Interfaces: development TCP listener, CLI, SQL/LSL parsers"]
     eng["Storage engine: row engine, AS OF reads, indexes, catalog"]
     ker["Durable kernel: WAL, recovery, commit logic, checkpoints"]
     ver["Verification: simulator, fuzzing, mutation tests, TLA+, Miri, ASan"]
@@ -57,7 +60,7 @@ flowchart TB
   ahead -.-> have
 ```
 
-SQL, PostgreSQL clients, live sync, policy enforcement and the connected workspace are still ahead.
+Storage-backed SQL execution, PostgreSQL driver conformance, live sync, policy enforcement and the connected workspace are still ahead.
 See the [delivery plan](docs/spec/README.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
 
 ## Try the foundations
@@ -78,6 +81,17 @@ cargo xtask sim --seeds 1000                  # replay crashes across five fault
 cargo run -p lattice-cli -- doctor --dir path/to/data
 cargo run -p lattice-cli -- lsl compat old.lsl new.lsl
 ```
+
+To try the development listener from the current source tree:
+
+```bash
+cargo run -p latticed -- --listen 127.0.0.1:5432 --max-connections 32
+```
+
+Keep stdin open, then enter `shutdown` to stop cleanly; EOF also stops it. This placeholder uses
+plaintext and trust authentication and does not open a database. See the
+[listener guide](crates/latticed/README.md) for timeouts and supported behavior. Published nightly
+archives may predate these source changes.
 
 <details>
 <summary><strong>How the foundation is checked</strong></summary>

@@ -127,3 +127,34 @@ memory/time measurements; vacuum; SQL parser, planner and executor; PostgreSQL w
 conformance; branches and SQL time travel; online schema changes; and complete Phase 2 simulation,
 benchmark and north-star evidence. The Phase 1 nightly/fuzz history and final gate review also remain
 open. Track partial acceptance on [the roadmap](https://github.com/users/moncifem/projects/1).
+
+
+## Merged development adapters and vacuum follow-ups (2026-10-29)
+
+PRs [197](https://github.com/moncifem/latticedb/pull/197),
+[199](https://github.com/moncifem/latticedb/pull/199),
+[200](https://github.com/moncifem/latticedb/pull/200) and
+[201](https://github.com/moncifem/latticedb/pull/201) merged after all six required checks passed.
+
+- `latticed` drives the existing simple/extended sans-I/O session over bounded TCP workers, with
+  complete-frame read deadlines, write timeouts and explicit shutdown. Six independent socket tests
+  passed locally; portability testing caught and fixed macOS accepted-socket nonblocking inheritance.
+  The handler only answers `SELECT 1`, uses plaintext/trust authentication and opens no database.
+  Authentication, TLS, cancellation routing, query execution and driver conformance remain open.
+- `lattice-api::cancel` has a bounded RNG-seam credential registry, expiry and one-way per-query
+  tokens. Its fixed-capacity arithmetic-mask lookup is not a formal platform timing proof. The
+  registry is not connected to the TCP listener or query executor yet.
+- `lattice-engines::limits` provides per-row read/write policy hooks, explicit allow/deny policies,
+  seam-clock deadlines, cancellation and live-byte reservation accounting. Unit/property tests
+  validate these primitives; no scan/write policy enforcement, query abort/rollback or allocator RSS
+  limit is claimed before integration. WP32 remains open.
+- Vacuum now prunes row commit-time/id metadata below its floor while preserving kernel dedupe and
+  all WAL bytes. Public row/index/table/transaction reads return `SnapshotTooOld` below the floor,
+  including absent-key and transaction-local reads; expired read-only commits also fail. Timestamp
+  resolution clamps to the floor, and threshold maintenance respects explicit retention/oldest-open
+  inputs. Replay-then-vacuum equivalence and byte-unchanged WAL tests pass. Recovery still restores
+  retained WAL history; benchmark acceptance and complete P2-19 evidence remain open.
+
+These changes do not sign Phase 1 or establish a Phase 2 exit criterion. Earlier missing-work lists
+above are historical snapshots: vacuum and the TCP development adapter are now implemented to the
+scope described here; the SQL parser exists, while the planner/executor and wire-driver gate do not.
