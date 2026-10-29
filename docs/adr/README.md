@@ -16,6 +16,7 @@
 | [0012](0012-row-write-payload.md) | ADR 0012: Row writes travel in the change set payload | accepted |
 | [0013](0013-sql-planner-and-executor.md) | ADR 0013: SQL planner and executor | proposed |
 | [0014](0014-derived-row-indexes.md) | ADR 0014: Secondary indexes are derived from committed rows | accepted |
+| [0015](0015-persisted-typed-schemas.md) | ADR 0015: Persist schemas with typed rows' writer-layout versions | proposed |
 | [0018](0018-schema-change-strategy.md) | ADR 0018: Online schema changes through shadow generations | proposed |
 | [0019](0019-catalog-managed-indexes.md) | ADR 0019: Managed index definitions in atomic catalog and row changes | accepted |
 | [0020](0020-pgwire-scram-sha256.md) | ADR 0020: PostgreSQL SCRAM-SHA-256 primitives with explicit authentication phases | accepted |

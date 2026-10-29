@@ -9,6 +9,10 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Proposed persisted typed-schema integration: immutable original writer layouts and raw/compound
+  schema validation share the guarded row/catalog/index writer. RFC 0001 / ADR 0015 remain proposed;
+  typed capability 4 and LCIX v2 are not accepted by this implementation or a green check.
+
 - `RowStore::try_snapshot_as_of_hlc`: strict full-HLC predecessor resolution returns
   `SnapshotTooOld` for expired history while the existing helper retains its floor clamp.
   This is a storage API; SQL timestamp execution and SQLSTATE mapping remain pending.

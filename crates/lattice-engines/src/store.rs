@@ -15,7 +15,7 @@ use crate::limits::{
 use crate::mvcc::{MvccError, Snapshot, Table, Tx};
 use crate::rowops::{self, RowKey, RowOpsError};
 use lattice_abi::{Classify, ErrorClass, Hlc};
-use lattice_core::admission::MANAGED_COMPOUND;
+use lattice_core::admission::{MANAGED_COMPOUND, TYPED_SCHEMA};
 use lattice_core::bugs::{self, Bug};
 use lattice_core::changeset::{ChangeSet, ChangeSetId};
 use lattice_core::record::RecordType;
@@ -90,6 +90,8 @@ pub enum RowError {
     PermissionDenied,
     /// The catalog or managed index definition change is invalid; nothing was written.
     InvalidCatalog(CatalogError),
+    /// A raw or compound row write violates its persisted typed schema.
+    InvalidTyped(String),
     /// The writes do not fit the payload format.
     Encode(RowOpsError),
 }
@@ -112,6 +114,7 @@ impl fmt::Display for RowError {
             RowError::Corrupt(why) => write!(f, "row data corrupt: {why}"),
             RowError::InvalidIndexes(why) => write!(f, "invalid index definitions: {why}"),
             RowError::InvalidCatalog(error) => write!(f, "invalid catalog change: {error}"),
+            RowError::InvalidTyped(why) => write!(f, "invalid typed row: {why}"),
             RowError::Encode(e) => write!(f, "cannot encode writes: {e:?}"),
             RowError::PermissionDenied => f.write_str("row write denied"),
         }
@@ -128,7 +131,8 @@ impl Classify for RowError {
             RowError::Encode(_)
             | RowError::InvalidIndexes(_)
             | RowError::PermissionDenied
-            | RowError::InvalidCatalog(_) => ErrorClass::Rejected,
+            | RowError::InvalidCatalog(_)
+            | RowError::InvalidTyped(_) => ErrorClass::Rejected,
         }
     }
 }
@@ -162,6 +166,33 @@ pub struct VacuumStats {
     pub index_versions: usize,
 }
 
+// Catalog-only validation cannot see uncataloged physical row ids. The shared row/catalog
+// boundary must reject assigning a typed layout to any id with older untyped row history.
+fn check_schema_history(
+    catalog: &Catalog,
+    row_tables: &std::collections::BTreeSet<u32>,
+    ops: &[CatalogOp],
+) -> Result<(), CatalogError> {
+    for op in ops {
+        if let CatalogOp::DefineSchema { tables, .. } = op {
+            for table in tables.keys() {
+                if row_tables.contains(table)
+                    && catalog.layout_at(*table, catalog.applied_lsn()).is_none()
+                {
+                    return Err(CatalogError::IdUsed(*table));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn typed_writes(catalog: &Catalog, writes: &[crate::rowops::RowWrite]) -> bool {
+    writes
+        .iter()
+        .any(|((table, _), _)| catalog.has_typed_history(*table))
+}
+
 /// Rows over the kernel.
 pub struct RowStore<I: Io, C: Clock, R: Rng> {
     kernel: Kernel<I, C, R>,
@@ -169,6 +200,7 @@ pub struct RowStore<I: Io, C: Clock, R: Rng> {
     indexes: Indexes,
     catalog: Catalog,
     legacy_indexes: bool,
+    row_tables: std::collections::BTreeSet<u32>,
     /// Commit LSN and timestamp of each row change set at or above the vacuum floor. The HLC grows
     /// with the LSN, so `AS OF` can name a retained point by change set or by time.
     commit_lsn: std::collections::BTreeMap<ChangeSetId, u64>,
@@ -206,8 +238,13 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let mut catalog = Catalog::new();
         let mut commit_lsn = std::collections::BTreeMap::new();
         let mut commit_times: Vec<(Hlc, u64, ChangeSetId)> = Vec::new();
+        let mut row_tables = std::collections::BTreeSet::new();
         let mut failure: Option<RowError> = None;
-        let supported = if legacy_indexes { 0 } else { MANAGED_COMPOUND };
+        let supported = if legacy_indexes {
+            0
+        } else {
+            MANAGED_COMPOUND | TYPED_SCHEMA
+        };
         let (kernel, _, _) = Kernel::open_streaming_with_capabilities(
             io,
             clock,
@@ -242,9 +279,17 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                                 "callback mode cannot replay managed compound changes".into(),
                             ));
                         }
+                        if cs.payload.get(4) == Some(&2)
+                            && context.required_capabilities & TYPED_SCHEMA == 0
+                        {
+                            return Err(RowError::Corrupt("unguarded typed compound".into()));
+                        }
                         let change = catalog::decode_compound(&cs.payload).map_err(|e| {
                             RowError::Corrupt(format!("compound at lsn {}: {e}", r.lsn))
                         })?;
+                        check_schema_history(&catalog, &row_tables, &change.tables).map_err(
+                            |e| RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn)),
+                        )?;
                         let mut next = catalog.clone();
                         next.apply_change(r.lsn, &change.tables, &change.indexes)
                             .map_err(|e| {
@@ -252,7 +297,15 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                             })?;
                         (change.rows, Some(next))
                     } else if catalog::is_catalog_payload(&cs.payload) {
+                        if cs.payload.get(4) == Some(&2)
+                            && context.required_capabilities & TYPED_SCHEMA == 0
+                        {
+                            return Err(RowError::Corrupt("unguarded typed catalog".into()));
+                        }
                         let ops = catalog::decode(&cs.payload).map_err(|e| {
+                            RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
+                        })?;
+                        check_schema_history(&catalog, &row_tables, &ops).map_err(|e| {
                             RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
                         })?;
                         let mut next = catalog.clone();
@@ -270,6 +323,16 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                     } else {
                         return Ok(false);
                     };
+                    let governing = next_catalog.as_ref().unwrap_or(&catalog);
+                    if typed_writes(governing, &writes)
+                        && context.required_capabilities & TYPED_SCHEMA == 0
+                    {
+                        return Err(RowError::Corrupt("unguarded typed row writes".into()));
+                    }
+                    crate::typed_store::validate_writes(governing, &writes).map_err(|e| {
+                        RowError::Corrupt(format!("typed rows at lsn {}: {e}", r.lsn))
+                    })?;
+                    row_tables.extend(writes.iter().map(|((table, _), _)| *table));
                     if bugs::active(Bug::RowRecoveryDropsDeletes) {
                         writes.retain(|(_, value)| value.is_some());
                     }
@@ -315,11 +378,18 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 indexes,
                 catalog,
                 legacy_indexes,
+                row_tables,
                 commit_lsn,
                 commit_times,
                 stale: false,
             }),
         }
+    }
+
+    /// Whether a physical table id has ever appeared in a durable row write or tombstone.
+    /// Vacuum does not release ids; recovery rebuilds the reservation from the full WAL.
+    pub fn has_table_history(&self, table: u32) -> bool {
+        self.row_tables.contains(&table)
     }
 
     /// Versioned table and managed-index definitions recovered from the shared WAL.
@@ -363,13 +433,29 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         if !bugs::active(Bug::RowConflictCheckSkipped) {
             tx.inner.check(&self.table).map_err(mvcc_error)?;
         }
-        let (_, definitions) = self
-            .catalog
-            .check_change(&tables, &indexes)
+        check_schema_history(&self.catalog, &self.row_tables, &tables)
             .map_err(RowError::InvalidCatalog)?;
+        let mut next_catalog = self.catalog.clone();
+        // The tentative LSN is used only for pre-append validation; publication uses the receipt.
+        next_catalog
+            .apply_change(
+                self.catalog.applied_lsn().saturating_add(1),
+                &tables,
+                &indexes,
+            )
+            .map_err(RowError::InvalidCatalog)?;
+        let definitions = next_catalog.indexes();
         let snapshot = tx.snapshot();
         let RowTx { inner, policy } = tx;
         let writes = inner.into_writes();
+        crate::typed_store::validate_writes(&next_catalog, &writes)
+            .map_err(RowError::InvalidTyped)?;
+        let required = MANAGED_COMPOUND
+            | if catalog::has_schema(&tables) || typed_writes(&next_catalog, &writes) {
+                TYPED_SCHEMA
+            } else {
+                0
+            };
         if !bugs::active(Bug::RowPolicyWriteSkipped) {
             for ((table, key), after) in &writes {
                 let before = self
@@ -401,9 +487,11 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let id = self.kernel.new_id();
         match self
             .kernel
-            .commit_with_capabilities(ChangeSet::new(id, payload), MANAGED_COMPOUND)
+            .commit_with_capabilities(ChangeSet::new(id, payload), required)
         {
             Ok(Receipt::Recorded { lsn, hlc }) => {
+                self.row_tables
+                    .extend(writes.iter().map(|((table, _), _)| *table));
                 let applied = (|| {
                     self.table.apply(lsn, id, writes).map_err(mvcc_error)?;
                     self.indexes
@@ -753,6 +841,13 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let snapshot = tx.snapshot();
         let RowTx { inner, policy } = tx;
         let writes = inner.into_writes();
+        crate::typed_store::validate_writes(&self.catalog, &writes)
+            .map_err(RowError::InvalidTyped)?;
+        let required = if typed_writes(&self.catalog, &writes) {
+            TYPED_SCHEMA
+        } else {
+            0
+        };
         if !bugs::active(Bug::RowPolicyWriteSkipped) {
             for ((table, key), after) in &writes {
                 let before = self
@@ -773,13 +868,18 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         }
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
         let id = self.kernel.new_id();
-        match self.kernel.commit(ChangeSet::new(id, payload)) {
+        match self
+            .kernel
+            .commit_with_capabilities(ChangeSet::new(id, payload), required)
+        {
             Ok(Receipt::Recorded { lsn, hlc }) => {
                 let writes: Vec<_> = if bugs::active(Bug::RowPartialApply) {
                     writes.into_iter().take(1).collect()
                 } else {
                     writes
                 };
+                self.row_tables
+                    .extend(writes.iter().map(|((table, _), _)| *table));
                 let changes = self
                     .indexes
                     .changes_for(&self.table, &writes)

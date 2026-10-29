@@ -291,3 +291,21 @@ empty/pre-first/future snapshots, retention floors, recovery and reapplied vacuu
 Local focused verification passed five strict-HLC tests (including the planted defect witness), four
 existing vacuum regressions and the 38-bit registry uniqueness check. Touched engine/core Clippy passed.
 This is bounded API evidence, not full SQL conformance or soak-volume evidence.
+
+
+## Proposed guarded typed-catalog integration (P2-01/P2-02)
+
+RFC 0001 and ADR 0015 remain draft/proposed; resuming their preserved implementation does not accept
+a format, waive review or choose a checkpoint. The integration retains the old six-commit typed
+proposal's checked LSL schemas, writer-layout versions, raw-history id reservations, transaction
+fencing and raw commit/replay validation. It uses the current RowStore's one guarded writer,
+managed-index publication, policy checks and strict HLC API. Proposed typed capability 4 is distinct
+from accepted managed capability 1 and leaves reserved/unknown value 2 unchanged. Accepted LCIX v1
+retains nested LCAT v1; only proposed LCIX v2 permits nested LCAT v2.
+
+Local bounded checks passed all 16 preserved typed-store tests, seven new typed admission/semantic
+tests, 25 existing managed-index tests, five strict-HLC tests, 11 catalog integration/edge tests,
+seven existing core admission tests and the 39-guard u64 uniqueness check. Hosted-only exports were
+not counted as local passes. Independent Python typed-capability fixtures and an actual frozen
+45926c7 reader workflow are provided; their execution evidence is pending. This is not a power-loss
+soak, complete SQL type implementation, online migration, branch implementation or phase-gate claim.

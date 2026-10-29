@@ -44,3 +44,16 @@ predecessor has expired. An empty snapshot before the first commit is valid unti
 it. The existing `snapshot_as_of_hlc` intentionally keeps its floor-clamping behavior. Reopening
 restores history from the WAL; reapplying vacuum restores the retention boundary. This is a storage
 API: SQL timestamp parsing, microsecond conversion and SQLSTATE mapping remain executor work.
+
+## Proposed persisted typed schemas
+
+`TypedStore` compiles canonical LSL into persisted immutable writer layouts over the existing
+RowStore/Kernel writer. It keeps schema/version identity, historical layout decoding, raw-table id
+reservations, typed validation at raw/compound commit and replay, policy-bound transactions and
+strict HLC/retention checks. Managed indexes keep their physical-byte key semantics; this does not
+add SQL column-index extraction or the complete SQL type system.
+
+RFC 0001 / ADR 0015 remain draft/proposed. Proposed typed capability 4 protects LCAT v2 and typed
+writes; proposed LCIX v2 nests typed schema operations under mask 5. Existing LCIX v1 and legacy
+bytes remain unchanged. Callback readers advertise zero and catalog-only readers do not advertise
+typed semantics. A guarded-history upgrade has no automatic downgrade; use disposable review data.

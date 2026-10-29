@@ -1,0 +1,60 @@
+name: typed-admission
+on:
+  pull_request:
+    paths:
+      - 'crates/lattice-core/**'
+      - 'crates/lattice-engines/**'
+      - 'crates/lattice-lsl/**'
+      - 'crates/lattice-seams/**'
+      - 'crates/lattice-sim/**'
+      - 'formats/catalog-v2.md'
+      - 'formats/catalog-index-v2.md'
+      - 'formats/typed-envelope-v1.md'
+      - 'formats/corpus/typed-*'
+      - 'formats/corpus/catalog-v2-*'
+      - 'formats/generate_typed_catalog_golden.py'
+      - 'tools/typed-admission/**'
+      - 'tools/wal-admission/make_fixtures.py'
+      - '.github/workflows/typed-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frozen-typed-reader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: moncifem/latticedb
+          ref: 45926c7fc1f6fa71a7a69ac858c805ab1d9679b0
+          path: frozen
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - name: Independent proposed fixtures and current typed semantics
+        run: |
+          set -euo pipefail
+          python3 formats/generate_typed_catalog_golden.py
+          python3 tools/typed-admission/make_fixtures.py
+          git diff --exit-code -- formats/corpus
+          cargo test --locked -p lattice-engines --test typed_store --test typed_admission -- --nocapture 2>&1 | tee typed-semantics.log
+          cargo test --locked -p lattice-engines --test typed_admission export_typed_admission_histories_for_frozen_reader -- --ignored --nocapture 2>&1 | tee typed-export.log
+      - name: Build actual immutable reader and verify refusal before callbacks or repair
+        run: |
+          set -euo pipefail
+          mkdir -p frozen/crates/lattice-engines/examples
+          cp tools/typed-admission/old_reader.rs frozen/crates/lattice-engines/examples/typed_old_reader.rs
+          cargo build --manifest-path frozen/Cargo.toml --locked -p lattice-engines --example typed_old_reader --target-dir target/frozen-typed-reader 2>&1 | tee typed-frozen-build.log
+          python3 tools/typed-admission/verify_old_reader.py target/frozen-typed-reader/debug/examples/typed_old_reader
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: evidence-typed-admission
+          path: |
+            typed-semantics.log
+            typed-export.log
+            typed-frozen-build.log
+            typed-admission-old-reader.json
+            target/typed-admission-cases/
+          if-no-files-found: error
