@@ -1,0 +1,378 @@
+//! Independent byte, admission and durability witnesses for the proposed WAL guard.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+use crate::admission::{self, MANAGED_COMPOUND, RecoveryContext};
+use crate::record::{self, Record};
+use crate::{ChangeSet, ChangeSetId, Config, Kernel, Log, LogError};
+use lattice_seams::{Io, IoError};
+use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+const HEADER: &[u8] = include_bytes!("../../../formats/corpus/wal-admission-v2-header.golden");
+const COMPOUND: &[u8] = include_bytes!("../../../formats/corpus/wal-admission-v2-compound.golden");
+const UNKNOWN_CAP: &[u8] =
+    include_bytes!("../../../formats/corpus/wal-admission-v2-unknown-capability.golden");
+const UNKNOWN_VERSION: &[u8] =
+    include_bytes!("../../../formats/corpus/wal-admission-v2-unknown-version.golden");
+const LEGACY: &[u8] = include_bytes!("../../../formats/corpus/wal-admission-v1-legacy.golden");
+const FIRST: &str = "wal/00000000000000000001.seg";
+
+#[derive(Clone)]
+struct Disk(Rc<RefCell<SimIo>>, Rc<Cell<usize>>);
+impl Disk {
+    fn new() -> Self {
+        Self(
+            Rc::new(RefCell::new(SimIo::new(3, FaultProfile::clean()))),
+            Rc::new(Cell::new(0)),
+        )
+    }
+    fn manifest(&self) -> Vec<(String, Vec<u8>)> {
+        self.list("wal")
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.ends_with(".seg"))
+            .map(|p| {
+                let b = self.read(&format!("wal/{p}")).unwrap();
+                (p, b)
+            })
+            .collect()
+    }
+}
+impl Io for Disk {
+    fn exists(&self, p: &str) -> bool {
+        self.0.borrow().exists(p)
+    }
+    fn len(&self, p: &str) -> Result<u64, IoError> {
+        self.0.borrow().len(p)
+    }
+    fn read(&self, p: &str) -> Result<Vec<u8>, IoError> {
+        self.1.set(self.1.get() + 1);
+        self.0.borrow().read(p)
+    }
+    fn read_prefix(&self, p: &str, n: usize) -> Result<Vec<u8>, IoError> {
+        assert!(n <= 32);
+        self.0.borrow().read_prefix(p, n)
+    }
+    fn append(&mut self, p: &str, b: &[u8]) -> Result<(), IoError> {
+        self.0.borrow_mut().append(p, b)
+    }
+    fn truncate(&mut self, p: &str, n: u64) -> Result<(), IoError> {
+        self.0.borrow_mut().truncate(p, n)
+    }
+    fn sync(&mut self, p: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().sync(p)
+    }
+    fn sync_dir(&mut self, p: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().sync_dir(p)
+    }
+    fn list(&self, p: &str) -> Result<Vec<String>, IoError> {
+        self.0.borrow().list(p)
+    }
+    fn remove(&mut self, p: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().remove(p)
+    }
+    fn create_dir_all(&mut self, p: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().create_dir_all(p)
+    }
+    fn lock(&mut self, p: &str) -> Result<(), IoError> {
+        self.0.borrow_mut().lock(p)
+    }
+    fn unlock(&mut self, p: &str) {
+        self.0.borrow_mut().unlock(p)
+    }
+}
+fn plant(disk: &mut Disk, path: &str, bytes: &[u8]) {
+    disk.create_dir_all("wal").unwrap();
+    disk.sync_dir("").unwrap();
+    disk.append(path, bytes).unwrap();
+    disk.sync(path).unwrap();
+    disk.sync_dir("wal").unwrap();
+}
+fn open(disk: &Disk) -> Log<Disk> {
+    Log::open_streaming_with_capabilities(disk.clone(), "wal", 1 << 20, 1, |_, _| {})
+        .unwrap()
+        .0
+}
+
+#[test]
+fn independent_headers_and_compound_fixture_pin_exact_bytes_and_context() {
+    assert_eq!(admission::guarded_header(1).unwrap(), HEADER);
+    assert_eq!(record::segment_header(), LEGACY);
+    let parsed = admission::decode_header(HEADER).unwrap();
+    assert_eq!((parsed.length, parsed.required_capabilities), (32, 1));
+    assert!(matches!(
+        admission::decode_header(&UNKNOWN_VERSION[..16]),
+        Err(admission::HeaderError::Invalid(_))
+    ));
+    let mut unknown_length = HEADER[..16].to_vec();
+    unknown_length[12] = 16;
+    assert!(matches!(
+        admission::decode_header(&unknown_length),
+        Err(admission::HeaderError::Invalid(_))
+    ));
+    for bytes in [UNKNOWN_CAP, UNKNOWN_VERSION] {
+        assert!(admission::decode_header(bytes).is_err());
+    }
+    for n in 0..32 {
+        assert!(admission::decode_header(&HEADER[..n]).is_err());
+    }
+    for n in 0..32 {
+        let mut b = HEADER.to_vec();
+        b[n] ^= 1;
+        assert!(admission::decode_header(&b).is_err());
+    }
+    let mut disk = Disk::new();
+    plant(&mut disk, FIRST, COMPOUND);
+    let mut observed = Vec::new();
+    let (kernel, report, _) = Kernel::open_streaming_with_capabilities(
+        disk,
+        SimClock::new(2),
+        SeededRng::new(3),
+        &Config::default(),
+        1,
+        |r, c| observed.push((r, c)),
+    )
+    .unwrap();
+    assert_eq!(report.records, 1);
+    assert_eq!(observed[0].1.required_capabilities, 1);
+    let cs = ChangeSet::decode(&observed[0].0.payload).unwrap();
+    assert_eq!(cs.id, ChangeSetId::from_bytes(1u128.to_be_bytes()));
+    assert_eq!(&cs.payload[..5], b"LCIX\x01");
+    assert_eq!(cs.payload.len(), 96);
+    assert!(kernel.scrub().unwrap().is_clean());
+    assert_eq!(kernel.read_from_with_context(1, 2).unwrap(), observed);
+}
+
+#[test]
+fn unsupported_later_header_refuses_before_any_record_read_callback_or_tail_repair() {
+    let mut disk = Disk::new();
+    let mut first = LEGACY.to_vec();
+    first.extend(record::encode_record(1, 42, b"legacy"));
+    plant(&mut disk, FIRST, &first);
+    plant(&mut disk, "wal/00000000000000000002.seg", HEADER);
+    let before = disk.manifest();
+    disk.1.set(0);
+    let calls = Cell::new(0);
+    assert!(matches!(
+        Log::open_streaming(disk.clone(), "wal", 100, |_| calls.set(calls.get() + 1)),
+        Err(LogError::UnsupportedCapabilities {
+            required: 1,
+            supported: 0
+        })
+    ));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(
+        disk.1.get(),
+        0,
+        "preflight must use bounded prefix reads only"
+    );
+    assert_eq!(disk.manifest(), before);
+    // A caller supporting the known bit still refuses an unknown bit with a valid independent CRC.
+    let mut bad = Disk::new();
+    plant(&mut bad, FIRST, UNKNOWN_CAP);
+    let before = bad.manifest();
+    assert!(
+        Log::open_streaming_with_capabilities(bad.clone(), "wal", 100, 1, |_, _| panic!(
+            "callback before admission"
+        ))
+        .is_err()
+    );
+    assert_eq!(bad.manifest(), before);
+}
+
+#[test]
+fn empty_tail_promotion_rollover_context_and_capability_rollback_are_checked() {
+    let disk = Disk::new();
+    let mut log = open(&disk);
+    assert_eq!(log.next_lsn(), 1);
+    assert!(matches!(
+        log.append_with_capabilities(42, b"bad", 2),
+        Err(LogError::UnsupportedCapabilities { .. })
+    ));
+    assert_eq!(log.next_lsn(), 1);
+    assert_eq!(
+        log.append_with_capabilities(42, b"protected", 1).unwrap(),
+        1
+    );
+    assert_eq!(log.sync().unwrap(), 1);
+    assert_eq!(disk.read_prefix(FIRST, 32).unwrap(), HEADER);
+    assert_eq!(
+        log.read_from_with_context(1, 1).unwrap()[0]
+            .1
+            .required_capabilities,
+        1
+    );
+    drop(log);
+    let mut log = Log::open_streaming_with_capabilities(disk.clone(), "wal", 1, 1, |_, _| {})
+        .unwrap()
+        .0;
+    log.append(42, b"ordinary").unwrap();
+    log.sync().unwrap();
+    drop(log);
+    for (_, bytes) in disk.manifest() {
+        assert_eq!(
+            admission::decode_header(&bytes)
+                .unwrap()
+                .required_capabilities,
+            1
+        );
+    }
+    let mut clone = disk.clone();
+    let name = "wal/00000000000000000003.seg";
+    clone.truncate(name, 0).unwrap();
+    clone.append(name, LEGACY).unwrap();
+    assert!(
+        Log::open_streaming_with_capabilities(clone, "wal", 100, 1, |_, _| panic!(
+            "rollback callback"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn kernel_guarded_append_preserves_typestate_dedupe_and_checkpoint_records() {
+    let disk = Disk::new();
+    let (mut k, _, _) = Kernel::open_streaming_with_capabilities(
+        disk.clone(),
+        SimClock::new(2),
+        SeededRng::new(3),
+        &Config::default(),
+        1,
+        |_, _| {},
+    )
+    .unwrap();
+    let cs = ChangeSet::new(
+        ChangeSetId::from_bytes(1u128.to_be_bytes()),
+        b"opaque".to_vec(),
+    );
+    k.commit_with_capabilities(cs.clone(), 1).unwrap();
+    assert_eq!(
+        k.commit_with_capabilities(cs, 1).unwrap(),
+        crate::Receipt::Duplicate
+    );
+    k.checkpoint().unwrap();
+    assert!(k.scrub().unwrap().is_clean());
+    drop(k);
+    assert!(
+        Kernel::open(
+            disk.clone(),
+            SimClock::new(3),
+            SeededRng::new(4),
+            &Config::default()
+        )
+        .is_err()
+    );
+    let (_, report, cp) = Kernel::open_streaming_with_capabilities(
+        disk,
+        SimClock::new(3),
+        SeededRng::new(4),
+        &Config::default(),
+        1,
+        |_, c| assert_eq!(c.required_capabilities, 1),
+    )
+    .unwrap();
+    assert_eq!(report.records, 2);
+    assert!(cp.is_some());
+}
+
+#[cfg(feature = "planted-bugs")]
+#[test]
+fn independent_omitted_guard_witness_has_a_clean_control() {
+    use crate::bugs::{self, Bug};
+    for mutate in [false, true] {
+        let disk = Disk::new();
+        let mut log = open(&disk);
+        if mutate {
+            bugs::enable(Bug::RequiredGuardOmitted);
+        }
+        log.append_with_capabilities(42, b"requires-one", 1)
+            .unwrap();
+        log.sync().unwrap();
+        bugs::clear();
+        let rows = log.read_from_with_context(1, 1).unwrap();
+        let violated = rows[0].1.required_capabilities != 1;
+        assert_eq!(
+            violated, mutate,
+            "literal required-feature oracle must catch an omitted guard"
+        );
+    }
+}
+
+#[test]
+#[ignore = "bounded upgrade power-cut matrix runs on hosted WAL admission CI"]
+fn guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption() {
+    for prefix in [false, true] {
+        let mut observed = 0;
+        let mut next_cut = None;
+        loop {
+            let cut = next_cut;
+            let disk = Disk::new();
+            let mut log = open(&disk);
+            if prefix {
+                log.append(42, b"legacy").unwrap();
+                log.sync().unwrap();
+            }
+            let before = disk.0.borrow().mutating_ops();
+            if let Some(cut) = cut {
+                disk.0.borrow_mut().arm_power_cut(cut);
+            }
+            let ack = log
+                .append_with_capabilities(42, b"protected", 1)
+                .and_then(|_| log.sync())
+                .is_ok();
+            if cut.is_none() {
+                observed = disk.0.borrow().mutating_ops() - before;
+                assert!(observed >= 5);
+            }
+            drop(log);
+            disk.0.borrow_mut().crash();
+            let mut records: Vec<(Record, RecoveryContext)> = Vec::new();
+            let (log, _) =
+                Log::open_streaming_with_capabilities(disk.clone(), "wal", 1 << 20, 1, |r, c| {
+                    records.push((r, c))
+                })
+                .unwrap();
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|(r, _)| r.payload == b"legacy")
+                    .count(),
+                usize::from(prefix)
+            );
+            let protected: Vec<_> = records
+                .iter()
+                .filter(|(r, _)| r.payload == b"protected")
+                .collect();
+            assert!(protected.len() <= 1);
+            assert!(!ack || protected.len() == 1);
+            for (_, c) in protected {
+                assert_eq!(c.required_capabilities, MANAGED_COMPOUND);
+            }
+            assert_eq!(log.read_from_with_context(1, 10).unwrap(), records);
+            drop(log);
+            let mut second = Vec::new();
+            let (_, _) = Log::open_streaming_with_capabilities(disk, "wal", 1 << 20, 1, |r, c| {
+                second.push((r, c))
+            })
+            .unwrap();
+            assert_eq!(second, records);
+            next_cut = match cut {
+                None => {
+                    eprintln!(
+                        "guard upgrade prefix={prefix}: observed {observed} mutating operations"
+                    );
+                    Some(0)
+                }
+                Some(n) if n < observed => Some(n + 1),
+                Some(_) => break,
+            };
+        }
+    }
+}

@@ -8,10 +8,11 @@
 //! Only one writer may have a log open: [`Log::open`] takes an exclusive lock that is released when
 //! the log is dropped (or the process dies).
 
+use crate::admission::{self, HeaderError, RecoveryContext, SegmentHeader};
 use crate::bugs::{self, Bug};
 use crate::record::{
-    Decoded, HeaderCheck, MAX_PAYLOAD, RECORD_HEADER_LEN, Record, SEGMENT_HEADER_LEN, check_header,
-    decode_record, encode_record, segment_header, u32_at, u64_at,
+    Decoded, MAX_PAYLOAD, RECORD_HEADER_LEN, Record, SEGMENT_HEADER_LEN, decode_record,
+    encode_record, segment_header, u32_at, u64_at,
 };
 use lattice_abi::{Classify, ErrorClass};
 use lattice_seams::{Io, IoError};
@@ -31,13 +32,23 @@ pub enum LogError {
     /// The record is larger than the format allows. Nothing was queued.
     #[error("record of {0} bytes exceeds the {MAX_PAYLOAD} byte limit")]
     TooLarge(usize),
+    /// This caller does not understand required engine capabilities. No record was queued.
+    #[error("required capabilities {required:#x} exceed supported {supported:#x}")]
+    UnsupportedCapabilities {
+        /// Features required by the segment or append.
+        required: u64,
+        /// Features explicitly supported by this consumer.
+        supported: u64,
+    },
 }
 
 impl Classify for LogError {
     fn class(&self) -> ErrorClass {
         match self {
             LogError::Io(e) => e.class(),
-            LogError::TooLarge(_) => ErrorClass::Rejected,
+            LogError::TooLarge(_) | LogError::UnsupportedCapabilities { .. } => {
+                ErrorClass::Rejected
+            }
             LogError::Corrupt(_) | LogError::Poisoned => ErrorClass::Fatal,
         }
     }
@@ -67,6 +78,9 @@ pub struct Log<I: Io> {
     durable_lsn: u64,
     buffer: Vec<u8>,
     poisoned: bool,
+    supported_capabilities: u64,
+    required_capabilities: u64,
+    header_len: usize,
 }
 
 impl<I: Io> Drop for Log<I> {
@@ -81,6 +95,58 @@ fn seg_name(dir: &str, first_lsn: u64) -> String {
 
 fn first_lsn_of(name: &str) -> Option<u64> {
     name.strip_suffix(".seg")?.parse().ok()
+}
+
+fn admit(required: u64, supported: u64) -> Result<(), LogError> {
+    if required & !supported != 0 || required & !admission::KNOWN_CAPABILITIES != 0 {
+        return Err(LogError::UnsupportedCapabilities {
+            required,
+            supported,
+        });
+    }
+    Ok(())
+}
+
+/// All header admission happens before any recovery callback, repair, truncate or record read.
+fn preflight<I: Io>(
+    io: &I,
+    dir: &str,
+    names: &[(u64, String)],
+    supported: u64,
+) -> Result<Vec<Option<SegmentHeader>>, LogError> {
+    let mut previous = 0;
+    let mut headers = Vec::with_capacity(names.len());
+    for (idx, (_, name)) in names.iter().enumerate() {
+        let bytes = io.read_prefix(&format!("{dir}/{name}"), admission::GUARDED_HEADER_LEN)?;
+        match admission::decode_header(&bytes) {
+            Ok(header) => {
+                admit(header.required_capabilities, supported)?;
+                if previous & !header.required_capabilities != 0 {
+                    return Err(LogError::Corrupt(format!(
+                        "segment {name} drops required capabilities"
+                    )));
+                }
+                previous = header.required_capabilities;
+                headers.push(Some(header));
+            }
+            Err(HeaderError::Incomplete) if idx + 1 == names.len() => headers.push(None),
+            Err(error) => {
+                return Err(LogError::Corrupt(format!(
+                    "segment {name} header: {error:?}"
+                )));
+            }
+        }
+    }
+    Ok(headers)
+}
+
+fn header_bytes(required: u64) -> Result<Vec<u8>, LogError> {
+    if required == 0 {
+        Ok(segment_header())
+    } else {
+        admission::guarded_header(required)
+            .map_err(|e| LogError::Corrupt(format!("guard header: {e:?}")))
+    }
 }
 
 /// Whether a valid record with an LSN above `min_lsn` starts anywhere after `from`. Used to tell a
@@ -135,6 +201,8 @@ struct Recovered {
     current_len: u64,
     next_lsn: u64,
     durable_lsn: u64,
+    required_capabilities: u64,
+    header_len: usize,
 }
 
 /// Scans the log, repairs a torn tail and hands every valid record to `sink` in LSN order, one at a
@@ -142,7 +210,8 @@ struct Recovered {
 fn recover<I: Io>(
     io: &mut I,
     dir: &str,
-    sink: &mut dyn FnMut(Record),
+    supported: u64,
+    sink: &mut dyn FnMut(Record, RecoveryContext),
 ) -> Result<Recovered, LogError> {
     let mut names: Vec<(u64, String)> = io
         .list(dir)?
@@ -150,6 +219,9 @@ fn recover<I: Io>(
         .filter_map(|n| first_lsn_of(&n).map(|l| (l, n)))
         .collect();
     names.sort();
+    let headers = preflight(io, dir, &names, supported)?;
+    let mut required = 0;
+    let mut header_len = SEGMENT_HEADER_LEN;
     let mut report = RecoveryReport::default();
     if names.is_empty() {
         let name = seg_name(dir, 1);
@@ -162,10 +234,12 @@ fn recover<I: Io>(
             current_len: SEGMENT_HEADER_LEN as u64,
             next_lsn: 1,
             durable_lsn: 0,
+            required_capabilities: 0,
+            header_len: SEGMENT_HEADER_LEN,
         });
     }
     // One record is held back so the last one can still be dropped by the planted recovery bug.
-    let mut pending: Option<Record> = None;
+    let mut pending: Option<(Record, RecoveryContext)> = None;
     let mut count: u64 = 0;
     let mut expected: u64 = 1;
     let mut current = String::new();
@@ -182,35 +256,39 @@ fn recover<I: Io>(
             )));
         }
         let data = io.read(&path)?;
-        match check_header(&data) {
-            HeaderCheck::Ok => {}
-            HeaderCheck::TooShort | HeaderCheck::BadMagic
-                if is_last && data.len() < SEGMENT_HEADER_LEN =>
-            {
-                // Torn creation of the newest segment: nothing was ever acknowledged in it.
-                io.truncate(&path, 0)?;
-                io.append(&path, &segment_header())?;
-                io.sync(&path)?;
-                report.truncated_bytes += data.len() as u64;
-                current = path;
-                current_len = SEGMENT_HEADER_LEN as u64;
-                report.segments += 1;
-                continue;
-            }
-            other => {
+        let header = headers.get(idx).copied().flatten();
+        if let Some(header) = header {
+            if admission::decode_header(&data) != Ok(header) {
                 return Err(LogError::Corrupt(format!(
-                    "segment {name} header: {other:?}"
+                    "segment {name} header changed after preflight"
                 )));
             }
+            required = header.required_capabilities;
+            header_len = header.length;
+        } else {
+            // Only an incomplete newest creation is repaired. Keep prior required bits.
+            let bytes = header_bytes(required)?;
+            io.truncate(&path, 0)?;
+            io.append(&path, &bytes)?;
+            io.sync(&path)?;
+            report.truncated_bytes += data.len() as u64;
+            current = path;
+            current_len = bytes.len() as u64;
+            header_len = bytes.len();
+            report.segments += 1;
+            continue;
         }
-        let mut off = SEGMENT_HEADER_LEN;
+        let context = RecoveryContext {
+            required_capabilities: required,
+        };
+        let mut off = header_len;
         let mut bad_at: Option<usize> = None;
         while off < data.len() {
             match decode_record(&data, off) {
                 Decoded::Record(r, next) if r.lsn == expected => {
                     expected += 1;
-                    if let Some(prev) = pending.replace(r) {
-                        sink(prev);
+                    if let Some(prev) = pending.replace((r, context)) {
+                        sink(prev.0, prev.1);
                         count += 1;
                     }
                     off = next;
@@ -249,7 +327,7 @@ fn recover<I: Io>(
     if bugs::active(Bug::RecoveryDropsLastRecord)
         && let Some(last) = pending.take()
     {
-        let cut = current_len.saturating_sub((RECORD_HEADER_LEN + last.payload.len()) as u64);
+        let cut = current_len.saturating_sub((RECORD_HEADER_LEN + last.0.payload.len()) as u64);
         io.truncate(&current, cut)?;
         io.sync(&current)?;
         current_len = cut;
@@ -264,7 +342,7 @@ fn recover<I: Io>(
         io.sync_dir(dir)?;
     }
     if let Some(last) = pending.take() {
-        sink(last);
+        sink(last.0, last.1);
         count += 1;
     }
     report.records = count;
@@ -280,6 +358,8 @@ fn recover<I: Io>(
         current_len,
         next_lsn,
         durable_lsn: last_lsn,
+        required_capabilities: required,
+        header_len,
     })
 }
 
@@ -297,15 +377,28 @@ impl<I: Io> Log<I> {
     /// then turns out to be damaged beyond repair; in that case the open fails and they must be
     /// discarded.
     pub fn open_streaming(
-        mut io: I,
+        io: I,
         dir: &str,
         segment_limit: u64,
         mut visit: impl FnMut(Record),
     ) -> Result<(Self, RecoveryReport), LogError> {
+        Self::open_streaming_with_capabilities(io, dir, segment_limit, 0, |record, _| visit(record))
+    }
+
+    /// Explicit engine admission; `visit` receives the containing segment's required capabilities.
+    /// No callback or repair occurs before the complete header chain passes admission.
+    pub fn open_streaming_with_capabilities(
+        mut io: I,
+        dir: &str,
+        segment_limit: u64,
+        supported: u64,
+        mut visit: impl FnMut(Record, RecoveryContext),
+    ) -> Result<(Self, RecoveryReport), LogError> {
+        admit(supported, admission::KNOWN_CAPABILITIES)?;
         ensure_dir(&mut io, dir)?;
         let lock_path = format!("{dir}/LOCK");
         io.lock(&lock_path)?;
-        match recover(&mut io, dir, &mut visit) {
+        match recover(&mut io, dir, supported, &mut visit) {
             Ok(r) => {
                 let log = Self {
                     io,
@@ -318,6 +411,9 @@ impl<I: Io> Log<I> {
                     durable_lsn: r.durable_lsn,
                     buffer: Vec::new(),
                     poisoned: false,
+                    supported_capabilities: supported,
+                    required_capabilities: r.required_capabilities,
+                    header_len: r.header_len,
                 };
                 Ok((log, r.report))
             }
@@ -331,11 +427,33 @@ impl<I: Io> Log<I> {
     /// Queues a record and returns its LSN. Nothing is durable until [`Log::sync`]. A record the
     /// format cannot hold is rejected before it takes an LSN.
     pub fn append(&mut self, rtype: u8, payload: &[u8]) -> Result<u64, LogError> {
+        self.append_with_capabilities(rtype, payload, 0)
+    }
+
+    /// Queues a record only after its required guard is durable. Refusal consumes no LSN.
+    pub fn append_with_capabilities(
+        &mut self,
+        rtype: u8,
+        payload: &[u8],
+        required: u64,
+    ) -> Result<u64, LogError> {
         if self.poisoned {
             return Err(LogError::Poisoned);
         }
         if payload.len() > MAX_PAYLOAD {
             return Err(LogError::TooLarge(payload.len()));
+        }
+        admit(required, self.supported_capabilities)?;
+        if required & !self.required_capabilities != 0 && !bugs::active(Bug::RequiredGuardOmitted) {
+            // Flush the legacy prefix before changing segment context; never mix a queued batch.
+            self.sync()?;
+            if self.poisoned {
+                return Err(LogError::Poisoned);
+            }
+            if let Err(error) = self.install_guard(self.required_capabilities | required) {
+                self.poisoned = true;
+                return Err(error);
+            }
         }
         let lsn = self.next_lsn;
         self.buffer
@@ -376,7 +494,8 @@ impl<I: Io> Log<I> {
 
     fn rotate(&mut self) -> Result<(), LogError> {
         let name = seg_name(&self.dir, self.next_lsn);
-        self.io.append(&name, &segment_header())?;
+        let bytes = header_bytes(self.required_capabilities)?;
+        self.io.append(&name, &bytes)?;
         if !bugs::active(Bug::RotateHeaderNotSynced) {
             self.io.sync(&name)?;
         }
@@ -384,8 +503,37 @@ impl<I: Io> Log<I> {
             self.io.sync_dir(&self.dir)?;
         }
         self.current = name;
-        self.current_len = SEGMENT_HEADER_LEN as u64;
+        self.current_len = bytes.len() as u64;
+        self.header_len = bytes.len();
         Ok(())
+    }
+
+    fn install_guard(&mut self, required: u64) -> Result<(), LogError> {
+        let bytes = header_bytes(required)?;
+        let path = if self.current_len == self.header_len as u64 {
+            self.io.truncate(&self.current, 0)?;
+            self.current.clone()
+        } else {
+            seg_name(&self.dir, self.next_lsn)
+        };
+        self.io.append(&path, &bytes)?;
+        self.io.sync(&path)?;
+        self.io.sync_dir(&self.dir)?;
+        self.current = path;
+        self.current_len = bytes.len() as u64;
+        self.header_len = bytes.len();
+        self.required_capabilities = required;
+        Ok(())
+    }
+
+    /// Engine capabilities explicitly admitted by this log consumer.
+    pub fn supported_capabilities(&self) -> u64 {
+        self.supported_capabilities
+    }
+
+    /// Cumulative required engine capabilities in this log's current segment.
+    pub fn required_capabilities(&self) -> u64 {
+        self.required_capabilities
     }
 
     /// Highest LSN known durable.
@@ -409,6 +557,19 @@ impl<I: Io> Log<I> {
     /// has been queued or written but not yet acknowledged, and never a partial one. Reading does
     /// not touch the writer's state.
     pub fn read_from(&self, from_lsn: u64, max: usize) -> Result<Vec<Record>, LogError> {
+        Ok(self
+            .read_from_with_context(from_lsn, max)?
+            .into_iter()
+            .map(|(record, _)| record)
+            .collect())
+    }
+
+    /// Explicit durable reads retaining required engine capabilities for every record.
+    pub fn read_from_with_context(
+        &self,
+        from_lsn: u64,
+        max: usize,
+    ) -> Result<Vec<(Record, RecoveryContext)>, LogError> {
         let mut firsts: Vec<u64> = self
             .io
             .list(&self.dir)?
@@ -416,6 +577,11 @@ impl<I: Io> Log<I> {
             .filter_map(|n| first_lsn_of(&n))
             .collect();
         firsts.sort_unstable();
+        let names: Vec<_> = firsts
+            .iter()
+            .map(|first| (*first, format!("{first:020}.seg")))
+            .collect();
+        preflight(&self.io, &self.dir, &names, self.supported_capabilities)?;
         // Nothing is ever deleted from the head of the log, so the first segment starts at lsn 1.
         // If everything up to the durable LSN is claimed, the history must start there.
         if self.durable_lsn >= 1 && firsts.first() != Some(&1) {
@@ -433,12 +599,9 @@ impl<I: Io> Log<I> {
                 continue;
             }
             let data = self.io.read(&seg_name(&self.dir, *first))?;
-            if check_header(&data) != HeaderCheck::Ok {
-                return Err(LogError::Corrupt(format!(
-                    "segment {first} has an invalid header"
-                )));
-            }
-            let mut off = SEGMENT_HEADER_LEN;
+            let header = admission::decode_header(&data)
+                .map_err(|e| LogError::Corrupt(format!("segment {first} header: {e:?}")))?;
+            let mut off = header.length;
             while off < data.len() && out.len() < max {
                 let Decoded::Record(r, next) = decode_record(&data, off) else {
                     break;
@@ -455,7 +618,12 @@ impl<I: Io> Log<I> {
                 }
                 reached = Some(r.lsn);
                 if r.lsn >= from_lsn {
-                    out.push(r);
+                    out.push((
+                        r,
+                        RecoveryContext {
+                            required_capabilities: header.required_capabilities,
+                        },
+                    ));
                 }
                 off = next;
             }
@@ -623,7 +791,7 @@ mod tests {
         io.append(path, &data).unwrap();
         io.sync(path).unwrap();
         io.sync_dir("wal").unwrap();
-        let result = recover(&mut io, "wal", &mut |_| {});
+        let result = recover(&mut io, "wal", 0, &mut |_, _| {});
         assert!(
             matches!(result, Err(LogError::Corrupt(ref why)) if why.contains("valid records follow"))
         );

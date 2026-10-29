@@ -6,6 +6,7 @@
 //! records is also the order of timestamps and no prepared transaction can slip past a fence or an
 //! id reservation made after it was prepared.
 
+use crate::admission::RecoveryContext;
 use crate::bugs::{self, Bug};
 use crate::changeset::{
     ChangeSet, ChangeSetId, Checkpoint, TurnRef, decode_checkpoint, decode_turn_begin,
@@ -115,28 +116,47 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     pub fn open_streaming(
         io: I,
         clock: C,
-        mut rng: R,
+        rng: R,
         config: &Config,
         mut visit: impl FnMut(Record),
+    ) -> Result<(Self, RecoveryReport, Option<Checkpoint>), TxnError> {
+        Self::open_streaming_with_capabilities(io, clock, rng, config, 0, |record, _| visit(record))
+    }
+
+    /// Explicit engine admission with segment context for every recovered record.
+    /// Default open methods support no required engine capabilities and refuse guarded histories.
+    pub fn open_streaming_with_capabilities(
+        io: I,
+        clock: C,
+        mut rng: R,
+        config: &Config,
+        supported: u64,
+        mut visit: impl FnMut(Record, RecoveryContext),
     ) -> Result<(Self, RecoveryReport, Option<Checkpoint>), TxnError> {
         let mut seen = BTreeSet::new();
         let mut turns: BTreeMap<u64, u64> = BTreeMap::new();
         let mut highest = Hlc::default();
         let mut latest_checkpoint = None;
         let mut failure: Option<TxnError> = None;
-        let (log, report) = Log::open_streaming(io, &config.dir, config.segment_limit, |r| {
-            if failure.is_none() {
-                failure = Self::rebuild_step(
-                    &r,
-                    &mut seen,
-                    &mut turns,
-                    &mut highest,
-                    &mut latest_checkpoint,
-                )
-                .err();
-            }
-            visit(r);
-        })?;
+        let (log, report) = Log::open_streaming_with_capabilities(
+            io,
+            &config.dir,
+            config.segment_limit,
+            supported,
+            |r, context| {
+                if failure.is_none() {
+                    failure = Self::rebuild_step(
+                        &r,
+                        &mut seen,
+                        &mut turns,
+                        &mut highest,
+                        &mut latest_checkpoint,
+                    )
+                    .err();
+                }
+                visit(r, context);
+            },
+        )?;
         if let Some(e) = failure {
             return Err(e);
         }
@@ -271,6 +291,16 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// Queues the change set in the log. This is the linearization point: duplicates and fences
     /// are checked again, and the timestamp is assigned in log order.
     pub fn log(&mut self, txn: Txn<Prepared>) -> Result<Txn<Logged>, TxnError> {
+        self.log_with_capabilities(txn, 0)
+    }
+
+    /// Appends a prepared change only under a durably established required engine guard.
+    /// The requirement belongs to this append, not mutable global transaction/principal state.
+    pub fn log_with_capabilities(
+        &mut self,
+        txn: Txn<Prepared>,
+        required: u64,
+    ) -> Result<Txn<Logged>, TxnError> {
         self.check_owner(txn.owner)?;
         if self.log.is_poisoned() {
             return Err(TxnError::Log(LogError::Poisoned));
@@ -288,7 +318,9 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         self.check_fence(&cs)?;
         cs.hlc = self.hlc.tick(self.clock.now_ms())?;
         let encoded = cs.encode()?;
-        let lsn = self.log.append(RecordType::ChangeSet as u8, &encoded)?;
+        let lsn =
+            self.log
+                .append_with_capabilities(RecordType::ChangeSet as u8, &encoded, required)?;
         self.in_flight.insert(cs.id, (lsn, crc32c(&encoded)));
         Ok(txn.logged(cs, lsn))
     }
@@ -337,6 +369,27 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
             .into_iter()
             .next()
             .unwrap_or(Err(TxnError::Invalid("empty batch".into())))
+    }
+
+    /// Commits one change set with an explicit engine requirement bound to its log append.
+    pub fn commit_with_capabilities(
+        &mut self,
+        cs: ChangeSet,
+        required: u64,
+    ) -> Result<Receipt, TxnError> {
+        let open = self.begin(cs).validate(&AllowAll)?.authorize(&AllowAll)?;
+        let prepared = match self.prepare(open)? {
+            PrepareOutcome::Duplicate(_) => return Ok(Receipt::Duplicate),
+            PrepareOutcome::Ready(txn) => txn,
+        };
+        let logged = self.log_with_capabilities(prepared, required)?;
+        let durable = self
+            .sync(vec![logged])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| TxnError::Invalid("empty durable batch".into()))?;
+        let applied = self.apply(durable)?;
+        Ok(self.publish(applied))
     }
 
     /// Group commit: many change sets, one fsync. Each result is independent, except that a log
@@ -511,6 +564,15 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         Ok((records, next))
     }
 
+    /// Durable record reads with the segment's engine admission requirements preserved.
+    pub fn read_from_with_context(
+        &self,
+        from_lsn: u64,
+        max: usize,
+    ) -> Result<Vec<(Record, RecoveryContext)>, LogError> {
+        self.log.read_from_with_context(from_lsn, max)
+    }
+
     /// Counters and latency histograms for this kernel instance.
     pub fn metrics(&self) -> &Metrics {
         &self.metrics
@@ -519,7 +581,11 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
     /// Verifies the log on disk and checks that this kernel's in-memory state (committed ids and
     /// turn fences) equals a rebuild from the log. Read-only. A mismatch is invariant I9 failing.
     pub fn scrub(&self) -> Result<crate::scrub::ScrubReport, LogError> {
-        let mut report = crate::scrub::scrub(self.log.io(), self.log.dir())?;
+        let mut report = crate::scrub::scrub_with_capabilities(
+            self.log.io(),
+            self.log.dir(),
+            self.log.supported_capabilities(),
+        )?;
         if report.rebuilt_ids != self.seen {
             let extra = self.seen.difference(&report.rebuilt_ids).count();
             let missing = report.rebuilt_ids.difference(&self.seen).count();

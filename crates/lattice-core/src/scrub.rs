@@ -5,12 +5,11 @@
 //! The scrubber never writes, takes no lock, and reports every problem it can find instead of
 //! stopping at the first.
 
+use crate::admission;
 use crate::changeset::{
     ChangeSet, ChangeSetId, TurnRef, decode_checkpoint, decode_turn_begin, state_crc,
 };
-use crate::record::{
-    Decoded, HeaderCheck, Record, RecordType, SEGMENT_HEADER_LEN, check_header, decode_record,
-};
+use crate::record::{Decoded, Record, RecordType, decode_record};
 use lattice_seams::{Io, IoError};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -115,6 +114,17 @@ fn first_lsn_of(name: &str) -> Option<u64> {
 
 /// Scans the log in `dir` read-only.
 pub fn scrub<I: Io>(io: &I, dir: &str) -> Result<ScrubReport, IoError> {
+    scrub_with_capabilities(io, dir, 0)
+}
+
+/// Explicit capability-aware raw inspection. Unknown/downgraded headers remain findings.
+/// This verifier interprets kernel records, not engine payloads; caller chooses required support.
+pub fn scrub_with_capabilities<I: Io>(
+    io: &I,
+    dir: &str,
+    supported: u64,
+) -> Result<ScrubReport, IoError> {
+    let mut required = 0;
     let mut report = ScrubReport::default();
     let mut names: Vec<(u64, String)> = io
         .list(dir)?
@@ -136,17 +146,23 @@ pub fn scrub<I: Io>(io: &I, dir: &str) -> Result<ScrubReport, IoError> {
             expected_lsn = *first;
         }
         let data = io.read(&format!("{dir}/{name}"))?;
-        match check_header(&data) {
-            HeaderCheck::Ok => {}
+        let header = match admission::decode_header(&data) {
+            Ok(header)
+                if header.required_capabilities & !supported == 0
+                    && required & !header.required_capabilities == 0 =>
+            {
+                header
+            }
             other => {
                 report.issues.push(Issue::BadHeader {
                     segment: name.clone(),
-                    problem: format!("{other:?}"),
+                    problem: format!("unsupported, invalid or downgraded header: {other:?}"),
                 });
                 continue;
             }
-        }
-        let mut off = SEGMENT_HEADER_LEN;
+        };
+        required = header.required_capabilities;
+        let mut off = header.length;
         while off < data.len() {
             match decode_record(&data, off) {
                 Decoded::Record(r, next) if r.lsn == expected_lsn => {

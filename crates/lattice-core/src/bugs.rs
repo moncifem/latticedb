@@ -78,6 +78,8 @@ pub enum Bug {
     RowPolicyWriteSkipped,
     /// The tree CRDT applies a move without checking that it would create a cycle (convergence).
     TreeCycleCheckSkipped,
+    /// A capability-requiring append omits its durable segment guard.
+    RequiredGuardOmitted,
 }
 
 impl Bug {
@@ -112,6 +114,8 @@ impl Bug {
 
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
+    /// Guarded-WAL admission defects, exercised by independent context witnesses.
+    pub const ADMISSION: [Bug; 1] = [Bug::RequiredGuardOmitted];
 
     /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [
@@ -194,6 +198,7 @@ mod tests {
             .chain(Bug::VACUUM)
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
+            .chain(Bug::ADMISSION)
     }
 
     #[test]
@@ -204,8 +209,9 @@ mod tests {
             .chain(Bug::VACUUM)
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
+            .chain(Bug::ADMISSION)
             .collect();
-        assert_eq!(all.len(), 35);
+        assert_eq!(all.len(), 36);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

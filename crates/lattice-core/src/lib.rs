@@ -22,6 +22,7 @@
 //! ```
 #![forbid(unsafe_code)]
 
+pub mod admission;
 pub mod bugs;
 pub mod chain;
 pub mod changeset;
@@ -51,3 +52,6 @@ pub use txn::{
 pub const LAYER: u8 = 3;
 
 pub mod feed;
+
+#[cfg(test)]
+mod admission_tests;
