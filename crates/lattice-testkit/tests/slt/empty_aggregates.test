@@ -1,0 +1,139 @@
+# Aggregates over empty and all-NULL inputs. Without GROUP BY an aggregate query always returns one
+# row: count is 0 and sum, min, max and avg are NULL. With GROUP BY an empty input has no groups.
+
+statement ok
+CREATE TABLE e (id INT PRIMARY KEY, g INT, v INT)
+
+statement ok
+CREATE TABLE f (id INT PRIMARY KEY, g INT, v INT)
+
+statement ok
+INSERT INTO f VALUES (1, 1, 10), (2, 1, 20), (3, 2, NULL)
+
+query IIII nosort
+SELECT count(*), sum(v), min(v), max(v) FROM e
+----
+0
+NULL
+NULL
+NULL
+
+query II nosort
+SELECT count(v), count(DISTINCT v) FROM e
+----
+0
+0
+
+query R nosort
+SELECT avg(v) FROM e
+----
+NULL
+
+query I nosort
+SELECT coalesce(sum(v), 0) FROM e
+----
+0
+
+query II nosort
+SELECT g, count(*) FROM e GROUP BY g
+----
+
+query I nosort
+SELECT DISTINCT g FROM e
+----
+
+query I nosort
+SELECT id FROM e ORDER BY id LIMIT 3
+----
+
+# HAVING without GROUP BY filters the single aggregate row.
+query I nosort
+SELECT count(*) FROM e HAVING count(*) = 0
+----
+0
+
+query I nosort
+SELECT count(*) FROM e HAVING count(*) > 0
+----
+
+# A filter that removes every row behaves like an empty table.
+query II nosort
+SELECT count(*), sum(v) FROM f WHERE id > 99
+----
+0
+NULL
+
+# A column that is all NULL.
+query III nosort
+SELECT count(*), count(v), sum(v) FROM f WHERE g = 2
+----
+1
+0
+NULL
+
+query II nosort
+SELECT min(v), max(v) FROM f WHERE g = 2
+----
+NULL
+NULL
+
+query III nosort
+SELECT count(*), sum(v), max(v) FROM f
+----
+3
+30
+20
+
+# Groups: NULL sums are kept as a group, HAVING compares against them.
+query II nosort
+SELECT g, sum(v) FROM f GROUP BY g ORDER BY g
+----
+1
+30
+2
+NULL
+
+query II nosort
+SELECT g, sum(v) FROM f GROUP BY g HAVING sum(v) > 0
+----
+1
+30
+
+query II nosort
+SELECT g, sum(v) FROM f GROUP BY g HAVING sum(v) IS NULL
+----
+2
+NULL
+
+query II nosort
+SELECT g, count(*) FROM f GROUP BY g HAVING count(*) > 5
+----
+
+query I nosort
+SELECT g FROM f GROUP BY g HAVING count(v) = 0
+----
+2
+
+# Ungrouped columns and aggregates in the wrong place are errors.
+statement error 42803
+SELECT id, count(*) FROM f GROUP BY g
+
+statement error 42803
+SELECT sum(v), id FROM f
+
+statement error 42803
+SELECT id FROM f WHERE count(*) > 1
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: aggregate filters, ordered aggregates and other aggregate
+# functions are not in the subset. sum(*) is a syntax error in both.
+statement error 0A000
+SELECT count(*) FILTER (WHERE v > 5) FROM f
+
+statement error 0A000
+SELECT count(DISTINCT v), sum(DISTINCT v) FROM f
+
+statement error 0A000
+SELECT string_agg(g, ',') FROM f
+
+statement error 42601
+SELECT sum(*) FROM e

@@ -1,0 +1,179 @@
+# The declared column types: boolean, numeric, date, uuid and jsonb values, casts between them,
+# and the SQLSTATE for a value that is not one of the type. Booleans appear only as filters, so
+# the results are plain integers and text.
+
+statement ok
+CREATE TABLE ty (id INT PRIMARY KEY, flag BOOLEAN, amt NUMERIC(8, 2), d DATE, j JSONB, u UUID)
+
+statement ok
+INSERT INTO ty VALUES (1, true, 10.5, date '2024-02-29', '{"a": 1, "b": {"c": "deep"}}'::jsonb, '123e4567-e89b-12d3-a456-426614174000'::uuid)
+
+statement ok
+INSERT INTO ty VALUES (2, false, 0.25, date '2023-12-31', '{"a": 2}'::jsonb, NULL)
+
+statement ok
+INSERT INTO ty VALUES (3, NULL, NULL, NULL, NULL, NULL)
+
+# Boolean.
+query I nosort
+SELECT id FROM ty WHERE flag ORDER BY id
+----
+1
+
+query I nosort
+SELECT id FROM ty WHERE NOT flag ORDER BY id
+----
+2
+
+query I nosort
+SELECT id FROM ty WHERE flag = false ORDER BY id
+----
+2
+
+query I nosort
+SELECT count(*) FROM ty WHERE flag IS NULL
+----
+1
+
+statement error 22P02
+SELECT 'maybe'::boolean
+
+statement error 22P02
+INSERT INTO ty (id, flag) VALUES (9, 'perhaps')
+
+# Numeric: exact, scale kept.
+query IR nosort
+SELECT id, amt FROM ty WHERE amt IS NOT NULL ORDER BY id
+----
+1
+10.50
+2
+0.25
+
+query R nosort
+SELECT sum(amt) FROM ty
+----
+10.75
+
+query R nosort
+SELECT amt + 0.005 FROM ty WHERE id = 2
+----
+0.255
+
+query R nosort
+SELECT amt * 3 FROM ty WHERE id = 1
+----
+31.50
+
+query R nosort
+SELECT round(amt) FROM ty WHERE id = 1
+----
+11
+
+query R nosort
+SELECT round(amt, 1) FROM ty WHERE id = 2
+----
+0.3
+
+statement error 22003
+UPDATE ty SET amt = 1000000 WHERE id = 3
+
+# Date.
+query III nosort
+SELECT extract(year FROM d), extract(month FROM d), extract(day FROM d) FROM ty WHERE id = 1
+----
+2024
+2
+29
+
+query I nosort
+SELECT id FROM ty WHERE d < date '2024-01-01' ORDER BY id
+----
+2
+
+query I nosort
+SELECT id FROM ty WHERE d BETWEEN date '2023-01-01' AND date '2024-12-31' ORDER BY id
+----
+1
+2
+
+statement error 22008
+SELECT date '2023-02-29'
+
+statement error 22007
+SELECT date 'not a date'
+
+# Uuid.
+query I nosort
+SELECT id FROM ty WHERE u = '123e4567-e89b-12d3-a456-426614174000'::uuid
+----
+1
+
+query T nosort
+SELECT u::text FROM ty WHERE id = 1
+----
+123e4567-e89b-12d3-a456-426614174000
+
+statement error 22P02
+SELECT 'not-a-uuid'::uuid
+
+# Jsonb: ->, ->> and @> only.
+query T nosort
+SELECT j ->> 'a' FROM ty WHERE id = 1
+----
+1
+
+query T nosort
+SELECT j -> 'b' ->> 'c' FROM ty WHERE id = 1
+----
+deep
+
+query T nosort
+SELECT j ->> 'missing' FROM ty WHERE id = 1
+----
+NULL
+
+query I nosort
+SELECT id FROM ty WHERE j @> '{"a": 2}'::jsonb ORDER BY id
+----
+2
+
+query I nosort
+SELECT count(*) FROM ty WHERE j @> '{"b": {"c": "deep"}}'::jsonb
+----
+1
+
+statement error 22P02
+SELECT '{bad'::jsonb
+
+# Casts between the types.
+query TIT nosort
+SELECT 42::text, '42'::integer, 3.7::integer::text
+----
+42
+42
+4
+
+query R nosort
+SELECT '2.50'::numeric + 1
+----
+3.50
+
+query I nosort
+SELECT 'true'::boolean::integer
+----
+1
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: operators outside ->, ->> and @> on jsonb, and the other
+# types, are not in the subset.
+statement error 0A000
+SELECT j #> '{b,c}' FROM ty
+
+statement error 0A000
+SELECT j ? 'a' FROM ty
+
+statement error 0A000
+SELECT jsonb_extract_path(j, 'a') FROM ty
+
+statement error 0A000
+SELECT d + INTERVAL '1 day' FROM ty

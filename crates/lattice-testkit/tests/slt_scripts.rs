@@ -4,12 +4,49 @@
 
 use lattice_testkit::slt::{Record, parse};
 
-const SCRIPTS: [(&str, &str); 5] = [
+const SCRIPTS: [(&str, &str); 21] = [
     ("basics.test", include_str!("slt/basics.test")),
     ("joins.test", include_str!("slt/joins.test")),
     ("aggregates.test", include_str!("slt/aggregates.test")),
     ("changes.test", include_str!("slt/changes.test")),
     ("transactions.test", include_str!("slt/transactions.test")),
+    ("nulls_logic.test", include_str!("slt/nulls_logic.test")),
+    (
+        "nulls_functions.test",
+        include_str!("slt/nulls_functions.test"),
+    ),
+    (
+        "arithmetic_errors.test",
+        include_str!("slt/arithmetic_errors.test"),
+    ),
+    ("strings.test", include_str!("slt/strings.test")),
+    ("order_nulls.test", include_str!("slt/order_nulls.test")),
+    ("limit_offset.test", include_str!("slt/limit_offset.test")),
+    (
+        "empty_aggregates.test",
+        include_str!("slt/empty_aggregates.test"),
+    ),
+    ("joins_small.test", include_str!("slt/joins_small.test")),
+    ("returning.test", include_str!("slt/returning.test")),
+    (
+        "transactions_visibility.test",
+        include_str!("slt/transactions_visibility.test"),
+    ),
+    ("constraints.test", include_str!("slt/constraints.test")),
+    (
+        "ddl_statements.test",
+        include_str!("slt/ddl_statements.test"),
+    ),
+    (
+        "prepared_forms.test",
+        include_str!("slt/prepared_forms.test"),
+    ),
+    ("subqueries.test", include_str!("slt/subqueries.test")),
+    ("unsupported.test", include_str!("slt/unsupported.test")),
+    (
+        "types_and_casts.test",
+        include_str!("slt/types_and_casts.test"),
+    ),
 ];
 
 #[test]

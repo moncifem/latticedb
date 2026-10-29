@@ -1,0 +1,222 @@
+# Joins over tiny tables: INNER, LEFT, CROSS, comma joins, self joins, non-equality conditions,
+# three tables, NULL join keys, and the difference between a condition in ON and one in WHERE.
+
+statement ok
+CREATE TABLE pa (id INT PRIMARY KEY, v TEXT NOT NULL)
+
+statement ok
+CREATE TABLE pb (id INT PRIMARY KEY, a_id INT, w TEXT NOT NULL)
+
+statement ok
+CREATE TABLE pc (id INT PRIMARY KEY, b_id INT)
+
+statement ok
+INSERT INTO pa VALUES (1, 'a1'), (2, 'a2'), (3, 'a3')
+
+statement ok
+INSERT INTO pb VALUES (10, 1, 'b1'), (11, 1, 'b2'), (12, 3, 'b3'), (13, NULL, 'b4'), (14, 9, 'b5')
+
+statement ok
+INSERT INTO pc VALUES (100, 10), (101, 12), (102, NULL)
+
+query TT rowsort
+SELECT pa.v, pb.w FROM pa INNER JOIN pb ON pb.a_id = pa.id
+----
+a1
+b1
+a1
+b2
+a3
+b3
+
+query TT rowsort
+SELECT pa.v, pb.w FROM pa JOIN pb ON pb.a_id = pa.id
+----
+a1
+b1
+a1
+b2
+a3
+b3
+
+query TT rowsort
+SELECT pa.v, pb.w FROM pa LEFT JOIN pb ON pb.a_id = pa.id
+----
+a1
+b1
+a1
+b2
+a2
+NULL
+a3
+b3
+
+query TT rowsort
+SELECT pa.v, pb.w FROM pa LEFT OUTER JOIN pb ON pb.a_id = pa.id
+----
+a1
+b1
+a1
+b2
+a2
+NULL
+a3
+b3
+
+# A condition in ON keeps the unmatched left rows; the same condition in WHERE removes them.
+query TT rowsort
+SELECT pa.v, pb.w FROM pa LEFT JOIN pb ON pb.a_id = pa.id AND pb.w = 'b2'
+----
+a1
+b2
+a2
+NULL
+a3
+NULL
+
+query TT rowsort
+SELECT pa.v, pb.w FROM pa LEFT JOIN pb ON pb.a_id = pa.id WHERE pb.w = 'b2'
+----
+a1
+b2
+
+query T nosort
+SELECT pa.v FROM pa LEFT JOIN pb ON pb.a_id = pa.id WHERE pb.id IS NULL
+----
+a2
+
+query TI nosort
+SELECT pa.v, count(pb.id) FROM pa LEFT JOIN pb ON pb.a_id = pa.id GROUP BY pa.v ORDER BY pa.v
+----
+a1
+2
+a2
+0
+a3
+1
+
+query II nosort
+SELECT count(*), count(pb.id) FROM pa LEFT JOIN pb ON pb.a_id = pa.id
+----
+4
+3
+
+# CROSS JOIN and the comma form.
+query I nosort
+SELECT count(*) FROM pa CROSS JOIN pb
+----
+15
+
+query I nosort
+SELECT count(*) FROM pa, pb
+----
+15
+
+query I nosort
+SELECT count(*) FROM pa, pb WHERE pb.a_id = pa.id
+----
+3
+
+query I nosort
+SELECT count(*) FROM pa CROSS JOIN pc
+----
+9
+
+# Rows whose key is NULL never match, not even each other.
+query I nosort
+SELECT count(*) FROM pb x INNER JOIN pb y ON x.a_id = y.a_id
+----
+6
+
+query I nosort
+SELECT count(*) FROM pb x LEFT JOIN pb y ON x.a_id = y.a_id
+----
+7
+
+# A condition that is not an equality.
+query I nosort
+SELECT count(*) FROM pa INNER JOIN pb ON pb.a_id < pa.id
+----
+4
+
+query TT rowsort
+SELECT pa.v, pb.w FROM pa INNER JOIN pb ON pb.a_id = pa.id AND pa.v <> 'a1'
+----
+a3
+b3
+
+# Three tables.
+query TTI rowsort
+SELECT pa.v, pb.w, pc.id FROM pa JOIN pb ON pb.a_id = pa.id JOIN pc ON pc.b_id = pb.id
+----
+a1
+b1
+100
+a3
+b3
+101
+
+query TTI rowsort
+SELECT pa.v, pb.w, pc.id FROM pa LEFT JOIN pb ON pb.a_id = pa.id LEFT JOIN pc ON pc.b_id = pb.id
+----
+a1
+b1
+100
+a1
+b2
+NULL
+a2
+NULL
+NULL
+a3
+b3
+101
+
+query I rowsort
+SELECT pc.id FROM pc LEFT JOIN pb ON pb.id = pc.b_id WHERE pb.a_id IS NULL
+----
+102
+
+# Self join with aliases.
+query TT rowsort
+SELECT x.w, y.w FROM pb x JOIN pb y ON y.a_id = x.a_id AND y.id > x.id
+----
+b1
+b2
+
+query IT nosort
+SELECT pa.* FROM pa JOIN pb ON pb.a_id = pa.id WHERE pb.w = 'b3'
+----
+3
+a3
+
+statement error 42702
+SELECT id FROM pa JOIN pb ON pb.a_id = pa.id
+
+statement error 42P01
+SELECT nope.v FROM pa
+
+statement error 42712
+SELECT 1 FROM pa JOIN pa ON pa.id = pa.id
+
+statement error 42703
+SELECT pa.nope FROM pa JOIN pb ON pb.a_id = pa.id
+
+statement error 42601
+SELECT * FROM pa JOIN pb
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: only INNER, LEFT and CROSS joins with ON are in the subset.
+statement error 0A000
+SELECT * FROM pa RIGHT JOIN pb ON pb.a_id = pa.id
+
+statement error 0A000
+SELECT * FROM pa FULL JOIN pb ON pb.a_id = pa.id
+
+statement error 0A000
+SELECT * FROM pa JOIN pb USING (id)
+
+statement error 0A000
+SELECT * FROM pa, LATERAL (SELECT pa.id) AS s
+
+statement error 0A000
+SELECT * FROM pa JOIN (SELECT * FROM pb) AS s ON s.a_id = pa.id

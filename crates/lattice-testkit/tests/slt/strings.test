@@ -1,0 +1,237 @@
+# Text comparison, ordering and the string functions. Ordering is by bytes in the subset (no
+# collation), so the ordered data here is lower-case ASCII letters and digits, where PostgreSQL
+# with any common database collation gives the same order. The records that compare mixed case or
+# non-ASCII text are marked, because PostgreSQL's answer depends on its database collation.
+
+statement ok
+CREATE TABLE words (id INT PRIMARY KEY, w TEXT NOT NULL)
+
+statement ok
+INSERT INTO words VALUES (1, 'app'), (2, 'apple'), (3, 'banana'), (4, 'cherry'), (5, 'apricot'), (6, '10'), (7, '9'), (8, 'applesauce')
+
+query T nosort
+SELECT w FROM words ORDER BY w
+----
+10
+9
+app
+apple
+applesauce
+apricot
+banana
+cherry
+
+query T nosort
+SELECT w FROM words ORDER BY w DESC LIMIT 3
+----
+cherry
+banana
+apricot
+
+query T nosort
+SELECT w FROM words WHERE w >= 'apple' AND w < 'banana' ORDER BY w
+----
+apple
+applesauce
+apricot
+
+# Text compares as text, not as numbers: '10' sorts before '9'.
+query T nosort
+SELECT w FROM words WHERE w < '9'
+----
+10
+
+query I nosort
+SELECT count(*) FROM words WHERE w < 'b'
+----
+6
+
+query TT nosort
+SELECT min(w), max(w) FROM words
+----
+10
+cherry
+
+query I nosort
+SELECT count(*) FROM words WHERE w = 'Apple'
+----
+0
+
+query I nosort
+SELECT count(*) FROM words WHERE 'a ' = 'a'
+----
+0
+
+# LIKE: % matches any run, _ matches one character, matching is case-sensitive.
+query T nosort
+SELECT w FROM words WHERE w LIKE 'app%' ORDER BY w
+----
+app
+apple
+applesauce
+
+query T nosort
+SELECT w FROM words WHERE w LIKE 'a_p%' ORDER BY w
+----
+app
+apple
+applesauce
+
+query T nosort
+SELECT w FROM words WHERE w LIKE '%e' ORDER BY w
+----
+apple
+
+query T nosort
+SELECT w FROM words WHERE w NOT LIKE '%a%' ORDER BY w
+----
+10
+9
+cherry
+
+query I nosort
+SELECT count(*) FROM words WHERE w LIKE 'APP%'
+----
+0
+
+query T nosort
+SELECT w FROM words WHERE w LIKE 'banan_' ORDER BY w
+----
+banana
+
+# Functions.
+query TTI nosort
+SELECT lower('AbC'), upper('AbC'), length('abc')
+----
+abc
+ABC
+3
+
+query T nosort
+SELECT 'ab' || 'cd'
+----
+abcd
+
+query T nosort
+SELECT 'n' || 1::text
+----
+n1
+
+query T nosort
+SELECT w || '!' FROM words WHERE id = 1
+----
+app!
+
+query I nosort
+SELECT length('héllo')
+----
+5
+
+query TTT nosort
+SELECT substring('hello' FROM 2 FOR 3), substring('hello', 2), substring('hello' FROM 4)
+----
+ell
+ello
+lo
+
+query TT nosort
+SELECT substring('hello' FROM 0 FOR 3), substring('hello' FROM -1 FOR 3)
+----
+he
+h
+
+query III nosort
+SELECT position('lo' IN 'hello'), position('z' IN 'hello'), position('h' IN 'hello')
+----
+4
+0
+1
+
+query TTTT nosort
+SELECT trim('  hi  '), trim(both 'x' FROM 'xxhixx'), trim(leading 'x' FROM 'xxhixx'), trim(trailing 'x' FROM 'xxhixx')
+----
+hi
+hi
+hixx
+xxhi
+
+query IT nosort
+SELECT id, upper(w) FROM words WHERE length(w) = 3
+----
+1
+APP
+
+# varchar(n) counts characters, not bytes.
+statement ok
+CREATE TABLE codes (id INT PRIMARY KEY, c VARCHAR(3))
+
+statement ok
+INSERT INTO codes VALUES (1, 'abc'), (2, 'héé'), (3, NULL)
+
+statement error 22001
+INSERT INTO codes VALUES (4, 'abcd')
+
+statement error 22001
+UPDATE codes SET c = 'wxyz' WHERE id = 1
+
+query IT nosort
+SELECT id, c FROM codes ORDER BY id
+----
+1
+abc
+2
+héé
+3
+NULL
+
+# Byte order against the database collation. PostgreSQL with en_US.UTF-8 orders letters
+# case-insensitively first and puts an accented letter before 'z'; the subset sorts by bytes.
+statement ok
+CREATE TABLE cased (id INT PRIMARY KEY, w TEXT NOT NULL)
+
+statement ok
+INSERT INTO cased VALUES (1, 'b'), (2, 'B'), (3, 'a'), (4, 'A'), (5, 'z'), (6, 'é')
+
+# differs-from-postgres
+query T nosort
+SELECT w FROM cased ORDER BY w
+----
+A
+B
+a
+b
+z
+é
+
+# differs-from-postgres
+query I nosort
+SELECT count(*) FROM cased WHERE w < 'a'
+----
+2
+
+# differs-from-postgres
+query TT nosort
+SELECT min(w), max(w) FROM cased
+----
+A
+é
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: ILIKE, SIMILAR TO, COLLATE and the other string functions are
+# not in the subset.
+statement error 0A000
+SELECT w FROM words WHERE w ILIKE 'APP%'
+
+statement error 0A000
+SELECT w FROM words WHERE w SIMILAR TO 'app%'
+
+statement error 0A000
+SELECT w FROM cased ORDER BY w COLLATE "C"
+
+statement error 0A000
+SELECT concat(w, '!') FROM words
+
+statement error 0A000
+SELECT replace(w, 'a', 'b') FROM words
+
+statement error 0A000
+SELECT repeat(w, 2) FROM words

@@ -1,0 +1,174 @@
+# INSERT, UPDATE and DELETE with RETURNING: the returned rows carry the values after the change
+# (before it for DELETE), defaults and expressions are evaluated, and a failed statement returns
+# nothing and changes nothing.
+
+statement ok
+CREATE TABLE r (id INT PRIMARY KEY, name TEXT NOT NULL, qty INT DEFAULT 5)
+
+query ITI nosort
+INSERT INTO r (id, name) VALUES (1, 'one') RETURNING id, name, qty
+----
+1
+one
+5
+
+query I rowsort
+INSERT INTO r VALUES (2, 'two', 2), (3, 'three', 3) RETURNING id
+----
+2
+3
+
+query II nosort
+INSERT INTO r VALUES (4, 'four', 4) RETURNING qty * 2, length(name)
+----
+8
+4
+
+query ITI nosort
+INSERT INTO r VALUES (5, 'five', NULL) RETURNING *
+----
+5
+five
+NULL
+
+query I rowsort
+INSERT INTO r SELECT id + 10, name, qty FROM r WHERE id <= 2 RETURNING id
+----
+11
+12
+
+query ITI nosort
+INSERT INTO r (id, name, qty) VALUES (6, 'six', 6) RETURNING r.id, r.name, r.qty
+----
+6
+six
+6
+
+# UPDATE returns the new values.
+query I nosort
+UPDATE r SET qty = qty + 100 WHERE id = 1 RETURNING qty
+----
+105
+
+query IT rowsort
+UPDATE r SET name = name || '!' WHERE id IN (2, 3) RETURNING id, name
+----
+2
+two!
+3
+three!
+
+query II nosort
+UPDATE r SET qty = NULL WHERE id = 4 RETURNING id, qty
+----
+4
+NULL
+
+# No row matches: no row returned.
+query I nosort
+UPDATE r SET qty = 0 WHERE id = 99 RETURNING id
+----
+
+query I nosort
+DELETE FROM r WHERE id = 99 RETURNING id
+----
+
+# Every right-hand side sees the old row.
+query II nosort
+UPDATE r SET qty = id, id = id + 40 WHERE id = 6 RETURNING id, qty
+----
+46
+6
+
+# DELETE returns the rows that were removed.
+query IT rowsort
+DELETE FROM r WHERE id > 10 AND id < 40 RETURNING id, name
+----
+11
+one
+12
+two
+
+query IT nosort
+SELECT id, name FROM r ORDER BY id
+----
+1
+one
+2
+two!
+3
+three!
+4
+four
+5
+five
+46
+six
+
+query I rowsort
+DELETE FROM r RETURNING id
+----
+1
+2
+3
+4
+46
+5
+
+query I nosort
+SELECT count(*) FROM r
+----
+0
+
+# A failed statement returns no rows and leaves the table as it was.
+statement ok
+INSERT INTO r VALUES (1, 'one', 1)
+
+statement error 23505
+INSERT INTO r VALUES (2, 'two', 2), (1, 'dup', 1) RETURNING id
+
+statement error 23502
+INSERT INTO r (id) VALUES (3) RETURNING id
+
+query IT nosort
+SELECT id, name FROM r
+----
+1
+one
+
+statement ok
+INSERT INTO r VALUES (2, 'two', 2)
+
+statement error 23505
+UPDATE r SET id = 1 WHERE id = 2 RETURNING id
+
+query IT nosort
+SELECT id, name FROM r ORDER BY id
+----
+1
+one
+2
+two
+
+statement error 42703
+INSERT INTO r VALUES (7, 'x', 1) RETURNING missing
+
+statement error 42803
+INSERT INTO r VALUES (7, 'x', 1) RETURNING count(*)
+
+statement error 42P01
+DELETE FROM nowhere RETURNING id
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: UPDATE ... FROM, DELETE ... USING, ON CONFLICT and
+# DEFAULT VALUES are not in the subset.
+statement error 0A000
+UPDATE r SET qty = o.qty FROM r o WHERE o.id = r.id RETURNING r.id
+
+statement error 0A000
+DELETE FROM r USING r o WHERE o.id = r.id RETURNING r.id
+
+statement error 0A000
+INSERT INTO r VALUES (1, 'x', 1) ON CONFLICT (id) DO UPDATE SET qty = 2 RETURNING id
+
+statement error 0A000
+INSERT INTO r DEFAULT VALUES RETURNING id

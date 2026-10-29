@@ -31,6 +31,70 @@ const SCRIPTS: &[(&str, &str)] = &[
         "transactions.test",
         include_str!("../../lattice-testkit/tests/slt/transactions.test"),
     ),
+    (
+        "nulls_logic.test",
+        include_str!("../../lattice-testkit/tests/slt/nulls_logic.test"),
+    ),
+    (
+        "nulls_functions.test",
+        include_str!("../../lattice-testkit/tests/slt/nulls_functions.test"),
+    ),
+    (
+        "arithmetic_errors.test",
+        include_str!("../../lattice-testkit/tests/slt/arithmetic_errors.test"),
+    ),
+    (
+        "strings.test",
+        include_str!("../../lattice-testkit/tests/slt/strings.test"),
+    ),
+    (
+        "order_nulls.test",
+        include_str!("../../lattice-testkit/tests/slt/order_nulls.test"),
+    ),
+    (
+        "limit_offset.test",
+        include_str!("../../lattice-testkit/tests/slt/limit_offset.test"),
+    ),
+    (
+        "empty_aggregates.test",
+        include_str!("../../lattice-testkit/tests/slt/empty_aggregates.test"),
+    ),
+    (
+        "joins_small.test",
+        include_str!("../../lattice-testkit/tests/slt/joins_small.test"),
+    ),
+    (
+        "returning.test",
+        include_str!("../../lattice-testkit/tests/slt/returning.test"),
+    ),
+    (
+        "transactions_visibility.test",
+        include_str!("../../lattice-testkit/tests/slt/transactions_visibility.test"),
+    ),
+    (
+        "constraints.test",
+        include_str!("../../lattice-testkit/tests/slt/constraints.test"),
+    ),
+    (
+        "ddl_statements.test",
+        include_str!("../../lattice-testkit/tests/slt/ddl_statements.test"),
+    ),
+    (
+        "prepared_forms.test",
+        include_str!("../../lattice-testkit/tests/slt/prepared_forms.test"),
+    ),
+    (
+        "subqueries.test",
+        include_str!("../../lattice-testkit/tests/slt/subqueries.test"),
+    ),
+    (
+        "unsupported.test",
+        include_str!("../../lattice-testkit/tests/slt/unsupported.test"),
+    ),
+    (
+        "types_and_casts.test",
+        include_str!("../../lattice-testkit/tests/slt/types_and_casts.test"),
+    ),
 ];
 
 struct Record {
@@ -72,7 +136,7 @@ fn records() -> Vec<Record> {
 
 #[test]
 fn every_script_record_is_read() {
-    // 5 scripts: counted from the `statement`/`query` header lines of the files.
+    // 21 scripts: counted from the `statement`/`query` header lines of the files.
     let n = records().len();
     let headers: usize = SCRIPTS
         .iter()
@@ -83,7 +147,7 @@ fn every_script_record_is_read() {
         })
         .sum();
     assert_eq!(n, headers);
-    assert!(n >= 60, "expected the declared scripts, found {n} records");
+    assert!(n >= 600, "expected the declared scripts, found {n} records");
 }
 
 #[test]
@@ -125,8 +189,8 @@ fn refused_records_fail_with_the_declared_class() {
             _ => syntax += 1,
         }
     }
-    assert_eq!(unsupported, 6);
-    assert_eq!(syntax, 1);
+    assert_eq!(unsupported, 125);
+    assert_eq!(syntax, 18);
 }
 
 #[test]

@@ -1,0 +1,95 @@
+# Prepared statements. The subset supports them through the extended query protocol (Parse, Bind,
+# Execute), not as SQL statements: PREPARE, EXECUTE and DEALLOCATE are refused with 0A000. A script
+# line cannot carry a parameter value, so the parameter-free case is what a script can state: a
+# statement with no placeholders returns the same answer however often it is run, and a query with
+# a text that was never run before behaves like one that was.
+
+statement ok
+CREATE TABLE pf (id INT PRIMARY KEY, label TEXT NOT NULL)
+
+statement ok
+INSERT INTO pf VALUES (1, 'one'), (2, 'two'), (3, 'three')
+
+query IT nosort
+SELECT id, label FROM pf WHERE id = 2
+----
+2
+two
+
+# The same text again, now a cached plan in an engine that keeps one: same rows.
+query IT nosort
+SELECT id, label FROM pf WHERE id = 2
+----
+2
+two
+
+# A write between two runs of a read is visible to the second run.
+statement ok
+UPDATE pf SET label = 'deux' WHERE id = 2
+
+query IT nosort
+SELECT id, label FROM pf WHERE id = 2
+----
+2
+deux
+
+query I nosort
+SELECT count(*) FROM pf
+----
+3
+
+statement ok
+INSERT INTO pf VALUES (4, 'four')
+
+query I nosort
+SELECT count(*) FROM pf
+----
+4
+
+# A dropped and recreated table is a different table: no stale plan answers for the old one.
+statement ok
+DROP TABLE pf
+
+statement error 42P01
+SELECT id, label FROM pf WHERE id = 2
+
+statement ok
+CREATE TABLE pf (id INT PRIMARY KEY, label TEXT NOT NULL, extra INT)
+
+statement ok
+INSERT INTO pf VALUES (2, 'zwei', 20)
+
+query ITI nosort
+SELECT * FROM pf WHERE id = 2
+----
+2
+zwei
+20
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: SQL-level prepared statements are not in the subset.
+statement error 0A000
+PREPARE p AS SELECT id FROM pf
+
+statement error 0A000
+PREPARE p (INT) AS SELECT id FROM pf WHERE id = $1
+
+statement error 0A000
+EXECUTE p
+
+statement error 0A000
+EXECUTE p (1)
+
+statement error 0A000
+DEALLOCATE p
+
+statement error 0A000
+DEALLOCATE ALL
+
+statement error 0A000
+DECLARE c CURSOR FOR SELECT id FROM pf
+
+statement error 0A000
+FETCH 1 FROM c
+
+statement error 0A000
+EXPLAIN SELECT id FROM pf

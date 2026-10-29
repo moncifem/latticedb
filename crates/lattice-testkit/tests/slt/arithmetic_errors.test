@@ -1,0 +1,186 @@
+# Integer arithmetic: truncating division, overflow (22003), division by zero (22012) and bad
+# casts (22P02). A small literal is a 32-bit integer, a literal beyond that is a 64-bit integer, and
+# an operation that leaves its type's range fails instead of wrapping.
+
+query I nosort
+SELECT 7 / 2
+----
+3
+
+query I nosort
+SELECT -7 / 2
+----
+-3
+
+query I nosort
+SELECT -7 % 3
+----
+-1
+
+query I nosort
+SELECT 7 % -3
+----
+1
+
+query I nosort
+SELECT 2147483647 + 0
+----
+2147483647
+
+query I nosort
+SELECT 2147483647 + 1::bigint
+----
+2147483648
+
+query I nosort
+SELECT 2147483648
+----
+2147483648
+
+query I nosort
+SELECT 9223372036854775806 + 1
+----
+9223372036854775807
+
+statement error 22003
+SELECT 2147483647 + 1
+
+statement error 22003
+SELECT 2147483647 * 2
+
+statement error 22003
+SELECT -2147483647 - 2
+
+statement error 22003
+SELECT 9223372036854775807 + 1
+
+statement error 22003
+SELECT 9223372036854775807 * 2
+
+statement error 22003
+SELECT abs(-2147483647 - 1)
+
+query I nosort
+SELECT abs(-5)
+----
+5
+
+statement error 22012
+SELECT 1 / 0
+
+statement error 22012
+SELECT 1 % 0
+
+statement error 22012
+SELECT 1.5 / 0
+
+statement error 22012
+SELECT 1 / 0.0
+
+statement ok
+CREATE TABLE ov (id INT PRIMARY KEY, s SMALLINT, i INT, b BIGINT)
+
+statement ok
+INSERT INTO ov VALUES (1, 32767, 2147483647, 9223372036854775807), (2, -32768, 2147483647, -9223372036854775807)
+
+statement error 22003
+INSERT INTO ov VALUES (9, 32768, 0, 0)
+
+statement error 22003
+INSERT INTO ov VALUES (9, 0, 2147483648, 0)
+
+statement error 22003
+INSERT INTO ov VALUES (9, 0, 0, 9223372036854775808)
+
+statement error 22003
+UPDATE ov SET s = s + 1 WHERE id = 1
+
+statement error 22003
+UPDATE ov SET i = i + 1 WHERE id = 1
+
+statement error 22003
+UPDATE ov SET b = b + 1 WHERE id = 1
+
+statement error 22003
+SELECT i + 1 FROM ov
+
+statement error 22012
+SELECT i / (s - s) FROM ov
+
+# A failed statement changed nothing.
+query IIII nosort
+SELECT id, s, i, b FROM ov ORDER BY id
+----
+1
+32767
+2147483647
+9223372036854775807
+2
+-32768
+2147483647
+-9223372036854775807
+
+query I nosort
+SELECT i::bigint + 1 FROM ov WHERE id = 1
+----
+2147483648
+
+# sum() of integers is a bigint and does not overflow at 32 bits.
+query III nosort
+SELECT sum(i), min(s), max(b) FROM ov
+----
+4294967294
+-32768
+9223372036854775807
+
+# Casts: out of range is 22003, malformed text is 22P02, fractions round half away from zero.
+statement error 22003
+SELECT 2147483648::integer
+
+statement error 22003
+SELECT 40000::smallint
+
+statement error 22003
+SELECT '2147483648'::integer
+
+statement error 22P02
+SELECT 'abc'::integer
+
+statement error 22P02
+SELECT '1.5'::integer
+
+query I nosort
+SELECT '12'::integer + 1
+----
+13
+
+query I nosort
+SELECT CAST('7' AS integer)
+----
+7
+
+query II nosort
+SELECT 1.5::integer, 2.5::integer
+----
+2
+3
+
+query RRR nosort
+SELECT round(2.5), round(-2.5), round(1.005, 2)
+----
+3
+-3
+1.01
+
+# Numeric arithmetic is exact.
+query R nosort
+SELECT 0.1 + 0.2
+----
+0.3
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: power() and mod() are not in the subset's function list.
+statement error 0A000
+SELECT power(2, 3)
+
+statement error 0A000
+SELECT mod(7, 3)

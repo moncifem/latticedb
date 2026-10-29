@@ -1,0 +1,208 @@
+# Everything PostgreSQL accepts that the subset does not: each is refused with 0A000 and a stable
+# message, never answered approximately. The first group is query syntax, then expressions, types
+# and statements. The last group is real syntax errors (42601), which PostgreSQL also refuses.
+#
+# DIFFERS FROM POSTGRESQL BY DESIGN: every 0A000 record below. The reference check skips them.
+
+statement ok
+CREATE TABLE ux (id INT PRIMARY KEY, a INT, b TEXT)
+
+statement ok
+INSERT INTO ux VALUES (1, 1, 'x'), (2, 2, 'y')
+
+# Query forms.
+statement error 0A000
+WITH c AS (SELECT id FROM ux) SELECT id FROM c
+
+statement error 0A000
+SELECT id FROM ux UNION SELECT id FROM ux
+
+statement error 0A000
+SELECT id FROM ux INTERSECT SELECT id FROM ux
+
+statement error 0A000
+SELECT id FROM ux EXCEPT SELECT id FROM ux
+
+statement error 0A000
+VALUES (1), (2)
+
+statement error 0A000
+SELECT id FROM ux FOR UPDATE
+
+statement error 0A000
+SELECT id INTO copy_ux FROM ux
+
+statement error 0A000
+SELECT DISTINCT ON (a) id FROM ux
+
+statement error 0A000
+SELECT id FROM ux WINDOW w AS (ORDER BY id)
+
+statement error 0A000
+SELECT id, row_number() OVER (ORDER BY id) FROM ux
+
+statement error 0A000
+TABLE ux
+
+# Expressions.
+statement error 0A000
+SELECT CASE WHEN a = 1 THEN 'one' ELSE 'other' END FROM ux
+
+statement error 0A000
+SELECT id FROM ux WHERE EXISTS (SELECT 1)
+
+statement error 0A000
+SELECT id FROM ux WHERE a = SOME (SELECT a FROM ux)
+
+statement error 0A000
+SELECT ARRAY[1, 2]
+
+statement error 0A000
+SELECT (1, 2)
+
+statement error 0A000
+SELECT INTERVAL '1 day'
+
+statement error 0A000
+SELECT current_date
+
+statement error 0A000
+SELECT current_timestamp
+
+statement error 0A000
+SELECT id FROM ux WHERE b ILIKE 'X'
+
+statement error 0A000
+SELECT id FROM ux WHERE b SIMILAR TO 'x'
+
+statement error 0A000
+SELECT id FROM ux WHERE b COLLATE "C" = 'x'
+
+statement error 0A000
+SELECT id FROM ux WHERE a IS DISTINCT FROM 1
+
+statement error 0A000
+SELECT now() AT TIME ZONE 'UTC'
+
+statement error 0A000
+SELECT random()
+
+statement error 0A000
+SELECT md5(b) FROM ux
+
+statement error 0A000
+SELECT string_agg(b, ',') FROM ux
+
+statement error 0A000
+SELECT sum(DISTINCT a) FROM ux
+
+statement error 0A000
+SELECT count(*) FILTER (WHERE a > 1) FROM ux
+
+statement error 0A000
+SELECT id FROM ux GROUP BY ROLLUP (id)
+
+# Types.
+statement error 0A000
+CREATE TABLE bad1 (id INT PRIMARY KEY, x INTEGER[])
+
+statement error 0A000
+CREATE TABLE bad2 (id INT PRIMARY KEY, x INTERVAL)
+
+statement error 0A000
+CREATE TABLE bad3 (id INT PRIMARY KEY, x INET)
+
+statement error 0A000
+CREATE TABLE bad4 (id INT PRIMARY KEY, x MONEY)
+
+statement error 0A000
+CREATE TABLE bad5 (id INT PRIMARY KEY, x XML)
+
+statement error 0A000
+CREATE TABLE bad6 (id INT PRIMARY KEY, x TIMESTAMP)
+
+statement error 0A000
+CREATE TABLE bad7 (id INT PRIMARY KEY, x NUMERIC(40, 2))
+
+# Statements.
+statement error 0A000
+COPY ux FROM STDIN
+
+statement error 0A000
+TRUNCATE ux
+
+statement error 0A000
+VACUUM ux
+
+statement error 0A000
+ANALYZE ux
+
+statement error 0A000
+EXPLAIN SELECT id FROM ux
+
+statement error 0A000
+LOCK TABLE ux
+
+statement error 0A000
+GRANT SELECT ON ux TO PUBLIC
+
+statement error 0A000
+LISTEN ch
+
+statement error 0A000
+DO 'BEGIN END'
+
+statement error 0A000
+SET LOCAL statement_timeout = 5
+
+statement error 0A000
+SHOW ALL
+
+statement error 0A000
+MERGE INTO ux USING ux u2 ON ux.id = u2.id WHEN MATCHED THEN DELETE
+
+# Syntax errors: refused by PostgreSQL too, with the same class.
+statement error 42601
+FROBNICATE ux
+
+statement error 42601
+SELECT id FROM FROM ux
+
+statement error 42601
+SELECT 1 +
+
+statement error 42601
+SELECT (1
+
+statement error 42601
+SELECT * FROM
+
+statement error 42601
+SELECT 'unterminated
+
+statement error 42601
+INSERT INTO ux VALUES
+
+statement error 42601
+UPDATE ux SET
+
+statement error 42601
+CREATE TABLE broken (
+
+statement error 42601
+SELECT 1 < 2 < 3
+
+statement error 42601
+CREATE TABLE select (a INT)
+
+statement error 42601
+SELECT id FROM ux WHERE
+
+# Still working after every refusal.
+query II rowsort
+SELECT id, a FROM ux
+----
+1
+1
+2
+2

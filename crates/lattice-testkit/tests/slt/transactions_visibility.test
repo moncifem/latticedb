@@ -1,0 +1,249 @@
+# One session: what a transaction sees of its own writes, what ROLLBACK and COMMIT leave behind,
+# and what happens to a transaction after a failed statement. Everything here is deterministic in
+# a single session. Write-write conflicts (40001) need two sessions and are not expressible in a
+# script with one connection; the simulator and the kernel tests cover them.
+#
+# The script depends on session state, so tools/slt_reference.py lists it among the scripts it
+# does not replay against PostgreSQL (one connection per statement there). The expected values are
+# PostgreSQL's behaviour, written down from its documentation.
+
+statement ok
+CREATE TABLE tx (id INT PRIMARY KEY, v INT NOT NULL)
+
+statement ok
+INSERT INTO tx VALUES (1, 10), (2, 20)
+
+# A transaction reads its own writes; ROLLBACK discards them.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO tx VALUES (3, 30)
+
+query I nosort
+SELECT count(*) FROM tx
+----
+3
+
+statement ok
+ROLLBACK
+
+query I nosort
+SELECT count(*) FROM tx
+----
+2
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE tx SET v = v + 1
+
+query I nosort
+SELECT sum(v) FROM tx
+----
+32
+
+statement ok
+ROLLBACK
+
+query I nosort
+SELECT sum(v) FROM tx
+----
+30
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM tx
+
+query I nosort
+SELECT count(*) FROM tx
+----
+0
+
+statement ok
+ROLLBACK
+
+query I nosort
+SELECT count(*) FROM tx
+----
+2
+
+# A row inserted, changed and removed inside one transaction leaves no trace.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO tx VALUES (5, 50)
+
+statement ok
+UPDATE tx SET v = 51 WHERE id = 5
+
+query I nosort
+SELECT v FROM tx WHERE id = 5
+----
+51
+
+statement ok
+DELETE FROM tx WHERE id = 5
+
+query I nosort
+SELECT count(*) FROM tx WHERE id = 5
+----
+0
+
+statement ok
+COMMIT
+
+query I nosort
+SELECT count(*) FROM tx
+----
+2
+
+# COMMIT keeps the writes.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO tx VALUES (3, 30)
+
+statement ok
+COMMIT
+
+query I nosort
+SELECT count(*) FROM tx
+----
+3
+
+# A rolled-back insert frees its key.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO tx VALUES (4, 40)
+
+statement ok
+ROLLBACK
+
+statement ok
+INSERT INTO tx VALUES (4, 41)
+
+query I nosort
+SELECT v FROM tx WHERE id = 4
+----
+41
+
+# After a failed statement the transaction is aborted: everything but ROLLBACK or COMMIT fails
+# with 25P02, and COMMIT rolls back.
+statement ok
+BEGIN
+
+statement error 23505
+INSERT INTO tx VALUES (1, 99)
+
+statement error 25P02
+SELECT count(*) FROM tx
+
+statement error 25P02
+INSERT INTO tx VALUES (6, 60)
+
+statement ok
+ROLLBACK
+
+query II nosort
+SELECT count(*), sum(v) FROM tx
+----
+4
+101
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO tx VALUES (6, 60)
+
+statement error 23505
+INSERT INTO tx VALUES (1, 99)
+
+statement ok
+COMMIT
+
+query I nosort
+SELECT count(*) FROM tx WHERE id = 6
+----
+0
+
+# The spelled-out forms.
+statement ok
+START TRANSACTION
+
+statement ok
+INSERT INTO tx VALUES (7, 70)
+
+statement ok
+COMMIT WORK
+
+statement ok
+BEGIN TRANSACTION
+
+statement ok
+DELETE FROM tx WHERE id = 7
+
+statement ok
+ROLLBACK TRANSACTION
+
+query I nosort
+SELECT v FROM tx WHERE id = 7
+----
+70
+
+# The isolation level requested on BEGIN. REPEATABLE READ is what a transaction gets.
+statement ok
+BEGIN ISOLATION LEVEL REPEATABLE READ
+
+query T nosort
+SHOW transaction_isolation
+----
+repeatable read
+
+statement ok
+ROLLBACK
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: PostgreSQL grants SERIALIZABLE; the subset gives snapshot
+# isolation and reports the level it really gives.
+statement ok
+BEGIN ISOLATION LEVEL SERIALIZABLE
+
+# differs-from-postgres
+query T nosort
+SHOW transaction_isolation
+----
+repeatable read
+
+statement ok
+ROLLBACK
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: savepoints, END and ABORT, READ COMMITTED, access modes and
+# AND CHAIN are not in the subset.
+statement error 0A000
+ROLLBACK TO SAVEPOINT s1
+
+statement error 0A000
+RELEASE SAVEPOINT s1
+
+statement error 0A000
+END
+
+statement error 0A000
+ABORT
+
+statement error 0A000
+BEGIN READ ONLY
+
+statement error 0A000
+BEGIN ISOLATION LEVEL READ COMMITTED
+
+statement error 0A000
+COMMIT AND CHAIN

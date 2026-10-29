@@ -1,0 +1,170 @@
+# ORDER BY with NULLs and ties. Ascending order puts NULLs last and descending order puts them
+# first unless NULLS FIRST or NULLS LAST says otherwise. Where rows tie and the order among them is
+# not defined, the record sorts the rows (rowsort) instead of relying on an arbitrary order.
+
+statement ok
+CREATE TABLE o (id INT PRIMARY KEY, g TEXT NOT NULL, n INT)
+
+statement ok
+INSERT INTO o VALUES (1, 'x', 3), (2, 'x', NULL), (3, 'y', 3), (4, 'y', 1), (5, 'x', NULL), (6, 'y', 1)
+
+query I nosort
+SELECT id FROM o ORDER BY n, id
+----
+4
+6
+1
+3
+2
+5
+
+query I nosort
+SELECT id FROM o ORDER BY n DESC, id
+----
+2
+5
+1
+3
+4
+6
+
+query I nosort
+SELECT id FROM o ORDER BY n NULLS FIRST, id
+----
+2
+5
+4
+6
+1
+3
+
+query I nosort
+SELECT id FROM o ORDER BY n DESC NULLS LAST, id
+----
+1
+3
+4
+6
+2
+5
+
+query I nosort
+SELECT id FROM o ORDER BY n ASC NULLS LAST, id DESC
+----
+6
+4
+3
+1
+5
+2
+
+query I nosort
+SELECT id FROM o ORDER BY n NULLS FIRST, id DESC
+----
+5
+2
+6
+4
+3
+1
+
+# Equal sort keys: the values come out in key order, which is all that is defined.
+query I nosort
+SELECT n FROM o ORDER BY n
+----
+1
+1
+3
+3
+NULL
+NULL
+
+# The ids of the first four rows are fixed even though the order within a tie is not.
+query I rowsort
+SELECT id FROM o ORDER BY n LIMIT 4
+----
+1
+3
+4
+6
+
+query I valuesort
+SELECT id FROM o ORDER BY n DESC LIMIT 2
+----
+2
+5
+
+query II nosort
+SELECT id, n FROM o ORDER BY g, n DESC, id
+----
+2
+NULL
+5
+NULL
+1
+3
+3
+3
+4
+1
+6
+1
+
+query I nosort
+SELECT id FROM o ORDER BY n + 1, id
+----
+4
+6
+1
+3
+2
+5
+
+query II nosort
+SELECT id, n AS v FROM o ORDER BY v DESC, id LIMIT 3
+----
+2
+NULL
+5
+NULL
+1
+3
+
+query TI nosort
+SELECT g, sum(n) FROM o GROUP BY g ORDER BY sum(n) DESC
+----
+y
+5
+x
+3
+
+query TI nosort
+SELECT g, count(n) FROM o GROUP BY g ORDER BY count(n), g
+----
+x
+1
+y
+3
+
+query I nosort
+SELECT DISTINCT n FROM o ORDER BY n DESC
+----
+NULL
+3
+1
+
+query I nosort
+SELECT DISTINCT n FROM o ORDER BY n NULLS LAST
+----
+1
+3
+NULL
+
+statement error 42703
+SELECT id FROM o ORDER BY nope
+
+statement error 42601
+SELECT id FROM o ORDER BY n NULLS SIDEWAYS
+
+statement error 42601
+SELECT id FROM o ORDER BY

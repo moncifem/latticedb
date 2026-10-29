@@ -1,0 +1,155 @@
+# CREATE TABLE, ALTER TABLE ... ADD COLUMN, CREATE INDEX, DROP INDEX and DROP TABLE: success, the
+# errors for repeating or missing objects, and what a unique index enforces.
+
+statement ok
+CREATE TABLE d (id INT PRIMARY KEY, name TEXT, score INT)
+
+statement ok
+INSERT INTO d VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 20)
+
+statement error 42P07
+CREATE TABLE d (id INT PRIMARY KEY)
+
+statement ok
+CREATE TABLE IF NOT EXISTS d (id INT PRIMARY KEY)
+
+query I nosort
+SELECT count(*) FROM d
+----
+3
+
+statement error 42701
+CREATE TABLE twice (id INT PRIMARY KEY, id INT)
+
+# ADD COLUMN: existing rows get NULL, or the constant default.
+statement ok
+ALTER TABLE d ADD COLUMN note TEXT
+
+statement ok
+ALTER TABLE d ADD COLUMN flag INT DEFAULT 7
+
+query ITTI nosort
+SELECT id, name, note, flag FROM d ORDER BY id
+----
+1
+a
+NULL
+7
+2
+b
+NULL
+7
+3
+c
+NULL
+7
+
+statement ok
+UPDATE d SET note = 'n' WHERE id = 2
+
+query IT nosort
+SELECT id, note FROM d WHERE note IS NOT NULL
+----
+2
+n
+
+statement error 42701
+ALTER TABLE d ADD COLUMN note TEXT
+
+statement error 42P01
+ALTER TABLE missing ADD COLUMN x INT
+
+# Indexes.
+statement ok
+CREATE INDEX d_score ON d (score)
+
+statement error 42P07
+CREATE INDEX d_score ON d (name)
+
+statement error 42703
+CREATE INDEX d_bad ON d (nope)
+
+statement error 42P01
+CREATE INDEX m_idx ON missing (x)
+
+query I nosort
+SELECT id FROM d WHERE score = 20 ORDER BY id
+----
+2
+3
+
+statement ok
+CREATE UNIQUE INDEX d_name ON d (name)
+
+statement error 23505
+INSERT INTO d (id, name, score) VALUES (4, 'a', 5)
+
+statement ok
+INSERT INTO d (id, name, score) VALUES (4, NULL, 5), (5, NULL, 5)
+
+# A unique index cannot be built over duplicates.
+statement error 23505
+CREATE UNIQUE INDEX d_score_unique ON d (score)
+
+statement ok
+DROP INDEX d_name
+
+statement ok
+INSERT INTO d (id, name, score) VALUES (6, 'a', 5)
+
+statement error 42704
+DROP INDEX d_name
+
+statement ok
+DROP INDEX IF EXISTS d_name
+
+# Tables.
+statement ok
+DROP TABLE d
+
+statement error 42P01
+SELECT * FROM d
+
+statement error 42P01
+DROP TABLE d
+
+statement ok
+DROP TABLE IF EXISTS d
+
+# A dropped name can be created again, empty.
+statement ok
+CREATE TABLE d (id INT PRIMARY KEY, name TEXT)
+
+query I nosort
+SELECT count(*) FROM d
+----
+0
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: views, sequences, functions, triggers, TRUNCATE, ALTER forms
+# other than the table forms, index methods and DROP ... CASCADE are not in the subset.
+statement error 0A000
+CREATE VIEW v AS SELECT id FROM d
+
+statement error 0A000
+CREATE SEQUENCE s
+
+statement error 0A000
+CREATE FUNCTION f() RETURNS INT AS 'SELECT 1' LANGUAGE sql
+
+statement error 0A000
+CREATE TRIGGER t BEFORE INSERT ON d FOR EACH ROW EXECUTE FUNCTION f()
+
+statement error 0A000
+TRUNCATE d
+
+statement error 0A000
+ALTER INDEX d_score RENAME TO d_score2
+
+statement error 0A000
+CREATE INDEX d_hash ON d USING hash (name)
+
+statement error 0A000
+DROP TABLE d CASCADE
+
+statement error 0A000
+CREATE TABLE copy_of AS SELECT * FROM d
