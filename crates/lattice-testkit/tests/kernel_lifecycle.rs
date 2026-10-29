@@ -495,3 +495,91 @@ fn a_segment_whose_creation_was_torn_is_rewritten_and_counted() {
     assert_eq!(report.segments, before + 1);
     assert_eq!(report.records, 6);
 }
+
+#[test]
+fn a_write_for_a_turn_that_has_not_begun_is_refused_as_unknown_not_fenced() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    k.begin_turn(TurnRef {
+        session: 1,
+        turn: 1,
+    })
+    .unwrap();
+    let mut cs = ChangeSet::new(k.new_id(), vec![1]);
+    cs.turn = Some(TurnRef {
+        session: 1,
+        turn: 2,
+    });
+    assert!(matches!(k.commit(cs), Err(TxnError::UnknownTurn(1))));
+}
+
+/// A clock that moves 1.5 s every time it is read, so a commit takes a whole number of those ticks.
+struct Ticking(Rc<SimClock>);
+impl lattice_seams::Clock for Ticking {
+    fn now_ms(&self) -> u64 {
+        self.0.advance(1500);
+        self.0.now_ms()
+    }
+}
+
+#[test]
+fn commit_latency_is_recorded_in_seconds() {
+    let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
+    let (mut k, _) = Kernel::open(
+        disk.clone(),
+        Ticking(Rc::new(SimClock::new(1_000))),
+        SeededRng::new(1),
+        &config(),
+    )
+    .unwrap();
+    let id = k.new_id();
+    k.commit(ChangeSet::new(id, vec![1])).unwrap();
+    let h = k
+        .metrics()
+        .histogram(lattice_core::metrics::names::COMMIT_LATENCY_SECONDS)
+        .unwrap();
+    assert_eq!(h.count, 1);
+    // Every clock read adds 1.5 s, so the recorded latency is a positive whole number of ticks. A
+    // wrong unit conversion gives a fraction of a tick, zero or a number in the millions.
+    let ticks = h.sum / 1.5;
+    assert!(
+        (ticks - ticks.round()).abs() < 1e-9 && (1.0..60.0).contains(&ticks),
+        "recorded {} s",
+        h.sum
+    );
+}
+
+#[test]
+fn the_kernel_knows_which_ids_it_has_committed() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    let id = k.new_id();
+    let other = k.new_id();
+    assert!(!k.contains(&id));
+    k.commit(ChangeSet::new(id, vec![1])).unwrap();
+    assert!(k.contains(&id));
+    assert!(!k.contains(&other));
+}
+
+#[test]
+fn a_last_segment_as_long_as_a_header_but_not_one_is_corruption_not_a_torn_creation() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    // Two small commits stay inside the first segment, so the next segment does not exist yet.
+    for i in 0..2 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 40])).unwrap();
+    }
+    let path = format!("wal/{:020}.seg", k.durable_lsn() + 1);
+    drop(k);
+    assert!(
+        !disk.exists(&path),
+        "the garbage must be a new segment file"
+    );
+    // A header cut short by a crash is shorter than a header. These bytes are as long as one and are
+    // not one, so recovery must refuse the log rather than rewrite the segment.
+    let mut io = disk.clone();
+    io.append(&path, &[0xFF; lattice_core::record::SEGMENT_HEADER_LEN])
+        .unwrap();
+    assert!(lattice_core::Log::open(disk.clone(), "wal", 400).is_err());
+}

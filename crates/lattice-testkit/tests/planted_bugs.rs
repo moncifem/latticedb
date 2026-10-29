@@ -95,3 +95,12 @@ fn the_clean_build_trips_no_checker_over_the_same_budget() {
         }
     }
 }
+
+#[test]
+fn enabling_a_bug_twice_leaves_it_enabled_and_clear_turns_it_off() {
+    bugs::enable(Bug::SkipFsync);
+    bugs::enable(Bug::SkipFsync);
+    assert!(bugs::active(Bug::SkipFsync));
+    bugs::clear();
+    assert!(!bugs::active(Bug::SkipFsync));
+}

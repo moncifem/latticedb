@@ -212,6 +212,27 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
+    fn an_or_set_removes_what_it_has_seen_and_shows_a_later_add_again() {
+        let tag = |n: u64| Hlc {
+            wall_ms: n,
+            counter: 0,
+            node: 1,
+        };
+        let mut s: OrSet<u8> = OrSet::default();
+        assert!(!s.contains(&1));
+        s.remove(&1); // removing a value that was never added changes nothing
+        assert!(!s.contains(&1));
+        s.add(1, tag(1));
+        assert!(s.contains(&1));
+        assert!(!s.contains(&2));
+        s.remove(&1);
+        assert!(!s.contains(&1));
+        // An add with a new tag after the remove is a different add, so the value is back.
+        s.add(1, tag(2));
+        assert!(s.contains(&1));
+    }
+
+    #[test]
     fn a_tie_in_timestamps_keeps_the_larger_value_whatever_the_order() {
         let at = Hlc {
             wall_ms: 5,
