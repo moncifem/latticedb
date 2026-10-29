@@ -18,3 +18,4 @@
 | [0014](0014-derived-row-indexes.md) | ADR 0014: Secondary indexes are derived from committed rows | accepted |
 | [0018](0018-schema-change-strategy.md) | ADR 0018: Online schema changes through shadow generations | proposed |
 | [0020](0020-pgwire-scram-sha256.md) | ADR 0020: PostgreSQL SCRAM-SHA-256 primitives with explicit authentication phases | accepted |
+| [0021](0021-pgwire-scram-tls-integration.md) | ADR 0021: Require TLS for configured SCRAM sessions | proposed |
