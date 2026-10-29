@@ -1,6 +1,7 @@
 //! Lexer, parser and AST for the SQL subset declared in `docs/sql-subset.md`.
 //!
-//! Layer L2. Must not: do I/O, plan or execute queries.
+//! Layer L2. Must not: do I/O or execute queries. Binding to a logical plan is here; it reaches the
+//! database only through the [`plan::CatalogView`] trait.
 //!
 //! ```
 //! let stmt = lattice_sql::parse_statement("SELECT id FROM notes WHERE score >= 20").unwrap();
@@ -42,3 +43,6 @@ pub const MAX_IDENT_LEN: usize = 63;
 
 /// Layer marker used by the layer check. Do not remove.
 pub const LAYER: u8 = 2;
+
+pub mod binder;
+pub mod plan;
