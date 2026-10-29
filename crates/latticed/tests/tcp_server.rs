@@ -584,3 +584,32 @@ fn oversized_pre_authentication_startup_packet_is_refused_without_a_body() {
     assert!(error.windows(7).any(|bytes| bytes == b"C08P01\0"));
     server.shutdown().unwrap();
 }
+
+#[test]
+fn startup_packet_boundary_is_exactly_ten_thousand_bytes() {
+    let server = server(2, Duration::from_secs(3));
+    // A valid startup packet padded with a long option value to the exact length.
+    let padded = |total: usize| {
+        let mut packet = vec![0, 0, 0, 0, 0, 3, 0, 0];
+        packet.extend_from_slice(b"user\0socket-test\0options\0");
+        let filler = total - packet.len() - 2;
+        packet.extend(std::iter::repeat_n(b'x', filler));
+        packet.extend_from_slice(&[0, 0]);
+        packet[..4].copy_from_slice(&(total as i32).to_be_bytes());
+        assert_eq!(packet.len(), total);
+        packet
+    };
+    let mut accepted = connect(server.local_addr());
+    accepted
+        .write_all(&padded(latticed::MAX_STARTUP_PACKET_LEN))
+        .unwrap();
+    assert_eq!(message(&mut accepted), (b'R', vec![0; 4]));
+    let mut refused = connect(server.local_addr());
+    refused
+        .write_all(&padded(latticed::MAX_STARTUP_PACKET_LEN + 1))
+        .unwrap();
+    let (tag, error) = message(&mut refused);
+    assert_eq!(tag, b'E');
+    assert!(error.windows(7).any(|bytes| bytes == b"C08P01\0"));
+    server.shutdown().unwrap();
+}

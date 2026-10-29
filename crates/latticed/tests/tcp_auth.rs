@@ -383,3 +383,26 @@ fn cli_requires_persistent_decoy_secret_and_refuses_it_in_trust_mode() {
             .contains("--scram-decoy-secret FILE")
     );
 }
+
+#[test]
+fn registry_full_after_scram_success_reaches_the_client_as_53300() {
+    let (mut config, client_config) = fixture(Duration::from_secs(5));
+    config.max_connections = 1;
+    let server = ServerHandle::start(config).unwrap();
+    let mut first = tls(server.local_addr(), client_config.clone());
+    let proof_first = begin(&mut first, "user");
+    let signature = finish(&mut first, &proof_first, b"pencil");
+    let mut final_body = vec![0, 0, 0, 12];
+    final_body.extend(signature);
+    assert_eq!(message(&mut first), (b'R', final_body));
+    assert_eq!(message(&mut first), (b'R', vec![0, 0, 0, 0]));
+    // The first session holds the only registry slot; a second correct login is refused after SCRAM.
+    let mut second = tls(server.local_addr(), client_config);
+    let proof_second = begin(&mut second, "user");
+    finish(&mut second, &proof_second, b"pencil");
+    let (tag, error) = message(&mut second);
+    assert_eq!(tag, b'E');
+    assert!(error.windows(7).any(|bytes| bytes == b"C53300\0"));
+    is_closed(&mut second);
+    server.shutdown().unwrap();
+}

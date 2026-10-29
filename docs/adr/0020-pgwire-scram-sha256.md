@@ -45,8 +45,14 @@ password authentication, establish measured constant-time behavior on every targ
 The host registers a cancel key only after SCRAM succeeds, so unauthenticated clients occupy no
 registry slot, and cancel PIDs come from a wrapping counter that skips active PIDs. TLS handshake
 starts are limited globally (64 per second) and per client address (16 per second per IPv4 address or
-IPv6 /64, at most 1024 tracked addresses; the table fails closed for new addresses while full).
-Residual risk: a client controlling many source addresses can still exhaust the global budget and
-block TLS for others, and addresses behind one NAT share a budget. Operators needing stronger
-protection should rate limit in front of the listener. Pre-authentication startup packets are capped
-at 10000 bytes. The read timeout also acts as the idle timeout of authenticated sessions.
+IPv6 /64, with IPv4-mapped peers treated as IPv4; at most 1024 tracked addresses).
+Residual risks: a client controlling many source addresses can still exhaust the global budget and
+block TLS for others; a proxy or NAT in front of many clients shares one address and is capped at 16
+new TLS starts per second; and unauthenticated clients still hold worker threads (`max_connections`
+plus 8 control slots) until their deadline. Operators needing stronger protection should rate limit in
+front of the listener. Pre-authentication startup packets are capped at 10000 bytes. A 5 second
+pre-startup limit applies only to startup-phase packets (SASL frames use the read timeout) and drops
+clients that connect and then wait longer than that before sending, a deliberate behaviour change. The
+read timeout also acts as the idle timeout of authenticated sessions. The accept loop treats a bounded
+run of consecutive transient accept errors (about ten seconds) as fatal, and the `latticed` binary
+exits when its listener has stopped.

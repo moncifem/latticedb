@@ -12,10 +12,13 @@
 //! bytes and must arrive within [`PRE_STARTUP_TIMEOUT`].
 //!
 //! TLS handshakes are limited globally (64 starts per second) and per client address (16 starts per
-//! second per IPv4 address or IPv6 /64, in a table of at most 1024 addresses). Residual risk: a
-//! client with many source addresses can still exhaust the global budget, and the per-address
-//! table fails closed for new addresses while it is full of recent ones. This is a resource bound,
-//! not a denial-of-service guarantee; see ADR 0020.
+//! second per IPv4 address or IPv6 /64, in a table of at most 1024 addresses). Residual risks: a
+//! client with many source addresses can still exhaust the global budget; a proxy or NAT in front
+//! of many clients shares one address and is capped at 16 new TLS starts per second; and
+//! unauthenticated clients still hold worker threads (`max_connections` plus the control reserve of
+//! 8) until their deadline. The 5 s pre-startup limit applies only to startup-phase packets (SASL
+//! frames use `read_timeout`) and drops clients that connect and then wait longer than 5 s before
+//! sending. This is a resource bound, not a denial-of-service guarantee; see ADR 0020.
 #![forbid(unsafe_code)]
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -170,6 +173,14 @@ impl ServerHandle {
         })
     }
 
+    /// True once the accept thread has exited, which only happens after shutdown or a fatal
+    /// listener error. A supervisor should treat an unrequested exit as a failed server.
+    pub fn is_finished(&self) -> bool {
+        self.acceptor
+            .as_ref()
+            .is_none_or(|acceptor| acceptor.is_finished())
+    }
+
     /// Actual bound address, including the selected port when binding port zero.
     pub fn local_addr(&self) -> SocketAddr {
         self.address
@@ -202,6 +213,43 @@ struct Worker {
     thread: JoinHandle<()>,
 }
 
+/// Consecutive transient accept failures tolerated before the listener gives up (about ten seconds).
+const MAX_CONSECUTIVE_ACCEPT_ERRORS: u32 = 200;
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
+const ACCEPT_ERROR_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Whether an accept error ends the listener or only delays it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcceptFailure {
+    Fatal,
+    Transient,
+}
+
+/// Classifies by `ErrorKind` only. Fatal kinds mean the listening socket itself is unusable or
+/// misconfigured; everything else (EMFILE, ENOMEM, firewall refusal) may clear by itself.
+fn classify(error: &io::Error) -> AcceptFailure {
+    use io::ErrorKind::{
+        AddrInUse, AddrNotAvailable, InvalidData, InvalidInput, NotConnected, Unsupported,
+    };
+    if matches!(
+        error.kind(),
+        InvalidInput | InvalidData | NotConnected | Unsupported | AddrInUse | AddrNotAvailable
+    ) {
+        AcceptFailure::Fatal
+    } else {
+        AcceptFailure::Transient
+    }
+}
+
+/// Reports only the error kind and count; accept errors carry no client data.
+#[allow(clippy::print_stderr)]
+fn report_accept_error(error: &io::Error, consecutive: u32) {
+    eprintln!(
+        "latticed: accept failing ({:?}, {consecutive} in a row); retrying",
+        error.kind()
+    );
+}
+
 fn accept<H, F>(
     listener: TcpListener,
     config: ServerConfig,
@@ -215,6 +263,8 @@ where
 {
     let mut workers: Vec<Worker> = Vec::new();
     let handshakes = Arc::new(Mutex::new(HandshakeLimiter::default()));
+    let mut consecutive = 0u32;
+    let mut last_report: Option<Instant> = None;
     let result = (|| {
         while !stopping.load(Ordering::Acquire) {
             let mut index = 0;
@@ -232,6 +282,7 @@ where
             }
             match listener.accept() {
                 Ok((socket, _)) => {
+                    consecutive = 0;
                     if workers.len() == config.max_connections + CONTROL_CONNECTION_RESERVE {
                         // With no classification worker available, close without inventing a reply
                         // to a packet that may be CancelRequest. Normal startup admission below
@@ -247,6 +298,7 @@ where
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    consecutive = 0;
                     thread::sleep(Duration::from_millis(5))
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -256,16 +308,25 @@ where
                         error.kind(),
                         io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset
                     ) => {}
-                // Fatal listener errors: the socket is unusable or the arguments are invalid.
-                Err(error)
-                    if error.kind() == io::ErrorKind::InvalidInput
-                        || error.raw_os_error() == Some(9) =>
-                {
-                    return Err(error);
+                Err(error) => {
+                    if classify(&error) == AcceptFailure::Fatal {
+                        return Err(error);
+                    }
+                    // Descriptor exhaustion, memory pressure or a firewall refusal: back off and keep
+                    // serving admitted connections, but give up if the listener never recovers.
+                    consecutive += 1;
+                    if consecutive >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+                        return Err(io::Error::new(
+                            error.kind(),
+                            "listener gave up after repeated accept failures",
+                        ));
+                    }
+                    if last_report.is_none_or(|at| at.elapsed() >= ACCEPT_ERROR_REPORT_INTERVAL) {
+                        report_accept_error(&error, consecutive);
+                        last_report = Some(Instant::now());
+                    }
+                    thread::sleep(ACCEPT_ERROR_BACKOFF);
                 }
-                // Anything else (descriptor exhaustion, memory pressure, a firewall refusal) is
-                // transient: back off briefly and keep serving the connections already admitted.
-                Err(_) => thread::sleep(Duration::from_millis(50)),
             }
         }
         Ok(())
@@ -505,7 +566,8 @@ fn expire(starts: &mut VecDeque<Instant>, now: Instant) {
 impl HandshakeLimiter {
     /// IPv6 clients are keyed by /64 so one host cannot rotate through its whole prefix.
     fn key(address: IpAddr) -> IpAddr {
-        match address {
+        // A dual-stack `[::]` listener reports IPv4 peers as ::ffff:a.b.c.d; treat them as IPv4.
+        match address.to_canonical() {
             IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(
                 u128::from(v6) & 0xffff_ffff_ffff_ffff_0000_0000_0000_0000,
             )),
@@ -954,6 +1016,37 @@ mod tests {
         let c: IpAddr = "2001:db8:0:1::1".parse().unwrap();
         assert_eq!(HandshakeLimiter::key(a), HandshakeLimiter::key(b));
         assert_ne!(HandshakeLimiter::key(a), HandshakeLimiter::key(c));
+    }
+
+    #[test]
+    fn mapped_ipv4_peers_get_separate_buckets_and_accept_errors_are_classified() {
+        let now = Instant::now();
+        let a: IpAddr = "::ffff:192.0.2.1".parse().unwrap();
+        let b: IpAddr = "::ffff:192.0.2.2".parse().unwrap();
+        assert_ne!(HandshakeLimiter::key(a), HandshakeLimiter::key(b));
+        assert_eq!(HandshakeLimiter::key(a), IpAddr::from([192, 0, 2, 1]));
+        let mut limiter = HandshakeLimiter::default();
+        for _ in 0..PER_IP_TLS_STARTS_PER_SECOND {
+            assert!(limiter.admit(a, now));
+        }
+        assert!(!limiter.admit(a, now));
+        assert!(limiter.admit(b, now));
+        for kind in [
+            io::ErrorKind::InvalidInput,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::Unsupported,
+            io::ErrorKind::AddrInUse,
+        ] {
+            assert_eq!(classify(&io::Error::from(kind)), AcceptFailure::Fatal);
+        }
+        for kind in [
+            io::ErrorKind::OutOfMemory,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::Other,
+            io::ErrorKind::TimedOut,
+        ] {
+            assert_eq!(classify(&io::Error::from(kind)), AcceptFailure::Transient);
+        }
     }
 
     #[test]

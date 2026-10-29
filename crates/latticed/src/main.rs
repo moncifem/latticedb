@@ -119,9 +119,35 @@ fn run() -> Result<(), String> {
     );
     // An explicit host control channel avoids an unsafe signal handler or a new runtime dependency.
     // EOF also stops cleanly, so supervised use must keep stdin open until shutdown is requested.
-    for line in io::stdin().lock().lines() {
-        if line.map_err(|e| e.to_string())?.trim() == "shutdown" {
-            break;
+    // A reader thread forwards stdin so a dead listener can end the process instead of leaving it
+    // blocked on stdin while accepting nothing.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            match line {
+                Ok(line) if line.trim() == "shutdown" => break,
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                    return;
+                }
+            }
+        }
+        let _ = sender.send(Ok(()));
+    });
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(500)) {
+            Ok(Ok(())) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Err(error)) => return Err(error),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if server.is_finished() {
+                    // Surfaces the listener's fatal error, or reports an unexpected exit.
+                    return server
+                        .shutdown()
+                        .map_err(|e| e.to_string())
+                        .and_then(|()| Err("listener stopped unexpectedly".into()));
+                }
+            }
         }
     }
     server.shutdown().map_err(|e| e.to_string())

@@ -189,7 +189,9 @@ between minor versions; format changes are called out explicitly.
 - latticed: a failed accept or per-connection setup error drops that socket and the listener keeps
   accepting; cancel keys are registered only after authentication; cancel PIDs wrap and skip active
   ones instead of exhausting; TLS handshake starts are also limited per client address; startup
-  packets are capped at 10000 bytes with a 5 s pre-startup deadline. The read timeout is documented
+  packets are capped at 10000 bytes. Behaviour change: a client that connects and sends no
+  startup packet for 5 s is now dropped (it was the read timeout, 30 s). Persistent accept errors end
+  the listener after about ten seconds and the binary then exits instead of hanging on stdin. The read timeout is documented
   as the idle timeout and `--help` states that stdin EOF stops the server.
 
 ## [0.1.0-alpha.0]
