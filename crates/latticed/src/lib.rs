@@ -196,21 +196,15 @@ where
                     .get(index)
                     .is_some_and(|worker| worker.thread.is_finished())
                 {
+                    // A panicked worker ends only its own connection; the listener keeps accepting.
                     let worker = workers.swap_remove(index);
-                    worker
-                        .thread
-                        .join()
-                        .map_err(|_| io::Error::other("connection worker panicked"))?;
+                    let _ = worker.thread.join();
                 } else {
                     index += 1;
                 }
             }
             match listener.accept() {
                 Ok((socket, _)) => {
-                    // Accepted sockets can inherit O_NONBLOCK on some hosts (notably macOS).
-                    // Workers use blocking I/O with explicit deadlines, independently of accept.
-                    socket.set_nonblocking(false)?;
-                    socket.set_write_timeout(Some(config.write_timeout))?;
                     if workers.len() == config.max_connections + CONTROL_CONNECTION_RESERVE {
                         // With no classification worker available, close without inventing a reply
                         // to a packet that may be CancelRequest. Normal startup admission below
@@ -218,41 +212,23 @@ where
                         let _ = socket.shutdown(Shutdown::Both);
                         continue;
                     }
-                    socket.set_nodelay(true)?;
-                    let controller = socket.try_clone()?;
-                    let connection_config = config.clone();
-                    let handshake_limit = handshakes.clone();
-                    let deadline = Instant::now()
-                        .checked_add(config.startup_timeout)
-                        .ok_or_else(|| io::Error::other("startup deadline overflow"))?;
-                    let connection_registry = registry.clone();
-                    let connection_factory = factory.clone();
-                    let worker =
-                        thread::Builder::new()
-                            .name("pg-connection".into())
-                            .spawn(move || {
-                                // Disconnects, malformed input and timeouts end this connection, not the listener.
-                                let _ = connection(
-                                    Transport::new(
-                                        socket,
-                                        deadline,
-                                        connection_config.write_timeout,
-                                    ),
-                                    connection_config,
-                                    connection_registry,
-                                    connection_factory,
-                                    handshake_limit,
-                                );
-                            })?;
-                    workers.push(Worker {
-                        socket: controller,
-                        thread: worker,
-                    });
+                    // A socket that fails setup or a failed spawn drops only that client.
+                    if let Ok(worker) =
+                        start_worker(socket, &config, &registry, &factory, &handshakes)
+                    {
+                        workers.push(worker);
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(5))
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                // The peer can reset a connection before it is accepted; that is not a listener failure.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset
+                    ) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -272,6 +248,48 @@ where
         }
     }
     result
+}
+
+fn start_worker<H, F>(
+    socket: TcpStream,
+    config: &ServerConfig,
+    registry: &Registry,
+    factory: &Arc<F>,
+    handshakes: &Arc<Mutex<std::collections::VecDeque<Instant>>>,
+) -> io::Result<Worker>
+where
+    H: QueryHandler + 'static,
+    F: Fn() -> H + Send + Sync + 'static,
+{
+    // Accepted sockets can inherit O_NONBLOCK on some hosts (notably macOS).
+    // Workers use blocking I/O with explicit deadlines, independently of accept.
+    socket.set_nonblocking(false)?;
+    socket.set_write_timeout(Some(config.write_timeout))?;
+    socket.set_nodelay(true)?;
+    let controller = socket.try_clone()?;
+    let connection_config = config.clone();
+    let handshake_limit = handshakes.clone();
+    let deadline = Instant::now()
+        .checked_add(config.startup_timeout)
+        .ok_or_else(|| io::Error::other("startup deadline overflow"))?;
+    let connection_registry = registry.clone();
+    let connection_factory = factory.clone();
+    let thread = thread::Builder::new()
+        .name("pg-connection".into())
+        .spawn(move || {
+            // Disconnects, malformed input and timeouts end this connection, not the listener.
+            let _ = connection(
+                Transport::new(socket, deadline, connection_config.write_timeout),
+                connection_config,
+                connection_registry,
+                connection_factory,
+                handshake_limit,
+            );
+        })?;
+    Ok(Worker {
+        socket: controller,
+        thread,
+    })
 }
 
 fn read_before(

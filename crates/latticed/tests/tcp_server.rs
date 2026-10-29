@@ -470,3 +470,39 @@ fn bounded_control_slots_cannot_make_shutdown_wait_for_slow_startup_clients() {
         closed(&mut stream);
     }
 }
+
+#[test]
+fn a_panicked_connection_worker_does_not_stop_the_listener() {
+    let (started, _receiver) = std::sync::mpsc::channel();
+    let first = std::sync::atomic::AtomicBool::new(true);
+    let server = ServerHandle::start_with_handler(
+        ServerConfig {
+            address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            max_connections: 4,
+            read_timeout: Duration::from_secs(3),
+            write_timeout: Duration::from_secs(2),
+            ..ServerConfig::default()
+        },
+        move || {
+            assert!(
+                !first.swap(false, std::sync::atomic::Ordering::SeqCst),
+                "injected handler panic"
+            );
+            Cooperative {
+                started: started.clone(),
+            }
+        },
+    )
+    .unwrap();
+    let mut panicked = connect(server.local_addr());
+    panicked.write_all(&startup()).unwrap();
+    closed(&mut panicked);
+    // Give the acceptor time to reap the panicked worker before the next client arrives.
+    std::thread::sleep(Duration::from_millis(200));
+    let mut next = TcpStream::connect_timeout(&server.local_addr(), Duration::from_secs(2))
+        .expect("listener must keep accepting after a worker panic");
+    next.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    next.write_all(&startup()).unwrap();
+    ready(&mut next);
+    server.shutdown().unwrap();
+}
