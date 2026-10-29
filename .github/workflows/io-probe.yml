@@ -9,6 +9,10 @@ on:
         description: Run only the isolated ADR0013 SQL planner experiment
         type: boolean
         default: false
+      functional_retry:
+        description: Cached planner functional retry; never clean-build evidence
+        type: boolean
+        default: false
       scorecard_source_run:
         description: "Replay retained evidence from a completed nightly run; empty runs the normal I/O probes"
         required: false
@@ -114,3 +118,5 @@ jobs:
   sql-planner-spike:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.sql_planner }}
     uses: ./.github/workflows/sql-planner-spike.yml
+    with:
+      functional_retry: ${{ inputs.functional_retry }}

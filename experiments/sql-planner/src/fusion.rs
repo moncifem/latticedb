@@ -207,6 +207,7 @@ fn values(batches: Vec<RecordBatch>) -> Result<Output> {
                     Value::Null
                 } else {
                     match a.data_type() {
+                        DataType::Null => Value::Null,
                         DataType::Int64 => {
                             Value::Int(a.as_any().downcast_ref::<Int64Array>().unwrap().value(row))
                         }
@@ -411,4 +412,23 @@ pub async fn execute<I: Io, C: Clock, R: Rng>(
         return result;
     }
     finish(db, s, auto, result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn arrow_null_type_reaches_row_not_null_validation() {
+        use datafusion::arrow::array::NullArray;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "priority",
+                DataType::Null,
+                true,
+            )])),
+            vec![Arc::new(NullArray::new(1))],
+        )
+        .unwrap();
+        assert_eq!(values(vec![batch]).unwrap(), vec![vec![Value::Null]]);
+    }
 }

@@ -2,7 +2,16 @@ name: sql-planner-spike
 # Standalone ADR0013 evidence experiment. Never part of a default PR or scheduled laptop build.
 on:
   workflow_dispatch:
+    inputs:
+      functional_retry:
+        description: Cached functional retry; no clean build metrics
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      functional_retry:
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -19,11 +28,19 @@ jobs:
           POSTGRES_PASSWORD: experiment
         ports: ["5432:5432"]
         options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: 1.99.1 }
+      - name: restore only the functional retry dependency cache
+        if: inputs.functional_retry
+        id: functional_cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: experiments/sql-planner -> functional-target
+          shared-key: sql-planner-functional
+          cache-on-failure: true
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
         with: { tool: cargo-deny }
       - name: record runner and source context
@@ -47,12 +64,20 @@ jobs:
           cargo metadata --locked --format-version 1 --no-deps > planner-evidence/production-metadata.json
       - name: coordinator timeout regression
         run: python3 -m unittest discover -s experiments/sql-planner -p test_measure.py
-      - name: clean builds and all three candidate measurements
+      - name: candidate experiment (mode recorded explicitly)
+        env:
+          FUNCTIONAL_CACHE_HIT: ${{ steps.functional_cache.outputs.cache-hit }}
         run: |
+          mode_args=()
+          target_root="$RUNNER_TEMP/sql-planner-clean"
+          if [ "${{ inputs.functional_retry }}" = "true" ]; then
+            mode_args=(--functional-retry)
+            target_root="$PWD/experiments/sql-planner/functional-target"
+          fi
           python3 experiments/sql-planner/measure.py \
             --output "$PWD/planner-evidence" \
-            --target-root "$RUNNER_TEMP/sql-planner-clean" \
-            --dsn 'postgresql://postgres:experiment@127.0.0.1:5432/postgres'
+            --target-root "$target_root" \
+            --dsn 'postgresql://postgres:experiment@127.0.0.1:5432/postgres' "${mode_args[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
