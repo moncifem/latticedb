@@ -78,7 +78,10 @@ plan/provider/storage/result events, not only sorted results. Repeat runs must a
 DataFusion's simulator path uses a single-thread future driver without a Tokio runtime. A requirement
 for Tokio / a thread pool, a panic, a timeout or unequal trace is a recorded failure, not silently
 replaced with a host-runtime pass. Matching traces alone cannot prove the absence of randomized hash
-seeds, wall clocks or unreachable thread-spawn paths; the C2 source audit remains separately open.
+seeds or host clocks. The [reachable C2 audit](C2_AUDIT.md) identifies actual UTC/monotonic-clock
+reads and randomized optimizer hashing in the pinned DataFusion path, so the current adapter fails
+those strict C2 conditions despite matching observable traces. The custom/parser audit is bounded to
+the implemented paths; no complete pool or full-subset safety proof is claimed.
 DataFusion host measurements use an explicitly separate current-thread Tokio runtime.
 
 ## Manual same-runner measurement

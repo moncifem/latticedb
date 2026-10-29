@@ -25,7 +25,10 @@ retries restore a compiler cache. Cached build times never replace this table or
 All three candidates executed all five positive simulator cases, and their repeated observable raw
 traces matched. DataFusion did so using the no-Tokio-runtime future driver on this corpus. That does
 not prove C2: hidden clock reads, randomized hash initialization or reachable pool paths still require
-source/call-path review. Matching ordered output alone is not proof of deterministic execution.
+source/call-path review. The subsequent [reachable audit](C2_AUDIT.md) identified concrete clock and
+randomized-hash constructors in this pinned DataFusion integration, so its strict C2 conditions fail
+even though the observable traces matched. Matching ordered output alone is not proof of deterministic
+execution.
 
 All three candidates passed all three real process-kill cases: each had 32 submitted commands, then
 2, 3 or 4 observed/recovered complete UPDATE statements, with the next 2,000-row statement confirmed
