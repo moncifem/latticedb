@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Manual CI experiment. Missing/failed candidate evidence is retained, never filled with estimates."""
-import argparse, hashlib, json, os, pathlib, platform, queue, signal, statistics, subprocess, sys, threading, time, traceback
+import argparse, hashlib, json, os, pathlib, platform, queue, signal, shutil, statistics, subprocess, sys, tempfile, threading, time, traceback
 
 HERE = pathlib.Path(__file__).resolve().parent
 MANIFEST = HERE / 'Cargo.toml'
@@ -37,17 +37,21 @@ def command(args, output, timeout=1800, env=None):
                     'timed_out': True, 'whole_process_group_killed': True,
                     'elapsed_s': time.monotonic()-start, 'log': output.name}
 
-def source_hints(metadata_path, output):
-    metadata=json.loads(metadata_path.read_text())
-    symbols=['RandomState','RandomizedHashBuilder','SystemTime::now','Instant::now','tokio::spawn','std::thread::spawn','HashMap::new']
-    hints=[];total=0
+def reachable_packages(metadata, kinds=(None,)):
     nodes={node['id']:node for node in metadata['resolve']['nodes']}
     pending=[metadata['resolve']['root']];reachable=set()
     while pending:
         package_id=pending.pop()
         if package_id in reachable:continue
         reachable.add(package_id)
-        pending += [dep['pkg']for dep in nodes[package_id]['deps']if any(kind['kind'] is None for kind in dep['dep_kinds'])]
+        pending += [dep['pkg']for dep in nodes[package_id]['deps']if any(kind['kind'] in kinds for kind in dep['dep_kinds'])]
+    return reachable
+
+def source_hints(metadata_path, output):
+    metadata=json.loads(metadata_path.read_text())
+    symbols=['RandomState','RandomizedHashBuilder','SystemTime::now','Instant::now','tokio::spawn','std::thread::spawn','HashMap::new']
+    hints=[];total=0
+    reachable=reachable_packages(metadata)
     for package in metadata['packages']:
         if package['id'] not in reachable or package.get('source') is None:continue
         root=pathlib.Path(package['manifest_path']).parent
@@ -143,7 +147,7 @@ def representatives(binary,candidate,root,output,dsn,rows):
         pg.execute('CREATE TABLE users(id bigint PRIMARY KEY,name text NOT NULL)')
         pg.execute('CREATE TABLE tickets(id bigint PRIMARY KEY,owner bigint NOT NULL,priority bigint NOT NULL)')
         pg.execute("INSERT INTO users SELECT i,'user'||lpad(i::text,3,'0') FROM generate_series(0,99) i")
-        pg.execute('INSERT INTO tickets SELECT i,i%100,i%7 FROM generate_series(0,%s) i',(rows-1,))
+        pg.execute('INSERT INTO tickets SELECT i,mod(i,100),mod(i,7) FROM generate_series(0,%s) i',(rows-1,))
         pg.execute('CREATE TABLE tickets_at_seed AS SELECT * FROM tickets')
         pg.execute("SET default_transaction_isolation='repeatable read'")
         with Host(binary,candidate,root,rows,output/f'{candidate}-representatives.stderr') as host:
@@ -184,7 +188,7 @@ def benchmark(binary,candidate,root,output,dsn,rows):
         pg.execute('CREATE TABLE users(id bigint PRIMARY KEY, name text NOT NULL)')
         pg.execute('CREATE TABLE tickets(id bigint PRIMARY KEY, owner bigint NOT NULL, priority bigint NOT NULL)')
         pg.execute("INSERT INTO users SELECT i, 'user'||lpad(i::text,3,'0') FROM generate_series(0,99) i")
-        pg.execute('INSERT INTO tickets SELECT i,i%100,i%7 FROM generate_series(0,%s) i',(rows-1,))
+        pg.execute('INSERT INTO tickets SELECT i,mod(i,100),mod(i,7) FROM generate_series(0,%s) i',(rows-1,))
         pg.execute('ANALYZE')
         pg.execute('SET max_parallel_workers_per_gather=0')
         pg.execute('SET jit=off')
@@ -253,31 +257,70 @@ def kill_case(binary,candidate,root,output,seed):
     if verify.returncode:raise RuntimeError(f'kill recovery verification failed: {verify.returncode}')
     return json.loads(verify.stdout)
 
+def deny_command(features):
+    args=['cargo','deny','--manifest-path',str(MANIFEST),'--config',str(HERE.parent.parent/'deny.toml')]
+    if features:args+=['--features',','.join(features)]
+    return args+['check']
+
+def preflight(dsn,output):
+    import psycopg
+    checks=[]
+    for candidate,features in FEATURES.items():
+        check=command(deny_command(features)+['--help'],output/f'{candidate}-deny-cli-preflight.log',timeout=30)
+        checks.append(check)
+        if check['exit']!=0:raise RuntimeError(f'cargo deny CLI preflight failed for {candidate}')
+    with psycopg.connect(dsn,autocommit=True) as pg:
+        pg.execute('BEGIN')
+        try:
+            pg.execute('CREATE TEMP TABLE tickets(id bigint,owner bigint,priority bigint) ON COMMIT DROP')
+            pg.execute('INSERT INTO tickets SELECT i,mod(i,100),mod(i,7) FROM generate_series(0,%s) i',(6,))
+            assert pg.execute('SELECT id,owner,priority FROM tickets ORDER BY id').fetchall()==[(n,n%100,n%7)for n in range(7)]
+        finally:pg.execute('ROLLBACK')
+    return {'complete':True,'deny_cli':checks,'postgres_parameterized_seed':True}
+
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);parser.add_argument('--target-root',type=pathlib.Path,required=True);parser.add_argument('--dsn',required=True);args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);parser.add_argument('--target-root',type=pathlib.Path,required=True);parser.add_argument('--dsn',required=True);parser.add_argument('--functional-retry',action='store_true');args=parser.parse_args()
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True);target=args.target_root.resolve();target.mkdir(parents=True,exist_ok=True)
-    if any(target.iterdir()):raise RuntimeError('clean build requires an empty target root')
-    report={'schema_version':1,'ADR_status':'proposed','criteria':{'C1':{'effort_days':None,'budget':None,'status':'unresolved: missing ADR budget and no retrospective effort estimate'},'C2':{'source_audit':'required; matching observable traces does not prove no randomized hashing'},'C7':{'status':'written hypothesis in README; full-subset feasibility remains unproven'}},'runner':{'platform':platform.platform(),'python':sys.version,'cpu_count':os.cpu_count()},'candidates':{},'failures':[]}
+    if not args.functional_retry and any(target.iterdir()):raise RuntimeError('clean build requires an empty target root')
+    report={'schema_version':2,'measurement_mode':'functional_retry' if args.functional_retry else 'clean_build','clean_build_evidence':not args.functional_retry,'functional_cache_hit':os.environ.get('FUNCTIONAL_CACHE_HIT') if args.functional_retry else None,'ADR_status':'proposed','criteria':{'C1':{'effort_days':None,'budget':None,'status':'unresolved: missing ADR budget and no retrospective effort estimate'},'C2':{'source_audit':'required; matching observable traces does not prove no randomized hashing'},'C7':{'status':'written hypothesis in README; full-subset feasibility remains unproven'}},'runner':{'platform':platform.platform(),'python':sys.version,'cpu_count':os.cpu_count()},'candidates':{},'failures':[]}
+    data_root=pathlib.Path(tempfile.mkdtemp(prefix='lattice-planner-run-data-'))
     try:
-        inputs=[p for p in HERE.rglob('*') if p.is_file() and 'target' not in p.parts and '__pycache__' not in p.parts]
+        inputs=[p for p in HERE.rglob('*') if p.is_file() and not {'target','functional-target','__pycache__'}.intersection(p.parts)]
         report['input_sha256']={str(p.relative_to(HERE)):hashlib.sha256(p.read_bytes()).hexdigest()for p in inputs}
         report['revision']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=HERE,text=True).strip()
         report['status_before']=subprocess.check_output(['git','status','--porcelain'],cwd=HERE,text=True)
-        # Prefetch is recorded separately; every measured build below has an empty target directory.
+        report['preflight']=preflight(args.dsn,out)
+        save(out/'report.json',report)
+        # Registry prefetch is separate; clean mode alone uses fresh compiler targets.
         fetch=command(['cargo','fetch','--locked','--manifest-path',str(MANIFEST)],out/'fetch.log');report['registry_prefetch']=fetch
+        if fetch['exit']!=0:raise RuntimeError('registry prefetch failed; compiler timing would include uncontrolled network work')
         baseline_manifest=HERE/'bridge-baseline/Cargo.toml'
-        report['bridge_fetch']=command(['cargo','fetch','--locked','--manifest-path',str(baseline_manifest)],out/'bridge-fetch.log')
-        baseline=command(['cargo','build','--locked','--release','--timings','--manifest-path',str(baseline_manifest),'--target-dir',str(target/'bridge')],out/'bridge-build.log');report['bridge_build']=baseline
+        if args.functional_retry:
+            baseline=None
+            report['bridge_build']={'status':'not measured in functional retry'}
+        else:
+            report['bridge_fetch']=command(['cargo','fetch','--locked','--manifest-path',str(baseline_manifest)],out/'bridge-fetch.log')
+            if report['bridge_fetch']['exit']!=0:raise RuntimeError('bridge registry prefetch failed')
+            baseline=command(['cargo','build','--locked','--release','--timings','--manifest-path',str(baseline_manifest),'--target-dir',str(target/'bridge')],out/'bridge-build.log');report['bridge_build']=baseline
         for candidate,features in FEATURES.items():
             row={'features':features};report['candidates'][candidate]=row
+            candidate_target=target if args.functional_retry else target/candidate
             try:
-                build=['cargo','build','--locked','--release','--timings','--manifest-path',str(MANIFEST),'--target-dir',str(target/candidate)]
+                build=['cargo','build','--locked','--release','--timings','--manifest-path',str(MANIFEST),'--target-dir',str(candidate_target)]
                 if features:build+=['--features',','.join(features)]
-                row['clean_build']=command(build,out/f'{candidate}-build.log')
-                if row['clean_build']['exit']!=0:raise RuntimeError('candidate build failed (raw log retained)')
-                row['added_clean_build_s_vs_bridge']=row['clean_build']['elapsed_s']-baseline['elapsed_s'] if baseline['exit']==0 else None
-                row['C5_added_build_under_60s']=row['added_clean_build_s_vs_bridge'] is not None and row['added_clean_build_s_vs_bridge']<60
-                timing=target/candidate/'cargo-timings';import shutil
+                row['deny']=command(deny_command(features),out/f'{candidate}-deny.log')
+                row['C5_dependency_review']=row['deny']['exit']==0
+                if not row['C5_dependency_review']:report['failures'].append({'candidate':candidate,'stage':'C5_dependency_review','error':'cargo deny failed; raw findings retained, no policy exception'})
+                row['deny_graph']='exact candidate feature graph; no blanket exclusions'
+                build_key='functional_build' if args.functional_retry else 'clean_build'
+                row[build_key]=command(build,out/f'{candidate}-build.log')
+                if row[build_key]['exit']!=0:raise RuntimeError('candidate build failed (raw log retained)')
+                if args.functional_retry:
+                    row['C5_build_status']='not measured: target may be restored/cached'
+                else:
+                    row['added_clean_build_s_vs_bridge']=row['clean_build']['elapsed_s']-baseline['elapsed_s'] if baseline['exit']==0 else None
+                    row['C5_added_build_under_60s']=row['added_clean_build_s_vs_bridge'] is not None and row['added_clean_build_s_vs_bridge']<60
+                timing=candidate_target/'cargo-timings'
                 if timing.exists():shutil.copytree(timing,out/f'{candidate}-cargo-timings',dirs_exist_ok=True)
                 tree=['cargo','tree','--locked','--manifest-path',str(MANIFEST),'--edges','normal','--prefix','none']
                 if features:tree+=['--features',','.join(features)]
@@ -288,19 +331,19 @@ def main():
                     m=subprocess.run(metadata,cwd=HERE,stdout=metadata_out,stderr=metadata_err,timeout=120)
                 row['source_audit']=source_hints(out/f'{candidate}-metadata.json',out/f'{candidate}-nondeterminism-hints.json') if m.returncode==0 else {'status':'metadata failed'}
                 row['dependency_tree']=command(tree,out/f'{candidate}-tree.txt')
-                row['normal_crate_count']=len(set(line.replace(' (*)','').strip()for line in (out/f'{candidate}-tree.txt').read_text().splitlines()if line.strip()))
-                row['deny']=command(['cargo','deny','--manifest-path',str(MANIFEST),'--all-features','check','--config',str(HERE.parent.parent/'deny.toml')],out/f'{candidate}-deny.log')
-                row['C5_dependency_review']=row['deny']['exit']==0
-                if not row['C5_dependency_review']:report['failures'].append({'candidate':candidate,'stage':'C5_dependency_review','error':'cargo deny failed; raw findings retained, no policy exception'})
-                row['deny_all_features_note']='same union graph checked for every candidate; exact candidate normal graphs separately retained'
-                binary=target/candidate/'release/lattice-sql-planner-spike'
+                if m.returncode==0:
+                    graph=json.loads((out/f'{candidate}-metadata.json').read_text())
+                    row['normal_crate_count_including_root']=len(reachable_packages(graph))
+                    row['normal_and_build_crate_count_including_root']=len(reachable_packages(graph,(None,'build')))
+                    row['crate_count_source']='resolved Cargo package IDs, not colorized tree lines'
+                binary=candidate_target/'release/lattice-sql-planner-spike'
                 sims=[]
                 for repeat in range(2):
                     path=out/f'{candidate}-sim-{repeat}.json';run=command([str(binary),'--candidate',candidate,'--mode','sim','--seed','42','--output',str(path)],out/f'{candidate}-sim-{repeat}.log',timeout=60);sims.append(run)
                 row['sim_runs']=sims
                 if all(r['exit']==0 for r in sims):
                     a=json.loads((out/f'{candidate}-sim-0.json').read_text());b=json.loads((out/f'{candidate}-sim-1.json').read_text());row['C2_raw_trace_repeat_equal']=a['run']['trace']==b['run']['trace'];row['representatives_complete_without_runtime']=a['run']['positive_cases_complete'];row['C6_negative_fixtures_match']=a['run']['C6_negative_fixtures_match'];row['C2_status']='execution failed without runtime' if not a['run']['positive_cases_complete'] else 'observable execution/trace checks only; randomized-hash source audit unverified'
-                stages=[('representative_differential',lambda:representatives(binary,candidate,target/f'{candidate}-representatives',out,args.dsn,20000)),('postgres_comparison',lambda:benchmark(binary,candidate,target/f'{candidate}-data',out,args.dsn,20000))]
+                stages=[('representative_differential',lambda:representatives(binary,candidate,data_root/f'{candidate}-representatives',out,args.dsn,20000)),('postgres_comparison',lambda:benchmark(binary,candidate,data_root/f'{candidate}-data',out,args.dsn,20000))]
                 for stage,operation in stages:
                     try:row[stage]=operation()
                     except BaseException as error:
@@ -310,13 +353,13 @@ def main():
                 # Build test-only barriers after all performance work. This reuses a warm target
                 # and is excluded from clean build / dependency weight / query timing evidence.
                 hook_features=features+['fault-hooks']
-                hook_build=['cargo','build','--locked','--release','--manifest-path',str(MANIFEST),'--target-dir',str(target/candidate),'--features',','.join(hook_features)]
+                hook_build=['cargo','build','--locked','--release','--manifest-path',str(MANIFEST),'--target-dir',str(candidate_target),'--features',','.join(hook_features)]
                 row['fault_hook_build_excluded_from_C5']=command(hook_build,out/f'{candidate}-fault-hooks-build.log')
                 if row['fault_hook_build_excluded_from_C5']['exit']!=0:
                     report['failures'].append({'candidate':candidate,'stage':'fault_hook_build','error':'test-only hook build failed'})
                 else:
                     for seed in range(3):
-                        try:row[f'process_kill_{seed}']=kill_case(binary,candidate,target/f'{candidate}-kill-{seed}',out,seed)
+                        try:row[f'process_kill_{seed}']=kill_case(binary,candidate,data_root/f'{candidate}-kill-{seed}',out,seed)
                         except BaseException as error:
                             row[f'process_kill_{seed}']={'incomplete':repr(error),'traceback':traceback.format_exc()}
                             report['failures'].append({'candidate':candidate,'stage':f'process_kill_{seed}','error':repr(error)})
@@ -334,6 +377,8 @@ def main():
         report['criterion_passes_are_not_phase_readiness']=True
     except BaseException as error:
         report['failures'].append({'coordinator':repr(error),'traceback':traceback.format_exc()});report['measurements_complete']=False
-    finally:save(out/'report.json',report)
+    finally:
+        save(out/'report.json',report)
+        shutil.rmtree(data_root,ignore_errors=True)
     return 0 if report.get('measurements_complete') else 1
 if __name__=='__main__':raise SystemExit(main())

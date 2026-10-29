@@ -2,8 +2,10 @@
 
 This is an isolated, unfinished experiment for P2-10 / issue #119. ADR 0013 remains **proposed**.
 Its seven criteria are fixed in `../../docs/adr/0013-sql-planner-and-executor.md`; this directory does
-not replace them or select a winner. There are no measured DataFusion, PostgreSQL, clean-CI-build or
-effort-day results yet. A workflow or source implementation is not successful execution evidence.
+not replace them or select a winner. Historical clean-build and simulator observations, including a failed first harness run, are recorded
+in [RESULTS.md](RESULTS.md). PostgreSQL comparisons and complete dependency-policy review remain
+missing until a corrected run finishes; effort-days remain unknown. A workflow or source implementation
+is not successful execution evidence.
 
 The nested `[workspace]` and lockfile keep all experiment dependencies out of the production graph
 and root lockfile. Do not add these dependencies to `lattice-engines`. DataFusion is compiled only by
@@ -83,7 +85,12 @@ DataFusion host measurements use an explicitly separate current-thread Tokio run
 
 Before merge, dispatch the already registered `io-probe` workflow at this experiment branch with
 `sql_planner=true`; its existing portable/runtime jobs keep their normal behavior when the flag is
-false, and the planner flag calls only this isolated reusable experiment.
+false, and the planner flag calls only this isolated reusable experiment. Add `functional_retry=true`
+only for an explicitly cached functional retry: that mode emits no clean-build C5 evidence and cannot
+replace the historical measured DataFusion threshold failure. Clean measurement remains the default.
+
+Cheap PostgreSQL parameterized-seed and cargo-deny argument preflight runs before expensive builds.
+Actual policy checks then review each candidate feature graph and preserve violations as failures.
 
 The manual workflow uses Ubuntu 24.04 and Rust 1.99.1. It builds all candidates in **separate empty
 target directories**, records registry prefetch separately, retains `cargo build --timings`, normal
