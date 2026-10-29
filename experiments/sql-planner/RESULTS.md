@@ -238,3 +238,24 @@ prepared rebind guards and absence of writes on validation failure. This mode do
 benchmarks, supplies no C5 criterion result, does not build DataFusion and cannot accept the ADR.
 The complete bounded audit and remaining scope limits are in SEMANTICS_AUDIT.md. Final full
 confirmation follows code freeze and independent review, with default full measurement unchanged.
+
+## Batched bounded-type semantic confirmation
+
+[Run 40907444118](https://github.com/moncifem/latticedb/actions/runs/40907444118) succeeded at
+`be31f26ac23a31871d9d2dfae48f1cbfce05b6a4`. Its `semantic_confirmation` scope selected exactly
+custom/parser. Artifact `12912696422` was verified against ZIP SHA256
+`c169e7cda72b022a2f320ff53c8342affce1a89a89faeee338d056470b32361e`.
+Both candidate builds/conformance suites, nineteen negative fixtures, repeated simulator traces,
+PostgreSQL boolean/NULL/text parameter cases, nullable ordering and all six process-kill/reopen cases
+passed. Source status and experiment input hashes stayed unchanged.
+
+The report explicitly sets C4/C5 and clean-build evidence false; both criterion assessments say
+not measured. No DataFusion candidate was built or executed, and no four-query performance ratio
+was measured. Thus this succeeds as bounded semantic evidence only. The newly shared type-validation
+and cached prepared-insert guard still need final DataFusion compilation/confirmation after review.
+
+Rebase onto fresh main `2cdd293` changed no experiment or experiment-workflow bytes; the sole conflict
+was an append in docs/releasing.md, resolved by retaining both sections. No new prototype scope is
+planned. Final independent review and one frozen-source full confirmation remain before landing;
+ADR acceptance, missing C1 effort/budget, the Phase 1 SQL baseline and C7 limitations are separate
+open decisions, not grounds to relabel research measurements as accepted criteria.
