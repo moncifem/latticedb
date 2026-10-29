@@ -9,6 +9,10 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- `lattice-testkit` fencing race tests (WP46, #248): takeover during append and during watch
+  reconnect on the kernel under five fault profiles, judged by a script oracle, with wrapper mutants
+  and planted kernel bugs proving each assertion can fail. Test only; no exit criterion is claimed.
+
 - `RowStore::try_snapshot_as_of_hlc`: strict full-HLC predecessor resolution returns
   `SnapshotTooOld` for expired history while the existing helper retains its floor clamp.
   This is a storage API; SQL timestamp execution and SQLSTATE mapping remain pending.

@@ -36,3 +36,13 @@ on CI yet; simulation, row integration and op-log growth measurement of WP43 are
 | E3-4 | Fan-out and merge benchmarks recorded | Not started |
 | E3-5 | NS7 passes end to end through the SDK | Not started |
 | E3-6 | Text CRDT ADR from Phase 1 confirmed or reversed with data | Not started |
+
+Verification evidence for WP46 (issue #248), not an exit criterion: `crates/lattice-testkit/tests/fencing_races.rs`
+runs two scripted race scenarios (takeover during append, takeover during watch reconnect) on the kernel and
+simulated disk for 200 seeds under each of the five fault profiles (clean, crash-heavy, disk-faulty, hostile,
+everything), 2,000 runs in all. One local run: 0 assertion failures, 12 runs censored by bit rot (all in
+`everything`), 19,656 superseded writes submitted, 18,809 answered `Fenced`. The test uses the kernel and not
+the plugin contract reference plugin, because `layers.toml` does not let `lattice-testkit` depend on
+`lattice-sdk`. A 100,000 seed per profile volume test exists as an ignored test and has not been run.
+One ignored test records a divergence: the kernel answers `Duplicate` where the plugin contract says `fenced`
+for a late retry of an already stored write.
