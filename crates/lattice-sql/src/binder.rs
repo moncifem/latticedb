@@ -66,6 +66,8 @@ pub enum BindErrorKind {
     InvalidParameterValue,
     /// A schema other than `public` (`3F000`).
     InvalidSchema,
+    /// An `ORDER BY` name that matches two different output columns (`42702`).
+    AmbiguousColumn,
     /// An `ORDER BY` position outside the select list (`42P10`).
     InvalidColumnReference,
     /// The statement nests deeper than [`MAX_DEPTH`] (`54001`).
@@ -127,6 +129,7 @@ impl BindError {
             BindErrorKind::InvalidParameterValue => "22023",
             BindErrorKind::InvalidSchema => "3F000",
             BindErrorKind::InvalidColumnReference => "42P10",
+            BindErrorKind::AmbiguousColumn => "42702",
             BindErrorKind::TooLarge => "54001",
         }
     }
@@ -185,7 +188,11 @@ pub fn bind_statement(
             }
         }
     }
-    Ok(BoundStatement { plan, param_types })
+    Ok(BoundStatement {
+        plan,
+        catalog_version: catalog.version(),
+        param_types,
+    })
 }
 
 /// Largest `$n` accepted, as in PostgreSQL.
@@ -202,6 +209,7 @@ impl Scope {
     fn empty() -> Scope {
         Scope {
             info: TableInfo {
+                id: 0,
                 name: String::new(),
                 columns: Vec::new(),
                 indexes: Vec::new(),
@@ -390,22 +398,35 @@ impl Binder<'_> {
 
     /// The type an unconstrained untyped operand takes: its parameter's earlier type, else `text`.
     fn default_type(&self, e: &TypedExpr) -> SqlType {
-        if let ExprNode::Param(n) = &e.kind {
-            let known = (*n as usize)
-                .checked_sub(1)
-                .and_then(|at| self.params.get(at))
-                .copied()
-                .flatten();
-            if let Some(t) = known {
-                return t;
-            }
-        }
-        SqlType::Text
+        self.known_param(e).unwrap_or(SqlType::Text)
+    }
+
+    /// The type an earlier use gave the parameter `e`, if `e` is a parameter.
+    fn known_param(&self, e: &TypedExpr) -> Option<SqlType> {
+        let ExprNode::Param(n) = &e.kind else {
+            return None;
+        };
+        (*n as usize)
+            .checked_sub(1)
+            .and_then(|at| self.params.get(at))
+            .copied()
+            .flatten()
     }
 
     /// Brings expressions to one comparable type; returns it. Numeric types promote to the widest,
     /// `date` with `timestamptz` to `timestamptz`, untyped operands take the common type.
     fn unify(&mut self, es: Vec<TypedExpr>, span: Span) -> R<(Vec<TypedExpr>, SqlType)> {
+        // A parameter that already has a type is an operand of that type, not an untyped one.
+        let mut es = es;
+        let mut param_typed = false;
+        for e in &mut es {
+            if e.ty == SqlType::Unknown
+                && let Some(t) = self.known_param(e)
+            {
+                e.ty = t;
+                param_typed = true;
+            }
+        }
         let mut common: Option<SqlType> = None;
         for e in &es {
             if e.ty == SqlType::Unknown {
@@ -413,7 +434,20 @@ impl Binder<'_> {
             }
             common = Some(match common {
                 None => e.ty,
-                Some(c) => merge(c, e.ty, span)?,
+                Some(c) => match merge(c, e.ty, span) {
+                    Ok(t) => t,
+                    Err(_) if param_typed => {
+                        return err(
+                            BindErrorKind::InconsistentParamTypes,
+                            format!(
+                                "inconsistent types deduced for a parameter: {c} versus {}",
+                                e.ty
+                            ),
+                            span,
+                        );
+                    }
+                    Err(e) => return Err(e),
+                },
             });
         }
         let mut out = Vec::with_capacity(es.len());
@@ -675,6 +709,12 @@ impl Binder<'_> {
                 ))
             }
             ExprKind::Cast { expr, data_type } => {
+                if matches!(
+                    data_type,
+                    ast::DataType::Numeric(Some(_)) | ast::DataType::Varchar(Some(_))
+                ) {
+                    return unsupported("CAST to a type with a precision, scale or length", span);
+                }
                 let to = SqlType::from_data_type(*data_type);
                 let inner = self.expr(expr, scope)?;
                 self.cast(inner, to, span)
@@ -1044,6 +1084,7 @@ impl Binder<'_> {
         };
         let mut plan = LogicalPlan::Scan {
             table: scope.info.name.clone(),
+            table_id: scope.info.id,
             as_of,
         };
         if let Some(w) = &q.selection {
@@ -1183,10 +1224,18 @@ impl Binder<'_> {
     fn order_key(&mut self, e: &Expr, outputs: &[OutputColumn], scope: &Scope) -> R<TypedExpr> {
         match &e.kind {
             ExprKind::Column(parts) if parts.len() == 1 => {
-                if let Some(first) = parts.first()
-                    && let Some(c) = outputs.iter().find(|c| c.name == first.value)
-                {
-                    return Ok(c.expr.clone());
+                if let Some(first) = parts.first() {
+                    let mut hits = outputs.iter().filter(|c| c.name == first.value);
+                    if let Some(c) = hits.next() {
+                        if hits.any(|o| o.expr != c.expr) {
+                            return err(
+                                BindErrorKind::AmbiguousColumn,
+                                format!("ORDER BY \"{}\" is ambiguous", first.value),
+                                e.span,
+                            );
+                        }
+                        return Ok(c.expr.clone());
+                    }
                 }
             }
             ExprKind::Literal(Literal::Number(n)) => {
@@ -1339,6 +1388,7 @@ impl Binder<'_> {
         }
         Ok(LogicalPlan::Insert {
             table: scope.info.name.clone(),
+            table_id: scope.info.id,
             targets,
             source,
             returning: self.returning(&i.returning, &scope)?,
@@ -1364,8 +1414,9 @@ impl Binder<'_> {
                 );
             };
             if assignments.iter().any(|(i, _)| *i == at) {
+                // PostgreSQL reports a repeated assignment target as a syntax error.
                 return err(
-                    BindErrorKind::DuplicateColumn,
+                    BindErrorKind::Syntax,
                     format!("column \"{}\" specified more than once", a.column.value),
                     a.column.span,
                 );
@@ -1380,6 +1431,7 @@ impl Binder<'_> {
         let input = self.filtered_scan(&scope, u.selection.as_ref())?;
         Ok(LogicalPlan::Update {
             table: scope.info.name.clone(),
+            table_id: scope.info.id,
             input: Box::new(input),
             assignments,
             returning: self.returning(&u.returning, &scope)?,
@@ -1391,6 +1443,7 @@ impl Binder<'_> {
         let input = self.filtered_scan(&scope, d.selection.as_ref())?;
         Ok(LogicalPlan::Delete {
             table: scope.info.name.clone(),
+            table_id: scope.info.id,
             input: Box::new(input),
             returning: self.returning(&d.returning, &scope)?,
         })
@@ -1399,6 +1452,7 @@ impl Binder<'_> {
     fn filtered_scan(&mut self, scope: &Scope, selection: Option<&Expr>) -> R<LogicalPlan> {
         let scan = LogicalPlan::Scan {
             table: scope.info.name.clone(),
+            table_id: scope.info.id,
             as_of: None,
         };
         match selection {
