@@ -249,3 +249,31 @@ merge. The [narrow decision record](../evidence/wal-admission-owner-decision-202
 that scope. This does not waive PR 209's separate hold, accept its managed-index format, activate
 LCIX on main, accept a checkpoint format, assign a release, establish a performance threshold,
 or sign either phase gate.
+
+
+## Persisted managed-index recovery (2026-10-29)
+
+PR [209](https://github.com/moncifem/latticedb/pull/209) persists physical-byte index definitions and
+lifecycle in atomic LCIX row/catalog changes. Default managed opens explicitly declare capability
+0x01 and rebuild definitions/entries from streamed history without callbacks. Nonempty callback opens
+remain legacy-only and advertise zero support. Compound writers request the guard; replay refuses
+unguarded LCIX. Bound actor policy, floor, conflict and metadata checks precede ID/RNG/WAL. Historical
+lookups preserve dropped/recreated definition timelines; scrub compares both authoritative definitions
+and entries. Creation is synchronous and may block; function pointers are never serialized.
+
+Independent review found no new blocking code defect. [Run 40916386232](https://github.com/moncifem/latticedb/actions/runs/40916386232)
+passed 25 semantic tests and a separately selected hosted export at reviewed head `d0edc12`, actual
+merge source `aa134abf47a15cd433375c0025514c13bd83db2e` with identical tree. Its 15 finite engine
+histories yielded 30 frozen old-reader probes: 20 byte-unchanged guarded refusals, ten legacy probes,
+and two allowed raw legacy repairs. It also retained two static controls. The
+[reviewed scope and provenance](../evidence/managed-index-40916386232.md) and
+[compact verified archive/probe record](../evidence/managed-index-40916386232.json) distinguish this
+from the separate 4,648-history core guard proof and Log-only performance measurements. Historical
+runs do not relabel later heads; final current-head required checks and hosted proof remain required.
+
+On 2026-10-29 the owner explicitly accepted RFC 0005 / ADR 0019 and waived this format's own
+seven-full-day wait, separately from RFC 0008 / ADR 0022. The
+[narrow decision record](../evidence/managed-index-owner-decision-2026-10-29.md) makes merge conditional
+on exact final-head green CI. Synchronous build performance, retained-state memory and row-decoder
+admission/allocation budgets remain unresolved. This supplies no mixed-version access, in-place
+downgrade, online backfill, accepted checkpoint composition, release or phase gate sign-off.

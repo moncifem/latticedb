@@ -1,8 +1,9 @@
 # Format: catalog-managed index compound changes v1
 
-Status: draft, RFC [0005](../docs/rfc/0005-catalog-managed-indexes.md), proposed ADR
-[0019](../docs/adr/0019-catalog-managed-indexes.md). Corpus examples pin this proposal's bytes;
-they do not accept the format or establish safe old-reader handling.
+Status: accepted, RFC [0005](../docs/rfc/0005-catalog-managed-indexes.md), ADR
+[0019](../docs/adr/0019-catalog-managed-indexes.md). The owner accepted these bytes and waived this
+format's wait on 2026-10-29; exact final-head green CI is still required before PR 209 merges.
+Old-reader refusal depends on accepted WAL admission and actual engine capability/context checks.
 
 ## Layout
 
@@ -37,15 +38,18 @@ Index ids cannot be reused, including invisible create/drop within one ChangeSet
 within each live table. Final live indexes must reference final live tables. Atomic catalog and row
 publication preserves historical definitions and entries; callback mode refuses LCIX on reopen.
 
-Older RowStore binaries silently skip this payload, including its rows. This draft implements no
-fail-closed WAL capability gate. The owner requires a separately reviewed, implemented and accepted WAL guard before LCIX
-activation and rejected operational-only upgrade on 2026-10-29. Corpus inclusion does not implement
-that guard, permit mixed-version access, or waive the seven-day comment period.
+Older RowStore binaries silently skip unguarded LCIX, including its rows. The writer must request
+capability 0x01 from the accepted RFC 0008 / ADR 0022 WAL guard before appending LCIX. Managed readers
+declare actual support and refuse unguarded LCIX; legacy callbacks remain at zero support. The guard
+is implemented and merged through PR 222. Corpus inclusion alone does not provide this enforcement
+or permit mixed-version access. The owner separately accepted RFC 0005 / ADR 0019
+and waived its wait; [the decision record](../docs/evidence/managed-index-owner-decision-2026-10-29.md)
+preserves that scope.
 
 ## Checksums
 
 No additional checksum is embedded in LCIX. The existing ChangeSet/WAL framing provides its CRC.
-Malformed or semantically invalid CRC-valid LCIX refuses recovery in the proposed new reader.
+Malformed or semantically invalid CRC-valid LCIX refuses recovery in the new reader.
 
 ## Golden files
 
@@ -59,7 +63,7 @@ tests decode literal expected values and require exact encoder equality to these
 | [catalog-index-v1-slice.golden](corpus/catalog-index-v1-slice.golden) | Create index 12 `prefix` on table 7, Slice offset 1 length 2 |
 | [catalog-v1-table.golden](corpus/catalog-v1-table.golden) | Unchanged 23-byte LCAT v1 table-7 `items` create, also nested in compound example |
 
-Each has a `.golden.toml` companion with format, version and explicit draft status. Files are retained
-as append-only proposal examples; a later incompatible proposal needs separately named fixtures.
+Each has a `.golden.toml` companion with format, version and explicit accepted status. Files are retained
+as append-only accepted examples; a later incompatible format needs separately named fixtures.
 These samples complement all-prefix truncation, arbitrary-input and semantic recovery tests. They do
 not prove safe downgrade, bounded allocator usage, long-running soak, or arbitrary-size build cost.

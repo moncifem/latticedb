@@ -243,3 +243,16 @@ the actual tested merge source. Historical proof survives later rebases; inspect
 separately. The owner's [specific WAL acceptance/waiver](evidence/wal-admission-owner-decision-2026-10-29.md)
 authorizes PR 222 only after final-head green CI. Jobs alone do not accept a format or waive a wait;
 PR 209 acceptance/hold and LCIX activation remain separate.
+
+
+### Managed-index integration proof
+
+The `managed-engine-admission` job in `wal-admission` runs the 26-test managed selection (25 normal
+semantic tests plus one separately selected hosted export), exports every observed first-upgrade
+cut's raw/recovered state and runs the immutable actual old RowStore against each snapshot. The
+`evidence-managed-engine-admission` artifact retains selection/semantic/cut logs, frozen build inputs,
+toolchain text and exact before/after manifests. The
+[completed 15-history/30-probe record](evidence/managed-index-40916386232.md) preserves its historical
+source and finite scope. Fresh final-head checks are required after replay. The owner's
+[specific managed-format acceptance/waiver](evidence/managed-index-owner-decision-2026-10-29.md) is
+separate from the WAL guard decision and grants no checkpoint, release or phase-gate approval.

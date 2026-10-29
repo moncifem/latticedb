@@ -35,7 +35,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Built | What it does |
 |---|---|
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
-| Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, replayed indexes and in-memory version vacuum; reads below the vacuum floor return an error |
+| Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, persisted managed-index definitions/history, callback legacy mode and in-memory version vacuum; reads below the vacuum floor return an error |
 | Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS, with a `SELECT 1` placeholder handler |
 | SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
 | Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
@@ -44,7 +44,11 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 
 The [accepted WAL capability guard](docs/rfc/0008-wal-capability-admission.md) has completed bounded
 old-reader/crash checks and [hosted admission measurements](docs/evidence/wal-admission-40908208450.md).
-The owner waived this guard's review wait; managed-index acceptance and activation remain separate.
+The owner waived this guard's review wait and separately accepted
+[managed-index recovery](docs/rfc/0005-catalog-managed-indexes.md). Default managed opens rebuild
+physical-byte indexes from persisted definitions; callback opens remain legacy-only. Synchronous
+build cost and full retained-state memory bounds are still unmeasured; see the
+[bounded engine proof](docs/evidence/managed-index-40916386232.md).
 
 ```mermaid
 flowchart TB

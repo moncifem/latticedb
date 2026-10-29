@@ -1,4 +1,4 @@
 format = "catalog"
 version = 1
-status = "draft"
-description = "Independent hand-framed little-endian example; RFC 0005 is proposed, not accepted"
+status = "accepted"
+description = "Independent hand-framed little-endian example; RFC 0005 accepted; original golden bytes unchanged"

@@ -1,0 +1,810 @@
+{
+  "source": {
+    "repository": "moncifem/latticedb",
+    "run_id": 40916386232,
+    "attempt": 1,
+    "conclusion": "success",
+    "url": "https://github.com/moncifem/latticedb/actions/runs/40916386232",
+    "pr_head": "d0edc12bf59d94a05254023bac59048536603f06",
+    "actual_tested_merge": "aa134abf47a15cd433375c0025514c13bd83db2e",
+    "actual_tested_tree": "1decbed5e2a3c80667fb489602d7fa770388349e",
+    "tree_matches_reviewed_head": true,
+    "frozen_revision": "743b0fb52a495a3f875490268d604ed543be9e64"
+  },
+  "scope": "15 finite actual-engine first-upgrade histories,30 frozen old-reader probes; not 4648 managed-index histories, soak, managed-index build-cost benchmark, total-memory bound or future checkpoint evidence. Later rebases require fresh current-head checks.",
+  "archives": [
+    {
+      "name": "admission",
+      "artifact_id": 12915802602,
+      "verified_archive_sha256": "4ecc8e887943450389190f4686e6fff8bc354ff3a3a868128e7e67f0b8310a30"
+    },
+    {
+      "name": "managed",
+      "artifact_id": 12915544087,
+      "verified_archive_sha256": "b409ef9b778aeaf40353d94ced2d65afb81cd065cf74261c425b2a76131ced9d"
+    },
+    {
+      "name": "measurement",
+      "artifact_id": 12915079342,
+      "verified_archive_sha256": "59231588db3a4e3ec46c22ec861e3a429d17cfa2c1b911dc747902ed68ce68a6"
+    }
+  ],
+  "raw_managed_files": {
+    "managed-index-build-inputs.sha256": {
+      "bytes": 277,
+      "sha256": "23b0434d512ca23389abbca4f71ac8001481933cae4a0deebab65d0e640b7e1b"
+    },
+    "managed-index-old-reader.json": {
+      "bytes": 35338,
+      "sha256": "a893652f72ffda4e7165fef363964027e8a79f056d260ab994be31f5706ccbc7"
+    },
+    "managed-index-selection.txt": {
+      "bytes": 2047,
+      "sha256": "981674185d8c1ffd123f641f3eeec106fedfea075ed2e5fb60138e2f24769f53"
+    },
+    "managed-index-semantics.log": {
+      "bytes": 2961,
+      "sha256": "c1ceb5c1e199b90ff9f36307efa853922fcb420df914b7e38fd06bdf03ff9b9a"
+    },
+    "managed-index-toolchain.txt": {
+      "bytes": 232,
+      "sha256": "db19261270b0428d1cffd44795917261238eab88402716d4f372b5b1c1350a6d"
+    },
+    "managed-index-upgrade-cuts.log": {
+      "bytes": 609,
+      "sha256": "8b751ceaf304e611c0b7e496d2a57404cc0dc8f87ab4680ad108e6c9ce484264"
+    }
+  },
+  "tests": {
+    "selected": 26,
+    "normal_passed": 25,
+    "hosted_export_initially_ignored": 1,
+    "hosted_export_explicit_execution": "passed"
+  },
+  "compatibility": {
+    "histories": 15,
+    "snapshots": 30,
+    "static_controls": 2,
+    "mode_counts": {
+      "guarded": 20,
+      "legacy-any": 10
+    },
+    "permitted_mutated_raw_legacy_cases": [
+      "000009-raw",
+      "000010-raw"
+    ],
+    "frozen_provenance": {
+      "tracked_source_clean": true,
+      "allowed_untracked_harness": "crates/lattice-engines/examples/admission_old_reader.rs",
+      "tracked_source_sha256": {
+        "Cargo.lock": "953fb9b9e87153707405b1d902b43c277321430e5aa19afb9b866da22fb008e3",
+        "rust-toolchain.toml": "b9c8d2d59f6f46474c0cfa0b8b77bea21d94fc73a30ad93d5bf6385c422197d2"
+      },
+      "harness_sha256": "ac6874284a57faddd916d590f9397dadc5d10aaa3433163c8de6429cdf3c7b6b",
+      "executable_sha256": "6f89a2e5a2dfd9c12247581e6459e2373d3aded5cbe95ab65d002c1d60ff07cd",
+      "rustc_version_verbose": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+      "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)\n"
+    },
+    "probes": [
+      {
+        "case": "000000-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000000-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000001-raw",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "true",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "fb7a5ed9e41b197b692c13461867aa3f0455e3bb697bc0dc307d916b6403f0a0",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "fb7a5ed9e41b197b692c13461867aa3f0455e3bb697bc0dc307d916b6403f0a0",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=false\n",
+        "stderr": ""
+      },
+      {
+        "case": "000001-recovered",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "3d0e644bf50b5ae99cc57a466ce652a07c802202e84882dea9c8bf60b5d9a482",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "3d0e644bf50b5ae99cc57a466ce652a07c802202e84882dea9c8bf60b5d9a482",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=false\n",
+        "stderr": ""
+      },
+      {
+        "case": "000002-raw",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "true",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "fb7a5ed9e41b197b692c13461867aa3f0455e3bb697bc0dc307d916b6403f0a0",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "fb7a5ed9e41b197b692c13461867aa3f0455e3bb697bc0dc307d916b6403f0a0",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=false\n",
+        "stderr": ""
+      },
+      {
+        "case": "000002-recovered",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "3d0e644bf50b5ae99cc57a466ce652a07c802202e84882dea9c8bf60b5d9a482",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "3d0e644bf50b5ae99cc57a466ce652a07c802202e84882dea9c8bf60b5d9a482",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=false\n",
+        "stderr": ""
+      },
+      {
+        "case": "000003-raw",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "true",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "fb7a5ed9e41b197b692c13461867aa3f0455e3bb697bc0dc307d916b6403f0a0",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "fb7a5ed9e41b197b692c13461867aa3f0455e3bb697bc0dc307d916b6403f0a0",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=false\n",
+        "stderr": ""
+      },
+      {
+        "case": "000003-recovered",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "3d0e644bf50b5ae99cc57a466ce652a07c802202e84882dea9c8bf60b5d9a482",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "3d0e644bf50b5ae99cc57a466ce652a07c802202e84882dea9c8bf60b5d9a482",
+          "wal/00000000000000000001.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=false\n",
+        "stderr": ""
+      },
+      {
+        "case": "000004-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000004-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000005-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000005-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000006-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000006-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000007-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000007-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "false",
+          "actual_engine": "true",
+          "legacy_prefix": "false"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "99c3f5041afc857a6d6fd5e175441ec100928233a5f2a66dd71dc02a0caa357f",
+          "wal/00000000000000000001.seg": "d2a564ec2033f9cf5b903cb3a33f230c5c0d2e312707b6ca0beb001cdb80c208",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000001.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000008-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000008-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000009-raw",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "true",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "4db2233f49733a8219b66c3d1d71563af62f4370e8e32e12a5161784e36b6484",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "4db2233f49733a8219b66c3d1d71563af62f4370e8e32e12a5161784e36b6484",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=true\n",
+        "stderr": ""
+      },
+      {
+        "case": "000009-recovered",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "03e38d40a51b1d3522e5dcac7a415eb82bfe324caa32f2911cba5481d8d0858f",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "03e38d40a51b1d3522e5dcac7a415eb82bfe324caa32f2911cba5481d8d0858f",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=true\n",
+        "stderr": ""
+      },
+      {
+        "case": "000010-raw",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "true",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "4db2233f49733a8219b66c3d1d71563af62f4370e8e32e12a5161784e36b6484",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "4db2233f49733a8219b66c3d1d71563af62f4370e8e32e12a5161784e36b6484",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=true\n",
+        "stderr": ""
+      },
+      {
+        "case": "000010-recovered",
+        "expectation": {
+          "mode": "legacy-any",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "03e38d40a51b1d3522e5dcac7a415eb82bfe324caa32f2911cba5481d8d0858f",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "03e38d40a51b1d3522e5dcac7a415eb82bfe324caa32f2911cba5481d8d0858f",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "a9ca411184f4e79b97aaacb489bcbb315db40060239c069c3cd7423443cd4263",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "legacy store accepted; literal_row_required=true\n",
+        "stderr": ""
+      },
+      {
+        "case": "000011-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000011-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000012-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000012-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000013-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000013-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "77f11850e39148ad5d34b94a6979fca01fced5af4b9a9e061a64e7efbef1a388",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000014-raw",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      },
+      {
+        "case": "000014-recovered",
+        "expectation": {
+          "mode": "guarded",
+          "allow_mutation": "false",
+          "prefix_row": "true",
+          "actual_engine": "true",
+          "legacy_prefix": "true"
+        },
+        "exit_code": 0,
+        "before": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "after": {
+          "expect.txt": "68c2c205e5e2352af2938b246f14d3e0431f061c5f642a3d9fa964d412e90b37",
+          "wal/00000000000000000001.seg": "96587c3cdfe645ffa625ed8669e77f9ef7d4b9f69e5bd8f4dcecebd9487f0d07",
+          "wal/00000000000000000002.seg": "8fd1bde6d9cf5cb58572c9e27ebc607b6b5260d5266b65c4e68c73f245b224e2",
+          "wal/LOCK": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": "guarded header refused: rejected: log corrupt: segment 00000000000000000002.seg header: BadMagic\n",
+        "stderr": ""
+      }
+    ]
+  },
+  "raw_managed_files_match_verified_archive": true
+}

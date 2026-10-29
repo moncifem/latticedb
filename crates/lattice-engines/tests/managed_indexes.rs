@@ -1,4 +1,4 @@
-//! Independent format and public-store witnesses for draft catalog-managed indexes.
+//! Independent format and public-store witnesses for catalog-managed indexes.
 #![cfg(feature = "row")]
 #![allow(
     clippy::unwrap_used,

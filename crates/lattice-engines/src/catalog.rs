@@ -6,7 +6,7 @@
 //!
 //! Layout (little endian): magic `LCAT`, a version byte, a `u32` count, then per operation a kind byte
 //! (1 create, 2 rename, 3 drop), a `u32` table id and, for create and rename, a `u32` name length and
-//! the UTF-8 name. Those version 1 bytes remain unchanged. The separately identified draft `LCIX`
+//! the UTF-8 name. Those version 1 bytes remain unchanged. The separately identified `LCIX`
 //! version 1 envelope adds managed index definitions and optional row mutations at one commit LSN;
 //! it does not reuse the reserved typed-catalog version 2. See RFC 0005 for upgrade restrictions.
 
@@ -203,7 +203,7 @@ pub fn decode(payload: &[u8]) -> Result<Vec<CatalogOp>, CatalogError> {
     Ok(ops)
 }
 
-/// Independent draft envelope magic; it does not reinterpret reserved LCAT version 2.
+/// Independent envelope magic; it does not reinterpret reserved LCAT version 2.
 pub const INDEX_MAGIC: [u8; 4] = *b"LCIX";
 /// Maximum table or index operations in one compound change.
 pub const MAX_INDEX_OPS: usize = 4096;
@@ -220,7 +220,7 @@ pub enum IndexOp {
     },
 }
 
-/// One atomic metadata and optional row mutation under the draft LCIX v1 envelope.
+/// One atomic metadata and optional row mutation under the LCIX v1 envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompoundChange {
     /// Existing canonical LCAT v1 table operations, applied before checking index references.
@@ -246,7 +246,7 @@ fn put_block(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), CatalogError> {
     Ok(())
 }
 
-/// Encodes the draft compound format. Existing LCAT and LROW bytes are unchanged.
+/// Encodes the compound format. Existing LCAT and LROW bytes are unchanged.
 pub fn encode_compound(change: &CompoundChange) -> Result<Vec<u8>, CatalogError> {
     if change.tables.is_empty() && change.indexes.is_empty() {
         return Err(CatalogError::Empty);

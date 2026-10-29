@@ -1,8 +1,8 @@
 # RFC 0005: Persist managed index definitions with atomic row changes
 
-Status: draft
-Comment period ends: 2026-11-05 (at least seven full days after this RFC's PR opens)
-Decision ADR: proposed ADR 0019
+Status: accepted
+Comment period ends: waived by the project owner on 2026-10-29
+Decision ADR: ADR 0019
 
 ## Motivation
 
@@ -10,8 +10,10 @@ ADR 0014 derives index entries from committed rows but requires callers to suppl
 again after every open. A callback cannot be persisted as code or a pointer. Default recovery must
 recover declarative definitions, their visibility history and the rows they index from the same WAL.
 
-This proposal is unaccepted. Independent format review, the full comment period, compatibility policy
-and the evidence below must finish before merge. Neither Phase 1 sign-off nor Phase 2 exit is implied.
+The owner accepted RFC 0005 / ADR 0019 and explicitly waived this format's wait on 2026-10-29 after
+independent review, the accepted WAL guard and bounded engine/frozen-reader proof disclosure. Merge
+remains conditional on exact final-head green CI; [the decision record](../evidence/managed-index-owner-decision-2026-10-29.md)
+preserves that narrow scope. Neither Phase 1 sign-off nor Phase 2 exit is implied.
 
 ## Proposal
 
@@ -39,7 +41,7 @@ Nested LROW mutations do not inherit the 4096 metadata-operation limit. They ret
 byte-bounded row decoder, whose in-memory vectors, allocation capacity and decoded values can exceed
 the encoded byte size. The record-byte ceiling alone therefore does not establish a peak allocator
 bound. A separate row-count/admission-budget policy and measured allocation amplification remain
-acceptance risks; this draft does not silently impose a new row count or claim those risks resolved.
+remaining risks; this format does not silently impose a new row count or claim those risks resolved.
 
 The initial expressions are tag 0 `WholeValue` (all physical value bytes) and tag 1 `Slice` followed
 by u32 offset and length. A slice with an overflowing end is invalid. A value shorter than the end
@@ -98,13 +100,15 @@ metadata-plus-row publication. An online build state machine is broader work tra
 ## Compatibility and migration
 
 **Older RowStore binaries skip unknown engine payloads, including unguarded LCIX. They may silently
-miss its row mutations. The stacked implementation now requires the draft RFC 0008 WAL guard;
-neither format is accepted, and mixed-version access remains unsupported.**
+miss its row mutations. This integration requires the accepted RFC 0008 WAL guard;
+RFC 0008 / ADR 0022 is accepted and merged in PR 222. This managed format was separately accepted
+by the owner on 2026-10-29; mixed-version access remains unsupported.**
 Changing only the engine magic or catalog version cannot fix an old kernel's unknown-payload policy.
 
 The owner selected enforced old-reader refusal on 2026-10-29. Acceptance and LCIX activation now
-require a separately reviewed, implemented and accepted WAL version/capability admission mechanism.
-Operational-only coordinated upgrade was not selected; it cannot satisfy this prerequisite.
+require the separately reviewed, implemented and accepted WAL version/capability admission mechanism.
+That prerequisite is supplied by accepted RFC 0008 / ADR 0022, merged in PR 222. Operational-only
+coordinated upgrade was not selected; it cannot satisfy this prerequisite.
 Do not point old clients at an upgraded directory. Upgrade all writers/readers together, take a
 verified backup before the first LCIX write, retain the old binary and pre-upgrade backup, and restore
 that backup for rollback. No downgrade converter or in-place downgrade is supplied. WAL is retained,
@@ -114,7 +118,7 @@ The dormant typed/checkpoint format proposals remain independent, unaccepted and
 work does not revive those branches or decide their formats. Composing managed definitions with a
 future checkpoint requires a new engine tag and complete schema/index history; none is implemented.
 
-## Evidence and remaining acceptance
+## Evidence and remaining validation
 
 The focused public-store tests include independently framed LCIX examples (with nested unchanged
 LCAT/LROW), exact encoder output, all-prefix truncations, arbitrary inputs, and overflow/unknown-tag
@@ -127,24 +131,24 @@ A dedicated planted recovery defect omits the managed definitions/entries while 
 A hard-coded expected lookup and the catalog-driven scrubber detect the semantic mismatch. Existing
 kernel/row/vacuum defect sets are unchanged; the registry uses u64 to give the new defect a distinct bit.
 
-The code is a draft implementation, not acceptance evidence for arbitrary data sizes or online builds.
-Before acceptance: independent review; exact-head required CI; implemented and independently accepted WAL admission;
-final freeze review under the accepted format policy; larger fault/soak evidence; and measured
-build/recovery cost and retained-state memory. Independent proposal fixtures now live in the global corpus as described below; structural
-integration does not constitute format acceptance.
+Independent review, the separately accepted WAL guard, exact frozen-reader provenance and finite
+engine proof support the owner's format acceptance. Final-head CI remains required before merge.
+The accepted format does not establish arbitrary-size or online-build safety: larger workload/soak
+evidence, synchronous build/recovery cost and retained-state memory/admission-budget measurements
+remain engineering work. Global fixture metadata pins the accepted bytes; structural corpus
+integration alone did not supply owner acceptance.
 
-## Concrete compatibility decision required before acceptance
+## Accepted compatibility decision
 
-The owner-required enforced-refusal mechanism needs a separate WAL admission proposal. The existing
+The owner-required enforced-refusal mechanism is supplied by separate accepted RFC 0008. The existing
 v1 segment header is `LATLOG01`, u32 version `1`, then a reserved u32. Old `check_header` validates
 the version but ignores the reserved word. Therefore a reserved-word bit, unknown record type,
 unknown ChangeSet payload or directory sidecar alone cannot stop an already shipped old reader.
 Neither an LCIX magic change nor an engine-only marker provides enforcement.
 
-A concrete candidate is a new segment-header version with explicit required capabilities, including
-managed compound changes. No version number, bit assignment or revised header bytes are reserved or
-implemented by this RFC. A separate WAL RFC/ADR must define and independently review them. Its minimum
-contract is:
+Accepted RFC 0008 / ADR 0022 defines the separate guarded header and explicit required capabilities,
+including managed compound replay. Its implementation is merged in PR 222. This RFC does not redefine
+those header assignments; the required integration contract is:
 
 1. A writer must install a guarded segment and durably sync its header and directory entry before
    appending its first LCIX record. Nonempty v1 segments remain byte-unchanged; only an empty tail
@@ -166,30 +170,31 @@ contract is:
    Compatibility tests must run the frozen old reader, not a new-reader imitation. Future header
    extension bytes must never be silently treated as record data.
 
-This is broader than an engine-only compatibility fix and is intentionally not implemented here.
-The owner explicitly selected separately reviewed WAL admission before LCIX activation on
-2026-10-29 and rejected operational-only upgrade. The operational alternative is retained above
-for design history, not as an available acceptance shortcut. Backup verification and restore-based
-rollback still apply alongside the mandatory guard. This selection accepts no header bytes, feature
-bits, checkpoint format, release or phase gate. The seven-full-day hold remains in force; no waiver
-was given. This PR stays draft until the separate guard is implemented and accepted, the hold ends,
-and independent format review plus exact-head required checks pass.
+The WAL admission mechanism is separately implemented and accepted in RFC 0008 / ADR 0022 and
+merged through PR 222. PR 209 integrates it with the real row/catalog readers and compound writer.
+Backup verification and restore-based rollback remain required; operational-only upgrade is not an
+acceptance shortcut. On 2026-10-29 the owner separately accepted RFC 0005 / ADR 0019 and explicitly
+waived this format's seven-full-day wait after independent review and bounded engine/frozen-reader
+proof disclosure. The [narrow decision record](../evidence/managed-index-owner-decision-2026-10-29.md)
+records that response. Merge still requires exact final-head green CI; no checkpoint format,
+release or phase gate is accepted by this decision.
 
-## Global proposal corpus
+## Global accepted corpus
 
-The independent examples are now in `formats/corpus/` with `.golden.toml` draft metadata and the
+The independent examples are now in `formats/corpus/` with `.golden.toml` accepted metadata and the
 [global layout specification](../../formats/catalog-index-v1.md). Engine tests consume those exact
 bytes. The structural corpus check covers their metadata; codec tests pin the independent bytes and
-literal semantics. This supplies repository-wide proposal fixtures without changing WAL v1 or
-promoting RFC 0005/ADR 0019 to accepted. Final format acceptance and the selected mandatory WAL admission implementation
-remain separate requirements. Compound row writes also retain their bound host policy from PR 215;
+literal semantics. The owner accepted these format bytes without changing WAL v1. The mandatory
+WAL guard was accepted separately; neither corpus metadata nor a test result supplies acceptance by
+itself. Compound row writes also retain their bound host policy from PR 215;
 metadata APIs remain privileged host operations and do not implement SQL catalog authorization.
 
 
-## Stacked guard integration and actual-engine evidence
+## Accepted guard integration and actual-engine evidence
 
-PR 209 is stacked on the exact guard/measurement head `f9f0307b42766a01261670bc51a23b1dd88b5581`
-from PR 222. Managed RowStore and the catalog projection explicitly advertise `MANAGED_COMPOUND`;
+The initial integration used guard/measurement head `f9f0307b42766a01261670bc51a23b1dd88b5581`.
+PR 222 has since merged accepted RFC 0008 / ADR 0022; this update rebases the existing PR 209 onto
+actual main parent `6a500f8` rather than the former stacked branch. Managed RowStore and the catalog projection explicitly advertise `MANAGED_COMPOUND`;
 nonempty legacy callback opens advertise zero support. The streaming callback receives the real
 segment recovery context and refuses any LCIX record lacking capability mask `0x01` before applying metadata or rows.
 Compound commits bind that bit to `Kernel::commit_with_capabilities` after the existing bound actor
@@ -209,10 +214,15 @@ A bounded first-upgrade cut sweep covers empty-tail promotion and nonempty legac
 requiring ACK survival, all-or-none row/catalog/index publication, retained historical prefix reads,
 zero-support refusal whenever a guard persists, and stable second recovery. Hosted-only export
 passes every raw/recovered pair to the actual frozen `743b0fb` reader using its original lockfile,
-with source/binary/toolchain hashes and before/after byte manifests. Those hosted results remain
-pending until exact-head completion. Core-level partial-append/ENOSPC/fsync/rollover evidence remains
-in PR 222; this engine sweep does not claim an exhaustive arbitrary workload or large soak.
+with source/binary/toolchain hashes and before/after byte manifests. Hosted run 40916386232 passed
+25 semantic tests and 15 finite engine histories / 30 old-reader probes at reviewed head `d0edc12`,
+actual merge source `aa134abf47a15cd433375c0025514c13bd83db2e`; their trees are identical. There were
+20 byte-unchanged guarded refusals, ten legacy probes and two permitted raw legacy repairs. See the
+[compact proof/provenance](../evidence/managed-index-40916386232.md). The separate 4,648-history core
+matrix is broader admission evidence, not 4,648 managed-index histories. Current replays require
+fresh final-head checks; this engine sweep does not claim arbitrary workload or large-soak coverage.
 
-This integration does not activate LCIX on main, accept either format, waive either review hold,
-provide a converter for earlier unguarded draft directories, or decide future checkpoint composition.
-Such draft directories now refuse and require restoration/recreation rather than silent adoption.
+The owner accepted the reviewed managed format and implementation and waived its own wait;
+publication remains conditional on final-head green CI. This supplies no converter for earlier
+unguarded draft directories and does not decide future checkpoint composition. Such draft
+directories refuse and require restoration/recreation rather than silent adoption.

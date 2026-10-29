@@ -39,4 +39,6 @@ lockfile, checks the literal legacy row and guarded refusal, then checks every e
 fault-matrix snapshot with before/after filename and byte-hash manifests. Guarded refusal and
 recovered legacy opens must not mutate bytes; permitted raw legacy-tail repair is recorded. Completed source-specific hosted evidence and limits are recorded in
 [the compatibility/measurement report](../docs/evidence/wal-admission-40908208450.md). The accepted
-WAL fixture metadata does not accept its nested illustrative LCIX payload; RFC 0005 remains draft.
+WAL fixture metadata alone did not accept its nested LCIX illustration. The owner separately
+accepted RFC 0005 / ADR 0019 on 2026-10-29; their reviewed engine integration and current-head checks
+remain separate from this header fixture.

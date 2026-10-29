@@ -3,7 +3,7 @@
 //! An index maps a value extracted from a row to the primary keys of the rows that hold it. Its
 //! entries are versioned exactly like rows and are applied at the same commit LSN as the row writes
 //! that cause them, in the same step, so a snapshot sees a row and its index entries together or
-//! neither (P2-07). Entries are derived, while managed definitions are logged in the catalog's draft
+//! neither (P2-07). Entries are derived, while managed definitions are logged in the catalog's accepted
 //! compound format. Recovery replays definition and row changes; legacy callback definitions remain
 //! an explicit process-local mode. [`Indexes::live_entries`] supports comparison with the rows.
 

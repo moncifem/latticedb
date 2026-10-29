@@ -9,12 +9,20 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Managed physical-byte index definitions and create/drop/recreate history persisted in atomic LCIX
+  catalog/row changes. Default managed opens rebuild without callbacks; explicit callback mode remains
+  legacy-only. Compound writes require the accepted WAL capability guard and actual replay context;
+  actor-bound row checks precede ID/RNG/WAL. The owner accepted RFC 0005 / ADR 0019 and waived its wait
+  on 2026-10-29, conditional on final-head green CI. Independent review and 15 finite engine histories /
+  30 frozen-reader probes passed; synchronous build cost, retained-state allocation bounds and broader
+  soak remain unmeasured. No in-place downgrade, online build or checkpoint format is introduced.
+
 - Explicit WAL engine-capability admission: preflight the complete segment-header chain,
   require durable guards before protected appends, preserve legacy WAL bytes and expose per-record
   recovery context. `Io::read_prefix` is a required bounded seam API. Hosted frozen-reader/cut checks
   and warmed-cache open/RSS measurements passed at the recorded source. The owner accepted
   RFC 0008 / ADR 0022 and waived this guard's wait on 2026-10-29, conditional on final-head green CI.
-  Managed-index format acceptance, its hold and activation remain separate.
+  Managed-index RFC 0005 / ADR 0019 was accepted separately; its merge still requires its own final CI.
 
 - A typed change feed model (`lattice_core::feed`): one `ChangeEvent` per entity change of a committed
   change set, and a `Cursor` of `(lsn, index)` whose order is commit order and does not depend on
