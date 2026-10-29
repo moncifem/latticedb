@@ -126,3 +126,10 @@ path = "fuzz_targets/mcp_message.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "outbox_decode"
+path = "fuzz_targets/outbox_decode.rs"
+test = false
+doc = false
+bench = false
