@@ -277,3 +277,17 @@ seven-full-day wait, separately from RFC 0008 / ADR 0022. The
 on exact final-head green CI. Synchronous build performance, retained-state memory and row-decoder
 admission/allocation budgets remain unresolved. This supplies no mixed-version access, in-place
 downgrade, online backfill, accepted checkpoint composition, release or phase gate sign-off.
+
+
+## Strict HLC history resolver (P2-14 foundation)
+
+`RowStore::try_snapshot_as_of_hlc` adds a checked full-HLC predecessor lookup: expired requests fail
+with `SnapshotTooOld`; `snapshot_as_of_hlc` retains its deliberate floor clamp. The focused
+`strict_hlc` tests cover literal wall/counter/node boundaries, gaps created by non-row WAL records,
+empty/pre-first/future snapshots, retention floors, recovery and reapplied vacuum. A separate
+`Bug::HLC_SNAPSHOT` witness exercises the clamping defect without changing `Bug::ALL` or
+`Bug::STORAGE`. This adds no SQL timestamp parser, SQLSTATE mapper, branch support or phase-gate claim.
+
+Local focused verification passed five strict-HLC tests (including the planted defect witness), four
+existing vacuum regressions and the 38-bit registry uniqueness check. Touched engine/core Clippy passed.
+This is bounded API evidence, not full SQL conformance or soak-volume evidence.

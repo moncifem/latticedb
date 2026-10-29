@@ -35,3 +35,12 @@ Phase 2 gate record for the remaining soak, north-star and branch evidence.
 eight real child-process terminations and two clean controls, verifying acknowledged log/row batches
 and index/history recovery. OS process termination preserves the page cache; this does not test power
 loss or establish soak-volume evidence.
+
+## Strict historical HLC resolution
+
+`RowStore::try_snapshot_as_of_hlc` returns the newest retained row change-set snapshot at or
+before the full `(wall_ms, counter, node)` timestamp, or `RowError::SnapshotTooOld` when that
+predecessor has expired. An empty snapshot before the first commit is valid until vacuum expires
+it. The existing `snapshot_as_of_hlc` intentionally keeps its floor-clamping behavior. Reopening
+restores history from the WAL; reapplying vacuum restores the retention boundary. This is a storage
+API: SQL timestamp parsing, microsecond conversion and SQLSTATE mapping remain executor work.

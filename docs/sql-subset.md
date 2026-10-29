@@ -1,8 +1,10 @@
 # SQL subset
 
 Status: draft (Phase 2, requirement P2-09). This is the **target** SQL subset, declared before
-implementation. The SQL parser, planner, executor, PostgreSQL wire server and conformance suites are
-not implemented yet. The constructs below describe the intended contract, not commands available today.
+implementation. A bounded parser and AST, PostgreSQL wire session state machine and development
+listener exist; the listener still uses a `SELECT 1` placeholder. SQL binding, planning, storage-backed
+execution and full Lattice conformance remain pending. The constructs below describe the intended
+contract, not commands available today.
 
 Once implemented, each accepted construct must be tested; everything outside the subset must fail
 with a stable error, never with a wrong answer. Adding to the subset requires a documented change

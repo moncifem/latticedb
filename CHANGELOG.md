@@ -9,6 +9,10 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- `RowStore::try_snapshot_as_of_hlc`: strict full-HLC predecessor resolution returns
+  `SnapshotTooOld` for expired history while the existing helper retains its floor clamp.
+  This is a storage API; SQL timestamp execution and SQLSTATE mapping remain pending.
+
 - `docs/agent-workflow.md`: contributor and agent workflow guide with an onboarding checklist.
 - A manual same-host foundation benchmark diagnostic with nine alternating sample pairs and raw
   evidence retention; it does not change benchmark thresholds or decide SQL planner criteria.

@@ -35,7 +35,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Built | What it does |
 |---|---|
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
-| Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, persisted managed-index definitions/history, callback legacy mode and in-memory version vacuum; reads below the vacuum floor return an error |
+| Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, persisted managed-index definitions/history, callback legacy mode and in-memory version vacuum; reads below the vacuum floor return an error; strict full-HLC resolution rejects expired history alongside the existing clamping helper |
 | Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS, with a `SELECT 1` placeholder handler |
 | SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
 | Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |

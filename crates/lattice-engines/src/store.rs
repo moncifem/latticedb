@@ -677,13 +677,34 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     /// `t`, clamped to the vacuum floor when that history has expired. Before any vacuum it is
     /// the empty snapshot if `t` is before the first commit.
     pub fn snapshot_as_of_hlc(&self, t: Hlc) -> Snapshot {
-        let end = self.commit_times.partition_point(|(h, _, _)| *h <= t);
-        let as_of = end
-            .checked_sub(1)
-            .and_then(|i| self.commit_times.get(i))
-            .map_or(0, |(_, lsn, _)| *lsn);
         Snapshot {
-            as_of: as_of.max(self.table.floor()),
+            as_of: self.hlc_predecessor(t).as_of.max(self.table.floor()),
+        }
+    }
+
+    /// Resolves the newest row change set at or before the full `(wall_ms, counter, node)` HLC,
+    /// refusing expired history with [`RowError::SnapshotTooOld`] instead of clamping to the floor.
+    /// Before the first commit this is the empty snapshot, provided vacuum has not expired it.
+    /// A reopen restores log history; reapplying vacuum restores the same retention boundary.
+    /// This is an HLC storage API, not SQL timestamp parsing or precision conversion.
+    pub fn try_snapshot_as_of_hlc(&self, t: Hlc) -> Result<Snapshot, RowError> {
+        if bugs::active(Bug::HlcSnapshotClamped) {
+            return Ok(self.snapshot_as_of_hlc(t));
+        }
+        let snap = self.hlc_predecessor(t);
+        self.check_snapshot(snap)?;
+        Ok(snap)
+    }
+
+    fn hlc_predecessor(&self, t: Hlc) -> Snapshot {
+        let end = self.commit_times.partition_point(|(h, _, _)| *h <= t);
+        Snapshot {
+            // Vacuum discards older commit metadata. No retained predecessor means either the
+            // empty snapshot or expired history; check_snapshot distinguishes those by the floor.
+            as_of: end
+                .checked_sub(1)
+                .and_then(|i| self.commit_times.get(i))
+                .map_or(0, |(_, lsn, _)| *lsn),
         }
     }
 
