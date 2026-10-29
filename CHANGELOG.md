@@ -9,6 +9,10 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Unsigned scorecards with ten observed-or-missing sections, bounded ledger JSON interchange,
+  retained nightly producer provenance and completed-fuzz summaries. Benchmark ledger entries now
+  include the actual comparison verdict; missing measures remain explicit.
+
 - Ten distinct storage defect witnesses with independent semantic oracles, clean controls and guard
   cleanup checks; the existing four-defect randomized workload remains unchanged.
 

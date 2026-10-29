@@ -36,7 +36,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
 | Row engine | Snapshot reads, write conflicts, a versioned catalog and secondary indexes rebuilt from the log |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
-| Verification tools | `lattice doctor`, a results ledger, fault simulation, fuzz targets and benchmark gates |
+| Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
 
 SQL, PostgreSQL clients, live sync, policy enforcement and the connected workspace are still ahead.
 See the [delivery plan](docs/spec/README.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
