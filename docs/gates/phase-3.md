@@ -78,3 +78,12 @@ order. A planted unbounded queue is caught by the bound check at 1 and 100 subsc
 publish, drain and acknowledge sequences kept queue length and bytes within limits, order and a monotonic cursor.
 Offers per second are not measured (the crate bans `Instant`); the counts above are the evidence. Not wired into a
 server, not part of the nightly shards.
+Verification evidence, not an exit criterion: `lattice-engines::merge` (WP42, issue #244, RFC 0011 draft) is a pure
+in-memory function `merge_rows` that merges a remote row change into a local row with a per-column `MergeKind`
+(last-writer-wins register, observed-remove set, or plain). It is not wired to the row store, the catalog or sync,
+has no byte encoding, and CRDT state is not persisted, so recovery of CRDT state, delta replication through change
+sets and the simulator-level N-replica check of WP42 are still open. One local run of
+`cargo test -p lattice-engines --lib merge` (12 tests, default proptest settings): commutativity, associativity,
+idempotence and convergence of replicas applying shuffled, duplicated orders of the same changes held against an
+oracle computed from the change set; five deliberately wrong merge variants were each caught by the matching law
+check. The full `cargo xtask ci` gate was not run locally.
