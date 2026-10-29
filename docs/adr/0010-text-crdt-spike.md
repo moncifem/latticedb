@@ -36,8 +36,16 @@ collection, interleaving tests). Nothing in the spec requires a decision earlier
 
 `lattice_core::crdt_text` implements the hardened option named above: an operation based RGA with stable
 element ids (insert op id plus chunk offset), tombstones, newest-sibling-first ordering, parked operations
-for out-of-order delivery, a canonical bounded encoding and tombstone compaction that keeps declared
-revert points. It sits beside the Phase 1 spike (`crdt::Rga`); the trait boundary has not been changed.
+for out-of-order delivery (indexed by the id they wait for, with per-origin and global caps), a canonical
+bounded encoding, size caps, and tombstone compaction that keeps declared revert points. It sits beside the
+Phase 1 spike (`crdt::Rga`); the trait boundary has not been changed.
+
+Compaction drops only leaf tombstones: a tombstone that still anchors a remaining element stays, because
+removing it changes where later concurrent inserts land. It also needs a causal stability claim from the
+caller (a stable id plus an ack per replica); the document refuses to compact while operations are parked
+or when a known node has no ack, and cannot check the claim itself. The set of applied insert ids (with a
+content hash, to detect id reuse) is never compacted, so memory for it grows with every insert for the life
+of the document.
 
 Measured with `cargo test -p lattice-core --lib crdt_text::tests::measure -- --nocapture` on one
 workload: random single-character inserts and deletes (about 40% deletes) until 10 000 characters are
@@ -47,21 +55,22 @@ visible, then the whole operation log replayed into a fresh replica, in the test
 | Measure | Result |
 |---|---|
 | Operations in the log | 50 780 (30 390 inserts, 20 390 deletes) |
-| Memory per stored element | 48 bytes (`size_of`), 51.8 bytes per element of array capacity; plus 16 bytes per applied insert id in a `BTreeSet` (tree overhead not measured) |
+| Memory per stored element | 48 bytes (`size_of`), 51.8 bytes per element of array capacity; the applied-id map adds a key and a small record per insert (not measured) |
 | Replay, in order, into an empty replica | about 150 000 to 165 000 operations per second; an insert is a linear scan plus a vector splice, so cost grows with document size |
 | Tombstones after the workload | 20 390 of 30 390 stored elements |
-| After compaction with no retained points | 0 tombstones (20 390 removed) |
-| After compaction with 3 retained points (at 25%, 50% and 75% of the log) | 7 832 tombstones kept, 12 558 removed |
+| After compaction with no retained points | 6 507 tombstones left (13 883 removed); the rest anchor later text |
+| After compaction with 3 retained points (at 25%, 50% and 75% of the log) | 11 133 tombstones left (9 257 removed) |
 
-What the tests show: with a generated three-replica history shuffled and duplicated, every replica
+What the tests show: with generated three-replica histories shuffled and duplicated, every replica
 produces the string an independent after-tree oracle computes (I5); compaction keeps the visible text and
 the text at every retained point (checked against the oracle restricted to operations at or before the
-point); the decoder never panics on arbitrary bytes and accepts only canonical encodings.
+point); later operations applied after compaction match an uncompacted replica, and that test fails if the
+leaf rule is removed; the decoder never panics on arbitrary bytes and accepts only canonical encodings.
+These ran at default proptest case counts locally.
 
-Does the Phase 1 decision stand? Provisionally yes: the operation based hardening path works and meets the
-convergence and compaction requirements, so the own implementation stays. Not shown: no candidate library
-was measured here, so the "adopting a library" column above is still empty; merge cost for large
-concurrent histories, documents far beyond 10 000 characters, an index to avoid the linear scans, the
-causal stability protocol that supplies the `stable` frontier, and integration with the row engine (P3-07)
-are open. Compaction assumes every replica has seen every operation at or below `stable`; that assumption
-is the caller's. E3-6 is not claimed as met.
+Does the Phase 1 decision stand? Provisionally: the hardened own implementation passes these tests, so
+there is no evidence yet to reverse the decision, but this is not a confirmation. No candidate library was
+measured here, so the "adopting a library" column above is still empty. Open: merge cost for large
+concurrent histories, documents far beyond 10 000 characters, an index to avoid the linear scans, a
+protocol that produces the causal stability claim, a way to reclaim tombstones that anchor live text, a
+bound on the applied-id set, and integration with the row engine (P3-07). E3-6 is not claimed as met.
