@@ -8,12 +8,15 @@ import hashlib
 import subprocess
 import textwrap
 from types import SimpleNamespace
+from unittest.mock import patch
 import unittest
 from pathlib import Path
 
 import scorecard
 import scorecard_metrics as metrics
 import scorecard_replay as replay
+import mutation_campaign as campaign
+import mutation_results as campaign_results
 
 BINARY = Path(os.environ.get("LATTICE_SCORECARD_BIN", str(scorecard.ROOT / "target/debug/lattice")))
 
@@ -412,6 +415,236 @@ class ReplayEvidenceTests(unittest.TestCase):
         for value in ('0', '-1', 'abc', '1; echo bad', '01'):
             with self.assertRaises(replay.argparse.ArgumentTypeError):
                 replay.positive(value)
+
+
+
+def campaign_fixture(count=50):
+    universes = {}
+    for group, package in [('dependent', 'lattice-core'), ('self', 'lattice-abi')]:
+        _, universe = mutation_fixture(['CaughtMutant'] * count)
+        for mutant in universe:
+            mutant['package'] = package
+        universes[group] = universe
+    source = {'type': 'github_workflow', 'repository': 'owner/repo', 'run_id': 1, 'attempt': 1,
+              'revision': 'a' * 40, 'branch': 'main', 'workflow_id': 2, 'workflow_path': '.github/workflows/weekly.yml'}
+    plan = campaign.make_plan(universes, source)
+    for group, block in plan['groups'].items():
+        block['universe_sha256'] = 'b' * 64
+    shards = {}
+    for row in plan['matrix']['include']:
+        group, index = row['group'], row['shard']
+        assigned = universes[group][index::row['total']]
+        raw, _ = mutation_fixture(['CaughtMutant'] * len(assigned))
+        raw['outcomes'] = [{'scenario': 'Baseline', 'summary': 'Success'}] + [
+            {'scenario': {'Mutant': {k: v for k, v in mutant.items() if k != 'diff'}}, 'summary': 'CaughtMutant'}
+            for mutant in assigned]
+        shards[f'{group}/{index}'] = {'manifest': {'schema': 1, 'source': source, 'group': group, 'shard': index,
+                    'total': row['total'], 'tool_version': campaign.VERSION, 'universe_sha256': 'b' * 64},
+            'command': {'arguments': campaign.command(group) + ['--shard', f'{index}/{row["total"]}', '--sharding', 'round-robin', '--output', '/tmp/test-only-output']},
+            'assigned': assigned, 'mutants': assigned, 'outcomes': raw,
+            'job_id': 10 + len(shards), 'job_status': 'completed', 'job_conclusion': 'success',
+            'artifact_id': 100 + len(shards), 'artifact_digest': 'sha256:' + 'c' * 64}
+    return plan, universes, shards
+
+
+class MutationCampaignTests(unittest.TestCase):
+    def test_complete_real_assignment_union_has_no_duplicates_or_omitted_mutants(self):
+        plan, universes, shards = campaign_fixture()
+        assignments = {group: {} for group in campaign.GROUPS}
+        for row in plan['matrix']['include']:
+            group, index = row['group'], row['shard']
+            assignments[group][index] = shards[f'{group}/{index}']['assigned']
+        proof = campaign.partition_proof(plan, assignments)
+        self.assertEqual(proof['expected_mutants'], 100)
+        self.assertEqual(proof['assigned_mutants_observed'], 100)
+        self.assertTrue(proof['union_equals_full_universe'])
+        self.assertTrue(proof['no_duplicates'])
+        self.assertTrue(all(row['planned'] <= 24 for row in plan['matrix']['include']))
+        del assignments['dependent'][0]
+        self.assertFalse(campaign.partition_proof(plan, assignments)['union_equals_full_universe'])
+
+    def test_duplicate_extra_and_changed_mutant_assignments_are_rejected(self):
+        plan, universes, shards = campaign_fixture()
+        assigned = shards['dependent/0']['assigned']
+        for bad in (assigned + assigned[:1], assigned[:-1], list(reversed(assigned))):
+            with self.assertRaises(ValueError):
+                campaign.check_assignment(plan, 'dependent', 0, bad)
+        with self.assertRaises(ValueError):
+            campaign.identities(assigned + assigned)
+
+    def test_real_rust_path_labels_allow_internal_parents_without_normalizing_identity(self):
+        _, mutants = mutation_fixture(['CaughtMutant'])
+        mutant = mutants[0]
+        mutant['file'] = 'crates/lattice-bench/src/bin/../runtime_spike/tokio_io.rs'
+        identity = metrics.mutation_id(mutant)
+        self.assertIn('bin/../runtime_spike', identity)
+        for bad in ('../escape.rs', 'crates/../../escape.rs', '/tmp/escape.rs'):
+            with self.assertRaises(ValueError):
+                metrics.mutation_id(dict(mutant, file=bad))
+
+    def test_matrix_ceiling_fails_without_dropping_universe(self):
+        _, universe = mutation_fixture(['CaughtMutant'] * 3073)
+        other = copy.deepcopy(universe)
+        for mutant in other:
+            mutant['package'] = 'different-package'
+        universes = {'dependent': universe, 'self': other}
+        with self.assertRaisesRegex(ValueError, 'matrix ceiling'):
+            campaign.make_plan(universes, {})
+
+    def test_shard_commands_preserve_both_original_crate_groups_and_test_budgets(self):
+        self.assertEqual(campaign.command('dependent'), ['cargo', 'mutants', '-p', 'lattice-core', '-p', 'lattice-lsl',
+            '--test-workspace=true', '--timeout', '120', '--no-shuffle', '-j', '2'])
+        command = campaign.command('self')
+        self.assertEqual([command[i + 1] for i, item in enumerate(command[:-1]) if item == '-p'],
+                         ['lattice-abi', 'lattice-evalkit', 'lattice-sim', 'lattice-seams', 'lattice-cli', 'lattice-bench', 'lattice-sdk'])
+        self.assertEqual(command[-6:], ['--test-workspace=false', '--timeout', '120', '--no-shuffle', '-j', '2'])
+        self.assertNotIn('--exclude', command)
+
+    def test_full_observed_campaign_is_complete_only_after_source_workflow_finishes(self):
+        plan, universes, shards = campaign_fixture()
+        observed = campaign_results.aggregate(plan, universes, shards, source_complete=True)
+        self.assertTrue(observed['proof']['union_equals_full_universe'])
+        self.assertEqual(observed['outcome_counts']['tested'], 100)
+        self.assertTrue(all(row['mutation_score'] == 1.0 for row in observed['modules']))
+        for row in observed['modules']:
+            metrics.validate_record('mutation', row)
+        diagnostic = campaign_results.aggregate(plan, universes, shards, source_complete=False)
+        self.assertEqual(diagnostic['scope'], 'diagnostic_only_workflow_in_progress')
+        self.assertTrue(all(row['mutation_score'] is None for row in diagnostic['modules']))
+
+    def test_missing_runner_failed_or_baseline_failed_shard_never_yields_a_complete_score(self):
+        for damage in ('missing', 'runner', 'baseline'):
+            plan, universes, shards = campaign_fixture()
+            if damage == 'missing':
+                del shards['dependent/0']
+            elif damage == 'runner':
+                shards['dependent/0'] = {'job_status': 'completed', 'job_conclusion': 'failure', 'job_id': 10}
+            else:
+                shard = shards['dependent/0']
+                shard['outcomes'], _ = mutation_fixture([], planned_count=len(shard['assigned']), baseline='Failure')
+                shard['job_conclusion'] = 'failure'
+            observed = campaign_results.aggregate(plan, universes, shards, source_complete=True)
+            self.assertFalse(observed['proof']['all_outcomes_complete'])
+            self.assertTrue(all(row['mutation_score'] is None for row in observed['modules']))
+            self.assertGreater(observed['outcome_counts']['unrun'], 0)
+            for row in observed['modules']:
+                metrics.validate_record('mutation', row)
+
+    def test_manifest_attempt_drift_and_bad_counters_are_invalid_not_coverage(self):
+        for damage in ('manifest', 'counter'):
+            plan, universes, shards = campaign_fixture()
+            if damage == 'manifest':
+                shards['dependent/0']['manifest']['source'] = dict(plan['source'], attempt=2)
+            else:
+                shards['dependent/0']['outcomes']['caught'] += 1
+            observed = campaign_results.aggregate(plan, universes, shards, source_complete=True)
+            self.assertTrue(observed['proof']['invalid_shards'])
+            self.assertTrue(all(row['mutation_score'] is None for row in observed['modules']))
+
+    def test_survivors_and_timeouts_keep_their_denominator_and_failed_status(self):
+        for summary, counter in [('MissedMutant', 'missed'), ('Timeout', 'timeout')]:
+            plan, universes, shards = campaign_fixture()
+            raw = shards['dependent/0']['outcomes']
+            raw['outcomes'][1]['summary'] = summary
+            raw['caught'] -= 1
+            raw[counter] += 1
+            shards['dependent/0']['job_conclusion'] = 'failure'
+            result = campaign_results.aggregate(plan, universes, shards, source_complete=True)
+            module = next(row for row in result['modules'] if row['group'] == 'dependent')
+            self.assertEqual(module['score_status'], 'failed')
+            self.assertEqual(module['counts']['survived'] if summary == 'MissedMutant' else module['counts']['timeout'], 1)
+            self.assertEqual(module['score_denominator'], 50 if summary == 'MissedMutant' else 49)
+            metrics.validate_record('mutation', module)
+
+    def test_changed_command_is_invalid_even_if_all_outcomes_claim_success(self):
+        plan, universes, shards = campaign_fixture()
+        shards['dependent/0']['command']['arguments'].insert(2, '--check')
+        result = campaign_results.aggregate(plan, universes, shards, source_complete=True)
+        self.assertTrue(result['proof']['invalid_shards'])
+        self.assertTrue(all(row['mutation_score'] is None for row in result['modules']))
+
+    def test_verified_plan_and_shard_archive_fetch_support_matrix_names_and_provenance(self):
+        plan, universes, shards = campaign_fixture(count=26)
+        run, _, _, workflow = weekly_fixture()
+        run['repository']['id'] = run['head_repository']['id'] = 123
+        jobs, artifacts, archives = [], [], {}
+        def add_job(name, identifier):
+            job = {'id': identifier, 'run_id': run['id'], 'run_attempt': run['run_attempt'], 'head_sha': run['head_sha'],
+                   'name': name, 'status': 'completed', 'conclusion': 'success', 'html_url': f'https://example.test/job/{identifier}'}
+            jobs.append(job)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_dir = root / 'plan'
+            (plan_dir / 'assignments').mkdir(parents=True)
+            assignments = {group: {} for group in campaign.GROUPS}
+            for group in campaign.GROUPS:
+                campaign.write(plan_dir / (group + '.json'), universes[group])
+                plan['groups'][group]['universe_sha256'] = campaign.digest(plan_dir / (group + '.json'))
+            for row in plan['matrix']['include']:
+                group, index = row['group'], row['shard']
+                assigned = shards[f'{group}/{index}']['assigned']
+                assignments[group][index] = assigned
+                campaign.write(plan_dir / 'assignments' / f'{group}-{index}.json', assigned)
+            plan['listing_proof'] = campaign.partition_proof(plan, assignments)
+            campaign.write(plan_dir / 'plan.json', plan)
+            plan_hash = campaign.digest(plan_dir / 'plan.json')
+            def add_artifact(name, directory, identifier):
+                path = root / (name + '.zip')
+                with zipfile.ZipFile(path, 'w') as archive:
+                    for file in directory.rglob('*'):
+                        if file.is_file():
+                            archive.write(file, str(file.relative_to(directory)))
+                archives[identifier] = path.read_bytes()
+                artifacts.append({'id': identifier, 'name': name, 'expired': False,
+                    'digest': 'sha256:' + hashlib.sha256(archives[identifier]).hexdigest(), 'size_in_bytes': len(archives[identifier]),
+                    'workflow_run': {'id': run['id'], 'head_sha': run['head_sha'], 'head_branch': 'main',
+                                     'repository_id': 123, 'head_repository_id': 123}})
+            add_job('mutation-plan', 10)
+            add_job('mutation-summary', 11)
+            add_artifact('mutants-plan', plan_dir, 100)
+            for number, row in enumerate(plan['matrix']['include']):
+                group, index = row['group'], row['shard']
+                shard = shards[f'{group}/{index}']
+                directory = root / f'shard-{number}'
+                (directory / 'mutants.out').mkdir(parents=True)
+                shard['manifest']['universe_sha256'] = plan['groups'][group]['universe_sha256']
+                shard['manifest']['plan_sha256'] = plan_hash
+                for name, value in [('manifest.json', shard['manifest']), ('command.json', shard['command']),
+                                    ('assigned.json', shard['assigned']), ('regenerated-universe.json', universes[group]),
+                                    ('mutants.out/mutants.json', shard['mutants']), ('mutants.out/outcomes.json', shard['outcomes'])]:
+                    campaign.write(directory / name, value)
+                add_job(f'mutation ({group}, {index})', 20 + number)
+                add_artifact(f'mutants-{group}-{index}', directory, 200 + number)
+            def download(command, stdout, check):
+                identifier = int(command[-1].split('/')[-2])
+                stdout.write(archives[identifier])
+            with patch.object(campaign_results.subprocess, 'run', side_effect=download):
+                result = campaign_results.fetch('owner/repo', 'main', run, workflow, artifacts, jobs)
+            self.assertTrue(result['proof']['union_equals_full_universe'])
+            self.assertEqual(result['outcome_counts']['tested'], 52)
+            self.assertTrue(all(row['source']['authentication'] == 'validated_shard_artifacts_and_complete_universe_plan' for row in result['modules']))
+            wrong_attempt = dict(run, run_attempt=2)
+            with patch.object(campaign_results.subprocess, 'run', side_effect=download), self.assertRaises(ValueError):
+                campaign_results.fetch('owner/repo', 'main', wrong_attempt, workflow, artifacts, jobs)
+
+    def test_plan_source_must_match_exact_workflow_repository_and_revision(self):
+        run, job, artifact, workflow = weekly_fixture()
+        source = campaign.source_from_run(run, 'owner/repo', 'a' * 40)
+        self.assertEqual(source['attempt'], 1)
+        for field, value in [('head_sha', 'b' * 40), ('path', '.github/workflows/other.yml'),
+                             ('head_repository', {'full_name': 'fork/repo'})]:
+            with self.assertRaises(ValueError):
+                campaign.source_from_run(dict(run, **{field: value}), 'owner/repo', 'a' * 40)
+
+    def test_legacy_single_job_mutation_import_still_works(self):
+        raw, planned = mutation_fixture(['CaughtMutant'])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'legacy.zip'
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('mutants/mutants.out/outcomes.json', json.dumps(raw))
+                archive.writestr('mutants/mutants.out/mutants.json', json.dumps(planned))
+            observed = metrics.import_mutation_archive(path, *weekly_fixture(), 'owner/repo', 'main')
+            self.assertEqual(observed[0]['mutation_score'], 1.0)
 
 
 if __name__ == '__main__':

@@ -125,6 +125,8 @@ def report(entries, root=ROOT):
         for observation in by(kind):
             try:
                 metrics[kind].append(scorecard_metrics.validate_record(kind, observation))
+                if kind == 'mutation' and observation.get('campaign_proof', {}).get('invalid_shards'):
+                    invalid.append('invalid mutation shards: ' + '; '.join(observation['campaign_proof']['invalid_shards']))
             except (ValueError, TypeError, KeyError) as error:
                 invalid.append(f'invalid {kind} observation: {error}')
     pending, named = [], {f'I{i}': [] for i in range(1, 15)}

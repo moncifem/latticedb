@@ -2,10 +2,17 @@ name: weekly
 on:
   schedule: [{ cron: "0 3 * * 0" }]
   workflow_dispatch:
+    inputs:
+      mutation_only:
+        description: "Run the complete current-revision mutation campaign without starting new long-fuzz jobs"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 jobs:
   long-fuzz:
+    if: inputs.mutation_only != true
     strategy:
       fail-fast: false
       matrix:
@@ -31,10 +38,48 @@ jobs:
           name: fuzz-crash-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
-  mutation:
+  mutation-plan:
     permissions:
       contents: read
       actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-mutants@27.1.0 }
+      - name: capture exact planning source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/mutation-source.json"
+      - name: enumerate complete universes and prove every real shard listing
+        id: plan
+        run: |
+          python3 tools/mutation_campaign.py plan --repository "$GITHUB_REPOSITORY" \
+            --run-metadata "$RUNNER_TEMP/mutation-source.json" --github-output "$GITHUB_OUTPUT" \
+            --output "$RUNNER_TEMP/mutation-plan"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: mutants-plan
+          path: ${{ runner.temp }}/mutation-plan/
+          if-no-files-found: error
+          retention-days: 90
+  mutation:
+    name: mutation (${{ matrix.group }}, ${{ matrix.shard }})
+    needs: mutation-plan
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -42,33 +87,54 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: 1.99.1 }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with: { shared-key: mutation-shards }
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
-        with: { tool: cargo-mutants }
-      - run: mkdir -p target
-      - name: mutation testing of crates whose tests live in other crates (a surviving mutant fails the run)
-        run: >
-          cargo mutants -p lattice-core -p lattice-lsl --test-workspace=true
-          --timeout 120 --no-shuffle -j 2 --output target/mutants
-      - if: always()
-        name: mutation testing of crates with their own tests (a surviving mutant fails the run)
-        run: >
-          cargo mutants -p lattice-abi -p lattice-evalkit -p lattice-sim -p lattice-seams
-          -p lattice-cli -p lattice-bench -p lattice-sdk --test-workspace=false
-          --timeout 120 --no-shuffle -j 2 --output target/mutants-crates
-      - name: preserve exact mutation producer provenance
+        with: { tool: cargo-mutants@27.1.0 }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutants-plan
+          path: ${{ runner.temp }}/mutation-plan
+      - name: capture exact shard source attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/mutation-source.json"
+      - name: validate and execute this exact mutation assignment
+        env:
+          MUTATION_GROUP: ${{ matrix.group }}
+          MUTATION_SHARD: ${{ matrix.shard }}
+        run: |
+          python3 tools/mutation_campaign.py shard --plan "$RUNNER_TEMP/mutation-plan" \
+            --repository "$GITHUB_REPOSITORY" --run-metadata "$RUNNER_TEMP/mutation-source.json" \
+            --group "$MUTATION_GROUP" --shard "$MUTATION_SHARD" --output "$RUNNER_TEMP/mutation-shard"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
+        with:
+          overwrite: true
+          name: mutants-${{ matrix.group }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/mutation-shard/
+          if-no-files-found: warn
+          retention-days: 90
+  mutation-summary:
+    if: always()
+    needs: [mutation-plan, mutation]
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: reconstruct raw shard evidence without assuming a complete weekly run
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --jq '{id,run_attempt,head_sha,workflow_id,path,head_branch}' > target/mutants-producer.json
+          python3 tools/mutation_results.py --repository "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME" \
+            --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --output target/mutation-campaign
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           overwrite: true
           name: mutants
-          path: |
-            target/mutants-producer.json
-            target/mutants/mutants.out
-            target/mutants-crates/mutants.out
-          if-no-files-found: ignore
+          path: target/mutation-campaign/
+          if-no-files-found: error
+          retention-days: 90

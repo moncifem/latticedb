@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import posixpath
 import re
 import subprocess
 import tempfile
@@ -41,8 +42,11 @@ def mutation_id(mutant):
     require(isinstance(mutant, dict), 'mutant must be an object')
     text(mutant.get('package'), 'package', 256)
     file = text(mutant.get('file'), 'module path')
-    require(not PurePosixPath(file).is_absolute() and '..' not in PurePosixPath(file).parts,
-            'module path must be relative')
+    # Rust #[path] modules can produce internal parent segments. This remains a raw identity
+    # label, never a path we open; accept it only when lexical normalization stays within the repo.
+    normalized = posixpath.normpath(file)
+    require(not PurePosixPath(file).is_absolute() and normalized not in ('.', '..')
+            and not normalized.startswith('../'), 'module path must stay relative to the repository')
     text(mutant.get('name'), 'mutant name')
     # mutants.json adds a diff; the scenario copy does not. Identity uses common producer fields.
     fields = {k: mutant.get(k) for k in ('package', 'file', 'name', 'function', 'span', 'replacement', 'genre')}
@@ -196,8 +200,8 @@ def validate_record(kind, value):
     return value
 
 
-def gh_json(endpoint):
-    raw = subprocess.check_output(['gh', 'api', endpoint])
+def gh_json(endpoint, paginate=False):
+    raw = subprocess.check_output(['gh', 'api'] + (['--paginate', '--slurp'] if paginate else []) + [endpoint])
     require(len(raw) <= scorecard.MAX_JSON, 'GitHub response exceeds evidence limit')
     return json.loads(raw)
 
@@ -275,7 +279,12 @@ def fetch_weekly(repository, branch):
         run = gh_json(f'repos/{repository}/actions/runs/{candidate["id"]}')
         if run.get('event') not in ('schedule', 'workflow_dispatch'):
             continue
-        artifacts = gh_json(f'repos/{repository}/actions/runs/{run["id"]}/artifacts?per_page=100')
+        artifact_pages = gh_json(f'repos/{repository}/actions/runs/{run["id"]}/artifacts?per_page=100', paginate=True)
+        artifacts = {'artifacts': [artifact for page in artifact_pages for artifact in page['artifacts']]}
+        if any(artifact['name'] == 'mutants-plan' for artifact in artifacts['artifacts']):
+            import mutation_results
+            jobs = mutation_results.paged(f'repos/{repository}/actions/runs/{run["id"]}/attempts/{run["run_attempt"]}/jobs?per_page=100', 'jobs')
+            return mutation_results.fetch(repository, branch, run, workflow, artifacts['artifacts'], jobs)['modules']
         matching = [a for a in artifacts['artifacts'] if a['name'] == 'mutants' and not a['expired']]
         if not matching:
             continue
