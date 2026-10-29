@@ -509,3 +509,254 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod sim_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    const LIMITS: Limits = Limits {
+        max_events: 64,
+        max_bytes: 2048,
+        max_in_flight: 32,
+    };
+
+    /// Deterministic payload sizes in 1..=64.
+    fn size(i: u64) -> usize {
+        (i.wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407)
+            >> 58) as usize
+            + 1
+    }
+
+    /// What the bound check looks at: every queue within the declared limits and the hub within
+    /// the declared memory bound.
+    fn check_bounds(hub: &Hub, declared: Limits) -> Result<(), String> {
+        let mut total = 0usize;
+        for id in 0..hub.len() {
+            let q = hub.get(id).ok_or("missing queue")?;
+            if q.len() > declared.max_events {
+                return Err(format!("queue {id} holds {} events", q.len()));
+            }
+            if q.queued_bytes() > declared.max_bytes {
+                return Err(format!("queue {id} holds {} bytes", q.queued_bytes()));
+            }
+            total += q.memory();
+        }
+        let bound = declared.worst_case_memory().saturating_mul(hub.len());
+        if total > bound {
+            return Err(format!("hub memory {total} over bound {bound}"));
+        }
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct Report {
+        peak_memory: usize,
+        peak_len: usize,
+        offers: u64,
+        payload_copies: u64,
+        fan_outs: u64,
+    }
+
+    /// Subscriber 0 never drains or acknowledges. The rest drain and acknowledge after each
+    /// publish. `actual` is what the hub enforces; `declared` is what the bound check holds it to.
+    fn run_sim(n: usize, events: u64, actual: Limits, declared: Limits) -> Result<Report, String> {
+        let mut hub = Hub::new();
+        for _ in 0..n {
+            hub.add(actual, 0);
+        }
+        let mut expected = vec![1u64; n];
+        let mut buf = Vec::new();
+        let mut rep = Report {
+            peak_memory: 0,
+            peak_len: 0,
+            offers: 0,
+            payload_copies: 0,
+            fan_outs: 0,
+        };
+        for s in 1..=events {
+            let payload = vec![s as u8; size(s)];
+            // Every publish returns a result at once; there is no wait to observe.
+            let r = hub.publish(s, &payload).map_err(|e| format!("{e:?}"))?;
+            if r.queued + r.overflowed_now + r.skipped != n {
+                return Err("fan-out did not account for every subscriber".into());
+            }
+            rep.fan_outs += 1;
+            for id in 1..n {
+                let q = hub.get_mut(id).ok_or("missing")?;
+                buf.clear();
+                q.drain_into(&mut buf, usize::MAX);
+                let exp = expected.get_mut(id).ok_or("missing")?;
+                for e in &buf {
+                    if e.seq != *exp {
+                        return Err(format!("sub {id} got {} expected {}", e.seq, exp));
+                    }
+                    *exp += 1;
+                }
+                if let Some(last) = buf.last() {
+                    q.ack(last.seq).map_err(|e| format!("{e:?}"))?;
+                }
+            }
+            check_bounds(&hub, declared)?;
+            rep.peak_memory = rep.peak_memory.max(hub.memory());
+            for id in 0..n {
+                rep.peak_len = rep
+                    .peak_len
+                    .max(hub.get(id).map_or(0, SubscriberQueue::len));
+            }
+        }
+        for id in 1..n {
+            if hub.get(id).map(SubscriberQueue::state) != Some(State::Live) {
+                return Err(format!("healthy sub {id} not live"));
+            }
+            if expected.get(id) != Some(&(events + 1)) {
+                return Err(format!("sub {id} missed events"));
+            }
+        }
+        // The stalled subscriber overflowed on the event after its queue filled, resume 0.
+        // Derived from the payload sizes alone: the first event that breaks either budget.
+        let mut held = 0usize;
+        let mut first_over = None;
+        for s in 1..=events {
+            let sz = size(s);
+            if (s as usize) > actual.max_events || held + sz > actual.max_bytes {
+                first_over = Some(s);
+                break;
+            }
+            held += sz;
+        }
+        let got = hub.get(0).map(SubscriberQueue::state);
+        let want = first_over.map(|s| State::Overflowed {
+            resume: 0,
+            dropped: s,
+        });
+        if want.is_some() && got != want {
+            return Err(format!("stalled state {got:?}"));
+        }
+        let st = hub.stats();
+        rep.offers = st.offers;
+        rep.payload_copies = st.payload_copies;
+        Ok(rep)
+    }
+
+    #[test]
+    fn stalled_subscriber_1_100_and_10000() {
+        for n in [1usize, 100, 10_000] {
+            let rep = run_sim(n, 300, LIMITS, LIMITS).unwrap();
+            assert_eq!(rep.offers, 300 * n as u64);
+            assert_eq!(
+                rep.payload_copies, 300,
+                "one copy per event, not per subscriber"
+            );
+            assert!(rep.peak_len <= LIMITS.max_events);
+            assert!(rep.peak_memory <= n * LIMITS.worst_case_memory());
+        }
+    }
+
+    #[test]
+    fn planted_unbounded_queue_is_caught() {
+        let unbounded = Limits {
+            max_events: usize::MAX,
+            max_bytes: usize::MAX,
+            max_in_flight: 32,
+        };
+        for n in [1usize, 100] {
+            let err = run_sim(n, 300, unbounded, LIMITS).unwrap_err();
+            assert!(err.contains("holds"), "{err}");
+        }
+    }
+
+    #[test]
+    fn measured_numbers() {
+        let n = 10_000usize;
+        let rep = run_sim(n, 300, LIMITS, LIMITS).unwrap();
+        println!(
+            "backpressure: subscribers={n} events=300 offers={} payload_copies={} \
+             size_of_queue_struct={}B size_of_event={}B peak_hub_memory={}B \
+             peak_per_subscriber={}B declared_per_subscriber_bound={}B peak_queue_len={} \
+             empty_queue_memory={}B",
+            rep.offers,
+            rep.payload_copies,
+            std::mem::size_of::<SubscriberQueue>(),
+            std::mem::size_of::<Event>(),
+            rep.peak_memory,
+            rep.peak_memory / n,
+            LIMITS.worst_case_memory(),
+            rep.peak_len,
+            SubscriberQueue::new(LIMITS, 0).memory(),
+        );
+        println!(
+            "backpressure: per publish at {n} subscribers: {} offers, 1 payload copy, \
+             0 blocking waits, {} reference increments",
+            rep.offers / rep.fan_outs,
+            n - 1
+        );
+    }
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        Publish(usize),
+        Drain(usize, usize),
+        Ack(usize, usize),
+    }
+
+    fn op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            (0usize..80).prop_map(Op::Publish),
+            (0usize..3, 0usize..6).prop_map(|(s, n)| Op::Drain(s, n)),
+            (0usize..3, 0usize..6).prop_map(|(s, k)| Op::Ack(s, k)),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn random_sequences_keep_invariants(ops in proptest::collection::vec(op(), 1..200)) {
+            let lim = Limits { max_events: 5, max_bytes: 200, max_in_flight: 3 };
+            let mut hub = Hub::new();
+            for _ in 0..3 { hub.add(lim, 0); }
+            let mut seq = 0u64;
+            let mut handed: Vec<Vec<u64>> = vec![Vec::new(); 3];
+            let mut acked = [0u64; 3];
+            for o in ops {
+                match o {
+                    Op::Publish(len) => {
+                        seq += 1;
+                        hub.publish(seq, &vec![1u8; len]).unwrap();
+                    }
+                    Op::Drain(s, n) => {
+                        let q = hub.get_mut(s).unwrap();
+                        let mut out = Vec::new();
+                        q.drain_into(&mut out, n);
+                        handed[s].extend(out.iter().map(|e| e.seq));
+                    }
+                    Op::Ack(s, k) => {
+                        let q = hub.get_mut(s).unwrap();
+                        let open: Vec<u64> =
+                            handed[s].iter().copied().filter(|x| *x > acked[s]).collect();
+                        if let Some(&target) = open.get(k.min(open.len().saturating_sub(1)))
+                            && q.state() == State::Live
+                        {
+                            prop_assert_eq!(q.ack(target), Ok(()));
+                            acked[s] = target;
+                        }
+                    }
+                }
+                for s in 0..3 {
+                    let q = hub.get(s).unwrap();
+                    prop_assert!(q.len() <= lim.max_events);
+                    prop_assert!(q.queued_bytes() <= lim.max_bytes);
+                    // Cursor is monotonic: it equals the last acknowledgement we made.
+                    prop_assert_eq!(q.acked(), acked[s]);
+                    // Order: handed-out events are the contiguous prefix of what was published.
+                    for (i, h) in handed[s].iter().enumerate() {
+                        prop_assert_eq!(*h, i as u64 + 1);
+                    }
+                    if let State::Overflowed { resume, .. } = q.state() {
+                        prop_assert_eq!(resume, acked[s]);
+                    }
+                }
+            }
+        }
+    }
+}
