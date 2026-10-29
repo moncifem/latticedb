@@ -1164,3 +1164,39 @@ mod tests {
         }
     }
 }
+
+/// Kani proofs, run by `.github/workflows/kani.yml`; see `docs/verification.md`.
+#[cfg(kani)]
+#[allow(clippy::indexing_slicing)]
+mod proofs {
+    use super::*;
+
+    /// `decode` never panics on a byte string of up to 24 bytes (the five header bytes plus a
+    /// payload of up to 19), and when it returns a frame the length it reports is within the
+    /// input. A bounded proof: larger payloads, and so the largest events and texts, are
+    /// covered by the property and fuzz tests only.
+    #[kani::proof]
+    #[kani::unwind(26)]
+    fn frame_decode_never_panics() {
+        let raw: [u8; 24] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= raw.len());
+        if let Ok(Some((_, used))) = decode(&raw[..len]) {
+            assert!(used >= HEADER_LEN && used <= len);
+        }
+    }
+
+    /// The same with a symbolic payload limit, including limits above and below the frame.
+    #[kani::proof]
+    #[kani::unwind(26)]
+    fn frame_decode_with_limit_never_panics() {
+        let raw: [u8; 24] = kani::any();
+        let len: usize = kani::any();
+        let limit: usize = kani::any();
+        kani::assume(len <= raw.len());
+        if let Ok(Some((_, used))) = decode_with_limit(&raw[..len], limit) {
+            assert!(used >= HEADER_LEN && used <= len);
+            assert!(used - HEADER_LEN <= limit.min(MAX_PAYLOAD));
+        }
+    }
+}

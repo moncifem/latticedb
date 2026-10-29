@@ -35,7 +35,7 @@ toml = "1.1.8"
 serde_json = "1.0.154"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(kani)'] }
 unsafe_code = "forbid"
 missing_docs = "warn"
 unreachable_pub = "warn"
