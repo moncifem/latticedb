@@ -564,6 +564,36 @@ mod tests {
     }
 
     #[test]
+    fn refusals_say_why() {
+        let msg = |s: &str| parse(s, "x").unwrap_err().message;
+        assert_eq!(msg("hash-threshold 8\n"), "hash-threshold is not supported");
+        assert_eq!(msg("bogus\n"), "unknown record");
+    }
+
+    #[test]
+    fn generated_scripts_use_every_query_shape_and_a_positive_limit() {
+        let text = generate(11, 200);
+        for shape in [
+            "SELECT id, score FROM g",
+            "SELECT count(*) FROM g",
+            "ORDER BY score DESC, id LIMIT",
+            "SELECT name FROM g",
+        ] {
+            assert!(text.contains(shape), "missing {shape}");
+        }
+        assert!(!text.contains("LIMIT 0"));
+        assert!(text.contains("LIMIT 8"));
+    }
+
+    #[test]
+    fn generated_tables_hold_between_five_and_twenty_four_rows() {
+        for seed in 0..40 {
+            let n = generate(seed, 0).matches("INSERT INTO g").count();
+            assert!((5..=24).contains(&n), "seed {seed}: {n} rows");
+        }
+    }
+
+    #[test]
     fn an_error_statement_that_succeeds_and_an_ok_statement_that_fails_are_mismatches() {
         let recs = parse("statement ok\nA\n\nstatement error\nB\n", "x").unwrap();
         let mut f = Fake(BTreeMap::from([("A".to_string(), fail("E"))]));
