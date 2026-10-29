@@ -272,10 +272,16 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         }
     }
 
-    /// Early checks: duplicates and fencing. They are repeated when the change set is logged.
+    /// Early checks: fencing, then duplicates. They are repeated when the change set is logged.
     pub fn prepare(&mut self, txn: Txn<Authorized>) -> Result<PrepareOutcome, TxnError> {
         let (cs, owner) = txn.into_parts();
         self.check_owner(owner)?;
+        // The plugin contract fixes the order: a superseded turn is fenced even for a record id
+        // that is already stored. Nothing is written either way.
+        let fence_first = !bugs::active(Bug::DuplicateBeforeFence);
+        if fence_first {
+            self.check_fence(&cs)?;
+        }
         if !bugs::active(Bug::NoDedupe) {
             if self.seen.contains(&cs.id) {
                 return Ok(PrepareOutcome::Duplicate(cs.id));
@@ -284,7 +290,9 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
                 return Err(TxnError::InFlight(cs.id));
             }
         }
-        self.check_fence(&cs)?;
+        if !fence_first {
+            self.check_fence(&cs)?;
+        }
         Ok(PrepareOutcome::Ready(Txn::prepared(cs, owner)))
     }
 
@@ -307,6 +315,10 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
         }
         let _span = tracing::debug_span!("log", txn_id = %txn.cs.id).entered();
         let mut cs = txn.cs.clone();
+        let fence_first = !bugs::active(Bug::DuplicateBeforeFence);
+        if fence_first {
+            self.check_fence(&cs)?;
+        }
         if !bugs::active(Bug::NoDedupe) {
             if self.seen.contains(&cs.id) {
                 return Err(TxnError::Duplicate(cs.id));
@@ -315,7 +327,9 @@ impl<I: Io, C: Clock, R: Rng> Kernel<I, C, R> {
                 return Err(TxnError::InFlight(cs.id));
             }
         }
-        self.check_fence(&cs)?;
+        if !fence_first {
+            self.check_fence(&cs)?;
+        }
         cs.hlc = self.hlc.tick(self.clock.now_ms())?;
         let encoded = cs.encode()?;
         let lsn =
@@ -720,6 +734,28 @@ mod tests {
             ..ChangeSet::new(k.new_id(), vec![1])
         };
         assert!(matches!(k.commit(current), Ok(Receipt::Recorded { .. })));
+    }
+
+    #[test]
+    fn inv_i12_a_superseded_retry_of_a_stored_id_is_fenced_not_duplicate() {
+        let mut k = kernel(std::rc::Rc::new(SimClock::new(1_000)));
+        let turn = |n| TurnRef {
+            session: 4,
+            turn: n,
+        };
+        k.begin_turn(turn(1)).unwrap();
+        let stored = ChangeSet {
+            turn: Some(turn(1)),
+            ..ChangeSet::new(k.new_id(), vec![1])
+        };
+        assert!(matches!(
+            k.commit(stored.clone()),
+            Ok(Receipt::Recorded { .. })
+        ));
+        k.begin_turn(turn(2)).unwrap();
+        let lsn = k.durable_lsn();
+        assert!(matches!(k.commit(stored), Err(TxnError::Fenced { .. })));
+        assert_eq!(k.durable_lsn(), lsn);
     }
 
     /// Records the fields of every span so a test can see what the write path attaches.

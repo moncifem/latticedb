@@ -464,18 +464,14 @@ impl<S: Sut> Sim<S> {
                 ),
             ),
             (Expect::Superseded, Ok(Receipt::Duplicate)) => {
-                // Contract: fence before duplicate. The kernel answers `Duplicate` for an id it
-                // really stored (see the ignored test at the end); an id that was never stored
-                // must never be called a duplicate.
-                if !known {
-                    self.fail(
-                        DUP_BEFORE_FENCE,
-                        format!(
-                            "superseded write {} never stored, answered duplicate",
-                            cs.id
-                        ),
-                    );
-                }
+                // Contract: fence before duplicate, even for an id that is already stored.
+                self.fail(
+                    DUP_BEFORE_FENCE,
+                    format!(
+                        "superseded write {} (stored: {known}) answered duplicate, not fenced",
+                        cs.id
+                    ),
+                );
             }
             (
                 Expect::Superseded,
@@ -1000,6 +996,14 @@ fn planted_kernel_bug_fence_not_rebuilt_is_caught() {
     );
 }
 
+#[test]
+fn planted_kernel_bug_duplicate_before_fence_is_caught() {
+    bugs::enable(Bug::DuplicateBeforeFence);
+    let tags = caught_by(|| Honest);
+    bugs::clear();
+    assert_caught("DuplicateBeforeFence", &tags, DUP_BEFORE_FENCE);
+}
+
 /// Same seed, same verdict and the same counters.
 #[test]
 fn runs_are_deterministic() {
@@ -1014,14 +1018,11 @@ fn runs_are_deterministic() {
     );
 }
 
-/// Divergence from the plugin contract, not run by default. formats/plugin-contract-v1.md says the
-/// fence check comes before the duplicate check, "even if a record id is one already stored": the
-/// late retry of a write that was recorded under the old turn is `fenced`. The kernel answers
-/// `Duplicate` because `prepare` consults the committed-id set before `check_fence`. Nothing is
-/// written either way, so I12 holds; the difference is the receipt. Whether the kernel or the
-/// contract should change is a design decision for the owner.
+/// formats/plugin-contract-v1.md says the fence check comes before the duplicate check, "even if a
+/// record id is one already stored": the late retry of a write that was recorded under the old turn
+/// is `fenced`. The kernel checks the fence first in `prepare` and `log` (issue 304). Nothing is
+/// written either way, so I12 holds; the difference is the receipt.
 #[test]
-#[ignore = "kernel answers Duplicate where the plugin contract demands fenced for a stored id; decision pending"]
 fn late_retry_of_a_stored_write_is_fenced_per_the_contract() {
     let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
     let config = Config {

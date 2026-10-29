@@ -84,9 +84,16 @@ pub enum Bug {
     ManagedIndexesNotRecovered,
     /// Strict HLC history resolution silently substitutes the vacuum floor for an expired view.
     HlcSnapshotClamped,
+    /// The duplicate check runs before the fence check, so a superseded turn retrying an
+    /// already stored record id is answered duplicate instead of fenced (plugin contract: fence first).
+    DuplicateBeforeFence,
 }
 
 impl Bug {
+    /// Fence-order defect, detected by the fencing race simulation (`lattice-testkit`), not by the
+    /// general log simulation, which does not retry stored writes of superseded turns.
+    pub const FENCE_ORDER: [Bug; 1] = [Bug::DuplicateBeforeFence];
+
     /// Defects in the row store, detected by the row simulation rather than the log simulation.
     pub const ROW: [Bug; 4] = [
         Bug::RowConflictCheckSkipped,
@@ -210,6 +217,7 @@ mod tests {
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
+            .chain(Bug::FENCE_ORDER)
     }
 
     #[test]
@@ -223,8 +231,9 @@ mod tests {
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
+            .chain(Bug::FENCE_ORDER)
             .collect();
-        assert_eq!(all.len(), 38);
+        assert_eq!(all.len(), 39);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

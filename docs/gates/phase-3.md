@@ -44,8 +44,9 @@ everything), 2,000 runs in all. One local run: 0 assertion failures, 12 runs cen
 `everything`), 19,656 superseded writes submitted, 18,809 answered `Fenced`. The test uses the kernel and not
 the plugin contract reference plugin, because `layers.toml` does not let `lattice-testkit` depend on
 `lattice-sdk`. A 100,000 seed per profile volume test exists as an ignored test and has not been run.
-One ignored test records a divergence: the kernel answers `Duplicate` where the plugin contract says `fenced`
-for a late retry of an already stored write.
+The kernel checks the fence before the duplicate check (issue #304), so a late retry of an already stored write
+is answered `Fenced`, as the plugin contract says; the test `late_retry_of_a_stored_write_is_fenced_per_the_contract`
+runs by default and the planted bug `DuplicateBeforeFence` is caught by the fencing race sweep.
 Verification evidence, not an exit criterion: `lattice-testkit::convergence` (WP45, issue #247) runs 2 to 5
 replicas of the register, set and tree CRDTs over a simulated network (delay, reorder, duplication, drops with
 retransmit) chosen from the five fault profile names (clean, crash-heavy, disk-faulty, hostile, everything).

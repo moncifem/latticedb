@@ -209,6 +209,10 @@ between minor versions; format changes are called out explicitly.
   the scorecard job and cancelled or lost-runner jobs; the SQL reference PostgreSQL image and the planner
   experiment's `psycopg` install are pinned (digest, hashes) and fuzz corpus cache keys are scoped to
   the branch. Same-repository and review-state checks are documented as owner procedure for the merger.
+- `lattice-core`: the kernel checks the turn fence before the duplicate check, so a superseded turn
+  retrying an already stored write is answered fenced, as the plugin contract says (#304). Nothing was
+  written before either; only the receipt changes. WAL format and recovery are unchanged. Planted bug
+  `Bug::DuplicateBeforeFence` restores the old order.
 
 ## [0.1.0-alpha.0]
 
