@@ -55,3 +55,5 @@ pub mod feed;
 
 #[cfg(test)]
 mod admission_tests;
+
+pub mod crdt_text;
