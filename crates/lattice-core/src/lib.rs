@@ -57,3 +57,4 @@ pub mod feed;
 mod admission_tests;
 
 pub mod crdt_text;
+pub mod workflow;

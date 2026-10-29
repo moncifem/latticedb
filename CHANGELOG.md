@@ -180,6 +180,11 @@ between minor versions; format changes are called out explicitly.
   with stable error codes; fuzz target `mcp_message` (not yet in a scheduled matrix). No transport,
   resources, prompts or authentication; see `docs/mcp-v0.md`.
 
+- `lattice_core::workflow` (WP47, #249, P3-09): a pure, server-arbitrated workflow state machine.
+  Transitions are accepted, rejected with a stable reason code, or recorded in a deterministic `Conflict`
+  entity (sorted proposals, resolution options, canonical bounded encoding) that `resolve` closes; requests
+  are idempotent by id. Pure library; no log, sync or SQL wiring yet, and no exit criterion is claimed.
+
 ### Changed
 
 - **Breaking (core API):** `Kernel::open` and `Log::open` no longer return every record. Recovery now holds
