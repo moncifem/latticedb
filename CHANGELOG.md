@@ -9,6 +9,7 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- `docs/agent-workflow.md`: contributor and agent workflow guide with an onboarding checklist.
 - Managed physical-byte index definitions and create/drop/recreate history persisted in atomic LCIX
   catalog/row changes. Default managed opens rebuild without callbacks; explicit callback mode remains
   legacy-only. Compound writes require the accepted WAL capability guard and actual replay context;
