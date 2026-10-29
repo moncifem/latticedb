@@ -363,6 +363,9 @@ fn independent_omitted_guard_witness_has_a_clean_control() {
 #[path = "admission_matrix_tests.rs"]
 mod matrix;
 
+#[path = "admission_rewrite_tests.rs"]
+mod guard_rewrite;
+
 #[derive(Clone)]
 struct ChangingView {
     disk: Disk,

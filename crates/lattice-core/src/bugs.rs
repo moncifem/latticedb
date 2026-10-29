@@ -80,6 +80,8 @@ pub enum Bug {
     TreeCycleCheckSkipped,
     /// A capability-requiring append omits its durable segment guard.
     RequiredGuardOmitted,
+    /// An empty tail's guard is rewritten in place without a durable staged copy (issue 307).
+    GuardRewriteUnstaged,
     /// Recovery ignores managed index definitions and therefore omits their rebuilt entries.
     ManagedIndexesNotRecovered,
     /// Strict HLC history resolution silently substitutes the vacuum floor for an expired view.
@@ -131,7 +133,7 @@ impl Bug {
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
     /// Guarded-WAL admission defects, exercised by independent context witnesses.
-    pub const ADMISSION: [Bug; 1] = [Bug::RequiredGuardOmitted];
+    pub const ADMISSION: [Bug; 2] = [Bug::RequiredGuardOmitted, Bug::GuardRewriteUnstaged];
 
     /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [

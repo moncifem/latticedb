@@ -93,12 +93,17 @@ fn seg_name(dir: &str, first_lsn: u64) -> String {
     format!("{dir}/{first_lsn:020}.seg")
 }
 
+/// The staged replacement for an empty tail's header; never a segment, so readers skip it.
+fn guard_stage_name(dir: &str, first_lsn: u64) -> String {
+    format!("{dir}/{first_lsn:020}.guard")
+}
+
 fn first_lsn_of(name: &str) -> Option<u64> {
     name.strip_suffix(".seg")?.parse().ok()
 }
 
 fn admit(required: u64, supported: u64) -> Result<(), LogError> {
-    if required & !supported != 0 || required & !admission::KNOWN_CAPABILITIES != 0 {
+    if required & !supported != 0 || required & !admission::known_capabilities() != 0 {
         return Err(LogError::UnsupportedCapabilities {
             required,
             supported,
@@ -290,6 +295,22 @@ fn recover<I: Io>(
             header_len: SEGMENT_HEADER_LEN,
         });
     }
+    // A newest segment whose header is torn may have been mid-rewrite: its staged replacement,
+    // made durable first, still holds every bit the segment had acknowledged. Admit it before
+    // any callback or repair, like every other header.
+    let mut staged_bits = 0;
+    if let (Some(last), Some((first, _))) = (headers.last(), names.last())
+        && last.header.is_none()
+    {
+        let stage = guard_stage_name(dir, *first);
+        if io.exists(&stage)
+            && let Ok(staged) =
+                admission::decode_header(&io.read_prefix(&stage, admission::GUARDED_HEADER_LEN)?)
+        {
+            admit(staged.required_capabilities, supported)?;
+            staged_bits = staged.required_capabilities;
+        }
+    }
     // One record is held back so the last one can still be dropped by the planted recovery bug.
     let mut pending: Option<(Record, RecoveryContext)> = None;
     let mut count: u64 = 0;
@@ -322,6 +343,7 @@ fn recover<I: Io>(
             header_len = header.length;
         } else {
             // Only an incomplete newest creation is repaired. Keep prior required bits.
+            required |= staged_bits;
             let bytes = header_bytes(required)?;
             io.truncate(&path, 0)?;
             io.append(&path, &bytes)?;
@@ -388,6 +410,15 @@ fn recover<I: Io>(
         current_len = cut;
         expected -= 1;
     }
+    // Staged headers are only ever needed to repair the newest segment, which is done by now.
+    for name in io.list(dir)? {
+        if name
+            .strip_suffix(".guard")
+            .is_some_and(|n| n.parse::<u64>().is_ok())
+        {
+            io.remove(&format!("{dir}/{name}"))?;
+        }
+    }
     // What recovery returns as committed must actually be durable: bytes that survived a crash, or
     // a failed fsync without a power cut, are visible but not necessarily on disk.
     if !bugs::active(Bug::SkipRecoverySync) {
@@ -449,7 +480,7 @@ impl<I: Io> Log<I> {
         supported: u64,
         mut visit: impl FnMut(Record, RecoveryContext),
     ) -> Result<(Self, RecoveryReport), LogError> {
-        admit(supported, admission::KNOWN_CAPABILITIES)?;
+        admit(supported, admission::known_capabilities())?;
         ensure_dir(&mut io, dir)?;
         let lock_path = format!("{dir}/LOCK");
         io.lock(&lock_path)?;
@@ -565,12 +596,33 @@ impl<I: Io> Log<I> {
 
     fn install_guard(&mut self, required: u64) -> Result<(), LogError> {
         let bytes = header_bytes(required)?;
-        let path = if self.current_len == self.header_len as u64 {
+        if self.current_len == self.header_len as u64 {
+            // An empty tail keeps its first LSN, so its segment name cannot be reused for a second
+            // file. Stage the new header in a fresh file first: truncating the tail destroys the
+            // bits it already made durable, and recovery re-derives a torn header from the
+            // staged file instead of losing them (issue 307).
+            let stage = guard_stage_name(&self.dir, self.next_lsn);
+            if !bugs::active(Bug::GuardRewriteUnstaged) {
+                if self.io.exists(&stage) {
+                    self.io.remove(&stage)?;
+                }
+                self.io.append(&stage, &bytes)?;
+                self.io.sync(&stage)?;
+                self.io.sync_dir(&self.dir)?;
+            }
             self.io.truncate(&self.current, 0)?;
-            self.current.clone()
-        } else {
-            seg_name(&self.dir, self.next_lsn)
-        };
+            self.io.append(&self.current, &bytes)?;
+            self.io.sync(&self.current)?;
+            self.current_len = bytes.len() as u64;
+            self.header_len = bytes.len();
+            self.required_capabilities = required;
+            if self.io.exists(&stage) {
+                self.io.remove(&stage)?;
+            }
+            self.io.sync_dir(&self.dir)?;
+            return Ok(());
+        }
+        let path = seg_name(&self.dir, self.next_lsn);
         self.io.append(&path, &bytes)?;
         self.io.sync(&path)?;
         self.io.sync_dir(&self.dir)?;

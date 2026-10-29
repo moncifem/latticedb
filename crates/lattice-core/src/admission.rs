@@ -13,6 +13,24 @@ pub const MANAGED_COMPOUND: u64 = 1;
 /// All required capabilities understood by this format.
 pub const KNOWN_CAPABILITIES: u64 = MANAGED_COMPOUND;
 
+#[cfg(test)]
+thread_local! {
+    /// Lets tests exercise a second capability bit before the format defines one.
+    pub(crate) static TEST_KNOWN: std::cell::Cell<u64> = const { std::cell::Cell::new(KNOWN_CAPABILITIES) };
+}
+
+/// The capability set this build understands; tests may widen it per thread.
+pub(crate) fn known_capabilities() -> u64 {
+    #[cfg(test)]
+    {
+        TEST_KNOWN.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        KNOWN_CAPABILITIES
+    }
+}
+
 /// Segment provenance supplied to a recovery consumer, separate from record bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RecoveryContext {
@@ -40,7 +58,7 @@ pub enum HeaderError {
 
 /// Encodes the guarded header. Zero or unknown requirements are invalid.
 pub fn guarded_header(required: u64) -> Result<Vec<u8>, HeaderError> {
-    if required == 0 || required & !KNOWN_CAPABILITIES != 0 {
+    if required == 0 || required & !known_capabilities() != 0 {
         return Err(HeaderError::Invalid("invalid required capabilities".into()));
     }
     let mut bytes = Vec::with_capacity(GUARDED_HEADER_LEN);
@@ -105,7 +123,7 @@ pub fn decode_header(bytes: &[u8]) -> Result<SegmentHeader, HeaderError> {
         .and_then(|b| b.try_into().ok())
         .map(u64::from_le_bytes)
         .ok_or(HeaderError::Incomplete)?;
-    if required == 0 || required & !KNOWN_CAPABILITIES != 0 {
+    if required == 0 || required & !known_capabilities() != 0 {
         return Err(HeaderError::Invalid(
             "unknown or empty required capabilities".into(),
         ));
