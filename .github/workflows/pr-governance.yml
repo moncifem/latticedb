@@ -1,0 +1,52 @@
+name: pr-governance
+# Not a required check yet. Uses pull_request (not pull_request_target) and never builds or runs
+# pull request code beyond tools/pr_governance.py. Policy: docs/review-policy.md.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  risk-gate:
+    name: risk-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Classifier tests
+        run: python3 -m unittest discover -s tools -p 'test_pr_governance.py'
+      - name: Require the reviewed label for risky paths
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: python3 tools/pr_governance.py risk --repo "$REPO" --pr "$PR_NUMBER" --labels-json "$PR_LABELS"
+
+  claims:
+    name: claims
+    # Fork pull requests get a read-only token and cannot be labeled or commented on.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare changed files with other open pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 tools/pr_governance.py claims --repo "$REPO" --pr "$PR_NUMBER"

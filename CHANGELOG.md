@@ -17,6 +17,10 @@ between minor versions; format changes are called out explicitly.
   `tools/test_merge_pr.sh`, guide in `docs/merging.md`). `tools/branch-protection.json` now requires
   strict (up-to-date) status checks and `enforce_admins` as proposed configuration only; the helper
   reads live protection and refuses updates/merges until those prerequisites are actually applied.
+- Pull request governance: code owners for risky paths, a `risk-gate` check that requires the
+  `reviewed` label when formats, the kernel, auth, layers, workflows, branch protection or RFC/ADR
+  files change, and a `claims` job that labels and comments when open pull requests touch the same
+  files. Policy in `docs/review-policy.md`. Both checks are advisory until the owner requires them.
 
 - Managed physical-byte index definitions and create/drop/recreate history persisted in atomic LCIX
   catalog/row changes. Default managed opens rebuild without callbacks; explicit callback mode remains

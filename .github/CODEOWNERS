@@ -1,3 +1,15 @@
 # Maintainers review everything for now. Split by area (and require code owner review in
 # branch protection) once there is more than one maintainer.
 * @moncifem
+
+# Risky paths. Keep in step with tools/pr_governance.py; docs/review-policy.md explains why.
+/formats/ @moncifem
+/crates/lattice-core/ @moncifem
+/crates/lattice-api/src/auth*.rs @moncifem
+/crates/lattice-api/src/scram*.rs @moncifem
+/layers.toml @moncifem
+/.github/ @moncifem
+/tools/branch-protection.json @moncifem
+/tools/pr_governance.py @moncifem
+/docs/rfc/ @moncifem
+/docs/adr/ @moncifem
