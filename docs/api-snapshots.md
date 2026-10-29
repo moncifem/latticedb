@@ -39,3 +39,10 @@ versions in the `public-api` job, regenerate every snapshot and commit them toge
 
 Snapshots list the default-feature API without blanket and auto-trait impls (`-ss`) and
 without function parameter names, so renaming a parameter does not show as a change.
+
+## Keeping snapshots current
+
+Updating the snapshot is part of any pull request that changes a public API. Several open pull
+requests change APIs at the same time, so a merge conflict in `api-snapshots/` is expected: resolve it
+by rebasing and re-running `tools/check_public_api.sh --update` for the affected crates, never by
+merging the text by hand.

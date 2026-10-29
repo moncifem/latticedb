@@ -685,6 +685,7 @@ impl core::fmt::Debug for lattice_sql::error::Span
 pub fn lattice_sql::error::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for lattice_sql::error::Span
 pub const lattice_sql::LAYER: u8
+pub const lattice_sql::MAX_CALL_DEPTH: usize
 pub const lattice_sql::MAX_DEPTH: usize
 pub const lattice_sql::MAX_IDENT_LEN: usize
 pub const lattice_sql::MAX_INPUT_LEN: usize
