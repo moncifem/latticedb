@@ -29,6 +29,50 @@ def command(group):
     return args + [f'--test-workspace={str(workspace).lower()}', '--timeout', '120', '--no-shuffle', '-j', '2']
 
 
+def baseline_commands(group, assigned):
+    packages = sorted({mutant['package'] for mutant in assigned})
+    require(packages and set(packages).issubset(GROUPS[group][0]), 'baseline assignment has unexpected packages')
+    # Each self-group mutant tests its own package; combining packages can unify features.
+    return ([['cargo', 'test', '--workspace']] if GROUPS[group][1] else
+            [['cargo', 'test', '--package', package] for package in packages])
+
+
+def baseline_context(manifest, assigned):
+    return {key: manifest[key] for key in
+            ('source', 'group', 'shard', 'total', 'plan_sha256', 'universe_sha256')} | {
+                'schema': 1, 'assigned_ids': identities(assigned)}
+
+
+def run_logged(arguments, path):
+    with path.open('wb') as log:
+        with subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            require(child.stdout is not None, 'child has no output stream')
+            for line in child.stdout:
+                log.write(line)
+                log.flush()
+                sys.stdout.buffer.write(line)
+                sys.stdout.buffer.flush()
+            return child.wait()
+
+
+def run_baselines(manifest, assigned, output):
+    proof = baseline_context(manifest, assigned)
+    proof['commands'] = [{'arguments': arguments, 'status': 'pending', 'log': f'baselines/{index}.log'}
+                         for index, arguments in enumerate(baseline_commands(manifest['group'], assigned))]
+    (output / 'baselines').mkdir()
+    write(output / 'baseline.json', proof)
+    for record in proof['commands']:
+        record['status'] = 'started'
+        write(output / 'baseline.json', proof)
+        path = output / record['log']
+        code = run_logged(record['arguments'], path)
+        record.update(status='completed', exit_code=code, log_sha256=digest(path))
+        write(output / 'baseline.json', proof)
+        if code:
+            return code
+    return 0
+
+
 def identities(mutants):
     require(isinstance(mutants, list), 'mutant universe must be an array')
     result = [hashlib.sha256(metrics.mutation_id(mutant).encode()).hexdigest() for mutant in mutants]
@@ -201,17 +245,12 @@ def shard_run(args):
     require(identities(actual) == identities(universes[group]), 'regenerated complete universe drifted')
     assigned = list_mutants(group, output / 'assigned.json', (index, block['shards']))
     check_assignment(plan, group, index, assigned)
+    baseline_code = run_baselines(manifest, assigned, output)
+    if baseline_code:
+        return baseline_code
     arguments = command(group) + ['--shard', f'{index}/{block["shards"]}', '--sharding', 'round-robin', '--output', str(output)]
     write(output / 'command.json', {'arguments': arguments})
-    with (output / 'command.log').open('wb') as log:
-        with subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
-            require(child.stdout is not None, 'mutation child has no output stream')
-            for line in child.stdout:
-                log.write(line)
-                log.flush()
-                sys.stdout.buffer.write(line)
-                sys.stdout.buffer.flush()
-            code = child.wait()
+    code = run_logged(arguments, output / 'command.log')
     write(output / 'execution.json', {'exit_code': code, 'command': arguments, 'scope': 'actual mutation execution'})
     evidence_files = [path for path in output.rglob('*') if path.is_file()]
     payload_bytes = sum(path.stat().st_size for path in evidence_files)

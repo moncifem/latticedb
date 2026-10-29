@@ -16,6 +16,31 @@ import scorecard_metrics as metrics
 from scorecard_metrics import require
 
 
+def validate_baseline(shard, assigned):
+    require(not shard.get('baseline_read_error'), 'matching-scope baseline JSON malformed')
+    proof = shard.get('baseline')
+    require(isinstance(proof, dict), 'matching-scope baseline proof missing or malformed')
+    expected = campaign.baseline_context(shard['manifest'], assigned)
+    context = {key: value for key, value in proof.items() if key != 'commands'}
+    require(json.dumps(context, sort_keys=True) == json.dumps(expected, sort_keys=True),
+            'baseline source, plan or assignment differs')
+    commands = campaign.baseline_commands(shard['manifest']['group'], assigned)
+    records = proof.get('commands')
+    require(isinstance(records, list) and len(records) == len(commands), 'baseline scopes missing or duplicated')
+    logs = shard.get('baseline_logs', {})
+    require(isinstance(logs, dict), 'baseline log collection malformed')
+    for index, (record, arguments) in enumerate(zip(records, commands)):
+        name = f'baselines/{index}.log'
+        require(isinstance(record, dict) and set(record) ==
+                {'arguments', 'status', 'exit_code', 'log', 'log_sha256'}, 'baseline command incomplete or malformed')
+        require(record['arguments'] == arguments and record['status'] == 'completed'
+                and type(record['exit_code']) is int and record['exit_code'] == 0
+                and record['log'] == name, 'baseline scope, completion or exit status differs')
+        raw = logs.get(name)
+        require(isinstance(raw, bytes) and len(raw) <= scorecard.MAX_JSON
+                and record['log_sha256'] == hashlib.sha256(raw).hexdigest(), 'baseline log missing or digest differs')
+
+
 def aggregate(plan, universes, shards, source_complete):
     assignments = {group: {} for group in campaign.GROUPS}
     modules, diagnostics, invalid, tested_ids = {}, [], [], set()
@@ -54,6 +79,12 @@ def aggregate(plan, universes, shards, source_complete):
             assigned = shard['assigned']
             campaign.check_assignment(plan, group, index, assigned)
             assignments[group][index] = assigned
+            try:
+                validate_baseline(shard, assigned)
+                diagnostic['baseline_scope'] = 'verified_matching_scope'
+            except (ValueError, KeyError, TypeError) as error:
+                diagnostic['baseline_scope'] = 'unverified'
+                diagnostic['baseline_scope_error'] = str(error)
             if shard.get('mutants') is None or shard.get('outcomes') is None:
                 diagnostic['state'] = 'not_executed_or_interrupted'
                 continue
@@ -67,7 +98,9 @@ def aggregate(plan, universes, shards, source_complete):
                 for count in ('tested', 'killed', 'survived', 'timeout', 'unviable', 'unclassified'):
                     counts[count] += row['counts'][count]
             tested_ids.update(outcome_ids)
-            diagnostic['baseline_passed'] = bool(rows) and all(row['baseline_passed'] for row in rows)
+            diagnostic['internal_baseline_passed'] = bool(rows) and all(row['baseline_passed'] for row in rows)
+            diagnostic['baseline_passed'] = (diagnostic['baseline_scope'] == 'verified_matching_scope'
+                                             and diagnostic['internal_baseline_passed'])
             diagnostic['start_time'] = rows[0]['start_time'] if rows else None
             diagnostic['end_time'] = rows[0]['end_time'] if rows else None
             diagnostic['tested'] = len(outcome_ids)
@@ -81,6 +114,7 @@ def aggregate(plan, universes, shards, source_complete):
     classified = sum(row['unclassified'] for row in modules.values()) == 0
     proof.update({'all_outcomes_classified': classified, 'invalid_shards': invalid, 'source_workflow_completed': source_complete,
                   'all_outcomes_complete': all(row['state'] == 'complete' for row in diagnostics),
+                  'all_baseline_scopes_verified': all(row.get('baseline_scope') == 'verified_matching_scope' for row in diagnostics),
                   'all_baselines_passed': all(row.get('baseline_passed') is True for row in diagnostics)})
     complete = (source_complete and proof['union_equals_full_universe'] and not invalid
                 and proof['all_outcomes_complete'] and classified)
@@ -135,7 +169,7 @@ def extract_archive(artifact, run, repository, directory):
             name = PurePosixPath(item.filename)
             require(not name.is_absolute() and '..' not in name.parts
                     and not stat.S_ISLNK(item.external_attr >> 16), 'unsafe mutation artifact path')
-            if not item.filename.endswith('.json'):
+            if not (item.filename.endswith('.json') or re.fullmatch(r'baselines/\d+\.log', item.filename)):
                 continue
             target = directory / item.filename
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -186,6 +220,12 @@ def fetch(repository, branch, run, workflow, artifacts, jobs, diagnostic=False):
                 path = target / relative
                 return scorecard.load(path) if path.exists() else None
             manifest = read('manifest.json')
+            # A malformed/missing new proof must not erase otherwise valid legacy outcomes.
+            baseline_error = None
+            try:
+                baseline = read('baseline.json')
+            except (ValueError, TypeError) as error:
+                baseline, baseline_error = None, str(error)
             generation_error = None
             if not isinstance(manifest, dict) or manifest.get('plan_sha256') != plan_hash:
                 generation_error = 'mutation shard did not bind the exact plan bytes'
@@ -195,6 +235,9 @@ def fetch(repository, branch, run, workflow, artifacts, jobs, diagnostic=False):
             elif campaign.digest(target / 'regenerated-universe.json') != plan['groups'][group]['universe_sha256']:
                 generation_error = 'matrix regenerated full source bytes changed'
             shards[f'{group}/{index}'] = {'generation_error': generation_error, 'manifest': manifest, 'command': read('command.json') or {}, 'assigned': read('assigned.json'),
+                'baseline': baseline, 'baseline_read_error': baseline_error,
+                'baseline_logs': {str(path.relative_to(target)): path.read_bytes()
+                                  for path in (target / 'baselines').glob('*.log')},
                 'mutants': read('mutants.out/mutants.json'), 'outcomes': read('mutants.out/outcomes.json'),
                 'job_id': job['id'], 'job_status': job['status'], 'job_conclusion': job.get('conclusion'),
                 'artifact_id': artifact['id'], 'artifact_digest': artifact['digest']}

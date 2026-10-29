@@ -5,6 +5,7 @@ import os
 import zipfile
 import tempfile
 import hashlib
+import io
 import subprocess
 import textwrap
 from types import SimpleNamespace
@@ -439,11 +440,21 @@ def campaign_fixture(count=50):
             {'scenario': {'Mutant': {k: v for k, v in mutant.items() if k != 'diff'}}, 'summary': 'CaughtMutant'}
             for mutant in assigned]
         shards[f'{group}/{index}'] = {'manifest': {'schema': 1, 'source': source, 'group': group, 'shard': index,
-                    'total': row['total'], 'tool_version': campaign.VERSION, 'universe_sha256': 'b' * 64},
+                    'total': row['total'], 'tool_version': campaign.VERSION, 'universe_sha256': 'b' * 64,
+                    'plan_sha256': 'd' * 64},
             'command': {'arguments': campaign.command(group) + ['--shard', f'{index}/{row["total"]}', '--sharding', 'round-robin', '--output', '/tmp/test-only-output']},
             'assigned': assigned, 'mutants': assigned, 'outcomes': raw,
             'job_id': 10 + len(shards), 'job_status': 'completed', 'job_conclusion': 'success',
             'artifact_id': 100 + len(shards), 'artifact_digest': 'sha256:' + 'c' * 64}
+        shard = shards[f'{group}/{index}']
+        shard['baseline'] = campaign.baseline_context(shard['manifest'], assigned)
+        shard['baseline']['commands'] = []
+        shard['baseline_logs'] = {}
+        for number, arguments in enumerate(campaign.baseline_commands(group, assigned)):
+            name, raw_log = f'baselines/{number}.log', b'test result: ok\n'
+            shard['baseline_logs'][name] = raw_log
+            shard['baseline']['commands'].append({'arguments': arguments, 'status': 'completed',
+                'exit_code': 0, 'log': name, 'log_sha256': hashlib.sha256(raw_log).hexdigest()})
     return plan, universes, shards
 
 
@@ -609,10 +620,16 @@ class MutationCampaignTests(unittest.TestCase):
                 (directory / 'mutants.out').mkdir(parents=True)
                 shard['manifest']['universe_sha256'] = plan['groups'][group]['universe_sha256']
                 shard['manifest']['plan_sha256'] = plan_hash
+                shard['baseline']['plan_sha256'] = plan_hash
+                shard['baseline']['universe_sha256'] = plan['groups'][group]['universe_sha256']
                 for name, value in [('manifest.json', shard['manifest']), ('command.json', shard['command']),
+                                    ('baseline.json', shard['baseline']),
                                     ('assigned.json', shard['assigned']), ('regenerated-universe.json', universes[group]),
                                     ('mutants.out/mutants.json', shard['mutants']), ('mutants.out/outcomes.json', shard['outcomes'])]:
                     campaign.write(directory / name, value)
+                for name, raw_log in shard['baseline_logs'].items():
+                    (directory / name).parent.mkdir(exist_ok=True)
+                    (directory / name).write_bytes(raw_log)
                 add_job(f'mutation ({group}, {index})', 20 + number)
                 add_artifact(f'mutants-{group}-{index}', directory, 200 + number)
             def download(command, stdout, check):
@@ -623,6 +640,27 @@ class MutationCampaignTests(unittest.TestCase):
             self.assertTrue(result['proof']['union_equals_full_universe'])
             self.assertEqual(result['outcome_counts']['tested'], 52)
             self.assertTrue(all(row['source']['authentication'] == 'validated_shard_artifacts_and_complete_universe_plan' for row in result['modules']))
+            self.assertTrue(all(row['mutation_score'] == 1.0 for row in result['modules']))
+            original = archives[200]
+            artifact = next(item for item in artifacts if item['id'] == 200)
+            for damage in ('missing', 'malformed', 'tampered_log'):
+                with self.subTest(damage=damage):
+                    replacement = io.BytesIO()
+                    with zipfile.ZipFile(io.BytesIO(original)) as old, zipfile.ZipFile(replacement, 'w') as new:
+                        for name in old.namelist():
+                            if damage == 'missing' and name == 'baseline.json': continue
+                            data = old.read(name)
+                            if damage == 'malformed' and name == 'baseline.json': data = b'{'
+                            if damage == 'tampered_log' and name == 'baselines/0.log': data += b'changed'
+                            new.writestr(name, data)
+                    archives[200] = replacement.getvalue()
+                    artifact.update(digest='sha256:' + hashlib.sha256(archives[200]).hexdigest(),
+                                    size_in_bytes=len(archives[200]))
+                    with patch.object(campaign_results.subprocess, 'run', side_effect=download):
+                        result = campaign_results.fetch('owner/repo', 'main', run, workflow, artifacts, jobs)
+                    self.assertEqual(result['outcome_counts']['tested'], 52)
+                    self.assertFalse(result['proof']['all_baseline_scopes_verified'])
+                    self.assertTrue(all(row['mutation_score'] is None for row in result['modules']))
             wrong_attempt = dict(run, run_attempt=2)
             with patch.object(campaign_results.subprocess, 'run', side_effect=download), self.assertRaises(ValueError):
                 campaign_results.fetch('owner/repo', 'main', wrong_attempt, workflow, artifacts, jobs)
@@ -645,6 +683,127 @@ class MutationCampaignTests(unittest.TestCase):
                 archive.writestr('mutants/mutants.out/mutants.json', json.dumps(planned))
             observed = metrics.import_mutation_archive(path, *weekly_fixture(), 'owner/repo', 'main')
             self.assertEqual(observed[0]['mutation_score'], 1.0)
+
+    def test_matching_baseline_commands_do_not_unify_self_package_features(self):
+        assigned = [{'package': 'lattice-sim'}, {'package': 'lattice-abi'}, {'package': 'lattice-sim'}]
+        self.assertEqual(campaign.baseline_commands('self', assigned),
+                         [['cargo', 'test', '--package', 'lattice-abi'],
+                          ['cargo', 'test', '--package', 'lattice-sim']])
+        self.assertEqual(campaign.baseline_commands('dependent', [{'package': 'lattice-core'}]),
+                         [['cargo', 'test', '--workspace']])
+        with self.assertRaises(ValueError):
+            campaign.baseline_commands('self', [{'package': 'lattice-core'}])
+
+    def test_old_or_bad_scope_proof_retains_survivors_but_never_qualifies_for_score(self):
+        for damage in ('missing', 'boolean', 'scope', 'duplicate', 'source', 'group', 'shard',
+                       'plan', 'assigned', 'log', 'digest', 'failed', 'boolean_exit',
+                       'started', 'malformed', 'extra'):
+            with self.subTest(damage=damage):
+                plan, universes, shards = campaign_fixture(count=2)
+                shard = shards['dependent/0']
+                raw = shard['outcomes']
+                raw['outcomes'][1]['summary'] = 'MissedMutant'
+                raw['caught'] -= 1
+                raw['missed'] += 1
+                shard['job_conclusion'] = 'failure'
+                proof = shard['baseline']
+                command = proof['commands'][0]
+                if damage == 'missing': del shard['baseline']
+                elif damage == 'boolean': shard['baseline'] = True
+                elif damage == 'scope': command['arguments'] = ['cargo', 'test', '-p', 'lattice-core']
+                elif damage == 'duplicate': proof['commands'] *= 2
+                elif damage == 'source': proof['source'] = dict(proof['source'], attempt=2)
+                elif damage == 'group': proof['group'] = 'self'
+                elif damage == 'shard': proof['shard'] = True
+                elif damage == 'plan': proof['plan_sha256'] = 'e' * 64
+                elif damage == 'assigned': proof['assigned_ids'] = []
+                elif damage == 'log': shard['baseline_logs'] = {}
+                elif damage == 'digest': shard['baseline_logs']['baselines/0.log'] += b'tampered'
+                elif damage == 'failed': command['exit_code'] = 101
+                elif damage == 'boolean_exit': command['exit_code'] = False
+                elif damage == 'started': command['status'] = 'started'
+                elif damage == 'malformed': proof['commands'] = [None]
+                elif damage == 'extra': proof['passed'] = True
+                result = campaign_results.aggregate(plan, universes, shards, True)
+                self.assertEqual(result['outcome_counts']['survived'], 1)
+                self.assertEqual(result['outcome_counts']['tested'], 4)
+                self.assertFalse(result['proof']['all_baseline_scopes_verified'])
+                self.assertFalse(result['proof']['all_baselines_passed'])
+                self.assertTrue(all(row['mutation_score'] is None for row in result['modules']))
+                self.assertTrue(all(row['score_status'] == 'unverified' for row in result['modules']))
+
+    def test_matching_baseline_producer_fail_stops_and_retains_started_records(self):
+        for group in ('dependent', 'self'):
+            for outcome in (0, 17, 'interrupted'):
+                with self.subTest(group=group, outcome=outcome), tempfile.TemporaryDirectory() as tmp:
+                    plan, universes, shards = campaign_fixture(count=2)
+                    assigned = shards[f'{group}/0']['assigned']
+                    expected = ([['cargo', 'test', '--workspace']] if group == 'dependent' else
+                                [['cargo', 'test', '--package', 'lattice-abi']])
+                    output = Path(tmp) / 'output'
+                    args = SimpleNamespace(plan=tmp, group=group, shard=0, output=str(output),
+                                           run_metadata='metadata.json', repository='owner/repo')
+                    observed = []
+                    def execute(arguments, path):
+                        observed.append(arguments)
+                        if arguments[:2] == ['cargo', 'test']:
+                            proof = json.loads((output / 'baseline.json').read_text())
+                            self.assertEqual(proof['commands'][0]['status'], 'started')
+                            self.assertFalse((output / 'command.json').exists())
+                            path.write_bytes(b'raw baseline log\n')
+                            if outcome == 'interrupted': raise OSError('interrupted')
+                            return outcome
+                        path.write_bytes(b'mutation fixture, no actual mutation\n')
+                        return 0
+                    with patch.object(campaign, 'verify_tool'), \
+                         patch.object(campaign, 'load_plan', return_value=(plan, universes)), \
+                         patch.object(campaign, 'checkout_revision', return_value='a' * 40), \
+                         patch.object(campaign.scorecard, 'load', return_value={}), \
+                         patch.object(campaign, 'source_from_run', return_value=plan['source']), \
+                         patch.object(campaign, 'digest', return_value='d' * 64), \
+                         patch.object(campaign, 'list_mutants', side_effect=[universes[group], assigned]), \
+                         patch.object(campaign, 'run_logged', side_effect=execute):
+                        if outcome == 'interrupted':
+                            with self.assertRaises(OSError): campaign.shard_run(args)
+                        else:
+                            self.assertEqual(campaign.shard_run(args), outcome)
+                    self.assertEqual(observed[:1], expected)
+                    self.assertEqual(len(observed), 2 if outcome == 0 else 1)
+                    if outcome == 0:
+                        self.assertEqual(observed[1][:2], ['cargo', 'mutants'])
+                    else:
+                        self.assertFalse((output / 'command.json').exists())
+                    proof = json.loads((output / 'baseline.json').read_text())
+                    command = proof['commands'][0]
+                    self.assertEqual(command['status'], 'started' if outcome == 'interrupted' else 'completed')
+                    if outcome != 'interrupted':
+                        self.assertEqual(command['exit_code'], outcome)
+
+    def test_self_baselines_run_individually_with_actual_log_hashes(self):
+        plan, _, shards = campaign_fixture(count=2)
+        assigned = copy.deepcopy(shards['self/0']['assigned'])
+        assigned[1]['package'] = 'lattice-sim'
+        manifest = shards['self/0']['manifest']
+        expected = [['cargo', 'test', '--package', 'lattice-abi'],
+                    ['cargo', 'test', '--package', 'lattice-sim']]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            observed = []
+            def execute(arguments, path):
+                observed.append(arguments)
+                path.write_bytes(('log for ' + arguments[-1]).encode())
+                return 0
+            with patch.object(campaign, 'run_logged', side_effect=execute):
+                self.assertEqual(campaign.run_baselines(manifest, assigned, output), 0)
+            self.assertEqual(observed, expected)
+            proof = json.loads((output / 'baseline.json').read_text())
+            shard = {'manifest': manifest, 'baseline': proof, 'baseline_logs': {
+                f'baselines/{i}.log': ('log for ' + command[-1]).encode()
+                for i, command in enumerate(expected)}}
+            campaign_results.validate_baseline(shard, assigned)
+            proof['commands'].pop()
+            with self.assertRaises(ValueError):
+                campaign_results.validate_baseline(shard, assigned)
 
 
 if __name__ == '__main__':

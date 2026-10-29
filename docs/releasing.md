@@ -187,3 +187,26 @@ Actual million-history execution and seven-calendar-night evidence remain pendin
 At most eight row-fault shards execute together. All forty selections still run; this bounds
 incremental runner contention with pull-request checks without reducing the million-history plan.
 The central seed day remains frozen across queued waves and midnight boundaries.
+
+### Weekly matching-scope mutation baselines
+
+Each weekly mutation shard now tests an explicit clean baseline before mutation execution.
+The dependent group runs `cargo test --workspace`, matching its workspace mutant tests.
+The self group runs `cargo test --package PACKAGE` separately for every unique package in
+that shard's actual assignment; combining these packages could change feature unification.
+These commands use default features, as do the recorded mutation commands. A failed or
+interrupted baseline prevents the shard from starting mutation execution.
+
+The shard artifact retains `baseline.json` and `baselines/N.log`. The proof binds exact
+source/run/attempt, group/shard, plan and universe digests, assigned mutant identities,
+argument arrays, command state, exit codes and raw-log SHA256 digests. A command left in
+`pending` or `started` state is incomplete evidence. The consumer validates every expected
+scope and log before allowing a score; cargo-mutants' internal baseline must also pass.
+
+Older artifacts without this proof retain observed caught, survived, timed-out and unviable
+counts, but their matching baseline scope remains unverified and their score is unavailable.
+New validation cannot establish a clean workspace baseline retrospectively for an older run.
+This change does not alter the mutation universe, exclusions, budgets or schedule. The
+manual focused workflow has its own package-only diagnostic baseline and remains outside
+weekly score ingestion. Mocked fixture validation is not a completed hosted baseline or
+mutation campaign; inspect fresh raw artifacts before making a measured coverage claim.
