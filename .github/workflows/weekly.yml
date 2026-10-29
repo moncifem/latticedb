@@ -8,6 +8,11 @@ on:
         required: false
         default: false
         type: boolean
+      extra_groups:
+        description: "Also plan the unmeasured engines and edge mutation groups (engines, sql, api, testkit, sys, latticed); the scheduled run does not"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 jobs:
@@ -63,10 +68,14 @@ jobs:
         run: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/mutation-source.json"
       - name: enumerate complete universes and prove every real shard listing
         id: plan
+        env:
+          EXTRA_GROUPS: ${{ inputs.extra_groups == true && 'true' || 'false' }}
         run: |
+          flags=()
+          if [ "$EXTRA_GROUPS" = true ]; then flags+=(--extra-groups); fi
           python3 tools/mutation_campaign.py plan --repository "$GITHUB_REPOSITORY" \
             --run-metadata "$RUNNER_TEMP/mutation-source.json" --github-output "$GITHUB_OUTPUT" \
-            --output "$RUNNER_TEMP/mutation-plan"
+            --output "$RUNNER_TEMP/mutation-plan" "${flags[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

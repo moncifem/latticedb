@@ -42,7 +42,7 @@ def validate_baseline(shard, assigned, trusted_manifest):
 
 
 def aggregate(plan, universes, shards, source_complete):
-    assignments = {group: {} for group in campaign.GROUPS}
+    assignments = {group: {} for group in plan['groups']}
     modules, diagnostics, invalid, tested_ids = {}, [], [], set()
     for group, universe in universes.items():
         for mutant in universe:

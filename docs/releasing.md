@@ -21,15 +21,16 @@ simulator, fuzzing, model checking and heavier suites and report failures; they 
   (`fuzz-build` job) when one is missing, and the same job runs
   `cargo check --manifest-path fuzz/Cargo.toml --bins --locked` so a broken target fails before 02:00 UTC.
   The check compiles without the sanitizer; it is not a fuzzing run.
-- The weekly mutation campaign has four groups: `dependent` (core, lsl), `self` (abi, evalkit, sim,
-  seams, cli, bench, sdk), `engines` (engines, sql, api; workspace tests) and `edge` (testkit, sys,
-  latticed; package tests). Shards hold at most 24 mutants and the plan fails above 256 shards. The
-  mutant counts of the two new groups have not been listed yet, so the first weekly plan decides
-  whether that ceiling fits; a plan failure is reported by the weekly run, not hidden.
-- The nightly `proptest-sql` job runs the `lattice-sql` properties at 1,000,000 cases (estimate: well
-  under the 90-minute budget; not measured). `lattice-engines` is not in it: its model-based and
-  managed-index properties open stores and write files per case, so a million cases is an estimated
-  several hours and has not been measured.
+- The scheduled weekly mutation campaign keeps its two groups: `dependent` (core, lsl) and `self`
+  (abi, evalkit, sim, seams, cli, bench, sdk). Two more groups, `engines` (engines, sql, api; workspace
+  tests) and `edge` (testkit, sys, latticed; package tests), are planned only by a manual dispatch with
+  `extra_groups` set. Shards hold at most 24 mutants and a plan above 256 shards fails for every group,
+  so the extra groups join the schedule only after a dispatch has shown that the plan fits.
+- The `proptest-sql` job (`lattice-sql` at 1,000,000 cases, 90-minute budget) runs only by manual dispatch
+  with `sql_proptest` set, because its time is unmeasured and a timeout would turn the nightly red.
+  After a dispatch fits the budget, remove its `if` so it runs nightly. `lattice-engines` is not in it:
+  its model-based and managed-index properties open stores and write files per case, an estimated
+  several hours, also unmeasured.
 - Fuzz and sanitizer jobs use the pinned toolchain `nightly-2026-10-27` and `cargo-fuzz@0.13.2`; the
   pull request gate pins `cargo-deny@0.20.2`. Move them together, deliberately.
 

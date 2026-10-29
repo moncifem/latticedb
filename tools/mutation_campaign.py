@@ -18,16 +18,27 @@ GROUPS = {
     'dependent': (['lattice-core', 'lattice-lsl'], True),
     'self': (['lattice-abi', 'lattice-evalkit', 'lattice-sim', 'lattice-seams',
               'lattice-cli', 'lattice-bench', 'lattice-sdk'], False),
+}
+
+# Groups added behind `--extra-groups` (weekly dispatch input `extra_groups`). Their mutant counts have
+# not been measured, and a plan above the 256-shard matrix ceiling fails for every group, so the
+# scheduled plan stays on GROUPS until a dispatch has listed them.
+EXTRA_GROUPS = {
     # The storage, SQL and API crates feed each other and latticed, so a mutant in one is tested by the
     # whole workspace. They were reachable only through the manual mutation-crate workflow before.
     'engines': (['lattice-engines', 'lattice-sql', 'lattice-api'], True),
     # The test kit, the system layer and the daemon binary: each mutant is tested by its own package.
     'edge': (['lattice-testkit', 'lattice-sys', 'latticed'], False),
 }
+ALL_GROUPS = {**GROUPS, **EXTRA_GROUPS}
+
+
+def active_groups(extra):
+    return ALL_GROUPS if extra else GROUPS
 
 
 def command(group):
-    packages, workspace = GROUPS[group]
+    packages, workspace = ALL_GROUPS[group]
     args = ['cargo', 'mutants']
     for package in packages:
         args += ['-p', package]
@@ -36,9 +47,9 @@ def command(group):
 
 def baseline_commands(group, assigned):
     packages = sorted({mutant['package'] for mutant in assigned})
-    require(packages and set(packages).issubset(GROUPS[group][0]), 'baseline assignment has unexpected packages')
+    require(packages and set(packages).issubset(ALL_GROUPS[group][0]), 'baseline assignment has unexpected packages')
     # Each self-group mutant tests its own package; combining packages can unify features.
-    return ([['cargo', 'test', '--workspace']] if GROUPS[group][1] else
+    return ([['cargo', 'test', '--workspace']] if ALL_GROUPS[group][1] else
             [['cargo', 'test', '--package', package] for package in packages])
 
 
@@ -105,7 +116,8 @@ def write(path, value):
 
 
 def make_plan(universes, source):
-    require(set(universes) == set(GROUPS), 'missing/extra mutation crate group')
+    extra = set(universes) == set(ALL_GROUPS)
+    require(extra or set(universes) == set(GROUPS), 'missing/extra mutation crate group')
     groups, matrix = {}, []
     # Sorted: load_plan rebuilds the plan from sorted JSON keys, so the matrix order must not depend on GROUPS order.
     for group, universe in sorted(universes.items()):
@@ -117,7 +129,7 @@ def make_plan(universes, source):
         matrix += [{'group': group, 'shard': index, 'total': total, 'planned': len(ids[index::total])}
                    for index in range(total)]
     require(len(matrix) <= 256, 'complete plan exceeds GitHub matrix ceiling; review a different full-universe shard size')
-    return {'schema': 1, 'tool_version': VERSION, 'source': source, 'sharding': 'round-robin',
+    return {'schema': 1, 'tool_version': VERSION, 'source': source, 'extra_groups': extra, 'sharding': 'round-robin',
             'max_per_shard': MAX_PER_SHARD, 'groups': groups, 'matrix': {'include': matrix}}
 
 
@@ -185,19 +197,20 @@ def list_mutants(group, path, shard=None):
 
 def plan_run(args):
     verify_tool()
+    names = active_groups(args.extra_groups)
     output = Path(args.output)
     require(not output.exists(), 'mutation plan output must be new')
     output.mkdir(parents=True)
     revision = checkout_revision(clean=not args.local_list_smoke)
     source = ({'type': 'local_list_smoke', 'revision': revision, 'scope': 'listing only; no mutation execution or CI evidence'}
               if args.local_list_smoke else source_from_run(scorecard.load(args.run_metadata), args.repository, revision))
-    universes = {group: list_mutants(group, output / (group + '.json')) for group in GROUPS}
+    universes = {group: list_mutants(group, output / (group + '.json')) for group in names}
     plan = make_plan(universes, source)
     for group, block in plan['groups'].items():
         block['universe_sha256'] = digest(output / block['universe_file'])
     # Fail the matrix ceiling before issuing any shard execution. Listings below are real cargo
     # selections, independent of this script's Python partition model; no tests or mutants run.
-    assignments = {group: {} for group in GROUPS}
+    assignments = {group: {} for group in names}
     assignment_dir = output / 'assignments'
     assignment_dir.mkdir()
     for row in plan['matrix']['include']:
@@ -216,8 +229,11 @@ def plan_run(args):
 def load_plan(directory):
     directory = Path(directory)
     plan = scorecard.load(directory / 'plan.json')
+    # Plans written before the extra groups existed carry no flag and cover GROUPS only.
+    require(type(plan.get('extra_groups', False)) is bool, 'mutation plan group set is not a boolean')
+    names = active_groups(plan.get('extra_groups', False))
     require(plan.get('schema') == 1 and plan.get('tool_version') == VERSION
-            and plan.get('sharding') == 'round-robin' and set(plan['groups']) == set(GROUPS), 'unsupported mutation plan')
+            and plan.get('sharding') == 'round-robin' and set(plan['groups']) == set(names), 'unsupported mutation plan')
     universes = {}
     for group, block in plan['groups'].items():
         require(block.get('command') == command(group) and block.get('universe_file') == group + '.json', 'mutation flags/universe changed')
@@ -228,10 +244,10 @@ def load_plan(directory):
     expected = make_plan(universes, plan['source'])
     require(same_json(expected['matrix'], plan['matrix']) and type(plan['max_per_shard']) is int
             and plan['max_per_shard'] == MAX_PER_SHARD, 'mutation plan matrix changed')
-    for group in GROUPS:
+    for group in names:
         for field in ('count', 'shards', 'command', 'ids', 'universe_file'):
             require(same_json(plan['groups'][group][field], expected['groups'][group][field]), 'mutation plan group changed')
-    assignments = {group: {} for group in GROUPS}
+    assignments = {group: {} for group in names}
     for row in plan['matrix']['include']:
         path = directory / 'assignments' / f'{row["group"]}-{row["shard"]}.json'
         assignments[row['group']][row['shard']] = scorecard.load(path)
@@ -288,9 +304,10 @@ def main():
     generate.add_argument('--repository')
     generate.add_argument('--github-output')
     generate.add_argument('--local-list-smoke', action='store_true')
+    generate.add_argument('--extra-groups', action='store_true')
     shard = sub.add_parser('shard')
     shard.add_argument('--plan', required=True)
-    shard.add_argument('--group', choices=GROUPS, required=True)
+    shard.add_argument('--group', choices=ALL_GROUPS, required=True)
     shard.add_argument('--shard', type=int, required=True)
     shard.add_argument('--output', required=True)
     shard.add_argument('--run-metadata', required=True)

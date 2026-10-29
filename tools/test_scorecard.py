@@ -419,9 +419,9 @@ class ReplayEvidenceTests(unittest.TestCase):
 
 
 
-def campaign_fixture(count=50):
+def campaign_fixture(count=50, extra=False):
     universes = {}
-    for group, (packages, _) in campaign.GROUPS.items():
+    for group, (packages, _) in campaign.active_groups(extra).items():
         package = packages[0]
         _, universe = mutation_fixture(['CaughtMutant'] * count)
         for mutant in universe:
@@ -514,11 +514,12 @@ class MutationCampaignTests(unittest.TestCase):
         self.assertEqual(command[-6:], ['--test-workspace=false', '--timeout', '120', '--no-shuffle', '-j', '2'])
         self.assertNotIn('--exclude', command)
 
-    def test_campaign_covers_engines_api_sql_testkit_sys_and_latticed_without_overlap(self):
-        covered = [package for packages, _ in campaign.GROUPS.values() for package in packages]
+    def test_extra_groups_cover_engines_api_sql_testkit_sys_and_latticed_without_overlap(self):
+        covered = [package for packages, _ in campaign.ALL_GROUPS.values() for package in packages]
         self.assertEqual(len(covered), len(set(covered)), 'a crate is in two mutation groups')
         for package in ('lattice-engines', 'lattice-api', 'lattice-sql', 'lattice-testkit', 'lattice-sys', 'latticed'):
             self.assertIn(package, covered)
+            self.assertNotIn(package, [p for packages, _ in campaign.GROUPS.values() for p in packages])
         # Dependents run the workspace tests; self-tested groups run their own package.
         self.assertEqual(campaign.command('engines')[-6], '--test-workspace=true')
         self.assertEqual(campaign.command('edge')[-6], '--test-workspace=false')
@@ -526,6 +527,55 @@ class MutationCampaignTests(unittest.TestCase):
                          [['cargo', 'test', '--workspace']])
         self.assertEqual(campaign.baseline_commands('edge', [{'package': 'latticed'}, {'package': 'lattice-sys'}]),
                          [['cargo', 'test', '--package', 'lattice-sys'], ['cargo', 'test', '--package', 'latticed']])
+
+    def test_scheduled_plan_stays_on_the_original_groups_and_extra_is_opt_in(self):
+        self.assertEqual(set(campaign.GROUPS), {'dependent', 'self'})
+        plan, universes, _ = campaign_fixture(count=3)
+        self.assertIs(plan['extra_groups'], False)
+        self.assertEqual(set(plan['groups']), {'dependent', 'self'})
+        extra, extra_universes, _ = campaign_fixture(count=3, extra=True)
+        self.assertIs(extra['extra_groups'], True)
+        self.assertEqual(set(extra['groups']), {'dependent', 'self', 'engines', 'edge'})
+        # A partial extra set is neither mode.
+        partial = dict(extra_universes)
+        del partial['edge']
+        with self.assertRaisesRegex(ValueError, 'missing/extra'):
+            campaign.make_plan(partial, extra['source'])
+
+    def test_extra_group_overflow_cannot_be_reached_by_the_scheduled_plan(self):
+        _, universe = mutation_fixture(['CaughtMutant'] * 3073)
+        universes = {group: copy.deepcopy(universe) for group in campaign.ALL_GROUPS}
+        for group, (packages, _) in campaign.ALL_GROUPS.items():
+            for mutant in universes[group]:
+                mutant['package'] = packages[0]
+        with self.assertRaisesRegex(ValueError, 'matrix ceiling'):
+            campaign.make_plan(universes, {})
+        base = {group: universes[group][:48] for group in campaign.GROUPS}
+        self.assertEqual(len(campaign.make_plan(base, {})['matrix']['include']), 4)
+
+    def test_load_plan_accepts_both_modes_and_rejects_a_flag_that_contradicts_the_groups(self):
+        for extra in (False, True):
+            plan, universes, shards = campaign_fixture(count=30, extra=extra)
+            with tempfile.TemporaryDirectory() as tmp:
+                plan_dir = Path(tmp)
+                (plan_dir / 'assignments').mkdir()
+                assignments = {group: {} for group in plan['groups']}
+                for group in plan['groups']:
+                    campaign.write(plan_dir / (group + '.json'), universes[group])
+                    plan['groups'][group]['universe_sha256'] = campaign.digest(plan_dir / (group + '.json'))
+                for row in plan['matrix']['include']:
+                    group, index = row['group'], row['shard']
+                    assigned = shards[f'{group}/{index}']['assigned']
+                    assignments[group][index] = assigned
+                    campaign.write(plan_dir / 'assignments' / f'{group}-{index}.json', assigned)
+                plan['listing_proof'] = campaign.partition_proof(plan, assignments)
+                campaign.write(plan_dir / 'plan.json', plan)
+                loaded, _ = campaign.load_plan(plan_dir)
+                self.assertEqual(set(loaded['groups']), set(campaign.active_groups(extra)))
+                plan['extra_groups'] = not extra
+                campaign.write(plan_dir / 'plan.json', plan)
+                with self.assertRaisesRegex(ValueError, 'unsupported mutation plan'):
+                    campaign.load_plan(plan_dir)
 
     def test_plan_matrix_order_does_not_depend_on_group_insertion_order(self):
         plan, universes, _ = campaign_fixture(count=3)

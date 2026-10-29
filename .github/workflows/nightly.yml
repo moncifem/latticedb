@@ -2,6 +2,12 @@ name: nightly
 on:
   schedule: [{ cron: "0 2 * * *" }]
   workflow_dispatch:
+    inputs:
+      sql_proptest:
+        description: "Run the lattice-sql property tests at 1,000,000 cases (unmeasured; the schedule does not)"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 env:
@@ -56,11 +62,12 @@ jobs:
         env:
           PROPTEST_CASES: "1000000"
   proptest-sql:
-    # The SQL print/parse round-trip properties run at 1,000,000 cases. Its own job, so a timeout here
-    # cannot hide the codec properties above. lattice-engines is deliberately not included: its
-    # model_based and managed_indexes properties open real stores and write files for every case, and
-    # no 1,000,000-case run of them has been measured (an estimate of hours, not minutes). Add it only
-    # after a measured run fits a job budget, or after the case count is set per test.
+    # The SQL print/parse round-trip properties at 1,000,000 cases. Manual dispatch only until a run
+    # has measured the time: a timeout here would turn the scheduled night red. TODO: after a dispatch
+    # fits well inside the budget, drop the `if` and let it run nightly. lattice-engines is not
+    # included: its model_based and managed_indexes properties open real stores and write files for
+    # every case, an estimate of hours that has not been measured.
+    if: inputs.sql_proptest == true
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
