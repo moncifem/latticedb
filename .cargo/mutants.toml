@@ -55,6 +55,9 @@ exclude_re = [
     # Typed rows: an overflow name equal to the previous one is already refused as a clash, because the
     # previous name is in the map by then, so the order check never sees equal names.
     "typed\\.rs:\\d+:54: replace > with >= in decode_row",
+    # Index lookup: the filter in the `RowIndexPrefixLookup` branch only runs with that planted bug on;
+    # its planted-bug test checks that the bug is detected, not the bug's own comparison.
+    "index\\.rs:143:\\d+: replace (==|&&) with (!=|\\|\\|) in Indexes::lookup",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
