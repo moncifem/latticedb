@@ -13,8 +13,9 @@
 use crate::index::{IndexKey, ManagedIndexDef, ManagedIndexes};
 use crate::rowops::{self, RowWrite};
 use lattice_abi::{Classify, ErrorClass};
+use lattice_core::admission::MANAGED_COMPOUND;
 use lattice_core::changeset::ChangeSet;
-use lattice_core::record::{Record, RecordType};
+use lattice_core::record::RecordType;
 use lattice_core::{Config, Kernel, Receipt, TxnError};
 use lattice_seams::{Clock, Io, Rng};
 use std::collections::{BTreeMap, BTreeSet};
@@ -624,55 +625,72 @@ impl Classify for StoreError {
 }
 
 impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
-    /// Opens the log and rebuilds the catalog from its catalog change sets, skipping other engines'.
+    /// Opens the log and rebuilds the catalog projection, explicitly admitting managed compounds.
+    /// Every LCIX envelope is decoded completely and must carry the managed segment capability;
+    /// row mutations are intentionally left to RowStore's projection.
     pub fn open(io: I, clock: C, rng: R, config: &Config) -> Result<Self, StoreError> {
         let mut catalog = Catalog::new();
         let mut failure: Option<StoreError> = None;
-        let (kernel, _, _) = Kernel::open_streaming(io, clock, rng, config, |r: Record| {
-            if failure.is_some() || RecordType::from_u8(r.rtype) != Some(RecordType::ChangeSet) {
-                return;
-            }
-            let cs = match ChangeSet::decode(&r.payload) {
-                Ok(cs) => cs,
-                Err(e) => {
-                    failure = Some(StoreError::Corrupt(format!(
-                        "change set at lsn {}: {e}",
-                        r.lsn
-                    )));
+        let (kernel, _, _) = Kernel::open_streaming_with_capabilities(
+            io,
+            clock,
+            rng,
+            config,
+            MANAGED_COMPOUND,
+            |r, context| {
+                if failure.is_some() || RecordType::from_u8(r.rtype) != Some(RecordType::ChangeSet)
+                {
                     return;
                 }
-            };
-            if is_compound_payload(&cs.payload) {
-                match decode_compound(&cs.payload)
-                    .and_then(|change| catalog.apply_change(r.lsn, &change.tables, &change.indexes))
-                {
-                    Ok(()) => {}
+                let cs = match ChangeSet::decode(&r.payload) {
+                    Ok(cs) => cs,
                     Err(e) => {
                         failure = Some(StoreError::Corrupt(format!(
-                            "compound catalog at lsn {}: {e}",
+                            "change set at lsn {}: {e}",
                             r.lsn
-                        )))
+                        )));
+                        return;
+                    }
+                };
+                if is_compound_payload(&cs.payload) {
+                    if context.required_capabilities & MANAGED_COMPOUND == 0 {
+                        failure = Some(StoreError::Corrupt(format!(
+                            "unguarded compound catalog at lsn {}",
+                            r.lsn
+                        )));
+                        return;
+                    }
+                    match decode_compound(&cs.payload).and_then(|change| {
+                        catalog.apply_change(r.lsn, &change.tables, &change.indexes)
+                    }) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            failure = Some(StoreError::Corrupt(format!(
+                                "compound catalog at lsn {}: {e}",
+                                r.lsn
+                            )))
+                        }
+                    }
+                    return;
+                }
+                if !is_catalog_payload(&cs.payload) {
+                    return;
+                }
+                match decode(&cs.payload) {
+                    Ok(ops) => {
+                        if let Err(e) = catalog.apply(r.lsn, &ops) {
+                            failure = Some(StoreError::Corrupt(format!("lsn {}: {e}", r.lsn)));
+                        }
+                    }
+                    Err(e) => {
+                        failure = Some(StoreError::Corrupt(format!(
+                            "catalog at lsn {}: {e}",
+                            r.lsn
+                        )));
                     }
                 }
-                return;
-            }
-            if !is_catalog_payload(&cs.payload) {
-                return;
-            }
-            match decode(&cs.payload) {
-                Ok(ops) => {
-                    if let Err(e) = catalog.apply(r.lsn, &ops) {
-                        failure = Some(StoreError::Corrupt(format!("lsn {}: {e}", r.lsn)));
-                    }
-                }
-                Err(e) => {
-                    failure = Some(StoreError::Corrupt(format!(
-                        "catalog at lsn {}: {e}",
-                        r.lsn
-                    )));
-                }
-            }
-        })
+            },
+        )
         .map_err(StoreError::Rejected)?;
         match failure {
             Some(e) => Err(e),
@@ -708,7 +726,10 @@ impl<I: Io, C: Clock, R: Rng> CatalogStore<I, C, R> {
         })
         .map_err(StoreError::Invalid)?;
         let id = self.kernel.new_id();
-        match self.kernel.commit(ChangeSet::new(id, payload)) {
+        match self
+            .kernel
+            .commit_with_capabilities(ChangeSet::new(id, payload), MANAGED_COMPOUND)
+        {
             Ok(Receipt::Recorded { lsn, .. }) => {
                 if let Err(error) = self.catalog.apply_change(lsn, &tables, &indexes) {
                     self.stale = true;

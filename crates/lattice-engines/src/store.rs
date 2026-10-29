@@ -15,6 +15,7 @@ use crate::limits::{
 use crate::mvcc::{MvccError, Snapshot, Table, Tx};
 use crate::rowops::{self, RowKey, RowOpsError};
 use lattice_abi::{Classify, ErrorClass, Hlc};
+use lattice_core::admission::MANAGED_COMPOUND;
 use lattice_core::bugs::{self, Bug};
 use lattice_core::changeset::{ChangeSet, ChangeSetId};
 use lattice_core::record::RecordType;
@@ -177,7 +178,8 @@ pub struct RowStore<I: Io, C: Clock, R: Rng> {
 
 impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     /// Opens the log and rebuilds the rows from every row change set in it, streaming, so recovery
-    /// memory is the row state itself and one log segment.
+    /// retains row/index/catalog state, segment admission metadata and one log segment.
+    /// Managed mode explicitly admits guarded compound changes and requires their segment context.
     pub fn open(io: I, clock: C, rng: R, config: &Config) -> Result<Self, RowError> {
         Self::open_with_indexes(io, clock, rng, config, Vec::new())
     }
@@ -185,7 +187,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     /// Opens the store with indexes derived from the row history. Index definitions must be
     /// deterministic and use distinct ids, and must be supplied again on every reopen. A nonempty
     /// callback list selects legacy mode and refuses LCIX compound payloads instead of replacing
-    /// persisted definitions with process-local guesses. An empty list selects managed mode.
+    /// persisted definitions with process-local guesses. It advertises zero engine capabilities,
+    /// so guarded history refuses before any callback. An empty list selects managed mode.
     pub fn open_with_indexes(
         io: I,
         clock: C,
@@ -204,86 +207,105 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let mut commit_lsn = std::collections::BTreeMap::new();
         let mut commit_times: Vec<(Hlc, u64, ChangeSetId)> = Vec::new();
         let mut failure: Option<RowError> = None;
-        let (kernel, _, _) = Kernel::open_streaming(io, clock, rng, config, |r| {
-            if failure.is_some() || RecordType::from_u8(r.rtype) != Some(RecordType::ChangeSet) {
-                return;
-            }
-            let cs = match ChangeSet::decode(&r.payload) {
-                Ok(cs) => cs,
-                Err(e) => {
-                    failure = Some(RowError::Corrupt(format!(
-                        "change set at lsn {}: {e}",
-                        r.lsn
-                    )));
+        let supported = if legacy_indexes { 0 } else { MANAGED_COMPOUND };
+        let (kernel, _, _) = Kernel::open_streaming_with_capabilities(
+            io,
+            clock,
+            rng,
+            config,
+            supported,
+            |r, context| {
+                if failure.is_some() || RecordType::from_u8(r.rtype) != Some(RecordType::ChangeSet)
+                {
                     return;
                 }
-            };
-            let applied = (|| -> Result<bool, RowError> {
-                let (mut writes, next_catalog) = if catalog::is_compound_payload(&cs.payload) {
-                    if legacy_indexes {
-                        return Err(RowError::InvalidIndexes(
-                            "callback mode cannot replay managed compound changes".into(),
-                        ));
+                let cs = match ChangeSet::decode(&r.payload) {
+                    Ok(cs) => cs,
+                    Err(e) => {
+                        failure = Some(RowError::Corrupt(format!(
+                            "change set at lsn {}: {e}",
+                            r.lsn
+                        )));
+                        return;
                     }
-                    let change = catalog::decode_compound(&cs.payload).map_err(|e| {
-                        RowError::Corrupt(format!("compound at lsn {}: {e}", r.lsn))
-                    })?;
-                    let mut next = catalog.clone();
-                    next.apply_change(r.lsn, &change.tables, &change.indexes)
-                        .map_err(|e| RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn)))?;
-                    (change.rows, Some(next))
-                } else if catalog::is_catalog_payload(&cs.payload) {
-                    let ops = catalog::decode(&cs.payload)
-                        .map_err(|e| RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn)))?;
-                    let mut next = catalog.clone();
-                    next.apply(r.lsn, &ops)
-                        .map_err(|e| RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn)))?;
-                    (Vec::new(), Some(next))
-                } else if rowops::is_row_payload(&cs.payload) {
-                    (
-                        rowops::decode(&cs.payload).map_err(|e| {
-                            RowError::Corrupt(format!("row writes at lsn {}: {e:?}", r.lsn))
-                        })?,
-                        None,
-                    )
-                } else {
-                    return Ok(false);
                 };
-                if bugs::active(Bug::RowRecoveryDropsDeletes) {
-                    writes.retain(|(_, value)| value.is_some());
-                }
-                if let Some(next) = next_catalog {
-                    let definitions = if bugs::active(Bug::ManagedIndexesNotRecovered) {
-                        Default::default()
+                let applied = (|| -> Result<bool, RowError> {
+                    let (mut writes, next_catalog) = if catalog::is_compound_payload(&cs.payload) {
+                        if context.required_capabilities & MANAGED_COMPOUND == 0 {
+                            return Err(RowError::Corrupt(format!(
+                                "unguarded compound at lsn {}",
+                                r.lsn
+                            )));
+                        }
+                        if legacy_indexes {
+                            return Err(RowError::InvalidIndexes(
+                                "callback mode cannot replay managed compound changes".into(),
+                            ));
+                        }
+                        let change = catalog::decode_compound(&cs.payload).map_err(|e| {
+                            RowError::Corrupt(format!("compound at lsn {}: {e}", r.lsn))
+                        })?;
+                        let mut next = catalog.clone();
+                        next.apply_change(r.lsn, &change.tables, &change.indexes)
+                            .map_err(|e| {
+                                RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
+                            })?;
+                        (change.rows, Some(next))
+                    } else if catalog::is_catalog_payload(&cs.payload) {
+                        let ops = catalog::decode(&cs.payload).map_err(|e| {
+                            RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
+                        })?;
+                        let mut next = catalog.clone();
+                        next.apply(r.lsn, &ops).map_err(|e| {
+                            RowError::Corrupt(format!("catalog at lsn {}: {e}", r.lsn))
+                        })?;
+                        (Vec::new(), Some(next))
+                    } else if rowops::is_row_payload(&cs.payload) {
+                        (
+                            rowops::decode(&cs.payload).map_err(|e| {
+                                RowError::Corrupt(format!("row writes at lsn {}: {e:?}", r.lsn))
+                            })?,
+                            None,
+                        )
                     } else {
-                        next.indexes()
+                        return Ok(false);
                     };
-                    let changes = indexes
-                        .catalog_changes_for(&table, &writes, &definitions)
-                        .map_err(mvcc_error)?;
-                    table.apply(r.lsn, cs.id, writes).map_err(mvcc_error)?;
-                    indexes
-                        .apply_catalog(r.lsn, cs.id, changes, definitions)
-                        .map_err(mvcc_error)?;
-                    catalog = next;
-                } else {
-                    let changes = indexes.changes_for(&table, &writes).map_err(mvcc_error)?;
-                    table
-                        .apply(r.lsn, cs.id, writes)
-                        .and_then(|()| indexes.apply(r.lsn, cs.id, changes))
-                        .map_err(mvcc_error)?;
+                    if bugs::active(Bug::RowRecoveryDropsDeletes) {
+                        writes.retain(|(_, value)| value.is_some());
+                    }
+                    if let Some(next) = next_catalog {
+                        let definitions = if bugs::active(Bug::ManagedIndexesNotRecovered) {
+                            Default::default()
+                        } else {
+                            next.indexes()
+                        };
+                        let changes = indexes
+                            .catalog_changes_for(&table, &writes, &definitions)
+                            .map_err(mvcc_error)?;
+                        table.apply(r.lsn, cs.id, writes).map_err(mvcc_error)?;
+                        indexes
+                            .apply_catalog(r.lsn, cs.id, changes, definitions)
+                            .map_err(mvcc_error)?;
+                        catalog = next;
+                    } else {
+                        let changes = indexes.changes_for(&table, &writes).map_err(mvcc_error)?;
+                        table
+                            .apply(r.lsn, cs.id, writes)
+                            .and_then(|()| indexes.apply(r.lsn, cs.id, changes))
+                            .map_err(mvcc_error)?;
+                    }
+                    Ok(true)
+                })();
+                match applied {
+                    Ok(true) => {
+                        commit_lsn.insert(cs.id, r.lsn);
+                        commit_times.push((cs.hlc, r.lsn, cs.id));
+                    }
+                    Ok(false) => {}
+                    Err(error) => failure = Some(error),
                 }
-                Ok(true)
-            })();
-            match applied {
-                Ok(true) => {
-                    commit_lsn.insert(cs.id, r.lsn);
-                    commit_times.push((cs.hlc, r.lsn, cs.id));
-                }
-                Ok(false) => {}
-                Err(error) => failure = Some(error),
-            }
-        })
+            },
+        )
         .map_err(RowError::Rejected)?;
         match failure {
             Some(e) => Err(e),
@@ -377,7 +399,10 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         })
         .map_err(RowError::InvalidCatalog)?;
         let id = self.kernel.new_id();
-        match self.kernel.commit(ChangeSet::new(id, payload)) {
+        match self
+            .kernel
+            .commit_with_capabilities(ChangeSet::new(id, payload), MANAGED_COMPOUND)
+        {
             Ok(Receipt::Recorded { lsn, hlc }) => {
                 let applied = (|| {
                     self.table.apply(lsn, id, writes).map_err(mvcc_error)?;

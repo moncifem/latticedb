@@ -21,6 +21,8 @@ def manifest(root):
 
 if __name__ == '__main__':
     binary = Path(sys.argv[1]).resolve()
+    exported = ROOT / (sys.argv[2] if len(sys.argv) > 2 else 'target/wal-admission-cases')
+    report_path = ROOT / (sys.argv[3] if len(sys.argv) > 3 else 'wal-admission-old-reader.json')
     source = subprocess.check_output(['git', '-C', str(ROOT / 'frozen'), 'rev-parse', 'HEAD'], text=True).strip()
     if source != SOURCE:
         raise SystemExit('frozen source revision mismatch')
@@ -60,10 +62,9 @@ if __name__ == '__main__':
                 raise SystemExit(f'{mode} old-reader operation modified fixture files')
             report['cases'].append({'mode': mode, 'fixture': filename, 'before': before, 'after': after,
                                     'stdout': run.stdout, 'stderr': run.stderr, 'exit_code': run.returncode})
-    (ROOT / 'wal-admission-old-reader.json').write_text(json.dumps(report, indent=2) + '\n')
+    report_path.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 
-    exported = ROOT / 'target/wal-admission-cases'
     cases = sorted(p for p in exported.iterdir() if p.is_dir())
     if not cases or len(cases) % 2:
         raise SystemExit('missing raw/recovered matrix snapshots')
@@ -89,5 +90,5 @@ if __name__ == '__main__':
                        'stdout': run.stdout, 'stderr': run.stderr, 'exit_code': run.returncode})
     report['matrix_snapshots'] = matrix
     report['matrix_histories'] = len(cases) // 2
-    (ROOT / 'wal-admission-old-reader.json').write_text(json.dumps(report, indent=2) + '\n')
+    report_path.write_text(json.dumps(report, indent=2) + '\n')
     print(f'Frozen old-reader verified {len(cases)} raw/recovered snapshots from {len(cases)//2} fault histories')

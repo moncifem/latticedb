@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'crates/lattice-core/**'
+      - 'crates/lattice-engines/**'
+      - 'formats/corpus/catalog-index-*'
       - 'crates/lattice-seams/**'
       - 'crates/lattice-sim/**'
       - 'formats/corpus/wal-admission-*'
@@ -85,4 +87,48 @@ jobs:
         with:
           name: evidence-wal-admission-measurement
           path: wal-admission-measurement.json
+          if-no-files-found: error
+  managed-engine-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: moncifem/latticedb
+          ref: 743b0fb52a495a3f875490268d604ed543be9e64
+          path: frozen
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - name: Verify actual managed engine semantics and export every first-upgrade cut
+        run: |
+          set -euo pipefail
+          cargo test -p lattice-engines --locked --features lattice-core/planted-bugs --test managed_indexes -- --list > managed-index-selection.txt
+          test "$(grep -c ': test$' managed-index-selection.txt)" -eq 26
+          cargo test -p lattice-engines --locked --features lattice-core/planted-bugs --test managed_indexes -- --nocapture 2>&1 | tee managed-index-semantics.log
+          rm -rf target/managed-index-admission-cases
+          cargo test -p lattice-engines --locked --features lattice-core/planted-bugs --test managed_indexes export_first_managed_upgrade_cuts_for_frozen_old_reader -- --ignored --nocapture 2>&1 | tee managed-index-upgrade-cuts.log
+      - name: Run actual frozen reader against raw and recovered engine histories
+        run: |
+          mkdir -p frozen/crates/lattice-engines/examples
+          cp tools/wal-admission/old_reader.rs frozen/crates/lattice-engines/examples/admission_old_reader.rs
+          git -C frozen diff --exit-code
+          git -C frozen diff --cached --exit-code HEAD
+          test "$(git -C frozen ls-files --others --exclude-standard)" = crates/lattice-engines/examples/admission_old_reader.rs
+          sha256sum frozen/Cargo.lock frozen/rust-toolchain.toml tools/wal-admission/old_reader.rs > managed-index-build-inputs.sha256
+          rustc -Vv > managed-index-toolchain.txt
+          cargo -V >> managed-index-toolchain.txt
+          cargo build --manifest-path frozen/Cargo.toml --locked -p lattice-engines --example admission_old_reader --target-dir target/frozen-old
+          python3 tools/wal-admission/verify_old_reader.py target/frozen-old/debug/examples/admission_old_reader target/managed-index-admission-cases managed-index-old-reader.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: evidence-managed-engine-admission
+          path: |
+            managed-index-selection.txt
+            managed-index-semantics.log
+            managed-index-upgrade-cuts.log
+            managed-index-old-reader.json
+            managed-index-build-inputs.sha256
+            managed-index-toolchain.txt
           if-no-files-found: error

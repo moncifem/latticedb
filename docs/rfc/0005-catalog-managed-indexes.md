@@ -97,8 +97,9 @@ metadata-plus-row publication. An online build state machine is broader work tra
 
 ## Compatibility and migration
 
-**Older RowStore binaries skip unknown engine payloads, including LCIX. They may silently miss its
-row mutations. This draft does not provide automatic old-reader refusal or mixed-version safety.**
+**Older RowStore binaries skip unknown engine payloads, including unguarded LCIX. They may silently
+miss its row mutations. The stacked implementation now requires the draft RFC 0008 WAL guard;
+neither format is accepted, and mixed-version access remains unsupported.**
 Changing only the engine magic or catalog version cannot fix an old kernel's unknown-payload policy.
 
 The owner selected enforced old-reader refusal on 2026-10-29. Acceptance and LCIX activation now
@@ -145,8 +146,9 @@ managed compound changes. No version number, bit assignment or revised header by
 implemented by this RFC. A separate WAL RFC/ADR must define and independently review them. Its minimum
 contract is:
 
-1. A writer must rotate to a guarded segment and durably sync its header and directory entry before
-   appending its first LCIX record. Existing v1 segments remain byte-unchanged. Every later segment
+1. A writer must install a guarded segment and durably sync its header and directory entry before
+   appending its first LCIX record. Nonempty v1 segments remain byte-unchanged; only an empty tail
+   may be promoted in place under RFC 0008's crash protocol. Every later segment
    in that upgraded history retains the guard, including segments containing ordinary LROW writes.
 2. A reader must reject an unsupported header version or required capability before interpreting,
    repairing or truncating that segment. It must not expose a partially replayed RowStore. A frozen
@@ -182,3 +184,35 @@ literal semantics. This supplies repository-wide proposal fixtures without chang
 promoting RFC 0005/ADR 0019 to accepted. Final format acceptance and the selected mandatory WAL admission implementation
 remain separate requirements. Compound row writes also retain their bound host policy from PR 215;
 metadata APIs remain privileged host operations and do not implement SQL catalog authorization.
+
+
+## Stacked guard integration and actual-engine evidence
+
+PR 209 is stacked on the exact guard/measurement head `f9f0307b42766a01261670bc51a23b1dd88b5581`
+from PR 222. Managed RowStore and the catalog projection explicitly advertise `MANAGED_COMPOUND`;
+nonempty legacy callback opens advertise zero support. The streaming callback receives the real
+segment recovery context and refuses any LCIX record lacking capability mask `0x01` before applying metadata or rows.
+Compound commits bind that bit to `Kernel::commit_with_capabilities` after the existing bound actor
+policy, conflict, floor and metadata checks, and before append. Ordinary LROW/LCAT writes preserve
+their bytes and keep the Log's cumulative capability when a prior upgrade requires it.
+
+The engine consumes the independent global guarded LCIX fixture and verifies literal rows, index
+definitions and historical entries. Independent regressions strip only the header from that fixture
+to prove valid unguarded LCIX refuses without repair; callback and raw zero-support readers refuse
+guarded histories, while unchanged legacy rows remain readable. Mixed legacy LCAT/LROW replay also
+retains callback table lookup after empty managed-definition versions; an independent regression
+caught and corrected the missing callback fallback. A clean/mutated planted guard-omission
+witness exercises actual engine commits. Existing drop/recreate, atomic publication, historical
+policy and malformed-payload checks now run through the guarded path.
+
+A bounded first-upgrade cut sweep covers empty-tail promotion and nonempty legacy-prefix rotation,
+requiring ACK survival, all-or-none row/catalog/index publication, retained historical prefix reads,
+zero-support refusal whenever a guard persists, and stable second recovery. Hosted-only export
+passes every raw/recovered pair to the actual frozen `743b0fb` reader using its original lockfile,
+with source/binary/toolchain hashes and before/after byte manifests. Those hosted results remain
+pending until exact-head completion. Core-level partial-append/ENOSPC/fsync/rollover evidence remains
+in PR 222; this engine sweep does not claim an exhaustive arbitrary workload or large soak.
+
+This integration does not activate LCIX on main, accept either format, waive either review hold,
+provide a converter for earlier unguarded draft directories, or decide future checkpoint composition.
+Such draft directories now refuse and require restoration/recreation rather than silent adoption.

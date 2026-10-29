@@ -33,3 +33,12 @@ policy and its measurement remain unresolved. The seven-full-day RFC hold was no
 Owner selection of the guard approach does not accept this format or the future WAL encoding.
 Online backfill and schema migration remain RFC 0004 work. Future checkpoint composition must preserve the complete definition timeline under
 an independently reviewed engine tag.
+
+
+The PR 209 implementation is stacked on PR 222's draft WAL guard. Managed row/catalog readers
+explicitly declare support and check actual record context; callback readers remain at zero support.
+Compound writers bind the managed requirement to their append after actor-policy checks. Independent
+literal guarded/unguarded fixtures, a planted guard-omission control and actual engine first-upgrade
+cuts cover the integration. Hosted frozen-old-reader execution is pending exact-head completion.
+Neither implementation nor measured evidence accepts either format or waives the review hold;
+unguarded directories created by an earlier draft are refused rather than adopted.

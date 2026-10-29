@@ -146,13 +146,15 @@ impl Indexes {
 
     /// The table whose visible row must be authorized before returning an index candidate.
     pub(crate) fn table_for(&self, snap: Snapshot, index: u32) -> Option<u32> {
-        if let Some(definitions) = self.managed_at(snap) {
-            return definitions.get(&index).map(|definition| definition.table);
-        }
-        self.defs
-            .iter()
-            .find(|definition| definition.id == index)
+        self.managed_at(snap)
+            .and_then(|definitions| definitions.get(&index))
             .map(|definition| definition.table)
+            .or_else(|| {
+                self.defs
+                    .iter()
+                    .find(|definition| definition.id == index)
+                    .map(|definition| definition.table)
+            })
     }
 
     /// The index entries a set of row writes changes, given the rows as they are before the writes.

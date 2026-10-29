@@ -7,6 +7,7 @@
     clippy::indexing_slicing
 )]
 
+use lattice_core::admission::MANAGED_COMPOUND;
 use lattice_core::bugs::{self, Bug};
 use lattice_core::{ChangeSet, Config, Kernel};
 use lattice_engines::catalog::{
@@ -491,7 +492,7 @@ fn catalog_store_metadata_and_default_row_open_recover_without_callbacks() {
         }],
     );
     assert!(
-        matches!(legacy, Err(RowError::InvalidIndexes(_))),
+        matches!(legacy, Err(RowError::Rejected(_))),
         "callback mode must not silently replace persisted definitions"
     );
 }
@@ -504,15 +505,19 @@ fn malformed_claimed_compound_payload_refuses_both_catalog_and_row_recovery() {
         b
     }] {
         let (disk, clock) = fresh();
-        let (mut kernel, _) = Kernel::open(
+        let (mut kernel, _, _) = Kernel::open_streaming_with_capabilities(
             disk.clone(),
             SharedClock(clock.clone()),
             SeededRng::new(31),
             &config(),
+            MANAGED_COMPOUND,
+            |_, _| {},
         )
         .unwrap();
         let id = kernel.new_id();
-        kernel.commit(ChangeSet::new(id, bytes)).unwrap();
+        kernel
+            .commit_with_capabilities(ChangeSet::new(id, bytes), MANAGED_COMPOUND)
+            .unwrap();
         drop(kernel);
         assert!(matches!(
             RowStore::open(
@@ -1203,4 +1208,508 @@ fn compound_writes_and_historical_managed_lookups_preserve_the_bound_actor_polic
         store.check_indexes_at(old).unwrap();
         store.check_indexes_at(now).unwrap();
     }
+}
+
+fn install_literal_segment(disk: &SharedIo, bytes: &[u8]) {
+    let mut writer = disk.clone();
+    writer.create_dir_all("wal").unwrap();
+    writer
+        .append("wal/00000000000000000001.seg", bytes)
+        .unwrap();
+    writer.sync("wal/00000000000000000001.seg").unwrap();
+    writer.sync_dir("wal").unwrap();
+}
+
+#[test]
+fn literal_guarded_compound_recovers_rows_definitions_and_historical_index_without_callbacks() {
+    let (disk, clock) = fresh();
+    let fixture = include_bytes!("../../../formats/corpus/wal-admission-v2-compound.golden");
+    install_literal_segment(&disk, fixture);
+    let before = wal(&disk);
+    for _ in 0..2 {
+        let store = open(&disk, &clock);
+        assert_eq!(store.snapshot().as_of, 1);
+        assert_eq!(
+            rows(&store),
+            BTreeMap::from([(b"a".to_vec(), b"x".to_vec())])
+        );
+        assert_eq!(
+            store.catalog().current(),
+            BTreeMap::from([(7, "items".into())])
+        );
+        assert_eq!(
+            store.catalog().indexes().get(&9),
+            Some(&definition(9, 7, IndexKey::WholeValue))
+        );
+        assert!(store.catalog().indexes_as_of(0).is_empty());
+        assert!(
+            store
+                .lookup_at(
+                    Snapshot { as_of: 0 },
+                    9,
+                    b"x",
+                    &lattice_engines::limits::AllowAll
+                )
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .lookup_at(
+                    Snapshot { as_of: 1 },
+                    9,
+                    b"x",
+                    &lattice_engines::limits::AllowAll
+                )
+                .unwrap(),
+            vec![b"a".to_vec()]
+        );
+        store.check_indexes().unwrap();
+        drop(store);
+        assert_eq!(wal(&disk), before);
+    }
+    let catalog = CatalogStore::open(
+        disk.clone(),
+        SharedClock(clock),
+        SeededRng::new(17),
+        &config(),
+    )
+    .unwrap();
+    assert_eq!(
+        catalog.catalog().indexes().get(&9),
+        Some(&definition(9, 7, IndexKey::WholeValue))
+    );
+    drop(catalog);
+    assert_eq!(wal(&disk), before);
+}
+
+#[test]
+fn valid_literal_compound_without_a_segment_guard_is_refused_without_repair() {
+    let guarded = include_bytes!("../../../formats/corpus/wal-admission-v2-compound.golden");
+    let mut unguarded = b"LATLOG01\x01\x00\x00\x00\x00\x00\x00\x00".to_vec();
+    // Record framing and its CRC are unchanged by the header, so this is complete valid LCIX.
+    unguarded.extend_from_slice(&guarded[32..]);
+    let (disk, clock) = fresh();
+    install_literal_segment(&disk, &unguarded);
+    let before = wal(&disk);
+    let row = RowStore::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(17),
+        &config(),
+    );
+    assert!(
+        matches!(row, Err(RowError::Corrupt(message)) if message.contains("unguarded compound"))
+    );
+    let catalog = CatalogStore::open(
+        disk.clone(),
+        SharedClock(clock),
+        SeededRng::new(17),
+        &config(),
+    );
+    assert!(
+        matches!(catalog, Err(catalog::StoreError::Corrupt(message)) if message.contains("unguarded compound"))
+    );
+    assert_eq!(wal(&disk), before);
+}
+
+#[test]
+fn legacy_callback_and_zero_support_readers_refuse_guarded_history_before_replay() {
+    let (disk, clock) = fresh();
+    install_literal_segment(
+        &disk,
+        include_bytes!("../../../formats/corpus/wal-admission-v2-compound.golden"),
+    );
+    let before = wal(&disk);
+    let legacy = RowStore::open_with_indexes(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(17),
+        &config(),
+        vec![IndexDef {
+            id: 8,
+            table: 7,
+            extract: |_| panic!("guard must refuse before a legacy callback runs"),
+        }],
+    );
+    assert!(matches!(legacy, Err(RowError::Rejected(_))));
+    assert!(lattice_core::Log::open(disk.clone(), "wal", 128).is_err());
+    assert!(
+        Kernel::open(
+            disk.clone(),
+            SharedClock(clock),
+            SeededRng::new(17),
+            &config()
+        )
+        .is_err()
+    );
+    assert_eq!(wal(&disk), before);
+}
+
+#[test]
+fn legacy_literal_rows_remain_unguarded_and_compatible_with_callback_readers() {
+    let (disk, clock) = fresh();
+    install_literal_segment(
+        &disk,
+        include_bytes!("../../../formats/corpus/wal-admission-v1-rows.golden"),
+    );
+    let before = wal(&disk);
+    let store = RowStore::open_with_indexes(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(17),
+        &config(),
+        vec![IndexDef {
+            id: 8,
+            table: 7,
+            extract: |value| Some(value.to_vec()),
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .lookup_at(
+                store.snapshot(),
+                8,
+                b"x",
+                &lattice_engines::limits::AllowAll
+            )
+            .unwrap(),
+        vec![b"a".to_vec()]
+    );
+    drop(store);
+    let (legacy, report) = lattice_core::Log::open(disk.clone(), "wal", 128).unwrap();
+    assert_eq!(report.records, 1);
+    drop(legacy);
+    assert_eq!(wal(&disk), before);
+}
+
+#[test]
+fn an_omitted_guard_on_actual_compound_commit_is_caught_by_engine_recovery() {
+    for mutated in [false, true] {
+        bugs::clear();
+        let guard = BugGuard;
+        let (disk, clock) = fresh();
+        let mut store = open(&disk, &clock);
+        if mutated {
+            bugs::enable(Bug::RequiredGuardOmitted);
+        }
+        store
+            .commit_catalog(
+                vec![table(7)],
+                vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))],
+            )
+            .unwrap();
+        drop(guard);
+        drop(store);
+        let recovered = RowStore::open(
+            disk.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(17),
+            &config(),
+        );
+        if mutated {
+            assert!(
+                matches!(recovered, Err(RowError::Corrupt(message)) if message.contains("unguarded compound"))
+            );
+        } else {
+            let store = recovered.unwrap();
+            assert_eq!(
+                store.catalog().indexes().get(&9),
+                Some(&definition(9, 7, IndexKey::WholeValue))
+            );
+            store.check_indexes().unwrap();
+        }
+    }
+}
+
+fn export_engine_upgrade(disk: &SharedIo, case: usize, stage: &str, legacy_prefix: bool) {
+    let files = wal(disk);
+    let guarded = files
+        .iter()
+        .any(|(_, bytes)| bytes.len() >= 16 && bytes.get(..8) == Some(b"LATCAP02"));
+    let mut output = lattice_seams::StdIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let base = format!("target/managed-index-admission-cases/{case:06}-{stage}");
+    output.create_dir_all(&format!("{base}/wal")).unwrap();
+    for (name, bytes) in files {
+        let path = format!("{base}/wal/{name}");
+        output.append(&path, &bytes).unwrap();
+        output.sync(&path).unwrap();
+    }
+    output.append(&format!("{base}/wal/LOCK"), b"").unwrap();
+    let mode = if guarded { "guarded" } else { "legacy-any" };
+    let metadata = format!(
+        "mode={mode}\nallow_mutation={}\nprefix_row={legacy_prefix}\nactual_engine=true\nlegacy_prefix={legacy_prefix}\n",
+        stage == "raw" && !guarded
+    );
+    output
+        .append(&format!("{base}/expect.txt"), metadata.as_bytes())
+        .unwrap();
+}
+
+fn first_managed_upgrade(cut: Option<u64>, legacy_prefix: bool, export: Option<usize>) -> u64 {
+    let (disk, clock) = fresh();
+    let initial_config = Config {
+        segment_limit: 1024,
+        ..config()
+    };
+    let mut store = RowStore::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(17),
+        &initial_config,
+    )
+    .unwrap();
+    if legacy_prefix {
+        let mut tx = store.begin();
+        tx.put((7, b"a".to_vec()), b"x".to_vec());
+        store.commit(tx).unwrap();
+    }
+    let prefix_lsn = store.snapshot().as_of;
+    let before = disk.mutating_ops();
+    if let Some(cut) = cut {
+        disk.arm_power_cut(cut);
+    }
+    let mut tx = store.begin();
+    tx.put((7, b"a".to_vec()), b"new".to_vec());
+    tx.put((7, b"b".to_vec()), b"new".to_vec());
+    let acknowledged = store
+        .commit_with_catalog(
+            tx,
+            vec![table(7)],
+            vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))],
+        )
+        .is_ok();
+    let operations = disk.mutating_ops() - before;
+    let cut_observed = disk.is_powered_off();
+    drop(store);
+    disk.crash();
+    disk.set_profile(FaultProfile::clean());
+    if let Some(case) = export {
+        export_engine_upgrade(&disk, case, "raw", legacy_prefix);
+    }
+    let recovered = open(&disk, &clock);
+    let indexed = recovered.catalog().indexes().contains_key(&9);
+    let prior = if legacy_prefix {
+        BTreeMap::from([(b"a".to_vec(), b"x".to_vec())])
+    } else {
+        BTreeMap::new()
+    };
+    let expected = if indexed {
+        BTreeMap::from([
+            (b"a".to_vec(), b"new".to_vec()),
+            (b"b".to_vec(), b"new".to_vec()),
+        ])
+    } else {
+        prior.clone()
+    };
+    assert_eq!(
+        rows(&recovered),
+        expected,
+        "first guard cut={cut:?}, prefix={legacy_prefix}"
+    );
+    assert_eq!(recovered.catalog().current().contains_key(&7), indexed);
+    assert_eq!(
+        recovered.catalog().indexes_as_of(prefix_lsn),
+        BTreeMap::new()
+    );
+    assert_eq!(
+        recovered
+            .scan_at(
+                Snapshot { as_of: prefix_lsn },
+                7,
+                ..,
+                &lattice_engines::limits::AllowAll
+            )
+            .unwrap()
+            .into_iter()
+            .map(|(key, value)| (key.to_vec(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        prior
+    );
+    if acknowledged {
+        assert!(indexed, "an acknowledged first compound was lost");
+    }
+    if indexed {
+        assert_eq!(
+            recovered.catalog().indexes().get(&9),
+            Some(&definition(9, 7, IndexKey::WholeValue))
+        );
+        assert_eq!(
+            recovered
+                .lookup_at(
+                    recovered.snapshot(),
+                    9,
+                    b"new",
+                    &lattice_engines::limits::AllowAll
+                )
+                .unwrap(),
+            vec![b"a".to_vec(), b"b".to_vec()]
+        );
+    }
+    recovered.check_indexes().unwrap();
+    drop(recovered);
+    let before_refusal = wal(&disk);
+    let guarded = before_refusal
+        .iter()
+        .any(|(_, bytes)| bytes.get(..8) == Some(b"LATCAP02"));
+    let legacy = lattice_core::Log::open(disk.clone(), "wal", 1024);
+    assert_eq!(
+        legacy.is_err(),
+        guarded,
+        "zero-support admission differs from actual persisted guard"
+    );
+    drop(legacy);
+    assert_eq!(wal(&disk), before_refusal);
+    if let Some(case) = export {
+        export_engine_upgrade(&disk, case, "recovered", legacy_prefix);
+    }
+    let again = open(&disk, &clock);
+    assert_eq!(rows(&again), expected);
+    again.check_indexes().unwrap();
+    if cut.is_some_and(|cut| cut < operations) {
+        assert!(cut_observed);
+    }
+    operations
+}
+
+#[test]
+fn every_first_managed_upgrade_cut_preserves_legacy_prefix_and_atomic_index_publication() {
+    for legacy_prefix in [false, true] {
+        let operations = first_managed_upgrade(None, legacy_prefix, None);
+        assert!(operations > 0);
+        for cut in 0..=operations {
+            first_managed_upgrade(Some(cut), legacy_prefix, None);
+        }
+    }
+}
+
+#[test]
+#[ignore = "hosted-only frozen-reader snapshots for actual engine upgrade cuts"]
+fn export_first_managed_upgrade_cuts_for_frozen_old_reader() {
+    let mut case = 0;
+    for legacy_prefix in [false, true] {
+        let operations = first_managed_upgrade(None, legacy_prefix, Some(case));
+        case += 1;
+        for cut in 0..=operations {
+            first_managed_upgrade(Some(cut), legacy_prefix, Some(case));
+            case += 1;
+        }
+    }
+    eprintln!(
+        "exported {case} actual managed-engine histories as raw/recovered frozen-reader pairs"
+    );
+}
+
+#[test]
+fn denied_first_compound_allocates_no_id_and_installs_no_guard_or_metadata() {
+    struct CountRng {
+        inner: SeededRng,
+        calls: Rc<std::cell::Cell<u64>>,
+    }
+    impl lattice_seams::Rng for CountRng {
+        fn next_u64(&mut self) -> u64 {
+            self.calls.set(self.calls.get() + 1);
+            lattice_seams::Rng::next_u64(&mut self.inner)
+        }
+    }
+    let (disk, clock) = fresh();
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let rng = CountRng {
+        inner: SeededRng::new(17),
+        calls: calls.clone(),
+    };
+    let mut store = RowStore::open(disk.clone(), SharedClock(clock), rng, &config()).unwrap();
+    let before = wal(&disk);
+    let before_rng = calls.get();
+    let mut denied = store.begin_with_policy(lattice_engines::limits::DenyAll);
+    denied.put((7, b"a".to_vec()), b"x".to_vec());
+    assert_eq!(
+        store.commit_with_catalog(
+            denied,
+            vec![table(7)],
+            vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))]
+        ),
+        Err(RowError::PermissionDenied)
+    );
+    assert_eq!(calls.get(), before_rng);
+    assert_eq!(wal(&disk), before);
+    assert_eq!(store.snapshot().as_of, 0);
+    assert!(store.catalog().current().is_empty());
+    assert!(store.catalog().indexes().is_empty());
+    let mut allowed = store.begin();
+    allowed.put((7, b"a".to_vec()), b"x".to_vec());
+    assert_eq!(
+        store
+            .commit_with_catalog(
+                allowed,
+                vec![table(7)],
+                vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))]
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .lookup_at(
+                store.snapshot(),
+                9,
+                b"x",
+                &lattice_engines::limits::AllowAll
+            )
+            .unwrap(),
+        vec![b"a".to_vec()]
+    );
+}
+
+#[test]
+fn legacy_catalog_records_do_not_replace_explicit_callback_definitions() {
+    let (disk, clock) = fresh();
+    let mut cat = CatalogStore::open(
+        disk.clone(),
+        SharedClock(clock.clone()),
+        SeededRng::new(17),
+        &config(),
+    )
+    .unwrap();
+    cat.commit(vec![table(7)]).unwrap();
+    drop(cat);
+    for cycle in 0..2 {
+        let mut store = RowStore::open_with_indexes(
+            disk.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(27 + cycle),
+            &config(),
+            vec![IndexDef {
+                id: 8,
+                table: 7,
+                extract: |value| Some(value.to_vec()),
+            }],
+        )
+        .unwrap();
+        if cycle == 0 {
+            let mut tx = store.begin();
+            tx.put((7, b"a".to_vec()), b"x".to_vec());
+            store.commit(tx).unwrap();
+        }
+        assert_eq!(
+            store
+                .lookup_at(
+                    store.snapshot(),
+                    8,
+                    b"x",
+                    &lattice_engines::limits::AllowAll
+                )
+                .unwrap(),
+            vec![b"a".to_vec()]
+        );
+        store.check_indexes().unwrap();
+        drop(store);
+        clock.advance(1);
+    }
+    assert!(
+        wal(&disk)
+            .iter()
+            .all(|(_, bytes)| bytes.get(..8) == Some(b"LATLOG01"))
+    );
 }
