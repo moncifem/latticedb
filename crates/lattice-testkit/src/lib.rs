@@ -21,3 +21,5 @@ mod tests {
         assert_eq!(example_sum(&[1, 2, 3]), 6);
     }
 }
+
+pub mod convergence;
