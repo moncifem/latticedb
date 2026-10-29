@@ -1,7 +1,8 @@
 //! Bounded, sans-I/O SCRAM-SHA-256 server exchange (RFC 5802 / RFC 7677).
 //!
 //! A host selects a verifier using the *startup* user name, then supplies a fresh server nonce
-//! through the RNG seam. PostgreSQL ignores the SCRAM user name for account selection. Provisioning
+//! through the RNG seam. PostgreSQL ignores the SCRAM user name for account selection, including
+//! the empty `n=` sent by libpq; the original bytes remain in the proof transcript. Provisioning
 //! accepts already prepared password bytes: SASLprep and PostgreSQL's raw-password fallback belong
 //! to the credential-management boundary, not this exchange. No password database, session wiring,
 //! TLS, SCRAM-SHA-256-PLUS or channel binding is implemented here. Do not log authentication input.
@@ -215,10 +216,13 @@ impl ScramServer {
         if !matches!(flag, "n" | "y") || !authz.is_empty() {
             return Err(ScramError::UnsupportedExtension);
         }
-        let attrs = attributes(bare)?;
+        let attrs = attributes(bare, true)?;
         let first = attrs.first().ok_or(ScramError::Malformed)?;
         let second = attrs.get(1).ok_or(ScramError::Malformed)?;
-        if first.0 != "n" || second.0 != "r" || !valid_sasl_name(first.1) || !valid_nonce(second.1)
+        if first.0 != "n"
+            || second.0 != "r"
+            || !valid_pg_sasl_name(first.1)
+            || !valid_nonce(second.1)
         {
             return Err(ScramError::Malformed);
         }
@@ -246,7 +250,7 @@ impl ScramServer {
             return Err(ScramError::InvalidState);
         };
         let message = text(bytes)?;
-        let attrs = attributes(message)?;
+        let attrs = attributes(message, false)?;
         let binding = attrs.first().ok_or(ScramError::Malformed)?;
         let nonce = attrs.get(1).ok_or(ScramError::Malformed)?;
         let proof = attrs.last().ok_or(ScramError::Malformed)?;
@@ -311,10 +315,9 @@ fn valid_nonce(nonce: &str) -> bool {
             .bytes()
             .all(|b| (0x21..=0x7e).contains(&b) && b != b',')
 }
-fn valid_sasl_name(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
+// PostgreSQL selects the account from startup, and libpq intentionally sends an empty n=.
+// This exception does not relax SASL-name escaping for a supplied nonempty name.
+fn valid_pg_sasl_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     while let Some(byte) = bytes.next() {
         if byte == b'='
@@ -328,7 +331,10 @@ fn valid_sasl_name(name: &str) -> bool {
     }
     true
 }
-fn attributes(message: &str) -> Result<Vec<(&str, &str)>, ScramError> {
+fn attributes(
+    message: &str,
+    allow_empty_pg_username: bool,
+) -> Result<Vec<(&str, &str)>, ScramError> {
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
     for part in message.split(',') {
@@ -338,7 +344,7 @@ fn attributes(message: &str) -> Result<Vec<(&str, &str)>, ScramError> {
         let (key, value) = part.split_once('=').ok_or(ScramError::Malformed)?;
         if key.len() != 1
             || !key.bytes().all(|b| b.is_ascii_alphabetic())
-            || value.is_empty()
+            || (value.is_empty() && !(allow_empty_pg_username && key == "n"))
             || !seen.insert(key)
         {
             return Err(ScramError::Malformed);
@@ -398,6 +404,61 @@ mod tests {
             Err(ScramError::InvalidState)
         );
         assert!(!server.is_authenticated());
+    }
+
+    #[test]
+    fn postgres_libpq_empty_username_authenticates_with_its_exact_raw_transcript() {
+        // libpq18 sends an empty n=; Python stdlib hashlib/hmac independently derives this fixture.
+        // The account/verifier comes from startup, not from a SCRAM user-name attribute.
+        let mut exchange = server();
+        assert_eq!(
+            exchange
+                .initial(MECHANISM, b"n,,n=,r=rOprNGfwEbeRWgbNEkqO")
+                .unwrap(),
+            Backend::AuthenticationSaslContinue(FIRST.as_bytes().to_vec())
+        );
+        assert_eq!(exchange.finish(b"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=qvT2SWdEH5Q06albL+hjSYuUhCG7VndFyzIb7CK4n9k=").unwrap(),
+            Backend::AuthenticationSaslFinal(b"v=3HO6Qt1M4MKJrmlKaoOqLAI0/0TV0HZe7J9H3MBtSOg=".to_vec()));
+        assert!(exchange.is_authenticated());
+        let mut different_transcript = server();
+        different_transcript
+            .initial(MECHANISM, b"n,,n=,r=rOprNGfwEbeRWgbNEkqO")
+            .unwrap();
+        assert_eq!(
+            different_transcript.finish(FINAL.as_bytes()),
+            Err(ScramError::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn postgres_empty_username_exception_does_not_accept_other_empty_attributes() {
+        for first in [
+            "n,,n=,r=",
+            "n,,n=,r=nonce,x=",
+            "n,,n=,r=nonce,n=",
+            "n,,n=,r=nonce,m=",
+        ] {
+            assert!(
+                server().initial(MECHANISM, first.as_bytes()).is_err(),
+                "{first}"
+            );
+        }
+        for final_message in [
+            "c=,r=nonce,p=proof",
+            "c=biws,r=,p=proof",
+            "c=biws,r=nonce,p=",
+            "c=biws,r=nonce,n=,p=proof",
+            "c=biws,r=nonce,x=,p=proof",
+        ] {
+            let mut server = server();
+            server.initial(MECHANISM, b"n,,n=,r=nonce").unwrap();
+            assert_eq!(
+                server.finish(final_message.as_bytes()),
+                Err(ScramError::Malformed),
+                "{final_message}"
+            );
+            assert!(!server.is_authenticated());
+        }
     }
 
     #[test]

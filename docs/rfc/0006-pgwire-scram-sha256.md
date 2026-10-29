@@ -21,7 +21,12 @@ and [RFC 7677](https://www.rfc-editor.org/rfc/rfc7677), using maintained SHA-256
 and constant-time comparison libraries. Server nonce generation takes the existing RNG seam;
 production callers must supply fresh cryptographically secure output. A verifier contains a salt,
 iteration count, stored key and server key. Provisioning accepts already-prepared password bytes;
-it does not implement SASLprep or PostgreSQL's raw-password fallback.
+it does not implement SASLprep or PostgreSQL's raw-password fallback. Account selection uses the
+startup user name, as [PostgreSQL specifies](https://www.postgresql.org/docs/current/sasl-authentication.html).
+Its libpq client sends an empty SCRAM `n=` attribute. Accept that PostgreSQL-specific exception only
+in client-first, preserving the exact empty attribute in the authenticated transcript; nonempty
+names still require valid SASL escapes. Other empty attributes remain invalid. This is compatibility
+with PostgreSQL, not a claim that generic RFC 5802 SASL names permit an empty value.
 
 The server advertises only SCRAM-SHA-256. It validates client-first syntax and returns the combined
 nonce, salt and configured iteration count, then validates the echoed GS2 header, exact combined
@@ -65,7 +70,9 @@ Tests compare exact wire bytes for the three backend authentication messages and
 response lengths; RFC 7677 supplies the complete published SHA-256 exchange. RFC 5802 grammar cases,
 an independently derived extension transcript, nonce-seam draws, every proof-byte mutation, malformed
 and truncated messages, terminal failure and framed arbitrary-input properties cover the pure module.
-RFC 5802's SHA-1 transcript is not presented as a SHA-256 known-answer vector.
+RFC 5802's SHA-1 transcript is not presented as a SHA-256 known-answer vector. A separate Python
+stdlib known-answer fixture covers libpq's empty user-name transcript; negative cases retain rejection
+of empty nonce, binding, proof and extension values.
 
 Independent authentication/codec review, hosted checks and comment-period acceptance remain required.
 No external driver authentication, TLS, account lookup, timing audit, simulator planted-bug witness

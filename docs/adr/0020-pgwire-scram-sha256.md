@@ -17,6 +17,9 @@ with explicit verifier/password-preparation and RNG boundaries. Preserve ordinar
 decoding; require callers to select the SASL decoding phase rather than guessing from payload bytes.
 Support the standard PostgreSQL AuthenticationSASL, SASLContinue and SASLFinal messages. Keep session
 and host authentication wiring separate; the current trust session refuses unexpected SASL messages.
+Select the verifier from the startup account and accept libpq's empty client-first `n=` as a
+PostgreSQL-specific exception, retaining those exact bytes in the proof transcript. Other empty
+attribute values remain invalid; nonempty names still use strict SASL escaping.
 
 Bound message sizes, nonce parts, attributes, salt/password inputs and provisioning iteration counts.
 Keep PBKDF2 off the network message path, fail exchanges terminally, redact verifier debug output and
