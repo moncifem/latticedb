@@ -15,7 +15,8 @@ between minor versions; format changes are called out explicitly.
 - `tools/merge-pr.sh`: serial PR merger that treats API errors and unknown values as retries, updates
   BEHIND branches, refuses on failed checks and merges only when CLEAN (tests in
   `tools/test_merge_pr.sh`, guide in `docs/merging.md`). `tools/branch-protection.json` now requires
-  strict (up-to-date) status checks and `enforce_admins`; the owner applies the live settings.
+  strict (up-to-date) status checks and `enforce_admins` as proposed configuration only; the helper
+  reads live protection and refuses updates/merges until those prerequisites are actually applied.
 
 - Managed physical-byte index definitions and create/drop/recreate history persisted in atomic LCIX
   catalog/row changes. Default managed opens rebuild without callbacks; explicit callback mode remains
