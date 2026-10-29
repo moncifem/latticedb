@@ -868,7 +868,7 @@ mod tests {
         io.append(path, &data).unwrap();
         io.sync(path).unwrap();
         io.sync_dir("wal").unwrap();
-        let result = recover(&mut io, "wal", &mut |_| {});
+        let result = recover(&mut io, "wal", 0, &mut |_, _| {});
         assert!(
             matches!(result, Err(LogError::Corrupt(ref why)) if why.contains("valid records follow"))
         );
