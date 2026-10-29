@@ -80,6 +80,8 @@ pub enum Bug {
     TreeCycleCheckSkipped,
     /// A capability-requiring append omits its durable segment guard.
     RequiredGuardOmitted,
+    /// Recovery ignores managed index definitions and therefore omits their rebuilt entries.
+    ManagedIndexesNotRecovered,
 }
 
 impl Bug {
@@ -111,6 +113,8 @@ impl Bug {
 
     /// Authorization defects, detected by the independent public row-policy witness suite.
     pub const POLICY: [Bug; 2] = [Bug::RowPolicyReadSkipped, Bug::RowPolicyWriteSkipped];
+    /// Catalog-managed definition recovery defects, exercised by the focused fault witness.
+    pub const CATALOG_INDEX: [Bug; 1] = [Bug::ManagedIndexesNotRecovered];
 
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
@@ -199,6 +203,7 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::ADMISSION)
+            .chain(Bug::CATALOG_INDEX)
     }
 
     #[test]
@@ -210,8 +215,9 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::ADMISSION)
+            .chain(Bug::CATALOG_INDEX)
             .collect();
-        assert_eq!(all.len(), 36);
+        assert_eq!(all.len(), 37);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();
