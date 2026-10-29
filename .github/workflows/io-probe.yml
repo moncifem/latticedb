@@ -5,6 +5,10 @@ on:
   schedule: [{ cron: "0 5 * * 0" }]
   workflow_dispatch:
     inputs:
+      sql_planner:
+        description: Run only the isolated ADR0013 SQL planner experiment
+        type: boolean
+        default: false
       scorecard_source_run:
         description: "Replay retained evidence from a completed nightly run; empty runs the normal I/O probes"
         required: false
@@ -14,7 +18,7 @@ permissions:
   contents: read
 jobs:
   io-probe:
-    if: inputs.scorecard_source_run == ''
+    if: ${{ inputs.scorecard_source_run == '' && !(github.event_name == 'workflow_dispatch' && inputs.sql_planner) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,7 +36,7 @@ jobs:
 
   runtime-spike:
     # An explicit, bounded experiment: no scheduled run until its evidence is reviewed.
-    if: github.event_name == 'workflow_dispatch' && inputs.scorecard_source_run == ''
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.scorecard_source_run == '' && !inputs.sql_planner }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -106,3 +110,7 @@ jobs:
           path: target/scorecard-replay/
           if-no-files-found: error
           retention-days: 90
+
+  sql-planner-spike:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sql_planner }}
+    uses: ./.github/workflows/sql-planner-spike.yml
