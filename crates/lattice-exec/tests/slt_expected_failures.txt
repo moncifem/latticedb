@@ -1,0 +1,19 @@
+# Records of the sqllogictest scripts that the executor is expected to fail, one per line:
+#   <script>:<line> <reason>
+# The scripts themselves are not changed. The test fails if a record outside this list fails, and if
+# a record listed here passes, so remove a line when the feature lands.
+#
+# Every entry is a statement the binder refuses with 0A000 (LSQL-0002) because the plan IR has no
+# operator for it yet; the executor never sees these plans.
+basics.test:20 aggregate function count(*): no aggregate operator in the plan IR
+basics.test:39 aggregate function count(*): no aggregate operator in the plan IR
+joins.test:15 JOIN: no join operator in the plan IR
+joins.test:25 JOIN: no join operator in the plan IR
+joins.test:37 JOIN: no join operator in the plan IR
+joins.test:47 JOIN: no join operator in the plan IR
+aggregates.test:9 GROUP BY: no aggregate operator in the plan IR
+aggregates.test:28 GROUP BY and HAVING: no aggregate operator in the plan IR
+aggregates.test:36 aggregate functions: no aggregate operator in the plan IR
+aggregates.test:41 DISTINCT: no distinct operator in the plan IR
+aggregates.test:48 aggregate functions: no aggregate operator in the plan IR
+transactions.test:38 aggregate function count(*): no aggregate operator in the plan IR

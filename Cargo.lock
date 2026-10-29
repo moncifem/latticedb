@@ -503,7 +503,10 @@ dependencies = [
  "lattice-core",
  "lattice-engines",
  "lattice-lsl",
+ "lattice-seams",
+ "lattice-sim",
  "lattice-sql",
+ "lattice-testkit",
  "proptest",
 ]
 

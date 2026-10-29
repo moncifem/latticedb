@@ -12,10 +12,13 @@ lattice-abi = { path = "../lattice-abi" }
 lattice-core = { path = "../lattice-core" }
 lattice-engines = { path = "../lattice-engines" }
 lattice-lsl = { path = "../lattice-lsl" }
+lattice-seams = { path = "../lattice-seams" }
 lattice-sql = { path = "../lattice-sql" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+lattice-sim = { path = "../lattice-sim" }
+lattice-testkit = { path = "../lattice-testkit" }
 proptest = "1.12.0"
