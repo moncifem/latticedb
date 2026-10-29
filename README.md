@@ -122,6 +122,9 @@ kinds of evidence. Long-run evidence and known gaps stay visible in the [gate re
 
 Nightly archives include checksums, SBOMs and build provenance. See [release verification](docs/releasing.md).
 
+A first-draft [threat model](docs/threat-model.md) and [security test plan](docs/security-test-plan.md) list the trust
+boundaries, the mitigations that exist, and the open gaps with their priorities. No second maintainer has reviewed them.
+
 </details>
 
 ## Build it with us
