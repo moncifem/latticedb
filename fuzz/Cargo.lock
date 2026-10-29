@@ -142,6 +142,7 @@ dependencies = [
  "lattice-lsl",
  "lattice-seams",
  "lattice-sim",
+ "lattice-sql",
  "libfuzzer-sys",
 ]
 
@@ -200,6 +201,10 @@ dependencies = [
  "lattice-abi",
  "lattice-seams",
 ]
+
+[[package]]
+name = "lattice-sql"
+version = "0.1.0-alpha.0"
 
 [[package]]
 name = "lattice-sys"

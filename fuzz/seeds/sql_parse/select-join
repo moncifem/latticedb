@@ -1,0 +1,1 @@
+SELECT t.name, count(*) FROM teams t LEFT JOIN members m ON m.team_id = t.id WHERE m.id BETWEEN 1 AND 9 GROUP BY t.name HAVING count(*) > 1 ORDER BY 2 DESC NULLS LAST LIMIT 10

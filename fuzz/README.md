@@ -1,6 +1,6 @@
 # fuzz
 
-`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire` and `wal_record`.
+`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire`, `sql_parse` and `wal_record`.
 
 ```sh
 cd fuzz

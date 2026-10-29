@@ -1,0 +1,1 @@
+INSERT INTO items (id, label, qty) VALUES (1, 'it''s', -5), (2, $1, NULL) RETURNING id
