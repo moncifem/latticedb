@@ -405,6 +405,7 @@ dependencies = [
  "lattice-lsl",
  "lattice-seams",
  "lattice-sim",
+ "lattice-sql",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ lattice-seams = { path = "../lattice-seams" }
 lattice-sim = { path = "../lattice-sim" }
 lattice-lsl = { path = "../lattice-lsl" }
 lattice-core = { path = "../lattice-core", features = ["planted-bugs"] }
+lattice-sql = { path = "../lattice-sql" }
 
 [lints]
 workspace = true

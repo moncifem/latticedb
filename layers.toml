@@ -67,7 +67,7 @@ allow = ["lattice-intel", "lattice-abi", "lattice-seams", "lattice-sys", "lattic
 
 [crate.lattice-testkit]
 layer = 8
-allow = ["lattice-abi", "lattice-seams", "lattice-sim", "lattice-lsl", "lattice-core"]
+allow = ["lattice-abi", "lattice-seams", "lattice-sim", "lattice-lsl", "lattice-core", "lattice-sql"]
 
 [crate.lattice-evalkit]
 layer = 8

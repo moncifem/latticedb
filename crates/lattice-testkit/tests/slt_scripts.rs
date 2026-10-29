@@ -28,3 +28,21 @@ fn every_subset_script_parses_and_has_records() {
         );
     }
 }
+
+#[test]
+fn every_generated_query_parses_with_the_sql_crate() {
+    use lattice_sql::parse_statement;
+    use lattice_testkit::slt::generate;
+    let mut queries = 0;
+    for seed in 0..100 {
+        for record in parse(&generate(seed, 25), "lattice").unwrap() {
+            let sql = match record {
+                Record::StatementOk { sql, .. } | Record::Query { sql, .. } => sql,
+                _ => continue,
+            };
+            parse_statement(&sql).unwrap_or_else(|e| panic!("seed {seed}: {sql}: {e:?}"));
+            queries += 1;
+        }
+    }
+    assert!(queries > 2500);
+}
