@@ -34,7 +34,9 @@ always-run upload. Build failures retain available metadata/logs and a failure r
 
 For complete measured coverage the summary reports all nine candidate/baseline ratios per workload
 through min/median/max, median absolute deviation and sample standard deviation, alongside both arms'
-ns/op distributions. It sets `adr_c4_status=not_evaluated` regardless of ratios. Shared virtual hosts
+ns/op distributions. The original reference ledger rounds ns/op to one decimal while the candidate
+ledger retains full precision. Especially for HLC near 1 ns, small paired ratios are therefore quantized;
+this measurement precision difference is retained without patching either frozen binary. It sets `adr_c4_status=not_evaluated` regardless of ratios. Shared virtual hosts
 can still vary in load/frequency during a run; pairing reduces between-host confounding without proving
 statistical equivalence or defining an acceptance threshold. No confidence guarantee is implied.
 

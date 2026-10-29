@@ -163,7 +163,8 @@ def run(args):
                 'cargo': command(['cargo', '-V'], sources['candidate']),
                 'build': 'cargo build --locked --release -p lattice-bench --bin bench_runner; default features; original release profile',
                 'sample_order': [order(p) for p in range(PAIRS)],
-                'scope': 'seven foundation CPU/SimIo workloads; no SQL or raw RowStore comparison'}
+                'scope': 'seven foundation CPU/SimIo workloads; no SQL or raw RowStore comparison',
+                'precision_caveat': 'Original reference ledger rounds ns/op to one decimal; candidate retains full precision. Small ratios, especially HLC near 1 ns, are quantized.'}
     save(root / 'metadata.json', metadata)
     binaries = {}
     for arm, path in sources.items():
@@ -190,7 +191,8 @@ def run(args):
     summary['warmups'] = warmups
     summary['source_unchanged_after_samples'] = all(
         source_identity(path, identities[arm]['revision']) == identities[arm] for arm, path in sources.items())
-    summary['complete'] = summary['complete'] and all(r['exit_code'] == 0 and not r.get('error') for r in warmups)
+    summary['complete'] = (summary['complete'] and summary['source_unchanged_after_samples']
+                           and all(r['exit_code'] == 0 and not r.get('error') for r in warmups))
     save(root / 'summary.json', summary)
     return 0 if summary['complete'] else 1
 
