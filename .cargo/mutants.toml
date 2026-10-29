@@ -37,4 +37,16 @@ exclude_re = [
 # by machine, so no test can pin it. This also means a change to what a benchmark measures goes
 # unnoticed by mutation testing; the nightly gate against a recorded baseline is what watches that. A
 # separate test checks that every benchmark reports a positive, finite time.
-exclude_globs = ["crates/lattice-bench/src/suite.rs"]
+#
+# The same holds for the measurement programs: `io_probe` and `runtime_probe` run a workload and print
+# what the disk or the runtime did, and `runtime_spike` is the experiment they time. `uring.rs` is the
+# opt-in Linux `io_uring` comparison, exercised by the io-probe workflow rather than the unit tests.
+# None of them is product code, and a mutation there changes a measurement, not behaviour. The
+# regression gate itself (`bench_runner.rs`) stays under mutation testing through its process tests.
+exclude_globs = [
+    "crates/lattice-bench/src/suite.rs",
+    "crates/lattice-bench/src/bin/io_probe.rs",
+    "crates/lattice-bench/src/bin/runtime_probe.rs",
+    "**/runtime_spike/*.rs",
+    "crates/lattice-seams/src/uring.rs",
+]
