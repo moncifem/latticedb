@@ -566,4 +566,27 @@ mod tests {
         data.extend_from_slice(&encode_record(1_000_000, 1, b"far"));
         assert!(!valid_record_after(&data, SEGMENT_HEADER_LEN, 1));
     }
+
+    #[test]
+    fn a_valid_record_far_beyond_what_the_data_could_hold_is_not_evidence_of_damage() {
+        // The window is the number of records the data could hold. A valid record 500 LSNs ahead in a
+        // file this small cannot be the continuation of the log, so it must not count.
+        let mut data = segment_header();
+        data.extend_from_slice(&encode_record(1, 1, b"first"));
+        let at = data.len();
+        data.extend_from_slice(&[0xFF; 20]);
+        data.extend_from_slice(&encode_record(501, 1, b"far"));
+        assert!(!valid_record_after(&data, at, 1));
+    }
+
+    #[test]
+    fn a_read_returns_exactly_as_many_records_as_asked_for() {
+        let mut log = log_with(6, 10_000);
+        log.sync().unwrap();
+        assert_eq!(log.read_from(1, 2).unwrap().len(), 2);
+        assert_eq!(log.read_from(1, 1).unwrap().len(), 1);
+        assert!(log.read_from(1, 0).unwrap().is_empty());
+        assert_eq!(log.read_from(1, 6).unwrap().len(), 6);
+        assert_eq!(log.read_from(1, 100).unwrap().len(), 6);
+    }
 }

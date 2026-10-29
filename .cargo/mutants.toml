@@ -20,6 +20,10 @@ exclude_re = [
     # The first comparison (`at > *t`) is not excluded: its `>=` lets a smaller value win a tie, and a
     # test catches it.
     "crdt\\.rs:\\d+:64: replace > with >= in LwwRegister<T>::set",
+    # `read_from` loops `while off < data.len() && ...`. At `off == data.len()` the decode finds no
+    # record and the loop breaks on the next line, so `<=` here reads nothing extra. The other `<`
+    # operands in the function (the read limit and the segment bounds) are tested.
+    "log\\.rs:\\d+:23: replace < with <= in Log<I>::read_from",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies

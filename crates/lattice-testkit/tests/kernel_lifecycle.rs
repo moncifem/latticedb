@@ -426,3 +426,72 @@ fn reading_notices_a_damaged_segment_header() {
     io.sync(&first).unwrap();
     assert!(k.read_from(1, 100).is_ok());
 }
+
+#[test]
+fn recovery_reports_how_many_segments_it_scanned() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    for i in 0..12 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 40])).unwrap();
+    }
+    drop(k);
+    let segments = disk
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .count();
+    assert!(segments > 1, "the small segment limit should have rotated");
+    let (_, report) = lattice_core::Log::open(disk.clone(), "wal", 400).unwrap();
+    assert_eq!(report.segments, segments);
+    assert_eq!(report.records, 12);
+}
+
+#[test]
+fn recovery_reports_the_bytes_it_cut_from_a_torn_tail() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    for i in 0..6 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 40])).unwrap();
+    }
+    drop(k);
+    let newest = disk
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .max()
+        .unwrap();
+    let mut io = disk.clone();
+    io.append(&format!("wal/{newest}"), &[0xAB; 9]).unwrap();
+    let (_, report) = lattice_core::Log::open(disk.clone(), "wal", 400).unwrap();
+    assert_eq!(report.truncated_bytes, 9);
+    assert_eq!(report.records, 6);
+}
+
+#[test]
+fn a_segment_whose_creation_was_torn_is_rewritten_and_counted() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    for i in 0..6 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 40])).unwrap();
+    }
+    drop(k);
+    let before = disk
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .count();
+    // The machine died while the next segment was being created: only part of its header exists.
+    let mut io = disk.clone();
+    io.append(&format!("wal/{:020}.seg", 7u64), &[1, 2, 3])
+        .unwrap();
+    let (_, report) = lattice_core::Log::open(disk.clone(), "wal", 400).unwrap();
+    assert_eq!(report.truncated_bytes, 3);
+    assert_eq!(report.segments, before + 1);
+    assert_eq!(report.records, 6);
+}
