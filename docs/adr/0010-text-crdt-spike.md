@@ -42,9 +42,9 @@ Phase 1 spike (`crdt::Rga`); the trait boundary has not been changed.
 
 Compaction drops only leaf tombstones: a tombstone that still anchors a remaining element stays, because
 removing it changes where later concurrent inserts land. It also needs a causal stability claim from the
-caller (a stable id plus an ack per replica); the document refuses to compact while operations are parked
-or when a known node has no ack, and cannot check the claim itself. The set of applied insert ids (with a
-content hash, to detect id reuse) is never compacted, so memory for it grows with every insert for the life
+caller (a stable id plus an ack per replica); the document refuses to compact while an operation at or below the stable id is parked
+or when a known node has no ack or an ack below its highest applied insert, and cannot check the rest of the claim itself. The set of applied insert ids (with a
+128 bit BLAKE3 content hash, to detect id reuse) is never compacted, so memory for it grows with every insert for the life
 of the document.
 
 Measured with `cargo test -p lattice-core --lib crdt_text::tests::measure -- --nocapture` on one

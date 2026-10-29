@@ -20,7 +20,14 @@
 //! - Deleting never removes an element. It records the *smallest* delete id seen, so concurrent
 //!   deletes agree, and "visible at point p" is `insert <= p < delete`.
 //! - Size is capped by [`Limits`]; going over is [`TextError::OpLimit`]. The applied-id set only
-//!   grows (it survives compaction so duplicates stay duplicates).
+//!   grows (it survives compaction so duplicates stay duplicates), so a document that has
+//!   received `max_inserts` inserts over its life refuses new ones even when empty; start a new
+//!   document (a snapshot-and-reset protocol is future work).
+//! - Content hashes are 128 bit BLAKE3 digests, unkeyed but collision resistant, so a peer
+//!   cannot cheaply forge two contents with one hash.
+//! - A parked operation that fails once its target arrives is dropped and counted in
+//!   [`Doc::rejected`]; that replica now differs from senders that accepted it, so callers
+//!   treat a non-zero count as a reason to resync.
 //!
 //! # Compaction and revert points
 //!
@@ -42,8 +49,11 @@
 //! replica issues after that moment is then causally after the deletes being dropped, and replicas
 //! only anchor inserts on, and delete, elements they can see. Operations a replica issued before
 //! that moment have ids at or below its ack, and this replica must have applied them. The
-//! document refuses to compact while operations are parked, or when an applied operation comes
-//! from a node with no ack ([`CompactError`]). If the proof is wrong a late reference to a dropped
+//! document refuses to compact while an operation at or below `stable` is parked
+//! ([`Doc::discard_pending`] clears such operations), when an applied insert comes from a node
+//! with no ack, or when a node's ack is below the highest insert applied from it
+//! ([`CompactError`]). Those are the only things it can check: ack values above that floor, and
+//! whether the list of nodes is complete, are taken on trust. If the proof is wrong a late reference to a dropped
 //! element is [`TextError::AnchorGone`] on this replica only, which is divergence; an already
 //! compacted delete is a harmless duplicate.
 //!
@@ -185,9 +195,9 @@ pub enum TextError {
     /// Too many operations are parked in total.
     #[error("too many pending operations")]
     PendingFull,
-    /// Too many operations are parked for one origin node.
-    #[error("too many pending operations from node {0}")]
-    PendingQuota(u32),
+    /// Too many operations are parked for one quota key (the node id, or the caller's key).
+    #[error("too many pending operations for quota key {0}")]
+    PendingQuota(u64),
     /// The document reached a size cap in [`Limits`].
     #[error("document size limit reached")]
     OpLimit,
@@ -199,12 +209,17 @@ pub enum TextError {
 /// Why [`Doc::compact`] refused to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CompactError {
-    /// Operations are parked, so some replica has sent something this one cannot place yet.
-    #[error("operations are still pending")]
+    /// An operation at or below the stable id is parked, so the stability claim is false or this
+    /// replica is missing history. Fill the gap or call [`Doc::discard_pending`].
+    #[error("operations at or below the stable id are still pending")]
     Pending,
     /// An applied operation comes from a node that has no ack in the frontier.
     #[error("no ack for node {0}")]
     MissingAck(u32),
+    /// A node's ack is below the highest insert this replica has applied from it, so the ack
+    /// cannot describe a moment after that node issued it.
+    #[error("ack for node {0} is behind an applied insert")]
+    AckBehind(u32),
 }
 
 /// What [`Doc::apply`] did with an operation.
@@ -228,23 +243,24 @@ pub struct Frontier {
     pub acks: BTreeMap<u32, Hlc>,
 }
 
-fn fnv1a(seed: u64, bytes: &[u8]) -> u64 {
-    bytes.iter().fold(seed, |h, b| {
-        (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
-}
-
-fn content_hash(after: Option<ElemId>, text: &str) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
+/// A 128 bit BLAKE3 digest of an insert's content (anchor and text), used to detect an id being
+/// reused for different content. BLAKE3 is already a dependency of this crate.
+fn content_hash(after: Option<ElemId>, text: &str) -> [u8; 16] {
+    let mut h = blake3::Hasher::new();
     match after {
-        None => h = fnv1a(h, &[0]),
+        None => {
+            h.update(&[0]);
+        }
         Some(a) => {
-            h = fnv1a(h, &[1]);
-            h = fnv1a(h, &a.op.to_bytes());
-            h = fnv1a(h, &a.off.to_le_bytes());
+            h.update(&[1]);
+            h.update(&a.op.to_bytes());
+            h.update(&a.off.to_le_bytes());
         }
     }
-    fnv1a(h, text.as_bytes())
+    h.update(text.as_bytes());
+    let mut out = [0u8; 16];
+    out.copy_from_slice(h.finalize().as_bytes().get(..16).unwrap_or(&[0; 16]));
+    out
 }
 
 impl Op {
@@ -430,7 +446,7 @@ impl Elem {
 #[derive(Debug, Clone, Copy)]
 struct Meta {
     after: Option<ElemId>,
-    hash: u64,
+    hash: [u8; 16],
 }
 
 /// What [`Doc::compact`] did.
@@ -456,12 +472,12 @@ pub struct Doc {
     elems: Vec<Elem>,
     /// Every insert ever applied, kept across compaction so duplicates stay duplicates.
     applied: BTreeMap<Hlc, Meta>,
-    /// Parked operations by the insert id they wait for.
-    parked: BTreeMap<Hlc, Vec<Op>>,
-    /// Parked operation id to the id it waits for.
-    parked_ids: BTreeMap<Hlc, Hlc>,
-    /// Parked operations per origin node.
-    parked_by_node: BTreeMap<u32, usize>,
+    /// Parked operations (with their quota key) by the insert id they wait for.
+    parked: BTreeMap<Hlc, Vec<(u64, Op)>>,
+    /// Parked operation id to the id it waits for and its quota key.
+    parked_ids: BTreeMap<Hlc, (Hlc, u64)>,
+    /// Parked operations per quota key.
+    parked_by_key: BTreeMap<u64, usize>,
     /// Parked operations dropped because they turned out unusable.
     rejected: usize,
     limits: Limits,
@@ -481,8 +497,17 @@ impl Doc {
         }
     }
 
-    /// Applies an operation in any delivery order, any number of times.
+    /// Applies an operation in any delivery order, any number of times. Parked operations are
+    /// counted against a quota keyed by the id's node, which the sender chooses: the transport
+    /// must bind node ids to authenticated peers, or use [`Doc::apply_keyed`].
     pub fn apply(&mut self, op: Op) -> Result<Outcome, TextError> {
+        let key = u64::from(op.id().node);
+        self.apply_keyed(key, op)
+    }
+
+    /// Like [`Doc::apply`], with a caller-chosen quota key (for example an authenticated
+    /// connection id) instead of the self-declared node id.
+    pub fn apply_keyed(&mut self, quota_key: u64, op: Op) -> Result<Outcome, TextError> {
         op.validate().map_err(TextError::Op)?;
         match self.try_apply(&op)? {
             Step::Duplicate => Ok(Outcome::Duplicate),
@@ -493,19 +518,19 @@ impl Doc {
                 Ok(Outcome::Applied)
             }
             Step::Wait(awaited) => {
-                self.park(op, awaited)?;
+                self.park(quota_key, op, awaited)?;
                 Ok(Outcome::Pending)
             }
         }
     }
 
-    fn park(&mut self, op: Op, awaited: Hlc) -> Result<(), TextError> {
+    fn park(&mut self, key: u64, op: Op, awaited: Hlc) -> Result<(), TextError> {
         let id = op.id();
-        if let Some(prev) = self.parked_ids.get(&id) {
+        if let Some((prev, _)) = self.parked_ids.get(&id) {
             let same = self
                 .parked
                 .get(prev)
-                .is_some_and(|bucket| bucket.contains(&op));
+                .is_some_and(|bucket| bucket.iter().any(|(_, o)| *o == op));
             return if same {
                 Ok(())
             } else {
@@ -515,36 +540,66 @@ impl Doc {
         if self.parked_ids.len() >= MAX_PENDING {
             return Err(TextError::PendingFull);
         }
-        let count = self.parked_by_node.entry(id.node).or_insert(0);
+        let count = self.parked_by_key.entry(key).or_insert(0);
         if *count >= MAX_PENDING_PER_ORIGIN {
-            return Err(TextError::PendingQuota(id.node));
+            return Err(TextError::PendingQuota(key));
         }
         *count += 1;
-        self.parked_ids.insert(id, awaited);
-        self.parked.entry(awaited).or_default().push(op);
+        self.parked_ids.insert(id, (awaited, key));
+        self.parked.entry(awaited).or_default().push((key, op));
         Ok(())
     }
 
+    fn unpark_bookkeeping(&mut self, id: Hlc, key: u64) {
+        self.parked_ids.remove(&id);
+        if let Some(c) = self.parked_by_key.get_mut(&key) {
+            *c = c.saturating_sub(1);
+            if *c == 0 {
+                self.parked_by_key.remove(&key);
+            }
+        }
+    }
+
     /// Retries everything that was waiting for `first`, and for whatever that in turn unblocks.
+    /// A parked operation that turns out unusable (its anchor is gone, a cap was reached, its id
+    /// clashes) is dropped and counted in [`Doc::rejected`]; the sender has to resync.
     fn release(&mut self, first: Hlc) {
         let mut ready: VecDeque<Hlc> = VecDeque::from([first]);
         while let Some(done) = ready.pop_front() {
-            for op in self.parked.remove(&done).unwrap_or_default() {
-                self.parked_ids.remove(&op.id());
-                if let Some(c) = self.parked_by_node.get_mut(&op.id().node) {
-                    *c = c.saturating_sub(1);
-                    if *c == 0 {
-                        self.parked_by_node.remove(&op.id().node);
+            for (key, op) in self.parked.remove(&done).unwrap_or_default() {
+                self.unpark_bookkeeping(op.id(), key);
+                match self.try_apply(&op) {
+                    Ok(Step::Applied) => {
+                        if matches!(op, Op::Insert { .. }) {
+                            ready.push_back(op.id());
+                        }
                     }
-                }
-                // A parked operation that turns out unusable is dropped, never retried.
-                if matches!(self.try_apply(&op), Ok(Step::Applied))
-                    && matches!(op, Op::Insert { .. })
-                {
-                    ready.push_back(op.id());
+                    Ok(Step::Duplicate) => {}
+                    Ok(Step::Wait(_)) | Err(_) => self.rejected += 1,
                 }
             }
         }
+    }
+
+    /// Drops every parked operation with an id at or below `up_to` and returns how many. Use it
+    /// when the history they wait for will never arrive.
+    pub fn discard_pending(&mut self, up_to: Hlc) -> usize {
+        let doomed: Vec<(Hlc, Hlc, u64)> = self
+            .parked_ids
+            .iter()
+            .filter(|(id, _)| **id <= up_to)
+            .map(|(id, (awaited, key))| (*id, *awaited, *key))
+            .collect();
+        for (id, awaited, key) in &doomed {
+            self.unpark_bookkeeping(*id, *key);
+            if let Some(bucket) = self.parked.get_mut(awaited) {
+                bucket.retain(|(_, o)| o.id() != *id);
+                if bucket.is_empty() {
+                    self.parked.remove(awaited);
+                }
+            }
+        }
+        doomed.len()
     }
 
     fn index_of(&self, id: ElemId) -> Option<usize> {
@@ -694,16 +749,20 @@ impl Doc {
         frontier: &Frontier,
         retained: &[Hlc],
     ) -> Result<Compaction, CompactError> {
-        if !self.parked_ids.is_empty() {
+        if self.parked_ids.keys().any(|id| *id <= frontier.stable) {
             return Err(CompactError::Pending);
         }
-        if let Some(node) = self
-            .applied
-            .keys()
-            .map(|id| id.node)
-            .find(|n| !frontier.acks.contains_key(n))
-        {
-            return Err(CompactError::MissingAck(node));
+        let mut highest: BTreeMap<u32, Hlc> = BTreeMap::new();
+        for id in self.applied.keys() {
+            let e = highest.entry(id.node).or_insert(*id);
+            *e = (*e).max(*id);
+        }
+        for (node, top) in &highest {
+            match frontier.acks.get(node) {
+                None => return Err(CompactError::MissingAck(*node)),
+                Some(ack) if ack < top => return Err(CompactError::AckBehind(*node)),
+                Some(_) => {}
+            }
         }
         let before = self.elems.len();
         let applied = &self.applied;
@@ -1045,6 +1104,61 @@ mod tests {
     }
 
     #[test]
+    fn released_operations_that_fail_are_counted() {
+        let mut d = Doc::new();
+        // Parked on op (1,1); once it arrives, offset 5 does not exist in its one-char chunk.
+        let bad = ins(h(2, 2), Some(el(h(1, 1), 5)), "x");
+        assert_eq!(d.apply(bad).unwrap(), Outcome::Pending);
+        assert_eq!(d.rejected(), 0);
+        d.apply(ins(h(1, 1), None, "a")).unwrap();
+        assert_eq!(d.pending(), 0);
+        assert_eq!(d.rejected(), 1);
+        assert_eq!(d.text(), "a");
+    }
+
+    #[test]
+    fn ack_values_are_checked_against_applied_inserts() {
+        let mut d = Doc::new();
+        d.apply(ins(h(5, 1), None, "a")).unwrap();
+        let mut f = fr(h(9, 0), &[1]);
+        f.acks.insert(1, h(4, 1));
+        assert_eq!(d.compact(&f, &[]), Err(CompactError::AckBehind(1)));
+        f.acks.insert(1, h(5, 1));
+        assert!(d.compact(&f, &[]).is_ok());
+    }
+
+    #[test]
+    fn only_pending_ops_at_or_below_stable_block_compaction() {
+        let mut d = Doc::new();
+        d.apply(ins(h(1, 1), None, "a")).unwrap();
+        // Parked, id 7 and id 30, both waiting for history that never arrives.
+        d.apply(ins(h(7, 1), Some(el(h(5, 1), 0)), "x")).unwrap();
+        d.apply(ins(h(30, 1), Some(el(h(6, 1), 0)), "y")).unwrap();
+        let f = fr(h(10, 0), &[1]);
+        assert_eq!(d.compact(&f, &[]), Err(CompactError::Pending));
+        assert_eq!(d.discard_pending(h(10, 0)), 1);
+        assert_eq!(d.pending(), 1);
+        assert!(d.compact(&f, &[]).is_ok());
+        // The remaining one is still parked and still resolves when its target shows up.
+        d.apply(ins(h(6, 1), None, "b")).unwrap();
+        assert_eq!(d.pending(), 0);
+        assert_eq!(d.text(), "bya");
+    }
+
+    #[test]
+    fn quota_key_can_be_chosen_by_the_caller() {
+        let mut d = Doc::new();
+        for i in 0..MAX_PENDING_PER_ORIGIN as u64 {
+            // Each id claims a different node, but they all arrive on one connection.
+            let node = u32::try_from(i).unwrap() + 1;
+            let op = ins(h(100 + i, node), Some(el(h(50, 99), 0)), "x");
+            assert_eq!(d.apply_keyed(42, op).unwrap(), Outcome::Pending);
+        }
+        let over = ins(h(9999, 5000), Some(el(h(50, 99), 0)), "x");
+        assert_eq!(d.apply_keyed(42, over), Err(TextError::PendingQuota(42)));
+    }
+
+    #[test]
     fn encode_refuses_invalid_ops() {
         let long = "x".repeat(MAX_CHUNK_CHARS + 1);
         assert_eq!(
@@ -1329,9 +1443,13 @@ mod tests {
                     Err(e) => prop_assert!(false, "unexpected {e}"),
                 }
             }
+            // A parked late op that named a dropped element is counted, not silent: that is the
+            // contract violation, so only those cases are skipped.
             if compacted.rejected() > 0 {
                 return Ok(());
             }
+            prop_assert_eq!(whole.rejected(), 0);
+            prop_assert_eq!(compacted.pending(), 0);
             prop_assert_eq!(compacted.text(), whole.text());
             let max = ops.iter().map(Op::id).max().unwrap();
             prop_assert_eq!(compacted.text(), oracle(&ops, max, true));
