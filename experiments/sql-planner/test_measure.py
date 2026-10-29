@@ -91,4 +91,36 @@ class SharedCompileBoundary(unittest.TestCase):
             self.assertFalse(report['measurements_complete'])
             self.assertIn('compile preflight failed',report['failures'][0]['coordinator'])
 
+class SemanticScope(unittest.TestCase):
+    def test_semantic_confirmation_never_selects_datafusion_or_performance_evidence(self):
+        from criteria import assess
+        for cached in (False,True):
+            scope=measure.execution_scope(True,cached)
+            self.assertEqual(scope['candidates'],['custom','parser'])
+            self.assertTrue(scope['cached'])
+            self.assertFalse(scope['performance_evidence'])
+            self.assertFalse(scope['clean_build_evidence'])
+        result=assess({'measurement_mode':'semantic_confirmation','candidate_scope':['custom','parser'],
+                       'candidates':{'custom':{'C5_dependency_review':True,'C5_added_build_under_60s':True}}})
+        self.assertEqual(set(result['candidates']),{'custom','parser'})
+        for row in result['candidates'].values():
+            self.assertIn('not measured',row['C4']['status'])
+            self.assertIn('not measured',row['C5']['status'])
+            self.assertIsNone(row['C5']['dependency_policy'])
+
+    def test_default_full_measurement_still_selects_all_candidates(self):
+        scope=measure.execution_scope(False,False)
+        self.assertEqual(scope['candidates'],['custom','parser','datafusion'])
+        self.assertFalse(scope['cached'])
+        self.assertTrue(scope['performance_evidence'])
+        self.assertTrue(scope['clean_build_evidence'])
+
+    def test_parameter_transport_preserves_types_and_signed_bounds(self):
+        self.assertEqual(measure.parameter(None),'Null')
+        self.assertEqual(measure.parameter(True),{'Bool':True})
+        self.assertEqual(measure.parameter('text'),{'Text':'text'})
+        self.assertEqual(measure.parameter(-(2**63)),{'Int':-(2**63)})
+        for invalid in (1.5,2**63,{},[]):
+            with self.assertRaises(ValueError):measure.parameter(invalid)
+
 if __name__=='__main__':unittest.main()

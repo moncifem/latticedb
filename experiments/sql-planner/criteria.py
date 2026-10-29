@@ -6,7 +6,7 @@ QUERIES = {'point', 'range_10000', 'join', 'group'}
 
 def assess(report):
     result = {}
-    for name in ('custom', 'parser', 'datafusion'):
+    for name in report.get('candidate_scope', ('custom', 'parser', 'datafusion')):
         row = report.get('candidates', {}).get(name, {})
         queries = row.get('postgres_comparison', {}).get('queries', [])
         measured = {query.get('query'): query for query in queries}
@@ -47,4 +47,10 @@ def assess(report):
             'C7': {'status': 'qualified written assessment',
                    'evidence': 'README.md: correlated binding and window operators not implemented; no no-rewrite proof'},
         }
+    if report.get('measurement_mode') == 'semantic_confirmation':
+        for row in result.values():
+            row['C4']={'status':'not measured in semantic_confirmation','same_runner_postgres_3x':'not measured',
+                       'recomputed_median_client_ratios':{},'phase1_regression':'not measured'}
+            row['C5']={'status':'not measured in semantic_confirmation','added_clean_build_under_60s':None,
+                       'dependency_policy':None,'engine_runtime':'not measured'}
     return {'ADR_status': 'proposed', 'automatic_acceptance': False, 'candidates': result}

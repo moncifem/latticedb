@@ -68,6 +68,21 @@ def source_hints(metadata_path, output):
     save(output,value)
     return {'status':'manual call-path review required','hint_file':output.name,'total_matching_lines':total,'truncated':value['truncated']}
 
+def parameter(value):
+    if value is None:return 'Null'
+    if type(value) is bool:return {'Bool':value}
+    if type(value) is str:return {'Text':value}
+    if type(value) is int and -(2**63)<=value<2**63:return {'Int':value}
+    raise ValueError('unsupported parameter type or bigint bound')
+
+
+def execution_scope(semantic_only, functional_retry):
+    return {'candidates':['custom','parser'] if semantic_only else list(FEATURES),
+            'cached':semantic_only or functional_retry,
+            'mode':'semantic_confirmation' if semantic_only else 'functional_retry' if functional_retry else 'clean_build',
+            'performance_evidence':not semantic_only,
+            'clean_build_evidence':not (semantic_only or functional_retry)}
+
 def scalar_rows(rows):
     if type(rows) is not list or any(type(row) is not list for row in rows):
         raise ValueError('result must be a complete row array')
@@ -118,7 +133,7 @@ class Host:
             raise RuntimeError(value)
         return value
     def submit(self, sql, params=(), prepared=False, commit_barrier=None):
-        request={'sql':sql,'params':[{'Int':n}for n in params],'prepared':prepared}
+        request={'sql':sql,'params':[parameter(value)for value in params],'prepared':prepared}
         if commit_barrier is not None:request['commit_barrier']=commit_barrier
         self.proc.stdin.write(json.dumps(request)+'\n')
         self.proc.stdin.flush()
@@ -183,6 +198,9 @@ def representatives(binary,candidate,root,output,dsn,rows):
                 assert same_rows(actual,expected),(candidate,name,actual[:5],expected[:5])
                 cases.append({'construct':name,'sql':sql,'postgres_sql':reference,'params':params,'prepared':prepared,'client_ns':elapsed,'engine_ns':engine,'row_count':len(actual),'results_match':True})
             run('join_filter','SELECT tickets.id, users.name FROM tickets INNER JOIN users ON tickets.owner = users.id WHERE tickets.priority >= $1 ORDER BY tickets.id LIMIT 5',(5,))
+            run('boolean_parameter','SELECT id FROM tickets WHERE $1 OR NULL ORDER BY id LIMIT 2',(True,))
+            run('null_parameter','SELECT id FROM tickets WHERE $1 ORDER BY id',(None,))
+            run('text_parameter', 'SELECT id FROM users WHERE name = $1',('user003',))
             run('ascending_nulls_last','SELECT id, priority > 5 OR NULL FROM tickets WHERE id < 8 ORDER BY (priority > 5 OR NULL), id')
             run('group_having','SELECT owner, COUNT(*) FROM tickets GROUP BY owner HAVING COUNT(*) >= $1 ORDER BY owner',(1,))
             run('update_returning','UPDATE tickets SET priority = priority + 1 WHERE id = $1 RETURNING id, priority',(2,))
@@ -281,10 +299,11 @@ def deny_command(features):
     if features:args+=['--features',','.join(features)]
     return args+['check']
 
-def preflight(dsn,output):
+def preflight(dsn,output,candidates=None):
     import psycopg
     checks=[]
-    for candidate,features in FEATURES.items():
+    for candidate in candidates or FEATURES:
+        features=FEATURES[candidate]
         check=command(deny_command(features)+['--help'],output/f'{candidate}-deny-cli-preflight.log',timeout=30)
         checks.append(check)
         if check['exit']!=0:raise RuntimeError(f'cargo deny CLI preflight failed for {candidate}')
@@ -298,17 +317,18 @@ def preflight(dsn,output):
     return {'complete':True,'deny_cli':checks,'postgres_parameterized_seed':True}
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);parser.add_argument('--target-root',type=pathlib.Path,required=True);parser.add_argument('--dsn',required=True);parser.add_argument('--functional-retry',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);parser.add_argument('--target-root',type=pathlib.Path,required=True);parser.add_argument('--dsn',required=True);parser.add_argument('--functional-retry',action='store_true');parser.add_argument('--semantic-only',action='store_true');args=parser.parse_args()
+    scope=execution_scope(args.semantic_only,args.functional_retry)
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True);target=args.target_root.resolve();target.mkdir(parents=True,exist_ok=True)
-    if not args.functional_retry and any(target.iterdir()):raise RuntimeError('clean build requires an empty target root')
-    report={'schema_version':3,'result_codec':RESULT_CODEC,'measurement_mode':'functional_retry' if args.functional_retry else 'clean_build','clean_build_evidence':not args.functional_retry,'functional_cache_hit':os.environ.get('FUNCTIONAL_CACHE_HIT') if args.functional_retry else None,'ADR_status':'proposed','criteria':{'C1':{'effort_days':None,'budget':None,'status':'unresolved: missing ADR budget and no retrospective effort estimate'},'C2':{'source_audit':'required; matching observable traces does not prove no randomized hashing'},'C7':{'status':'written hypothesis in README; full-subset feasibility remains unproven'}},'runner':{'platform':platform.platform(),'python':sys.version,'cpu_count':os.cpu_count()},'candidates':{},'failures':[]}
+    if not scope['cached'] and any(target.iterdir()):raise RuntimeError('clean build requires an empty target root')
+    report={'schema_version':3,'result_codec':RESULT_CODEC,'measurement_mode':scope['mode'],'candidate_scope':scope['candidates'],'C4_measurement_evidence':scope['performance_evidence'],'C5_measurement_evidence':not args.semantic_only,'clean_build_evidence':scope['clean_build_evidence'],'functional_cache_hit':os.environ.get('FUNCTIONAL_CACHE_HIT') if scope['cached'] else None,'ADR_status':'proposed','criteria':{'C1':{'effort_days':None,'budget':None,'status':'unresolved: missing ADR budget and no retrospective effort estimate'},'C2':{'source_audit':'required; matching observable traces does not prove no randomized hashing'},'C7':{'status':'written hypothesis in README; full-subset feasibility remains unproven'}},'runner':{'platform':platform.platform(),'python':sys.version,'cpu_count':os.cpu_count()},'candidates':{},'failures':[]}
     data_root=pathlib.Path(tempfile.mkdtemp(prefix='lattice-planner-run-data-'))
     try:
         inputs=[p for p in HERE.rglob('*') if p.is_file() and not {'target','functional-target','__pycache__'}.intersection(p.parts)]
         report['input_sha256']={str(p.relative_to(HERE)):hashlib.sha256(p.read_bytes()).hexdigest()for p in inputs}
         report['revision']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=HERE,text=True).strip()
         report['status_before']=subprocess.check_output(['git','status','--porcelain'],cwd=HERE,text=True)
-        report['preflight']=preflight(args.dsn,out)
+        report['preflight']=preflight(args.dsn,out,scope['candidates'])
         save(out/'report.json',report)
         # Registry prefetch is separate; clean mode alone uses fresh compiler targets.
         fetch=command(['cargo','fetch','--locked','--manifest-path',str(MANIFEST)],out/'fetch.log');report['registry_prefetch']=fetch
@@ -320,16 +340,17 @@ def main():
         if report['shared_compile_preflight']['exit']!=0:
             raise RuntimeError('shared experiment compile preflight failed; no candidate measurement attempted')
         baseline_manifest=HERE/'bridge-baseline/Cargo.toml'
-        if args.functional_retry:
+        if scope['cached']:
             baseline=None
             report['bridge_build']={'status':'not measured in functional retry'}
         else:
             report['bridge_fetch']=command(['cargo','fetch','--locked','--manifest-path',str(baseline_manifest)],out/'bridge-fetch.log')
             if report['bridge_fetch']['exit']!=0:raise RuntimeError('bridge registry prefetch failed')
             baseline=command(['cargo','build','--locked','--release','--timings','--manifest-path',str(baseline_manifest),'--target-dir',str(target/'bridge')],out/'bridge-build.log');report['bridge_build']=baseline
-        for candidate,features in FEATURES.items():
+        for candidate in scope['candidates']:
+            features=FEATURES[candidate]
             row={'features':features};report['candidates'][candidate]=row
-            candidate_target=target if args.functional_retry else target/candidate
+            candidate_target=target if scope['cached'] else target/candidate
             try:
                 build=['cargo','build','--locked','--release','--timings','--manifest-path',str(MANIFEST),'--target-dir',str(candidate_target)]
                 if features:build+=['--features',','.join(features)]
@@ -337,10 +358,10 @@ def main():
                 row['C5_dependency_review']=row['deny']['exit']==0
                 if not row['C5_dependency_review']:report['failures'].append({'candidate':candidate,'stage':'C5_dependency_review','error':'cargo deny failed; raw findings retained, no policy exception'})
                 row['deny_graph']='exact candidate feature graph; no blanket exclusions'
-                build_key='functional_build' if args.functional_retry else 'clean_build'
+                build_key='functional_build' if scope['cached'] else 'clean_build'
                 row[build_key]=command(build,out/f'{candidate}-build.log')
                 if row[build_key]['exit']!=0:raise RuntimeError('candidate build failed (raw log retained)')
-                if args.functional_retry:
+                if scope['cached']:
                     row['C5_build_status']='not measured: target may be restored/cached'
                 else:
                     row['added_clean_build_s_vs_bridge']=row['clean_build']['elapsed_s']-baseline['elapsed_s'] if baseline['exit']==0 else None
@@ -373,7 +394,11 @@ def main():
                 row['sim_runs']=sims
                 if all(r['exit']==0 for r in sims):
                     a=json.loads((out/f'{candidate}-sim-0.json').read_text());b=json.loads((out/f'{candidate}-sim-1.json').read_text());row['C2_raw_trace_repeat_equal']=a['run']['trace']==b['run']['trace'];row['representatives_complete_without_runtime']=a['run']['positive_cases_complete'];row['C6_negative_fixtures_match']=a['run']['C6_negative_fixtures_match'];row['C2_status']='execution failed without runtime' if not a['run']['positive_cases_complete'] else 'observable execution/trace checks only; randomized-hash source audit unverified'
-                stages=[('representative_differential',lambda:representatives(binary,candidate,data_root/f'{candidate}-representatives',out,args.dsn,20000)),('postgres_comparison',lambda:benchmark(binary,candidate,data_root/f'{candidate}-data',out,args.dsn,20000))]
+                stages=[('representative_differential',lambda:representatives(binary,candidate,data_root/f'{candidate}-representatives',out,args.dsn,20000))]
+                if args.semantic_only:
+                    row['postgres_comparison']={'status':'not measured in semantic_confirmation; no C4 evidence'}
+                else:
+                    stages.append(('postgres_comparison',lambda:benchmark(binary,candidate,data_root/f'{candidate}-data',out,args.dsn,20000)))
                 for stage,operation in stages:
                     try:row[stage]=operation()
                     except BaseException as error:

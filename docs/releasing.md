@@ -210,3 +210,13 @@ This change does not alter the mutation universe, exclusions, budgets or schedul
 manual focused workflow has its own package-only diagnostic baseline and remains outside
 weekly score ingestion. Mocked fixture validation is not a completed hosted baseline or
 mutation campaign; inspect fresh raw artifacts before making a measured coverage claim.
+### Planner experiment semantic confirmation
+
+The isolated `sql-planner-spike` comparison can be called through `io-probe.yml` with
+`sql_planner=true` and `semantic_only=true` on its experiment branch. This explicit mode builds only
+custom/parser, then checks conformance, simulator traces, PostgreSQL semantic cases and process-kill
+recovery. Reports identify `semantic_confirmation`, exclude DataFusion execution, skip the four-query
+performance comparison and suppress C4/C5 assessment. It supplies no clean-build or ADR-acceptance
+claim. Default full measurement still selects all three candidates; cached functional runs remain
+explicit and cannot replace clean-target C5 evidence. See `experiments/sql-planner/SEMANTICS_AUDIT.md`
+for bounded coverage and remaining gaps.

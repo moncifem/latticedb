@@ -211,3 +211,30 @@ and non-NULL client cells, rather than only testing their placement before a lim
 semantic checks need their own fresh confirmation; no ratios above are attributed to an unmeasured
 source. C1 effort/budget, the Phase 1 baseline, C7's qualified assessment and independent final review
 remain unresolved. ADR 0013 stays proposed.
+
+## Binding-guard confirmation before the batched type audit
+
+[Run 40904476774](https://github.com/moncifem/latticedb/actions/runs/40904476774), source
+`a83c974bf9799c563ca8c747fab284b8ef3f7785`, completed all candidate conformance, fifteen negative
+fixtures, repeated simulator traces, full PostgreSQL comparisons and process-kill/reopen cases.
+The nullable-boolean PostgreSQL case returned eight rows, checking both NULL and non-NULL client
+values against the independent reference. Artifact `12910752906` was verified against ZIP SHA256
+`7d232808722ab9bd62b4ed55fed476cbef37989bc142335c04cefc14fd6996c0`.
+
+| Candidate | Point ratio | 10,000-row range ratio | Join ratio | Group ratio |
+|---|---:|---:|---:|---:|
+| custom | 0.3984 | 2.0053 | 2.8142 | 2.3818 |
+| sqlparser + custom | 0.5532 | 1.7617 | 2.9435 | 2.6401 |
+| DataFusion | 2.3865 | 1.6115 | 2.3081 | 2.4585 |
+
+All twelve PostgreSQL ratios meet 3x again; the parser join margin remains small. The sole recorded
+workflow failure was DataFusion's zstd dependency policy. Historical failures, its strict C2 finding,
+and the missing Phase 1 SQL baseline remain. These measurements precede the subsequent batched
+actual-parameter/type validation and are not attributed to that later source.
+
+The next iteration uses the explicit custom/parser-only `semantic_confirmation` mode. It validates
+integer/text/boolean/NULL parameter transport, type errors even on empty inputs, strict predicates,
+prepared rebind guards and absence of writes on validation failure. This mode does not run C4
+benchmarks, supplies no C5 criterion result, does not build DataFusion and cannot accept the ADR.
+The complete bounded audit and remaining scope limits are in SEMANTICS_AUDIT.md. Final full
+confirmation follows code freeze and independent review, with default full measurement unchanged.

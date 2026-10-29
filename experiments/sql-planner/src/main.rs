@@ -86,6 +86,7 @@ impl Driver {
         {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if prepared && matches!(plan, Plan::Insert { .. }) {
+                    execute::check_types(&plan, params)?;
                     if !self.fusion_cache.contains_key(sql) {
                         let future =
                             lattice_sql_planner_spike::fusion::PreparedInsert::prepare(&plan);

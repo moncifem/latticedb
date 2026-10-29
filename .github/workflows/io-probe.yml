@@ -13,6 +13,10 @@ on:
         description: Cached planner functional retry; never clean-build evidence
         type: boolean
         default: false
+      semantic_only:
+        description: Planner-only custom/parser semantics; no performance or build-weight evidence
+        type: boolean
+        default: false
       scorecard_source_run:
         description: "Replay retained evidence from a completed nightly run; empty runs the normal I/O probes"
         required: false
@@ -120,3 +124,4 @@ jobs:
     uses: ./.github/workflows/sql-planner-spike.yml
     with:
       functional_retry: ${{ inputs.functional_retry }}
+      semantic_only: ${{ inputs.semantic_only }}

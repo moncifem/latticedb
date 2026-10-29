@@ -213,6 +213,14 @@ fn optimized_relational_edges(parse: Parse) {
             vec![vec![Value::Int(0)]],
         ),
         (
+            "SELECT tickets.id FROM tickets INNER JOIN users ON NULL",
+            vec![],
+        ),
+        (
+            "SELECT tickets.id FROM tickets INNER JOIN users ON tickets.owner = users.id OR NULL WHERE tickets.id = 2",
+            vec![vec![Value::Int(2)]],
+        ),
+        (
             "SELECT tickets.id, users.id FROM tickets INNER JOIN users ON tickets.id < users.id WHERE users.id < 2 AND tickets.id >= 0 ORDER BY tickets.id",
             vec![vec![Value::Int(0), Value::Int(1)]],
         ),
@@ -221,7 +229,12 @@ fn optimized_relational_edges(parse: Parse) {
             vec![vec![Value::Int(-2)], vec![Value::Int(3)]],
         ),
     ] {
-        assert_eq!(run(sql, &[Value::Int(-2)]), expected, "{sql}");
+        let params = if sql.contains("$1") {
+            vec![Value::Int(-2)]
+        } else {
+            vec![]
+        };
+        assert_eq!(run(sql, &params), expected, "{sql}");
     }
     assert_eq!(
         run("SELECT id FROM tickets WHERE id = $1", &[Value::Int(2)]),
@@ -309,4 +322,112 @@ fn custom_optimized_bounds_join_and_group_edges() {
 #[test]
 fn sqlparser_optimized_bounds_join_and_group_edges() {
     optimized_relational_edges(lattice_sql_planner_spike::parsed::parse);
+}
+
+fn bounded_type_edges(parse: Parse) {
+    let mut db = Db::open(
+        SimIo::new(71, FaultProfile::clean()),
+        SimClock::new(1000),
+        SeededRng::new(72),
+    )
+    .unwrap();
+    db.seed(0).unwrap();
+    let mut session = Session::default();
+    let receipts = db.receipts.len();
+    for (sql, params, state) in [
+        (
+            "SELECT id FROM tickets WHERE NULL OR $1",
+            vec![Value::Int(1)],
+            "0A000",
+        ),
+        (
+            "SELECT id FROM tickets WHERE $1 AND NULL",
+            vec![Value::Int(0)],
+            "0A000",
+        ),
+        (
+            "SELECT id FROM tickets WHERE $1",
+            vec![Value::Int(1)],
+            "0A000",
+        ),
+        ("SELECT id FROM users WHERE name = 1", vec![], "0A000"),
+        ("SELECT name + 1 FROM users", vec![], "0A000"),
+        (
+            "UPDATE tickets SET priority = $1",
+            vec![Value::Text("wrong".into())],
+            "0A000",
+        ),
+        (
+            "INSERT INTO tickets(id,owner,priority) VALUES($1,2,3)",
+            vec![Value::Text("wrong".into())],
+            "0A000",
+        ),
+        ("SELECT id FROM tickets WHERE id = $1", vec![], "42601"),
+        ("SELECT id FROM tickets", vec![Value::Int(1)], "42601"),
+        ("BEGIN", vec![Value::Int(1)], "42601"),
+    ] {
+        let error = execute(&mut db, &mut session, &parse(sql).unwrap(), &params).unwrap_err();
+        assert_eq!(error.state, state, "{sql}");
+        assert_eq!(
+            error.code,
+            if state == "42601" {
+                "LSQL-0001"
+            } else {
+                "LSQL-0002"
+            },
+            "{sql}"
+        );
+        assert_eq!(
+            db.receipts.len(),
+            receipts,
+            "invalid request appended WAL: {sql}"
+        );
+        assert!(
+            session.tx.is_none(),
+            "invalid request began a transaction: {sql}"
+        );
+        assert!(
+            session.pending.is_empty(),
+            "invalid request staged rows: {sql}"
+        );
+    }
+    for (sql, params, expected) in [
+        (
+            "SELECT id FROM tickets WHERE $1 OR NULL",
+            vec![Value::Bool(true)],
+            vec![],
+        ),
+        ("SELECT id FROM tickets WHERE $1", vec![Value::Null], vec![]),
+        (
+            "SELECT id FROM users WHERE name = $1",
+            vec![Value::Text("user003".into())],
+            vec![vec![Value::Int(3)]],
+        ),
+        (
+            "SELECT $1 FROM users WHERE id = 3",
+            vec![Value::Bool(true)],
+            vec![vec![Value::Bool(true)]],
+        ),
+        (
+            "SELECT NULL FROM users WHERE id = 3",
+            vec![],
+            vec![vec![Value::Null]],
+        ),
+    ] {
+        assert_eq!(
+            execute(&mut db, &mut session, &parse(sql).unwrap(), &params).unwrap(),
+            expected,
+            "{sql}"
+        );
+    }
+    assert_eq!(db.receipts.len(), receipts);
+}
+#[test]
+fn custom_validates_bounded_types_and_parameters_before_empty_scans() {
+    bounded_type_edges(custom::parse);
+}
+#[cfg(feature = "parser")]
+#[test]
+fn sqlparser_validates_bounded_types_and_parameters_before_empty_scans() {
+    bounded_type_edges(lattice_sql_planner_spike::parsed::parse);
 }

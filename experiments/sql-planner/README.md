@@ -164,3 +164,19 @@ establishes that a rewrite will or will not be necessary. C7 stays a qualified w
 Do not accept ADR 0013, change production dependencies, freeze the SQL subset, infer the pivot
 trigger, or declare Phase 2 readiness from parsing alone, this source tree, a green compile or a small
 local simulator run. Review the actual manual CI artifacts against C1-C7 first.
+
+## Bounded semantics and cheap iteration
+
+[SEMANTICS_AUDIT.md](SEMANTICS_AUDIT.md) records the accepted AST/type/predicate boundaries and remaining
+scope gaps. To confirm custom/parser semantic changes without a DataFusion build or performance
+claims:
+
+```sh
+gh workflow run io-probe.yml --ref codex/sql-planner-spike \
+  -f sql_planner=true -f semantic_only=true
+```
+
+This explicit `semantic_confirmation` mode checks conformance, simulator behavior, PostgreSQL semantic
+cases and process-kill recovery. It does not run C4 benchmarks, does not establish C5 and does not
+enter any ADR acceptance score. Default full-measurement behavior is unchanged. After semantic
+iteration and independent review, run one full all-candidate confirmation at the frozen source.

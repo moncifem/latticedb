@@ -7,9 +7,16 @@ on:
         description: Cached functional retry; no clean build metrics
         type: boolean
         default: false
+      semantic_only:
+        description: Custom/parser semantic confirmation only; no performance/build-weight evidence
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       functional_retry:
+        type: boolean
+        default: false
+      semantic_only:
         type: boolean
         default: false
 permissions:
@@ -34,7 +41,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: 1.99.1 }
       - name: restore only the functional retry dependency cache
-        if: inputs.functional_retry
+        if: inputs.functional_retry || inputs.semantic_only
         id: functional_cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -68,14 +75,18 @@ jobs:
         run: python3 -m unittest discover -s experiments/sql-planner -p test_measure.py
       - name: candidate experiment (mode recorded explicitly)
         env:
+          SEMANTIC_ONLY: ${{ inputs.semantic_only }}
           FUNCTIONAL_RETRY: ${{ inputs.functional_retry }}
           FUNCTIONAL_CACHE_HIT: ${{ steps.functional_cache.outputs.cache-hit }}
         run: |
           mode_args=()
           target_root="$RUNNER_TEMP/sql-planner-clean"
-          if [ "$FUNCTIONAL_RETRY" = "true" ]; then
+          if [ "$FUNCTIONAL_RETRY" = "true" ] || [ "$SEMANTIC_ONLY" = "true" ]; then
             mode_args=(--functional-retry)
             target_root="$PWD/experiments/sql-planner/functional-target"
+          fi
+          if [ "$SEMANTIC_ONLY" = "true" ]; then
+            mode_args+=(--semantic-only)
           fi
           python3 experiments/sql-planner/measure.py \
             --output "$PWD/planner-evidence" \

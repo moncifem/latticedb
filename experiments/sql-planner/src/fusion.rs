@@ -274,6 +274,7 @@ pub struct PreparedInsert {
     width: usize,
     table: String,
     returns: bool,
+    plan: Plan,
 }
 impl PreparedInsert {
     /// Real cached DataFusion logical plan: subsequent parameter binds do not parse SQL again.
@@ -294,6 +295,7 @@ impl PreparedInsert {
             width,
             table: table.clone(),
             returns: !returning.is_empty(),
+            plan: plan.clone(),
         })
     }
     pub async fn execute<I: Io, C: Clock, R: Rng>(
@@ -302,6 +304,7 @@ impl PreparedInsert {
         s: &mut Session,
         params: &[Value],
     ) -> Result<Output> {
+        crate::execute::check_types(&self.plan, params)?;
         let auto = s.tx.is_none();
         if auto {
             db.begin(s)?;
@@ -387,7 +390,7 @@ pub async fn execute<I: Io, C: Clock, R: Rng>(
     if matches!(plan, Plan::Begin | Plan::Commit | Plan::Rollback) {
         return crate::execute::execute(db, s, plan, params);
     }
-    crate::execute::bind(plan)?;
+    crate::execute::check_types(plan, params)?;
     let auto = s.tx.is_none();
     if auto {
         db.begin(s)?;

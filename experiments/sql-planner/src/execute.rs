@@ -237,12 +237,154 @@ fn scoped_filter(
     local(e, positions, low, high).then(|| e.clone())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Null,
+    Int,
+    Text,
+    Bool,
+}
+fn kind(value: &Value) -> Kind {
+    match value {
+        Value::Null => Kind::Null,
+        Value::Int(_) => Kind::Int,
+        Value::Text(_) => Kind::Text,
+        Value::Bool(_) => Kind::Bool,
+    }
+}
+/// Types only the bounded experiment AST and fixed fixture schema, with actual parameter values.
+/// No implicit coercions, casts, extra grammar, or production type-system claim is introduced.
+pub fn check_types(plan: &Plan, params: &[Value]) -> Result<()> {
+    bind(plan)?;
+    fn infer(e: &Expr, params: &[Value], arity: &mut usize) -> Result<Kind> {
+        let unsupported =
+            || Error::unsupported("unsupported expression operand types or implicit coercion");
+        match e {
+            Expr::Col(name) => Ok(if name == "name" || name == "users.name" {
+                Kind::Text
+            } else {
+                Kind::Int
+            }),
+            Expr::Count => Ok(Kind::Int),
+            Expr::Lit(value) => Ok(kind(value)),
+            Expr::Param(n) => {
+                *arity = (*arity).max(*n);
+                n.checked_sub(1)
+                    .and_then(|at| params.get(at))
+                    .map(kind)
+                    .ok_or_else(|| Error::syntax(format!("missing parameter ${n}")))
+            }
+            Expr::Binary(a, op, b) => {
+                let a = infer(a, params, arity)?;
+                let b = infer(b, params, arity)?;
+                match op.as_str() {
+                    "and" | "or" if [a, b].iter().all(|k| matches!(k, Kind::Bool | Kind::Null)) => {
+                        Ok(Kind::Bool)
+                    }
+                    "+" | "-"
+                        if [a, b].iter().all(|k| matches!(k, Kind::Int | Kind::Null))
+                            && (a == Kind::Int || b == Kind::Int) =>
+                    {
+                        Ok(Kind::Int)
+                    }
+                    "=" | "<" | ">" | "<=" | ">="
+                        if a == b || a == Kind::Null || b == Kind::Null =>
+                    {
+                        Ok(Kind::Bool)
+                    }
+                    _ => Err(unsupported()),
+                }
+            }
+        }
+    }
+    fn predicate_type(e: &Expr, params: &[Value], arity: &mut usize) -> Result<()> {
+        if !matches!(infer(e, params, arity)?, Kind::Bool | Kind::Null) {
+            return Err(Error::unsupported(
+                "predicate parameter/expression must be boolean",
+            ));
+        }
+        Ok(())
+    }
+    let mut arity = 0;
+    match plan {
+        Plan::Select(q) => {
+            for e in q.columns.iter().chain(q.group.iter()).chain(q.order.iter()) {
+                infer(e, params, &mut arity)?;
+            }
+            for e in q.filter.iter().chain(q.having.iter()) {
+                predicate_type(e, params, &mut arity)?;
+            }
+            if let Some((_, on)) = &q.join {
+                predicate_type(on, params, &mut arity)?;
+            }
+        }
+        Plan::Update {
+            assignments,
+            filter,
+            returning,
+            ..
+        } => {
+            for (column, e) in assignments {
+                let actual = infer(e, params, &mut arity)?;
+                let expected = if column == "name" {
+                    Kind::Text
+                } else {
+                    Kind::Int
+                };
+                if actual != Kind::Null && actual != expected {
+                    return Err(Error::unsupported(
+                        "assignment requires an unsupported coercion",
+                    ));
+                }
+            }
+            if let Some(e) = filter {
+                predicate_type(e, params, &mut arity)?;
+            }
+            for e in returning {
+                infer(e, params, &mut arity)?;
+            }
+        }
+        Plan::Insert {
+            columns,
+            values,
+            returning,
+            ..
+        } => {
+            for (column, e) in columns.iter().zip(values) {
+                let actual = infer(e, params, &mut arity)?;
+                let expected = if column == "name" {
+                    Kind::Text
+                } else {
+                    Kind::Int
+                };
+                if actual != Kind::Null && actual != expected {
+                    return Err(Error::unsupported(
+                        "insert requires an unsupported coercion",
+                    ));
+                }
+            }
+            for e in returning {
+                infer(e, params, &mut arity)?;
+            }
+        }
+        _ => {}
+    }
+    if params.len() != arity {
+        return Err(Error::syntax(format!(
+            "expected {arity} parameters, got {}",
+            params.len()
+        )));
+    }
+    Ok(())
+}
+
 pub fn execute<I: Io, C: Clock, R: Rng>(
     db: &mut Db<I, C, R>,
     s: &mut Session,
     plan: &Plan,
     params: &[Value],
 ) -> Result<Output> {
+    check_types(plan, params)?;
     match plan {
         Plan::Begin => {
             db.begin(s)?;
@@ -258,7 +400,6 @@ pub fn execute<I: Io, C: Clock, R: Rng>(
         }
         _ => {}
     }
-    bind(plan)?;
     let autocommit = s.tx.is_none();
     if autocommit {
         db.begin(s)?;
