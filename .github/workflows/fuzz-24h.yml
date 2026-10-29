@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, wal_record]
+        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, wal_record, sync_frame]
         shard: [1, 2, 3, 4, 5]
     runs-on: ubuntu-latest
     timeout-minutes: 355

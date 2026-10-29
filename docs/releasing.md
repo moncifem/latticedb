@@ -210,6 +210,7 @@ This change does not alter the mutation universe, exclusions, budgets or schedul
 manual focused workflow has its own package-only diagnostic baseline and remains outside
 weekly score ingestion. Mocked fixture validation is not a completed hosted baseline or
 mutation campaign; inspect fresh raw artifacts before making a measured coverage claim.
+
 ### Planner experiment semantic confirmation
 
 The isolated `sql-planner-spike` comparison can be called through `io-probe.yml` with
@@ -220,3 +221,10 @@ performance comparison and suppress C4/C5 assessment. It supplies no clean-build
 claim. Default full measurement still selects all three candidates; cached functional runs remain
 explicit and cannot replace clean-target C5 evidence. See `experiments/sql-planner/SEMANTICS_AUDIT.md`
 for bounded coverage and remaining gaps.
+
+### Candidate sync codec fuzz coverage
+
+The `sync_frame` target is registered in nightly (ten minutes), weekly (five hours), and the manual
+24-hour workflow (five shards of 5h40m). Those entries enable future execution; no completed fuzz
+campaign or phase-gate evidence follows from adding the matrix rows. Codec bytes remain experimental
+under RFC 0010 / proposed ADR 0024 pending format review and owner disposition.

@@ -26,8 +26,8 @@ stream. The target is not yet in the nightly, weekly or 24-hour matrices.
 decodes must re-encode to exactly the bytes it came from, and is incomplete one byte short. The input is
 also decoded as a stream and with a small negotiated payload limit. Seeds in `seeds/sync_frame/` cover
 every message type, a two-frame stream, a trailing byte, an unknown type, an over-long length, a
-truncated frame, a zero version and an undefined error code. The target is not yet in the nightly,
-weekly or 24-hour matrices.
+truncated frame, a zero version and an undefined error code. The target is registered in the nightly,
+weekly and manual 24-hour matrices; registration is not evidence that those runs have completed.
 
 ## Row codec targets
 

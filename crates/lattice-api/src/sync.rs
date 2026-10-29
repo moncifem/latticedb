@@ -272,11 +272,16 @@ pub fn encode(msg: &Message, out: &mut Vec<u8>) -> Result<(), SyncError> {
             for e in events {
                 put_cursor(&mut payload, &e.cursor, 1)?;
                 let n = u32::try_from(e.data.len()).map_err(|_| SyncError::TooLarge)?;
-                payload.extend_from_slice(&n.to_be_bytes());
-                payload.extend_from_slice(&e.data);
-                if payload.len() > MAX_PAYLOAD {
+                let end = payload
+                    .len()
+                    .checked_add(4)
+                    .and_then(|len| len.checked_add(e.data.len()))
+                    .ok_or(SyncError::TooLarge)?;
+                if end > MAX_PAYLOAD {
                     return Err(SyncError::TooLarge);
                 }
+                payload.extend_from_slice(&n.to_be_bytes());
+                payload.extend_from_slice(&e.data);
             }
             TYPE_EVENTS
         }
@@ -1078,49 +1083,49 @@ mod tests {
 
     /// The committed fuzz seeds mean what their names say, so the fuzzer starts from real frames.
     #[test]
-    #[allow(clippy::disallowed_methods)] // reads committed fixtures
     fn fuzz_seeds_are_what_they_claim() {
-        let dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/seeds/sync_frame");
-        let read = |n: &str| std::fs::read(dir.join(n)).unwrap();
-        for n in [
-            "hello",
-            "hello-range",
-            "welcome",
-            "subscribe-start",
-            "subscribe-resume",
-            "events",
-            "ack",
-            "error",
-            "error-subscription",
-            "ping",
-            "pong",
+        macro_rules! seed {
+            ($name:literal) => {
+                include_bytes!(concat!("../../../fuzz/seeds/sync_frame/", $name)).as_slice()
+            };
+        }
+        for (n, b) in [
+            ("hello", seed!("hello")),
+            ("hello-range", seed!("hello-range")),
+            ("welcome", seed!("welcome")),
+            ("subscribe-start", seed!("subscribe-start")),
+            ("subscribe-resume", seed!("subscribe-resume")),
+            ("events", seed!("events")),
+            ("ack", seed!("ack")),
+            ("error", seed!("error")),
+            ("error-subscription", seed!("error-subscription")),
+            ("ping", seed!("ping")),
+            ("pong", seed!("pong")),
         ] {
-            let b = read(n);
-            let (_, used) = decode(&b)
+            let (_, used) = decode(b)
                 .unwrap()
                 .unwrap_or_else(|| panic!("{n} incomplete"));
             assert_eq!(used, b.len(), "{n}");
         }
-        let two = read("two-frames");
-        let (_, first) = decode(&two).unwrap().unwrap();
+        let two = seed!("two-frames");
+        let (_, first) = decode(two).unwrap().unwrap();
         assert!(first < two.len() && decode(&two[first..]).unwrap().is_some());
-        assert_eq!(decode(&read("trailing-byte")), Err(SyncError::Trailing));
+        assert_eq!(decode(seed!("trailing-byte")), Err(SyncError::Trailing));
         assert_eq!(
-            decode(&read("unknown-type")),
+            decode(seed!("unknown-type")),
             Err(SyncError::UnknownType(9))
         );
         assert_eq!(
-            decode(&read("oversize-length")),
+            decode(seed!("oversize-length")),
             Err(SyncError::BadLength(1_048_577))
         );
-        assert_eq!(decode(&read("truncated")), Ok(None));
+        assert_eq!(decode(seed!("truncated")), Ok(None));
         assert_eq!(
-            decode(&read("zero-version")),
+            decode(seed!("zero-version")),
             Err(SyncError::InvalidField("version range"))
         );
         assert_eq!(
-            decode(&read("bad-error-code")),
+            decode(seed!("bad-error-code")),
             Err(SyncError::InvalidField("error code"))
         );
     }

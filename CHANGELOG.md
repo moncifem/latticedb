@@ -21,8 +21,8 @@ between minor versions; format changes are called out explicitly.
 - A sans-I/O sync protocol codec (`lattice_api::sync`, `formats/sync-protocol-v1.md`): hello and version
   negotiation (highest common version, or `unsupported_version`), subscribe with scope and opaque cursor,
   events, ack, error and ping, in strict bounded binary frames with one encoding per message. Round-trip,
-  byte-vector and no-panic property tests, and a `sync_frame` fuzz target with seeds (not yet in the
-  nightly, weekly or 24-hour matrices). No server, session state or change feed yet.
+  byte-vector and no-panic property tests, and a `sync_frame` fuzz target with seeds registered in the
+  nightly, weekly and manual 24-hour matrices. No server, session state or change feed yet.
 
 - A tree CRDT with move semantics (`lattice_core::crdt_tree`): stable node ids, moves ordered by the
   hybrid logical clock with undo and redo of later operations, cycle-forming moves dropped identically

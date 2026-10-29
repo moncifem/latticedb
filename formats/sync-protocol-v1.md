@@ -1,6 +1,9 @@
 # Format: Sync protocol v1
 
-Status: draft. Requirements P3-01 and P3-02; the codec is `lattice_api::sync`; the fuzz target is `fuzz/fuzz_targets/sync_frame.rs`.
+Status: experimental candidate, unaccepted. Proposed in
+[RFC 0010](../docs/rfc/0010-sync-protocol-framing.md) and
+[ADR 0024](../docs/adr/0024-sync-protocol-framing.md); no owner format acceptance or review-period
+waiver is assumed. Requirements P3-01 and P3-02; the codec is `lattice_api::sync`; the fuzz target is `fuzz/fuzz_targets/sync_frame.rs`.
 
 A client (an SDK, a plugin) keeps a connection to a server and receives the changes in the scopes it
 subscribes to. This document is the framing and the message set of that connection over any ordered,
@@ -12,7 +15,7 @@ and the event bodies belong to other documents, and a cursor is opaque bytes.
 A frame is `type (u8) | length (u32) | payload`. All integers are big-endian. `length` is the payload
 length in bytes, not counting the five header bytes.
 
-* The payload is at most **1,048,576 bytes** (`MAX_PAYLOAD`). A reader judges the type and the length as
+* The payload is at most **1,048,576 bytes** (`MAX_PAYLOAD`). A reader judges the type as soon as the first byte is present and the length as
   soon as the five header bytes are present: an unknown type or a larger length is an error without
   waiting for the payload. A server may announce a lower limit in `Welcome.max_payload`; a reader
   applies it with `decode_with_limit`.
@@ -79,8 +82,9 @@ range too (today 1 to 1) and picks **the highest version in both ranges** (negot
 do not overlap, it sends `Error(unsupported_version, sub 0)` and closes (refuse). A range with
 `min_version` 0 or above `max_version` is `malformed`. On success the server sends `Welcome` with the
 chosen version; the client must not send `Subscribe` before it. Later versions that change a frame
-layout use a new version number; v1 decoders never accept a frame of another version because frames carry
-none: the version is fixed per connection by the handshake.
+layout need a new version number. Frames carry no version: a future session must enforce successful
+negotiation and dispatch only the selected layout. This pure codec does not enforce handshake state,
+direction, version admission or close-on-error.
 
 Negotiation table for a server that speaks only version 1 (`lattice_api::sync::negotiate`):
 
