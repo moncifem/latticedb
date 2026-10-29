@@ -24,6 +24,13 @@ exclude_re = [
     # record and the loop breaks on the next line, so `<=` here reads nothing extra. The other `<`
     # operands in the function (the read limit and the segment bounds) are tested.
     "log\\.rs:\\d+:23: replace < with <= in Log<I>::read_from",
+    # `durable_lsn` adds `u64::from(bugs::active(Bug::DurableLsnOvershoot))`, which is zero unless that
+    # planted bug is on, so `- 0` and `* 0`-style changes of the sum cannot show in a clean build.
+    "log\\.rs:\\d+:46: replace \\+ with [-*] in Log<I>::sync",
+    # The arithmetic in recovery's `RecoveryDropsLastRecord` branch only runs when that planted bug is
+    # on; its planted-bug test checks that the bug is detected, not the bug's own byte counts.
+    "log\\.rs:\\d+:65: replace \\+ with [-*] in recover",
+    "log\\.rs:\\d+:18: replace -= with (\\+=|/=) in recover",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
