@@ -114,6 +114,9 @@ pub struct IndexInfo {
 /// A table as the catalog describes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TableInfo {
+    /// Stable identifier of the table; a plan carries it so an executor can detect a dropped and
+    /// re-created table of the same name.
+    pub id: u64,
     pub name: String,
     pub columns: Vec<ColumnInfo>,
     pub indexes: Vec<IndexInfo>,
@@ -123,7 +126,16 @@ pub struct TableInfo {
 /// storage dependency.
 pub trait CatalogView {
     /// The table called `name` (already case-folded), or `None`.
+    ///
+    /// Host contract: all calls for one bind see one consistent catalog; the returned column order
+    /// is the stored column order and is what `Column::index` refers to; and [`Self::version`]
+    /// changes whenever any table, column, type or index changes.
     fn table(&self, name: &str) -> Option<TableInfo>;
+
+    /// The catalog version the tables were read at. The binder copies it into the
+    /// [`BoundStatement`]; an executor must refuse to run a plan whose version differs from the
+    /// catalog it runs against (column positions in the plan are only valid for that version).
+    fn version(&self) -> u64;
 }
 
 /// A constant.
@@ -231,6 +243,7 @@ pub enum LogicalPlan {
     /// Every column of the table, in catalog order.
     Scan {
         table: String,
+        table_id: u64,
         as_of: Option<AsOfPlan>,
     },
     Filter {
@@ -254,6 +267,7 @@ pub enum LogicalPlan {
     /// out take their default or `NULL`.
     Insert {
         table: String,
+        table_id: u64,
         targets: Vec<usize>,
         source: InsertSource,
         returning: Vec<OutputColumn>,
@@ -261,12 +275,14 @@ pub enum LogicalPlan {
     /// `input` yields the rows to change (a scan, filtered).
     Update {
         table: String,
+        table_id: u64,
         input: Box<LogicalPlan>,
         assignments: Vec<(usize, TypedExpr)>,
         returning: Vec<OutputColumn>,
     },
     Delete {
         table: String,
+        table_id: u64,
         input: Box<LogicalPlan>,
         returning: Vec<OutputColumn>,
     },
@@ -276,6 +292,9 @@ pub enum LogicalPlan {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundStatement {
     pub plan: LogicalPlan,
+    /// [`CatalogView::version`] when the statement was bound. Column positions and table ids in
+    /// the plan are valid only against this version.
+    pub catalog_version: u64,
     /// Type of `$1`, `$2`, ... up to the highest placeholder used.
     pub param_types: Vec<SqlType>,
 }
@@ -305,7 +324,7 @@ impl LogicalPlan {
     fn write_tree(&self, out: &mut String, depth: usize) -> fmt::Result {
         let pad = "  ".repeat(depth);
         match self {
-            LogicalPlan::Scan { table, as_of } => {
+            LogicalPlan::Scan { table, as_of, .. } => {
                 write!(out, "{pad}Scan {table}")?;
                 if let Some(a) = as_of {
                     write!(out, " {a}")?;
@@ -355,6 +374,7 @@ impl LogicalPlan {
                 targets,
                 source,
                 returning,
+                ..
             } => {
                 let t: Vec<String> = targets.iter().map(|i| format!("#{i}")).collect();
                 write!(out, "{pad}Insert {table} ({})", t.join(", "))?;
@@ -375,6 +395,7 @@ impl LogicalPlan {
                 input,
                 assignments,
                 returning,
+                ..
             } => {
                 let a: Vec<String> = assignments
                     .iter()
@@ -389,6 +410,7 @@ impl LogicalPlan {
                 table,
                 input,
                 returning,
+                ..
             } => {
                 write!(out, "{pad}Delete {table}")?;
                 write_returning(out, returning)?;

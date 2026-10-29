@@ -18,6 +18,9 @@ use lattice_sql::plan::{
 };
 use proptest::prelude::*;
 
+/// Version the test catalog reports.
+const CATALOG_VERSION: u64 = 41;
+
 struct Catalog(BTreeMap<String, TableInfo>);
 
 fn col(name: &str, ty: SqlType, not_null: bool, has_default: bool) -> ColumnInfo {
@@ -33,6 +36,8 @@ fn table(name: &str, columns: Vec<ColumnInfo>, indexes: Vec<IndexInfo>) -> (Stri
     (
         name.to_string(),
         TableInfo {
+            // Distinct, nonzero ids derived from the name's length and first byte.
+            id: 1000 + name.len() as u64 * 10 + u64::from(name.as_bytes()[0] % 10),
             name: name.to_string(),
             columns,
             indexes,
@@ -122,6 +127,10 @@ fn catalog() -> Catalog {
 impl CatalogView for Catalog {
     fn table(&self, name: &str) -> Option<TableInfo> {
         self.0.get(name).cloned()
+    }
+
+    fn version(&self) -> u64 {
+        CATALOG_VERSION
     }
 }
 
@@ -352,10 +361,56 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
             Some("LSQL-0001"),
         ),
         ("INSERT INTO notes (id, id) VALUES (1, 2)", "42701", None),
-        ("UPDATE notes SET score = 1, score = 2", "42701", None),
+        (
+            "UPDATE notes SET score = 1, score = 2",
+            "42601",
+            Some("LSQL-0001"),
+        ),
         ("SELECT id FROM notes LIMIT -1", "2201W", None),
         ("SELECT id FROM notes LIMIT 1 OFFSET -2", "2201X", None),
         ("SELECT id FROM notes ORDER BY 9", "42P10", None),
+        (
+            "SELECT id AS x, score AS x FROM notes ORDER BY x",
+            "42702",
+            None,
+        ),
+        // type modifiers are not carried by CAST, so they are refused
+        (
+            "SELECT CAST(score AS numeric(5, 2)) FROM notes",
+            "0A000",
+            Some("LSQL-0002"),
+        ),
+        (
+            "SELECT title::varchar(3) FROM notes",
+            "0A000",
+            Some("LSQL-0002"),
+        ),
+        (
+            "SELECT CAST(score AS numeric(5)) FROM notes",
+            "0A000",
+            Some("LSQL-0002"),
+        ),
+        // a typed parameter reused with another type
+        (
+            "SELECT id FROM notes WHERE score = $1 AND title = $1",
+            "42P08",
+            None,
+        ),
+        (
+            "SELECT id FROM notes WHERE score = $1 AND title = $2 AND $1 = $2",
+            "42P08",
+            None,
+        ),
+        (
+            "SELECT id FROM notes WHERE score = $1 AND title = $2 AND coalesce($1, $2) IS NULL",
+            "42P08",
+            None,
+        ),
+        (
+            "SELECT id FROM notes WHERE title = $1 AND $1",
+            "42P08",
+            None,
+        ),
         ("SELECT id FROM notes ORDER BY 0", "42P10", None),
         // casts and functions
         ("SELECT CAST(id AS uuid) FROM notes", "42846", None),
@@ -915,4 +970,91 @@ proptest! {
             let _ = bind(&stmt, &catalog());
         }
     }
+}
+
+#[test]
+fn a_parameter_with_a_type_is_an_operand_of_that_type() {
+    let cases: &[(&str, &[SqlType])] = &[
+        // $1 and $2 are integers from the first two comparisons, so $1 + $2 is integer arithmetic.
+        (
+            "SELECT id FROM notes WHERE id = $1 AND score = $2 AND $1 + $2 > 0",
+            &[SqlType::Integer, SqlType::Integer],
+        ),
+        (
+            "SELECT id FROM notes WHERE id = $1 AND score = $2 AND coalesce($1, $2) > 0",
+            &[SqlType::Integer, SqlType::Integer],
+        ),
+        (
+            "SELECT id FROM notes WHERE title = $1 AND $1 IS NOT NULL",
+            &[SqlType::Text],
+        ),
+        (
+            "SELECT id FROM notes WHERE title = $1 AND title <> $1 AND $1 = title",
+            &[SqlType::Text],
+        ),
+        // A typed parameter next to a wider column keeps its own type.
+        (
+            "SELECT id FROM events WHERE small = $1 AND id = $1",
+            &[SqlType::SmallInt],
+        ),
+    ];
+    for (sql, want) in cases {
+        let stmt = parse_statement(sql).unwrap();
+        let bound = bind_statement(&stmt, &catalog()).unwrap_or_else(|e| panic!("`{sql}`: {e}"));
+        assert_eq!(&bound.param_types, want, "`{sql}`");
+    }
+    // The reused parameter prints with its type resolved: the sum is integer arithmetic.
+    assert_eq!(
+        plan_of("SELECT id FROM notes WHERE id = $1 AND score = $2 AND $1 + $2 > 0").to_string(),
+        "Project [id]\n  Filter (((id = $1) AND (score = $2)) AND (($1 + $2) > 0))\n    Scan notes\n"
+    );
+}
+
+#[test]
+fn a_known_parameter_never_matches_an_operand_of_another_type_silently() {
+    // integer parameter against a text parameter: both typed before they meet.
+    let stmt =
+        parse_statement("SELECT id FROM notes WHERE id = $1 AND title = $2 AND $1 = $2").unwrap();
+    let e = bind_statement(&stmt, &catalog()).unwrap_err();
+    assert_eq!(e.kind(), BindErrorKind::InconsistentParamTypes);
+}
+
+#[test]
+fn plans_carry_table_ids_and_the_catalog_version() {
+    let cat = catalog();
+    let notes_id = cat.table("notes").unwrap().id;
+    let items_id = cat.table("items").unwrap().id;
+    assert_ne!(notes_id, items_id);
+    let bound = |sql: &str| bind_statement(&parse_statement(sql).unwrap(), &cat).unwrap();
+
+    let b = bound("SELECT id FROM notes WHERE score > 1");
+    assert_eq!(b.catalog_version, CATALOG_VERSION);
+    let LogicalPlan::Project { input, .. } = &b.plan else {
+        panic!("not a project");
+    };
+    let LogicalPlan::Filter { input, .. } = &**input else {
+        panic!("not a filter");
+    };
+    assert!(matches!(&**input, LogicalPlan::Scan { table_id, .. } if *table_id == notes_id));
+
+    let b = bound("INSERT INTO items VALUES (1, 'a', 1, 'x')");
+    assert!(matches!(&b.plan, LogicalPlan::Insert { table_id, .. } if *table_id == items_id));
+    let b = bound("UPDATE items SET qty = 1");
+    let LogicalPlan::Update {
+        table_id, input, ..
+    } = &b.plan
+    else {
+        panic!("not an update");
+    };
+    assert_eq!(*table_id, items_id);
+    assert!(matches!(&**input, LogicalPlan::Scan { table_id, .. } if *table_id == items_id));
+    let b = bound("DELETE FROM items");
+    assert!(matches!(&b.plan, LogicalPlan::Delete { table_id, .. } if *table_id == items_id));
+}
+
+#[test]
+fn order_by_prefers_an_output_name_and_accepts_identical_duplicates() {
+    // The same expression under one name twice is not ambiguous.
+    plan_of("SELECT id AS x, id AS x FROM notes ORDER BY x");
+    plan_of("SELECT id, id FROM notes ORDER BY id");
 }

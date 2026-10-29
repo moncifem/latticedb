@@ -30,3 +30,6 @@ Allowed workspace dependencies: none.
   subqueries, DDL and session statements are refused with `0A000` until the IR has operators for them.
   Operand type mismatches report `42804` where PostgreSQL reports `42883` for operators.
 - `LogicalPlan` prints as an indented tree for review. The text is not a stable interface.
+- A bound plan carries table ids and the `CatalogView::version` it was bound at; an executor must refuse
+  a plan whose version differs from its catalog. Known differences from PostgreSQL are listed in
+  `docs/sql-subset.md`.
