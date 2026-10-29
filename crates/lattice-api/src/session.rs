@@ -235,7 +235,9 @@ impl<H: QueryHandler> Session<H> {
                 self.phase = Phase::Closed;
                 return closed();
             }
-            Frontend::Password(_) => {
+            Frontend::Password(_)
+            | Frontend::SaslInitialResponse { .. }
+            | Frontend::SaslResponse(_) => {
                 return self.fatal("08P01", "unexpected password message".to_string());
             }
             Frontend::Sync => {
@@ -428,6 +430,8 @@ impl<H: QueryHandler> Session<H> {
             Frontend::Query(_)
             | Frontend::Terminate
             | Frontend::Password(_)
+            | Frontend::SaslInitialResponse { .. }
+            | Frontend::SaslResponse(_)
             | Frontend::Sync
             | Frontend::Flush => {}
         }

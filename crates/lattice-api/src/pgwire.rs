@@ -128,6 +128,15 @@ pub enum Frontend {
     Sync,
     /// `H`: ask the server to send what it has pending.
     Flush,
+    /// `p`: phase-specific SASL mechanism selection and optional initial response.
+    SaslInitialResponse {
+        /// Selected SASL mechanism name.
+        mechanism: String,
+        /// Initial response, or `None` for the protocol's -1 absent-response length.
+        data: Option<Vec<u8>>,
+    },
+    /// `p`: phase-specific SASL challenge response bytes.
+    SaslResponse(Vec<u8>),
 }
 
 /// What `Describe` and `Close` name.
@@ -221,6 +230,24 @@ pub enum Backend {
         /// Human readable message.
         message: String,
     },
+    /// `R` 10: SASL mechanisms in server preference order, terminated by an empty string.
+    AuthenticationSasl(Vec<String>),
+    /// `R` 11: a mechanism-specific SASL server challenge.
+    AuthenticationSaslContinue(Vec<u8>),
+    /// `R` 12: mechanism-specific final data, sent before AuthenticationOk.
+    AuthenticationSaslFinal(Vec<u8>),
+}
+
+/// Maximum SASL response body or backend mechanism-data bytes.
+pub const MAX_SASL_BODY_LEN: usize = 8192;
+
+/// Password and SASL messages share the `p` tag; their layout requires the authentication phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaslPhase {
+    /// Mechanism C string, signed initial-response length, then optional response bytes.
+    InitialResponse,
+    /// Mechanism-specific response bytes without an inner length or terminator.
+    Response,
 }
 
 /// What the server answers to an SSL or GSS encryption request that it declines.
@@ -461,6 +488,71 @@ fn put_cstr(out: &mut Vec<u8>, s: &str) -> Result<(), ProtoError> {
     Ok(())
 }
 
+/// Decodes a `p` message using an explicit SASL phase. No password-layout heuristic is used.
+///
+/// The ordinary [`decode_frontend`] continues to return opaque Password messages. Authentication
+/// callers must select this decoder after sending AuthenticationSASL or AuthenticationSASLContinue.
+/// Bounds are checked before the body is copied; concatenated frames remain unconsumed.
+pub fn decode_frontend_sasl(
+    buf: &[u8],
+    phase: SaslPhase,
+) -> Result<Option<(Frontend, usize)>, ProtoError> {
+    let Some(&tag) = buf.first() else {
+        return Ok(None);
+    };
+    if tag != b'p' {
+        return Err(ProtoError::InvalidField("SASL message tag"));
+    }
+    let Some(len) = read_len(buf, 1) else {
+        return Ok(None);
+    };
+    let total = checked_total(len, 4)?;
+    let body_len = total
+        .checked_sub(4)
+        .ok_or(ProtoError::BadLength(i64::from(len)))?;
+    if body_len > MAX_SASL_BODY_LEN {
+        return Err(ProtoError::TooLarge);
+    }
+    let used = total.checked_add(1).ok_or(ProtoError::TooLarge)?;
+    if buf.len() < used {
+        return Ok(None);
+    }
+    let body = buf.get(5..used).ok_or(ProtoError::Truncated)?;
+    let msg = match phase {
+        SaslPhase::Response => Frontend::SaslResponse(body.to_vec()),
+        SaslPhase::InitialResponse => {
+            let mut reader = Reader { bytes: body, at: 0 };
+            let mechanism = reader.cstr()?;
+            if !valid_mechanism(&mechanism) {
+                return Err(ProtoError::InvalidField("SASL mechanism"));
+            }
+            let length = reader.i32()?;
+            let data = match length {
+                -1 => None,
+                n if n >= 0 => Some(
+                    reader
+                        .take(usize::try_from(n).map_err(|_| ProtoError::TooLarge)?)?
+                        .to_vec(),
+                ),
+                _ => return Err(ProtoError::InvalidField("SASL initial response length")),
+            };
+            if !reader.finished() {
+                return Err(ProtoError::Trailing);
+            }
+            Frontend::SaslInitialResponse { mechanism, data }
+        }
+    };
+    Ok(Some((msg, used)))
+}
+
+fn valid_mechanism(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 20
+        && name.bytes().all(|byte| {
+            byte.is_ascii_uppercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
 fn put_i16(out: &mut Vec<u8>, n: usize) -> Result<(), ProtoError> {
     let n = i16::try_from(n).map_err(|_| ProtoError::TooLarge)?;
     out.extend_from_slice(&n.to_be_bytes());
@@ -481,7 +573,11 @@ impl Backend {
     fn encode_inner(&self, out: &mut Vec<u8>) -> Result<(), ProtoError> {
         let start = out.len();
         let tag = match self {
-            Backend::AuthenticationOk | Backend::AuthenticationCleartextPassword => b'R',
+            Backend::AuthenticationOk
+            | Backend::AuthenticationCleartextPassword
+            | Backend::AuthenticationSasl(_)
+            | Backend::AuthenticationSaslContinue(_)
+            | Backend::AuthenticationSaslFinal(_) => b'R',
             Backend::ParameterStatus { .. } => b'S',
             Backend::BackendKeyData { .. } => b'K',
             Backend::ReadyForQuery(_) => b'Z',
@@ -502,6 +598,33 @@ impl Backend {
         match self {
             Backend::AuthenticationOk => out.extend_from_slice(&0i32.to_be_bytes()),
             Backend::AuthenticationCleartextPassword => out.extend_from_slice(&3i32.to_be_bytes()),
+            Backend::AuthenticationSasl(mechanisms) => {
+                if mechanisms.is_empty() || mechanisms.len() > 8 {
+                    return Err(ProtoError::InvalidField("SASL mechanism count"));
+                }
+                out.extend_from_slice(&10i32.to_be_bytes());
+                for mechanism in mechanisms {
+                    if !valid_mechanism(mechanism) {
+                        return Err(ProtoError::InvalidField("SASL mechanism"));
+                    }
+                    put_cstr(out, mechanism)?;
+                }
+                out.push(0);
+            }
+            Backend::AuthenticationSaslContinue(bytes)
+            | Backend::AuthenticationSaslFinal(bytes) => {
+                if bytes.len() > MAX_SASL_BODY_LEN {
+                    return Err(ProtoError::TooLarge);
+                }
+                let code = if matches!(self, Backend::AuthenticationSaslContinue(_)) {
+                    11i32
+                } else {
+                    12i32
+                };
+                out.extend_from_slice(&code.to_be_bytes());
+                out.extend_from_slice(bytes);
+            }
+
             Backend::ParameterStatus { name, value } => {
                 put_cstr(out, name)?;
                 put_cstr(out, value)?;
@@ -908,6 +1031,123 @@ mod tests {
                 msg.encode(&mut out).unwrap();
                 let declared = u32::from_be_bytes(out[1..5].try_into().unwrap()) as usize;
                 prop_assert_eq!(declared, out.len() - 1);
+            }
+        }
+    }
+
+    #[test]
+    fn sasl_backend_messages_match_postgresql_authentication_codes() {
+        for (message, expected) in [
+            (
+                Backend::AuthenticationSasl(vec!["SCRAM-SHA-256".to_string()]),
+                b"R\0\0\0\x17\0\0\0\x0aSCRAM-SHA-256\0\0".to_vec(),
+            ),
+            (
+                Backend::AuthenticationSaslContinue(b"r=nonce".to_vec()),
+                b"R\0\0\0\x0f\0\0\0\x0br=nonce".to_vec(),
+            ),
+            (
+                Backend::AuthenticationSaslFinal(b"v=proof".to_vec()),
+                b"R\0\0\0\x0f\0\0\0\x0cv=proof".to_vec(),
+            ),
+        ] {
+            let mut bytes = Vec::new();
+            message.encode(&mut bytes).unwrap();
+            assert_eq!(bytes, expected);
+        }
+        for message in [
+            Backend::AuthenticationSasl(vec![]),
+            Backend::AuthenticationSasl(vec!["bad-name".to_string()]),
+            Backend::AuthenticationSaslContinue(vec![0; MAX_SASL_BODY_LEN + 1]),
+        ] {
+            let mut bytes = vec![7, 8, 9];
+            assert!(message.encode(&mut bytes).is_err());
+            assert_eq!(bytes, [7, 8, 9]);
+        }
+    }
+
+    #[test]
+    fn sasl_frontend_requires_explicit_phase_and_strict_inner_lengths() {
+        let mut body = b"SCRAM-SHA-256\0".to_vec();
+        body.extend_from_slice(&3i32.to_be_bytes());
+        body.extend_from_slice(b"n,,");
+        let bytes = framed(b'p', &body);
+        assert_eq!(
+            decode_frontend(&bytes).unwrap().unwrap().0,
+            Frontend::Password(body.clone())
+        );
+        assert_eq!(
+            decode_frontend_sasl(&bytes, SaslPhase::InitialResponse)
+                .unwrap()
+                .unwrap(),
+            (
+                Frontend::SaslInitialResponse {
+                    mechanism: "SCRAM-SHA-256".to_string(),
+                    data: Some(b"n,,".to_vec())
+                },
+                bytes.len()
+            )
+        );
+        assert_eq!(
+            decode_frontend_sasl(&bytes, SaslPhase::Response)
+                .unwrap()
+                .unwrap()
+                .0,
+            Frontend::SaslResponse(body.clone())
+        );
+        let mut absent = b"SCRAM-SHA-256\0".to_vec();
+        absent.extend_from_slice(&(-1i32).to_be_bytes());
+        assert_eq!(
+            decode_frontend_sasl(&framed(b'p', &absent), SaslPhase::InitialResponse)
+                .unwrap()
+                .unwrap()
+                .0,
+            Frontend::SaslInitialResponse {
+                mechanism: "SCRAM-SHA-256".to_string(),
+                data: None
+            }
+        );
+        absent.extend_from_slice(b"unexpected");
+        assert_eq!(
+            decode_frontend_sasl(&framed(b'p', &absent), SaslPhase::InitialResponse),
+            Err(ProtoError::Trailing)
+        );
+        for invalid in [-2i32, 4] {
+            let mut bad = b"SCRAM-SHA-256\0".to_vec();
+            bad.extend_from_slice(&invalid.to_be_bytes());
+            bad.extend_from_slice(b"n,,");
+            assert!(decode_frontend_sasl(&framed(b'p', &bad), SaslPhase::InitialResponse).is_err());
+        }
+        for cut in 0..bytes.len() {
+            assert_eq!(
+                decode_frontend_sasl(&bytes[..cut], SaslPhase::InitialResponse),
+                Ok(None)
+            );
+        }
+        let mut pipeline = bytes.clone();
+        pipeline.extend_from_slice(&framed(b'p', b"final"));
+        assert_eq!(
+            decode_frontend_sasl(&pipeline, SaslPhase::InitialResponse)
+                .unwrap()
+                .unwrap()
+                .1,
+            bytes.len()
+        );
+        let oversized = [b'p', 0, 0, 0x20, 0x05];
+        assert_eq!(
+            decode_frontend_sasl(&oversized, SaslPhase::Response),
+            Err(ProtoError::TooLarge)
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn sasl_phase_decoders_never_panic_on_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(),0..500)) {
+            let valid_frame=framed(b'p',&bytes);
+            for input in [&bytes,&valid_frame] {
+                for phase in [SaslPhase::InitialResponse,SaslPhase::Response] {
+                    if let Ok(Some((_,used)))=decode_frontend_sasl(input,phase) { prop_assert!(used<=input.len()); }
+                }
             }
         }
     }

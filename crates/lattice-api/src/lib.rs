@@ -11,3 +11,5 @@ pub const LAYER: u8 = 6;
 
 /// Bounded PostgreSQL cancellation registry and query tokens.
 pub mod cancel;
+
+pub mod scram;
