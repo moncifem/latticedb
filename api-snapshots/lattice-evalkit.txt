@@ -1,0 +1,160 @@
+pub mod lattice_evalkit
+pub mod lattice_evalkit::dataset
+pub enum lattice_evalkit::dataset::LoadError
+pub lattice_evalkit::dataset::LoadError::HashMismatch
+pub lattice_evalkit::dataset::LoadError::HashMismatch::actual: alloc::string::String
+pub lattice_evalkit::dataset::LoadError::HashMismatch::expected: alloc::string::String
+pub lattice_evalkit::dataset::LoadError::HashMismatch::name: alloc::string::String
+pub lattice_evalkit::dataset::LoadError::HashMismatch::version: u32
+pub lattice_evalkit::dataset::LoadError::Unhashed(alloc::string::String)
+impl core::clone::Clone for lattice_evalkit::dataset::LoadError
+pub fn lattice_evalkit::dataset::LoadError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_evalkit::dataset::LoadError
+impl core::cmp::PartialEq for lattice_evalkit::dataset::LoadError
+pub fn lattice_evalkit::dataset::LoadError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_evalkit::dataset::LoadError
+impl core::fmt::Debug for lattice_evalkit::dataset::LoadError
+pub fn lattice_evalkit::dataset::LoadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_evalkit::dataset::LoadError
+pub fn lattice_evalkit::dataset::LoadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_evalkit::dataset::LoadError
+pub enum lattice_evalkit::dataset::Split
+pub lattice_evalkit::dataset::Split::Dev
+pub lattice_evalkit::dataset::Split::Test
+impl core::clone::Clone for lattice_evalkit::dataset::Split
+pub fn lattice_evalkit::dataset::Split::clone(&self) -> Self
+impl core::cmp::Eq for lattice_evalkit::dataset::Split
+impl core::cmp::PartialEq for lattice_evalkit::dataset::Split
+pub fn lattice_evalkit::dataset::Split::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_evalkit::dataset::Split
+pub fn lattice_evalkit::dataset::Split::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_evalkit::dataset::Split
+impl core::marker::StructuralPartialEq for lattice_evalkit::dataset::Split
+pub struct lattice_evalkit::dataset::Dataset
+pub lattice_evalkit::dataset::Dataset::examples: alloc::vec::Vec<lattice_evalkit::dataset::Example>
+pub lattice_evalkit::dataset::Dataset::hash: alloc::string::String
+pub lattice_evalkit::dataset::Dataset::name: alloc::string::String
+pub lattice_evalkit::dataset::Dataset::provenance: alloc::string::String
+pub lattice_evalkit::dataset::Dataset::split: lattice_evalkit::dataset::Split
+pub lattice_evalkit::dataset::Dataset::version: u32
+impl lattice_evalkit::dataset::Dataset
+pub fn lattice_evalkit::dataset::Dataset::load(&str, u32, lattice_evalkit::dataset::Split, &str, alloc::vec::Vec<lattice_evalkit::dataset::Example>, core::option::Option<&str>) -> core::result::Result<Self, lattice_evalkit::dataset::LoadError>
+pub fn lattice_evalkit::dataset::Dataset::new(&str, u32, lattice_evalkit::dataset::Split, &str, alloc::vec::Vec<lattice_evalkit::dataset::Example>) -> Self
+impl core::clone::Clone for lattice_evalkit::dataset::Dataset
+pub fn lattice_evalkit::dataset::Dataset::clone(&self) -> Self
+impl core::fmt::Debug for lattice_evalkit::dataset::Dataset
+pub fn lattice_evalkit::dataset::Dataset::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_evalkit::dataset::Example
+pub lattice_evalkit::dataset::Example::expected: alloc::vec::Vec<alloc::string::String>
+pub lattice_evalkit::dataset::Example::input: alloc::string::String
+impl core::clone::Clone for lattice_evalkit::dataset::Example
+pub fn lattice_evalkit::dataset::Example::clone(&self) -> Self
+impl core::cmp::Eq for lattice_evalkit::dataset::Example
+impl core::cmp::PartialEq for lattice_evalkit::dataset::Example
+pub fn lattice_evalkit::dataset::Example::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_evalkit::dataset::Example
+pub fn lattice_evalkit::dataset::Example::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_evalkit::dataset::Example
+pub fn lattice_evalkit::dataset::content_hash(&[lattice_evalkit::dataset::Example]) -> alloc::string::String
+pub mod lattice_evalkit::drift
+pub struct lattice_evalkit::drift::ExactComparator
+impl lattice_evalkit::suite::Provider for lattice_evalkit::drift::ExactComparator
+pub fn lattice_evalkit::drift::ExactComparator::name(&self) -> &str
+pub fn lattice_evalkit::drift::ExactComparator::predict(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+pub struct lattice_evalkit::drift::Noisy
+impl lattice_evalkit::suite::Provider for lattice_evalkit::drift::Noisy
+pub fn lattice_evalkit::drift::Noisy::name(&self) -> &str
+pub fn lattice_evalkit::drift::Noisy::predict(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+pub struct lattice_evalkit::drift::Silent
+impl lattice_evalkit::suite::Provider for lattice_evalkit::drift::Silent
+pub fn lattice_evalkit::drift::Silent::name(&self) -> &str
+pub fn lattice_evalkit::drift::Silent::predict(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+pub fn lattice_evalkit::drift::generate(u64, usize, u64) -> lattice_evalkit::dataset::Dataset
+pub mod lattice_evalkit::gate
+pub struct lattice_evalkit::gate::GateReport
+pub lattice_evalkit::gate::GateReport::passed: bool
+pub lattice_evalkit::gate::GateReport::rows: alloc::vec::Vec<lattice_evalkit::gate::Row>
+impl core::clone::Clone for lattice_evalkit::gate::GateReport
+pub fn lattice_evalkit::gate::GateReport::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_evalkit::gate::GateReport
+pub fn lattice_evalkit::gate::GateReport::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_evalkit::gate::GateReport
+pub fn lattice_evalkit::gate::GateReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_evalkit::gate::GateReport
+pub struct lattice_evalkit::gate::MetricResult
+pub lattice_evalkit::gate::MetricResult::ci_hi: f64
+pub lattice_evalkit::gate::MetricResult::ci_lo: f64
+pub lattice_evalkit::gate::MetricResult::n: usize
+pub lattice_evalkit::gate::MetricResult::value: f64
+impl core::clone::Clone for lattice_evalkit::gate::MetricResult
+pub fn lattice_evalkit::gate::MetricResult::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_evalkit::gate::MetricResult
+pub fn lattice_evalkit::gate::MetricResult::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_evalkit::gate::MetricResult
+pub fn lattice_evalkit::gate::MetricResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_evalkit::gate::MetricResult
+impl core::marker::StructuralPartialEq for lattice_evalkit::gate::MetricResult
+pub struct lattice_evalkit::gate::Row
+pub lattice_evalkit::gate::Row::bound: f64
+pub lattice_evalkit::gate::Row::name: alloc::string::String
+pub lattice_evalkit::gate::Row::passed: bool
+pub lattice_evalkit::gate::Row::reason: alloc::string::String
+pub lattice_evalkit::gate::Row::result: core::option::Option<lattice_evalkit::gate::MetricResult>
+impl core::clone::Clone for lattice_evalkit::gate::Row
+pub fn lattice_evalkit::gate::Row::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_evalkit::gate::Row
+pub fn lattice_evalkit::gate::Row::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_evalkit::gate::Row
+pub fn lattice_evalkit::gate::Row::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_evalkit::gate::Row
+pub struct lattice_evalkit::gate::Threshold
+pub lattice_evalkit::gate::Threshold::confidence: f64
+pub lattice_evalkit::gate::Threshold::lower_bound: f64
+pub lattice_evalkit::gate::Threshold::name: alloc::string::String
+pub lattice_evalkit::gate::Threshold::tolerance: f64
+impl core::clone::Clone for lattice_evalkit::gate::Threshold
+pub fn lattice_evalkit::gate::Threshold::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_evalkit::gate::Threshold
+pub fn lattice_evalkit::gate::Threshold::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_evalkit::gate::Threshold
+pub fn lattice_evalkit::gate::Threshold::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_evalkit::gate::Threshold
+pub fn lattice_evalkit::gate::evaluate(&[lattice_evalkit::gate::Threshold], &alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_evalkit::gate::MetricResult>) -> lattice_evalkit::gate::GateReport
+pub fn lattice_evalkit::gate::parse_thresholds(&str) -> core::result::Result<alloc::vec::Vec<lattice_evalkit::gate::Threshold>, alloc::string::String>
+pub mod lattice_evalkit::metrics
+pub struct lattice_evalkit::metrics::Prf
+pub lattice_evalkit::metrics::Prf::f1: f64
+pub lattice_evalkit::metrics::Prf::precision: f64
+pub lattice_evalkit::metrics::Prf::recall: f64
+impl core::clone::Clone for lattice_evalkit::metrics::Prf
+pub fn lattice_evalkit::metrics::Prf::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_evalkit::metrics::Prf
+pub fn lattice_evalkit::metrics::Prf::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_evalkit::metrics::Prf
+pub fn lattice_evalkit::metrics::Prf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_evalkit::metrics::Prf
+impl core::marker::StructuralPartialEq for lattice_evalkit::metrics::Prf
+pub fn lattice_evalkit::metrics::bootstrap_ci(&[f64], usize, u64, f64) -> (f64, f64)
+pub fn lattice_evalkit::metrics::bootstrap_micro_prf(&[(alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<alloc::string::String>)], usize, u64, f64) -> [(f64, f64); 3]
+pub fn lattice_evalkit::metrics::ece(&[(f64, bool)], usize) -> f64
+pub fn lattice_evalkit::metrics::ndcg_at_k(&[f64], &[f64], usize) -> core::option::Option<f64>
+pub fn lattice_evalkit::metrics::prf(&[(alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<alloc::string::String>)]) -> lattice_evalkit::metrics::Prf
+pub mod lattice_evalkit::report
+pub fn lattice_evalkit::report::to_evidence_json(&str, &lattice_evalkit::dataset::Dataset, &str, &[lattice_evalkit::gate::Threshold], &lattice_evalkit::gate::GateReport) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn lattice_evalkit::report::to_html(&str, &str, &lattice_evalkit::gate::GateReport) -> alloc::string::String
+pub fn lattice_evalkit::report::to_json(&str, &str, &str, &lattice_evalkit::gate::GateReport) -> alloc::string::String
+pub mod lattice_evalkit::suite
+pub trait lattice_evalkit::suite::Provider
+pub fn lattice_evalkit::suite::Provider::name(&self) -> &str
+pub fn lattice_evalkit::suite::Provider::predict(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+impl lattice_evalkit::suite::Provider for lattice_evalkit::drift::ExactComparator
+pub fn lattice_evalkit::drift::ExactComparator::name(&self) -> &str
+pub fn lattice_evalkit::drift::ExactComparator::predict(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+impl lattice_evalkit::suite::Provider for lattice_evalkit::drift::Noisy
+pub fn lattice_evalkit::drift::Noisy::name(&self) -> &str
+pub fn lattice_evalkit::drift::Noisy::predict(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+impl lattice_evalkit::suite::Provider for lattice_evalkit::drift::Silent
+pub fn lattice_evalkit::drift::Silent::name(&self) -> &str
+pub fn lattice_evalkit::drift::Silent::predict(&self, &str) -> alloc::vec::Vec<alloc::string::String>
+pub fn lattice_evalkit::suite::run(&dyn lattice_evalkit::suite::Provider, &lattice_evalkit::dataset::Dataset, f64, u64) -> alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_evalkit::gate::MetricResult>
+pub fn lattice_evalkit::example_recall(&[&str], &[&str]) -> f64

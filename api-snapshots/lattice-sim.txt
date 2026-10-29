@@ -1,0 +1,100 @@
+pub mod lattice_sim
+pub struct lattice_sim::FaultProfile
+pub lattice_sim::FaultProfile::append_error_ppm: u32
+pub lattice_sim::FaultProfile::bit_rot_ppm: u32
+pub lattice_sim::FaultProfile::disk_full_after: core::option::Option<usize>
+pub lattice_sim::FaultProfile::garbage_tail: bool
+pub lattice_sim::FaultProfile::lose_unsynced_dirs: bool
+pub lattice_sim::FaultProfile::sync_error_ppm: u32
+pub lattice_sim::FaultProfile::torn_writes: bool
+impl lattice_sim::FaultProfile
+pub fn lattice_sim::FaultProfile::clean() -> Self
+pub fn lattice_sim::FaultProfile::crash_heavy() -> Self
+pub fn lattice_sim::FaultProfile::disk_faulty() -> Self
+pub fn lattice_sim::FaultProfile::everything() -> Self
+pub fn lattice_sim::FaultProfile::without_transient_faults(self) -> Self
+impl core::clone::Clone for lattice_sim::FaultProfile
+pub fn lattice_sim::FaultProfile::clone(&self) -> Self
+impl core::default::Default for lattice_sim::FaultProfile
+pub fn lattice_sim::FaultProfile::default() -> Self
+impl core::fmt::Debug for lattice_sim::FaultProfile
+pub fn lattice_sim::FaultProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sim::FaultProfile
+pub struct lattice_sim::SeededRng
+impl lattice_sim::SeededRng
+pub fn lattice_sim::SeededRng::below(&mut self, u64) -> u64
+pub fn lattice_sim::SeededRng::chance_ppm(&mut self, u32) -> bool
+pub fn lattice_sim::SeededRng::fork(&mut self) -> Self
+pub fn lattice_sim::SeededRng::new(u64) -> Self
+impl core::clone::Clone for lattice_sim::SeededRng
+pub fn lattice_sim::SeededRng::clone(&self) -> Self
+impl core::fmt::Debug for lattice_sim::SeededRng
+pub fn lattice_sim::SeededRng::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl lattice_seams::Rng for lattice_sim::SeededRng
+pub fn lattice_sim::SeededRng::next_u64(&mut self) -> u64
+pub struct lattice_sim::SimClock
+impl lattice_sim::SimClock
+pub fn lattice_sim::SimClock::advance(&self, u64)
+pub fn lattice_sim::SimClock::new(u64) -> Self
+pub fn lattice_sim::SimClock::set(&self, u64)
+impl core::default::Default for lattice_sim::SimClock
+pub fn lattice_sim::SimClock::default() -> Self
+impl core::fmt::Debug for lattice_sim::SimClock
+pub fn lattice_sim::SimClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl lattice_seams::Clock for lattice_sim::SimClock
+pub fn lattice_sim::SimClock::now_ms(&self) -> u64
+pub struct lattice_sim::SimIo
+impl lattice_sim::SimIo
+pub fn lattice_sim::SimIo::arm_power_cut(&mut self, u64)
+pub fn lattice_sim::SimIo::crash(&mut self)
+pub fn lattice_sim::SimIo::durable_content(&self, &str) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn lattice_sim::SimIo::is_powered_off(&self) -> bool
+pub fn lattice_sim::SimIo::mutating_ops(&self) -> u64
+pub fn lattice_sim::SimIo::new(u64, lattice_sim::FaultProfile) -> Self
+pub fn lattice_sim::SimIo::no_space_events(&self) -> u64
+pub fn lattice_sim::SimIo::power_cuts(&self) -> u64
+pub fn lattice_sim::SimIo::profile(&self) -> lattice_sim::FaultProfile
+pub fn lattice_sim::SimIo::restart_process(&mut self)
+pub fn lattice_sim::SimIo::rot_events(&self) -> u64
+pub fn lattice_sim::SimIo::set_profile(&mut self, lattice_sim::FaultProfile)
+pub fn lattice_sim::SimIo::trace_hash(&self) -> u64
+pub fn lattice_sim::SimIo::used_bytes(&self) -> usize
+impl core::fmt::Debug for lattice_sim::SimIo
+pub fn lattice_sim::SimIo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl lattice_seams::Io for lattice_sim::SimIo
+pub fn lattice_sim::SimIo::append(&mut self, &str, &[u8]) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_sim::SimIo::create_dir_all(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_sim::SimIo::exists(&self, &str) -> bool
+pub fn lattice_sim::SimIo::len(&self, &str) -> core::result::Result<u64, lattice_seams::IoError>
+pub fn lattice_sim::SimIo::list(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, lattice_seams::IoError>
+pub fn lattice_sim::SimIo::lock(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_sim::SimIo::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_sim::SimIo::read_prefix(&self, &str, usize) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_sim::SimIo::remove(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_sim::SimIo::sync(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_sim::SimIo::sync_dir(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_sim::SimIo::truncate(&mut self, &str, u64) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_sim::SimIo::unlock(&mut self, &str)
+pub struct lattice_sim::SimNet
+impl lattice_sim::SimNet
+pub fn lattice_sim::SimNet::block(&mut self, lattice_seams::NodeId, lattice_seams::NodeId)
+pub fn lattice_sim::SimNet::heal(&mut self)
+pub fn lattice_sim::SimNet::new(u64, u32, u32, u32) -> Self
+impl core::fmt::Debug for lattice_sim::SimNet
+pub fn lattice_sim::SimNet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl lattice_seams::Net for lattice_sim::SimNet
+pub fn lattice_sim::SimNet::recv(&mut self, lattice_seams::NodeId) -> core::option::Option<(lattice_seams::NodeId, alloc::vec::Vec<u8>)>
+pub fn lattice_sim::SimNet::send(&mut self, lattice_seams::NodeId, lattice_seams::NodeId, alloc::vec::Vec<u8>)
+pub struct lattice_sim::TraceHash(_)
+impl lattice_sim::TraceHash
+pub fn lattice_sim::TraceHash::value(&self) -> u64
+pub fn lattice_sim::TraceHash::write(&mut self, &[u8])
+pub fn lattice_sim::TraceHash::write_u64(&mut self, u64)
+impl core::clone::Clone for lattice_sim::TraceHash
+pub fn lattice_sim::TraceHash::clone(&self) -> Self
+impl core::default::Default for lattice_sim::TraceHash
+pub fn lattice_sim::TraceHash::default() -> Self
+impl core::fmt::Debug for lattice_sim::TraceHash
+pub fn lattice_sim::TraceHash::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sim::TraceHash
+pub const lattice_sim::LAYER: u8

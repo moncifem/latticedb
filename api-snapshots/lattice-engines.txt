@@ -1,0 +1,519 @@
+pub mod lattice_engines
+pub mod lattice_engines::catalog
+pub enum lattice_engines::catalog::CatalogError
+pub lattice_engines::catalog::CatalogError::BadCompound(&'static str)
+pub lattice_engines::catalog::CatalogError::BadIndexKey
+pub lattice_engines::catalog::CatalogError::BadKind(u8)
+pub lattice_engines::catalog::CatalogError::BadName
+pub lattice_engines::catalog::CatalogError::Empty
+pub lattice_engines::catalog::CatalogError::IdUsed(u32)
+pub lattice_engines::catalog::CatalogError::IndexIdUsed(u32)
+pub lattice_engines::catalog::CatalogError::IndexNameTaken(alloc::string::String)
+pub lattice_engines::catalog::CatalogError::NameTaken(alloc::string::String)
+pub lattice_engines::catalog::CatalogError::NoSuchIndex(u32)
+pub lattice_engines::catalog::CatalogError::NoSuchTable(u32)
+pub lattice_engines::catalog::CatalogError::OutOfOrder
+pub lattice_engines::catalog::CatalogError::TableHasIndexes(u32)
+pub lattice_engines::catalog::CatalogError::TooLarge
+pub lattice_engines::catalog::CatalogError::Trailing
+pub lattice_engines::catalog::CatalogError::Truncated
+pub lattice_engines::catalog::CatalogError::UnsupportedVersion(u8)
+impl core::clone::Clone for lattice_engines::catalog::CatalogError
+pub fn lattice_engines::catalog::CatalogError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::catalog::CatalogError
+impl core::cmp::PartialEq for lattice_engines::catalog::CatalogError
+pub fn lattice_engines::catalog::CatalogError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::catalog::CatalogError
+pub fn lattice_engines::catalog::CatalogError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_engines::catalog::CatalogError
+pub fn lattice_engines::catalog::CatalogError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::catalog::CatalogError
+pub enum lattice_engines::catalog::CatalogOp
+pub lattice_engines::catalog::CatalogOp::Create
+pub lattice_engines::catalog::CatalogOp::Create::name: alloc::string::String
+pub lattice_engines::catalog::CatalogOp::Create::table: u32
+pub lattice_engines::catalog::CatalogOp::Drop
+pub lattice_engines::catalog::CatalogOp::Drop::table: u32
+pub lattice_engines::catalog::CatalogOp::Rename
+pub lattice_engines::catalog::CatalogOp::Rename::name: alloc::string::String
+pub lattice_engines::catalog::CatalogOp::Rename::table: u32
+impl core::clone::Clone for lattice_engines::catalog::CatalogOp
+pub fn lattice_engines::catalog::CatalogOp::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::catalog::CatalogOp
+impl core::cmp::PartialEq for lattice_engines::catalog::CatalogOp
+pub fn lattice_engines::catalog::CatalogOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::catalog::CatalogOp
+pub fn lattice_engines::catalog::CatalogOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::catalog::CatalogOp
+pub enum lattice_engines::catalog::IndexOp
+pub lattice_engines::catalog::IndexOp::Create(lattice_engines::index::ManagedIndexDef)
+pub lattice_engines::catalog::IndexOp::Drop
+pub lattice_engines::catalog::IndexOp::Drop::id: u32
+impl core::clone::Clone for lattice_engines::catalog::IndexOp
+pub fn lattice_engines::catalog::IndexOp::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::catalog::IndexOp
+impl core::cmp::PartialEq for lattice_engines::catalog::IndexOp
+pub fn lattice_engines::catalog::IndexOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::catalog::IndexOp
+pub fn lattice_engines::catalog::IndexOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::catalog::IndexOp
+pub enum lattice_engines::catalog::StoreError
+pub lattice_engines::catalog::StoreError::Corrupt(alloc::string::String)
+pub lattice_engines::catalog::StoreError::InDoubt(lattice_core::txn::TxnError)
+pub lattice_engines::catalog::StoreError::Invalid(lattice_engines::catalog::CatalogError)
+pub lattice_engines::catalog::StoreError::Rejected(lattice_core::txn::TxnError)
+pub lattice_engines::catalog::StoreError::Stale
+impl core::clone::Clone for lattice_engines::catalog::StoreError
+pub fn lattice_engines::catalog::StoreError::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_engines::catalog::StoreError
+pub fn lattice_engines::catalog::StoreError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::catalog::StoreError
+pub fn lattice_engines::catalog::StoreError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::catalog::StoreError
+impl lattice_abi::error::Classify for lattice_engines::catalog::StoreError
+pub fn lattice_engines::catalog::StoreError::class(&self) -> lattice_abi::error::ErrorClass
+pub struct lattice_engines::catalog::Catalog
+impl lattice_engines::catalog::Catalog
+pub fn lattice_engines::catalog::Catalog::applied_lsn(&self) -> u64
+pub fn lattice_engines::catalog::Catalog::apply(&mut self, u64, &[lattice_engines::catalog::CatalogOp]) -> core::result::Result<(), lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::Catalog::apply_change(&mut self, u64, &[lattice_engines::catalog::CatalogOp], &[lattice_engines::catalog::IndexOp]) -> core::result::Result<(), lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::Catalog::as_of(&self, u64) -> lattice_engines::catalog::Tables
+pub fn lattice_engines::catalog::Catalog::check(&self, &[lattice_engines::catalog::CatalogOp]) -> core::result::Result<lattice_engines::catalog::Tables, lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::Catalog::check_change(&self, &[lattice_engines::catalog::CatalogOp], &[lattice_engines::catalog::IndexOp]) -> core::result::Result<(lattice_engines::catalog::Tables, lattice_engines::index::ManagedIndexes), lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::Catalog::current(&self) -> lattice_engines::catalog::Tables
+pub fn lattice_engines::catalog::Catalog::id_of(&self, u64, &str) -> core::option::Option<u32>
+pub fn lattice_engines::catalog::Catalog::indexes(&self) -> lattice_engines::index::ManagedIndexes
+pub fn lattice_engines::catalog::Catalog::indexes_as_of(&self, u64) -> lattice_engines::index::ManagedIndexes
+pub fn lattice_engines::catalog::Catalog::new() -> Self
+impl core::clone::Clone for lattice_engines::catalog::Catalog
+pub fn lattice_engines::catalog::Catalog::clone(&self) -> Self
+impl core::default::Default for lattice_engines::catalog::Catalog
+pub fn lattice_engines::catalog::Catalog::default() -> Self
+impl core::fmt::Debug for lattice_engines::catalog::Catalog
+pub fn lattice_engines::catalog::Catalog::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_engines::catalog::CatalogStore<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng> lattice_engines::catalog::CatalogStore<I, C, R>
+pub fn lattice_engines::catalog::CatalogStore<I, C, R>::catalog(&self) -> &lattice_engines::catalog::Catalog
+pub fn lattice_engines::catalog::CatalogStore<I, C, R>::commit(&mut self, alloc::vec::Vec<lattice_engines::catalog::CatalogOp>) -> core::result::Result<u64, lattice_engines::catalog::StoreError>
+pub fn lattice_engines::catalog::CatalogStore<I, C, R>::commit_managed(&mut self, alloc::vec::Vec<lattice_engines::catalog::CatalogOp>, alloc::vec::Vec<lattice_engines::catalog::IndexOp>) -> core::result::Result<u64, lattice_engines::catalog::StoreError>
+pub fn lattice_engines::catalog::CatalogStore<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<Self, lattice_engines::catalog::StoreError>
+pub struct lattice_engines::catalog::CompoundChange
+pub lattice_engines::catalog::CompoundChange::indexes: alloc::vec::Vec<lattice_engines::catalog::IndexOp>
+pub lattice_engines::catalog::CompoundChange::rows: alloc::vec::Vec<lattice_engines::rowops::RowWrite>
+pub lattice_engines::catalog::CompoundChange::tables: alloc::vec::Vec<lattice_engines::catalog::CatalogOp>
+impl core::clone::Clone for lattice_engines::catalog::CompoundChange
+pub fn lattice_engines::catalog::CompoundChange::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::catalog::CompoundChange
+impl core::cmp::PartialEq for lattice_engines::catalog::CompoundChange
+pub fn lattice_engines::catalog::CompoundChange::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::catalog::CompoundChange
+pub fn lattice_engines::catalog::CompoundChange::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::catalog::CompoundChange
+pub const lattice_engines::catalog::INDEX_MAGIC: [u8; 4]
+pub const lattice_engines::catalog::MAGIC: [u8; 4]
+pub const lattice_engines::catalog::MAX_INDEX_OPS: usize
+pub const lattice_engines::catalog::MAX_NAME: usize
+pub fn lattice_engines::catalog::decode(&[u8]) -> core::result::Result<alloc::vec::Vec<lattice_engines::catalog::CatalogOp>, lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::decode_compound(&[u8]) -> core::result::Result<lattice_engines::catalog::CompoundChange, lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::encode(&[lattice_engines::catalog::CatalogOp]) -> core::result::Result<alloc::vec::Vec<u8>, lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::encode_compound(&lattice_engines::catalog::CompoundChange) -> core::result::Result<alloc::vec::Vec<u8>, lattice_engines::catalog::CatalogError>
+pub fn lattice_engines::catalog::is_catalog_payload(&[u8]) -> bool
+pub fn lattice_engines::catalog::is_compound_payload(&[u8]) -> bool
+pub type lattice_engines::catalog::Tables = alloc::collections::btree::map::BTreeMap<u32, alloc::string::String>
+pub mod lattice_engines::index
+pub enum lattice_engines::index::IndexKey
+pub lattice_engines::index::IndexKey::Slice
+pub lattice_engines::index::IndexKey::Slice::length: u32
+pub lattice_engines::index::IndexKey::Slice::offset: u32
+pub lattice_engines::index::IndexKey::WholeValue
+impl lattice_engines::index::IndexKey
+pub fn lattice_engines::index::IndexKey::extract(&self, &[u8]) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn lattice_engines::index::IndexKey::is_valid(&self) -> bool
+impl core::clone::Clone for lattice_engines::index::IndexKey
+pub fn lattice_engines::index::IndexKey::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::index::IndexKey
+impl core::cmp::PartialEq for lattice_engines::index::IndexKey
+pub fn lattice_engines::index::IndexKey::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::index::IndexKey
+pub fn lattice_engines::index::IndexKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::index::IndexKey
+pub struct lattice_engines::index::IndexDef
+pub lattice_engines::index::IndexDef::extract: fn(&[u8]) -> core::option::Option<alloc::vec::Vec<u8>>
+pub lattice_engines::index::IndexDef::id: u32
+pub lattice_engines::index::IndexDef::table: u32
+impl core::clone::Clone for lattice_engines::index::IndexDef
+pub fn lattice_engines::index::IndexDef::clone(&self) -> Self
+impl core::marker::Copy for lattice_engines::index::IndexDef
+pub struct lattice_engines::index::Indexes
+impl lattice_engines::index::Indexes
+pub fn lattice_engines::index::Indexes::apply(&mut self, u64, lattice_core::changeset::ChangeSetId, alloc::vec::Vec<((u32, alloc::vec::Vec<u8>), core::option::Option<alloc::vec::Vec<u8>>)>) -> core::result::Result<(), lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::index::Indexes::changes_for(&self, &lattice_engines::mvcc::Table<lattice_engines::rowops::RowKey, alloc::vec::Vec<u8>>, &[lattice_engines::rowops::RowWrite]) -> core::result::Result<alloc::vec::Vec<((u32, alloc::vec::Vec<u8>), core::option::Option<alloc::vec::Vec<u8>>)>, lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::index::Indexes::expected_entries(&self, &lattice_engines::mvcc::Table<lattice_engines::rowops::RowKey, alloc::vec::Vec<u8>>, lattice_engines::mvcc::Snapshot) -> core::result::Result<lattice_engines::index::IndexEntries, lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::index::Indexes::live_entries(&self, lattice_engines::mvcc::Snapshot) -> core::result::Result<lattice_engines::index::IndexEntries, lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::index::Indexes::lookup(&self, lattice_engines::mvcc::Snapshot, u32, &[u8]) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>, lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::index::Indexes::new(alloc::vec::Vec<lattice_engines::index::IndexDef>) -> Self
+pub fn lattice_engines::index::Indexes::vacuum(&mut self, u64) -> usize
+impl core::clone::Clone for lattice_engines::index::Indexes
+pub fn lattice_engines::index::Indexes::clone(&self) -> Self
+pub struct lattice_engines::index::ManagedIndexDef
+pub lattice_engines::index::ManagedIndexDef::id: u32
+pub lattice_engines::index::ManagedIndexDef::key: lattice_engines::index::IndexKey
+pub lattice_engines::index::ManagedIndexDef::name: alloc::string::String
+pub lattice_engines::index::ManagedIndexDef::table: u32
+impl core::clone::Clone for lattice_engines::index::ManagedIndexDef
+pub fn lattice_engines::index::ManagedIndexDef::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::index::ManagedIndexDef
+impl core::cmp::PartialEq for lattice_engines::index::ManagedIndexDef
+pub fn lattice_engines::index::ManagedIndexDef::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::index::ManagedIndexDef
+pub fn lattice_engines::index::ManagedIndexDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::index::ManagedIndexDef
+pub type lattice_engines::index::IndexEntries = alloc::collections::btree::map::BTreeMap<(u32, alloc::vec::Vec<u8>), alloc::vec::Vec<u8>>
+pub type lattice_engines::index::ManagedIndexes = alloc::collections::btree::map::BTreeMap<u32, lattice_engines::index::ManagedIndexDef>
+pub mod lattice_engines::limits
+pub enum lattice_engines::limits::LimitError
+pub lattice_engines::limits::LimitError::Cancelled
+pub lattice_engines::limits::LimitError::DeadlineExceeded
+pub lattice_engines::limits::LimitError::DeadlineOverflow
+pub lattice_engines::limits::LimitError::MemoryExceeded
+pub lattice_engines::limits::LimitError::MemoryExceeded::limit: u64
+pub lattice_engines::limits::LimitError::MemoryExceeded::requested: u64
+pub lattice_engines::limits::LimitError::MemoryExceeded::used: u64
+pub lattice_engines::limits::LimitError::PermissionDenied
+impl core::clone::Clone for lattice_engines::limits::LimitError
+pub fn lattice_engines::limits::LimitError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::limits::LimitError
+impl core::cmp::PartialEq for lattice_engines::limits::LimitError
+pub fn lattice_engines::limits::LimitError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_engines::limits::LimitError
+impl core::fmt::Debug for lattice_engines::limits::LimitError
+pub fn lattice_engines::limits::LimitError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_engines::limits::LimitError
+pub fn lattice_engines::limits::LimitError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::limits::LimitError
+impl core::marker::StructuralPartialEq for lattice_engines::limits::LimitError
+pub struct lattice_engines::limits::AllowAll
+impl core::clone::Clone for lattice_engines::limits::AllowAll
+pub fn lattice_engines::limits::AllowAll::clone(&self) -> Self
+impl core::default::Default for lattice_engines::limits::AllowAll
+pub fn lattice_engines::limits::AllowAll::default() -> Self
+impl core::fmt::Debug for lattice_engines::limits::AllowAll
+pub fn lattice_engines::limits::AllowAll::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::limits::AllowAll
+impl lattice_engines::limits::PolicyEvaluator for lattice_engines::limits::AllowAll
+pub fn lattice_engines::limits::AllowAll::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_engines::limits::AllowAll::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+pub struct lattice_engines::limits::CancellationFlag(_)
+impl lattice_engines::limits::CancellationFlag
+pub fn lattice_engines::limits::CancellationFlag::cancel(&self)
+pub fn lattice_engines::limits::CancellationFlag::check(&self) -> core::result::Result<(), lattice_engines::limits::LimitError>
+pub fn lattice_engines::limits::CancellationFlag::is_cancelled(&self) -> bool
+impl core::clone::Clone for lattice_engines::limits::CancellationFlag
+pub fn lattice_engines::limits::CancellationFlag::clone(&self) -> Self
+impl core::default::Default for lattice_engines::limits::CancellationFlag
+pub fn lattice_engines::limits::CancellationFlag::default() -> Self
+impl core::fmt::Debug for lattice_engines::limits::CancellationFlag
+pub fn lattice_engines::limits::CancellationFlag::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_engines::limits::Deadline
+impl lattice_engines::limits::Deadline
+pub fn lattice_engines::limits::Deadline::after(&impl lattice_seams::Clock + ?core::marker::Sized, u64) -> core::result::Result<Self, lattice_engines::limits::LimitError>
+pub fn lattice_engines::limits::Deadline::at_ms(&self) -> u64
+pub fn lattice_engines::limits::Deadline::check(&self, &impl lattice_seams::Clock + ?core::marker::Sized) -> core::result::Result<(), lattice_engines::limits::LimitError>
+impl core::fmt::Debug for lattice_engines::limits::Deadline
+pub fn lattice_engines::limits::Deadline::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_engines::limits::DenyAll
+impl core::clone::Clone for lattice_engines::limits::DenyAll
+pub fn lattice_engines::limits::DenyAll::clone(&self) -> Self
+impl core::default::Default for lattice_engines::limits::DenyAll
+pub fn lattice_engines::limits::DenyAll::default() -> Self
+impl core::fmt::Debug for lattice_engines::limits::DenyAll
+pub fn lattice_engines::limits::DenyAll::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::limits::DenyAll
+impl lattice_engines::limits::PolicyEvaluator for lattice_engines::limits::DenyAll
+pub fn lattice_engines::limits::DenyAll::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_engines::limits::DenyAll::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+pub struct lattice_engines::limits::MemoryBudget
+impl lattice_engines::limits::MemoryBudget
+pub fn lattice_engines::limits::MemoryBudget::limit(&self) -> u64
+pub fn lattice_engines::limits::MemoryBudget::new(u64) -> Self
+pub fn lattice_engines::limits::MemoryBudget::peak(&self) -> u64
+pub fn lattice_engines::limits::MemoryBudget::reserve(&self, u64) -> core::result::Result<lattice_engines::limits::MemoryReservation<'_>, lattice_engines::limits::LimitError>
+pub fn lattice_engines::limits::MemoryBudget::used(&self) -> u64
+impl core::fmt::Debug for lattice_engines::limits::MemoryBudget
+pub fn lattice_engines::limits::MemoryBudget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_engines::limits::MemoryReservation<'a>
+impl lattice_engines::limits::MemoryReservation<'_>
+pub fn lattice_engines::limits::MemoryReservation<'_>::bytes(&self) -> u64
+impl core::ops::drop::Drop for lattice_engines::limits::MemoryReservation<'_>
+pub fn lattice_engines::limits::MemoryReservation<'_>::drop(&mut self)
+impl<'a> core::fmt::Debug for lattice_engines::limits::MemoryReservation<'a>
+pub fn lattice_engines::limits::MemoryReservation<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_engines::limits::RowRef<'a>
+pub lattice_engines::limits::RowRef::key: &'a [u8]
+pub lattice_engines::limits::RowRef::table: u32
+pub lattice_engines::limits::RowRef::value: &'a [u8]
+impl<'a> core::clone::Clone for lattice_engines::limits::RowRef<'a>
+pub fn lattice_engines::limits::RowRef<'a>::clone(&self) -> Self
+impl<'a> core::fmt::Debug for lattice_engines::limits::RowRef<'a>
+pub fn lattice_engines::limits::RowRef<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for lattice_engines::limits::RowRef<'a>
+pub struct lattice_engines::limits::RowWriteRef<'a>
+pub lattice_engines::limits::RowWriteRef::after: core::option::Option<&'a [u8]>
+pub lattice_engines::limits::RowWriteRef::before: core::option::Option<&'a [u8]>
+pub lattice_engines::limits::RowWriteRef::key: &'a [u8]
+pub lattice_engines::limits::RowWriteRef::table: u32
+impl<'a> core::clone::Clone for lattice_engines::limits::RowWriteRef<'a>
+pub fn lattice_engines::limits::RowWriteRef<'a>::clone(&self) -> Self
+impl<'a> core::fmt::Debug for lattice_engines::limits::RowWriteRef<'a>
+pub fn lattice_engines::limits::RowWriteRef<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for lattice_engines::limits::RowWriteRef<'a>
+pub struct lattice_engines::limits::StatementLimits
+impl lattice_engines::limits::StatementLimits
+pub fn lattice_engines::limits::StatementLimits::check(&self, &impl lattice_seams::Clock + ?core::marker::Sized) -> core::result::Result<(), lattice_engines::limits::LimitError>
+pub fn lattice_engines::limits::StatementLimits::memory(&self) -> (u64, u64, u64)
+pub fn lattice_engines::limits::StatementLimits::new(&impl lattice_seams::Clock + ?core::marker::Sized, core::option::Option<u64>, u64, lattice_engines::limits::CancellationFlag) -> core::result::Result<Self, lattice_engines::limits::LimitError>
+pub fn lattice_engines::limits::StatementLimits::reserve(&self, &impl lattice_seams::Clock + ?core::marker::Sized, u64) -> core::result::Result<lattice_engines::limits::MemoryReservation<'_>, lattice_engines::limits::LimitError>
+impl core::fmt::Debug for lattice_engines::limits::StatementLimits
+pub fn lattice_engines::limits::StatementLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait lattice_engines::limits::PolicyEvaluator
+pub fn lattice_engines::limits::PolicyEvaluator::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_engines::limits::PolicyEvaluator::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+impl lattice_engines::limits::PolicyEvaluator for lattice_engines::limits::AllowAll
+pub fn lattice_engines::limits::AllowAll::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_engines::limits::AllowAll::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+impl lattice_engines::limits::PolicyEvaluator for lattice_engines::limits::DenyAll
+pub fn lattice_engines::limits::DenyAll::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_engines::limits::DenyAll::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+impl<P: lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized> lattice_engines::limits::PolicyEvaluator for &P
+pub fn &P::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn &P::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+pub fn lattice_engines::limits::authorize_read(&impl lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized, lattice_engines::limits::RowRef<'_>) -> core::result::Result<(), lattice_engines::limits::LimitError>
+pub fn lattice_engines::limits::authorize_write(&impl lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized, lattice_engines::limits::RowWriteRef<'_>) -> core::result::Result<(), lattice_engines::limits::LimitError>
+pub mod lattice_engines::mvcc
+pub enum lattice_engines::mvcc::MvccError
+pub lattice_engines::mvcc::MvccError::Conflict
+pub lattice_engines::mvcc::MvccError::Conflict::newer_lsn: u64
+pub lattice_engines::mvcc::MvccError::OutOfOrder
+pub lattice_engines::mvcc::MvccError::OutOfOrder::applied: u64
+pub lattice_engines::mvcc::MvccError::OutOfOrder::lsn: u64
+pub lattice_engines::mvcc::MvccError::SnapshotTooOld
+pub lattice_engines::mvcc::MvccError::SnapshotTooOld::floor: u64
+impl core::clone::Clone for lattice_engines::mvcc::MvccError
+pub fn lattice_engines::mvcc::MvccError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::mvcc::MvccError
+impl core::cmp::PartialEq for lattice_engines::mvcc::MvccError
+pub fn lattice_engines::mvcc::MvccError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::mvcc::MvccError
+pub fn lattice_engines::mvcc::MvccError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::mvcc::MvccError
+impl core::marker::StructuralPartialEq for lattice_engines::mvcc::MvccError
+pub struct lattice_engines::mvcc::Snapshot
+pub lattice_engines::mvcc::Snapshot::as_of: u64
+impl core::clone::Clone for lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::mvcc::Snapshot::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::mvcc::Snapshot
+impl core::cmp::Ord for lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::mvcc::Snapshot::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::mvcc::Snapshot::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::mvcc::Snapshot::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::mvcc::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::mvcc::Snapshot
+impl core::marker::StructuralPartialEq for lattice_engines::mvcc::Snapshot
+pub struct lattice_engines::mvcc::Table<K: core::cmp::Ord, V>
+impl<K: core::cmp::Ord + core::clone::Clone, V: core::clone::Clone> lattice_engines::mvcc::Table<K, V>
+pub fn lattice_engines::mvcc::Table<K, V>::applied_lsn(&self) -> u64
+pub fn lattice_engines::mvcc::Table<K, V>::apply(&mut self, u64, lattice_core::changeset::ChangeSetId, alloc::vec::Vec<(K, core::option::Option<V>)>) -> core::result::Result<(), lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::mvcc::Table<K, V>::check_readable(&self, lattice_engines::mvcc::Snapshot) -> core::result::Result<(), lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::mvcc::Table<K, V>::floor(&self) -> u64
+pub fn lattice_engines::mvcc::Table<K, V>::get(&self, lattice_engines::mvcc::Snapshot, &K) -> core::result::Result<core::option::Option<&V>, lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::mvcc::Table<K, V>::new() -> Self
+pub fn lattice_engines::mvcc::Table<K, V>::newest_lsn(&self, &K) -> core::option::Option<u64>
+pub fn lattice_engines::mvcc::Table<K, V>::range<R: core::ops::range::RangeBounds<K>>(&self, lattice_engines::mvcc::Snapshot, R) -> core::result::Result<alloc::vec::Vec<(&K, &V)>, lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::mvcc::Table<K, V>::snapshot(&self) -> lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::mvcc::Table<K, V>::vacuum(&mut self, u64) -> usize
+pub fn lattice_engines::mvcc::Table<K, V>::version_count(&self) -> usize
+pub fn lattice_engines::mvcc::Table<K, V>::written_by(&self, lattice_engines::mvcc::Snapshot, &K) -> core::result::Result<core::option::Option<lattice_core::changeset::ChangeSetId>, lattice_engines::mvcc::MvccError>
+impl<K: core::clone::Clone + core::cmp::Ord, V: core::clone::Clone> core::clone::Clone for lattice_engines::mvcc::Table<K, V>
+pub fn lattice_engines::mvcc::Table<K, V>::clone(&self) -> Self
+impl<K: core::cmp::Ord, V> core::default::Default for lattice_engines::mvcc::Table<K, V>
+pub fn lattice_engines::mvcc::Table<K, V>::default() -> Self
+impl<K: core::fmt::Debug + core::cmp::Ord, V: core::fmt::Debug> core::fmt::Debug for lattice_engines::mvcc::Table<K, V>
+pub fn lattice_engines::mvcc::Table<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_engines::mvcc::Tx<K: core::cmp::Ord, V>
+impl<K: core::cmp::Ord + core::clone::Clone, V: core::clone::Clone> lattice_engines::mvcc::Tx<K, V>
+pub fn lattice_engines::mvcc::Tx<K, V>::begin(&lattice_engines::mvcc::Table<K, V>) -> Self
+pub fn lattice_engines::mvcc::Tx<K, V>::check(&self, &lattice_engines::mvcc::Table<K, V>) -> core::result::Result<(), lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::mvcc::Tx<K, V>::commit(self, &mut lattice_engines::mvcc::Table<K, V>, u64, lattice_core::changeset::ChangeSetId) -> core::result::Result<(), lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::mvcc::Tx<K, V>::delete(&mut self, K)
+pub fn lattice_engines::mvcc::Tx<K, V>::get<'a>(&'a self, &'a lattice_engines::mvcc::Table<K, V>, &K) -> core::result::Result<core::option::Option<&'a V>, lattice_engines::mvcc::MvccError>
+pub fn lattice_engines::mvcc::Tx<K, V>::into_writes(self) -> alloc::vec::Vec<(K, core::option::Option<V>)>
+pub fn lattice_engines::mvcc::Tx<K, V>::is_read_only(&self) -> bool
+pub fn lattice_engines::mvcc::Tx<K, V>::put(&mut self, K, V)
+pub fn lattice_engines::mvcc::Tx<K, V>::snapshot(&self) -> lattice_engines::mvcc::Snapshot
+impl<K: core::clone::Clone + core::cmp::Ord, V: core::clone::Clone> core::clone::Clone for lattice_engines::mvcc::Tx<K, V>
+pub fn lattice_engines::mvcc::Tx<K, V>::clone(&self) -> Self
+impl<K: core::fmt::Debug + core::cmp::Ord, V: core::fmt::Debug> core::fmt::Debug for lattice_engines::mvcc::Tx<K, V>
+pub fn lattice_engines::mvcc::Tx<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod lattice_engines::rowops
+pub enum lattice_engines::rowops::RowOpsError
+pub lattice_engines::rowops::RowOpsError::BadKind(u8)
+pub lattice_engines::rowops::RowOpsError::TooLarge
+pub lattice_engines::rowops::RowOpsError::Trailing
+pub lattice_engines::rowops::RowOpsError::Truncated
+pub lattice_engines::rowops::RowOpsError::UnsupportedVersion(u8)
+impl core::clone::Clone for lattice_engines::rowops::RowOpsError
+pub fn lattice_engines::rowops::RowOpsError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::rowops::RowOpsError
+impl core::cmp::PartialEq for lattice_engines::rowops::RowOpsError
+pub fn lattice_engines::rowops::RowOpsError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::rowops::RowOpsError
+pub fn lattice_engines::rowops::RowOpsError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::rowops::RowOpsError
+pub const lattice_engines::rowops::MAGIC: [u8; 4]
+pub fn lattice_engines::rowops::decode(&[u8]) -> core::result::Result<alloc::vec::Vec<lattice_engines::rowops::RowWrite>, lattice_engines::rowops::RowOpsError>
+pub fn lattice_engines::rowops::encode(&[lattice_engines::rowops::RowWrite]) -> core::result::Result<alloc::vec::Vec<u8>, lattice_engines::rowops::RowOpsError>
+pub fn lattice_engines::rowops::is_row_payload(&[u8]) -> bool
+pub type lattice_engines::rowops::RowKey = (u32, alloc::vec::Vec<u8>)
+pub type lattice_engines::rowops::RowWrite = (lattice_engines::rowops::RowKey, core::option::Option<alloc::vec::Vec<u8>>)
+pub mod lattice_engines::store
+pub enum lattice_engines::store::RowError
+pub lattice_engines::store::RowError::Conflict
+pub lattice_engines::store::RowError::Conflict::newer_lsn: u64
+pub lattice_engines::store::RowError::Corrupt(alloc::string::String)
+pub lattice_engines::store::RowError::Encode(lattice_engines::rowops::RowOpsError)
+pub lattice_engines::store::RowError::InDoubt(lattice_core::txn::TxnError)
+pub lattice_engines::store::RowError::InvalidCatalog(lattice_engines::catalog::CatalogError)
+pub lattice_engines::store::RowError::InvalidIndexes(alloc::string::String)
+pub lattice_engines::store::RowError::PermissionDenied
+pub lattice_engines::store::RowError::Rejected(lattice_core::txn::TxnError)
+pub lattice_engines::store::RowError::SnapshotTooOld
+pub lattice_engines::store::RowError::SnapshotTooOld::floor: u64
+pub lattice_engines::store::RowError::Stale
+impl core::clone::Clone for lattice_engines::store::RowError
+pub fn lattice_engines::store::RowError::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_engines::store::RowError
+pub fn lattice_engines::store::RowError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::store::RowError
+pub fn lattice_engines::store::RowError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_engines::store::RowError
+pub fn lattice_engines::store::RowError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::store::RowError
+impl lattice_abi::error::Classify for lattice_engines::store::RowError
+pub fn lattice_engines::store::RowError::class(&self) -> lattice_abi::error::ErrorClass
+pub struct lattice_engines::store::RowStore<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng> lattice_engines::store::RowStore<I, C, R>
+pub fn lattice_engines::store::RowStore<I, C, R>::applied_lsn(&self) -> u64
+pub fn lattice_engines::store::RowStore<I, C, R>::begin(&self) -> lattice_engines::store::RowTx
+pub fn lattice_engines::store::RowStore<I, C, R>::begin_with_policy<P: lattice_engines::limits::PolicyEvaluator>(&self, P) -> lattice_engines::store::RowTx<P>
+pub fn lattice_engines::store::RowStore<I, C, R>::catalog(&self) -> &lattice_engines::catalog::Catalog
+pub fn lattice_engines::store::RowStore<I, C, R>::changeset_id_at(&self, u64) -> core::option::Option<lattice_core::changeset::ChangeSetId>
+pub fn lattice_engines::store::RowStore<I, C, R>::check_indexes(&self) -> core::result::Result<(), alloc::string::String>
+pub fn lattice_engines::store::RowStore<I, C, R>::check_indexes_at(&self, lattice_engines::mvcc::Snapshot) -> core::result::Result<(), alloc::string::String>
+pub fn lattice_engines::store::RowStore<I, C, R>::check_snapshot(&self, lattice_engines::mvcc::Snapshot) -> core::result::Result<(), lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::commit<P: lattice_engines::limits::PolicyEvaluator>(&mut self, lattice_engines::store::RowTx<P>) -> core::result::Result<u64, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::commit_catalog(&mut self, alloc::vec::Vec<lattice_engines::catalog::CatalogOp>, alloc::vec::Vec<lattice_engines::catalog::IndexOp>) -> core::result::Result<u64, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::commit_time_at(&self, u64) -> core::option::Option<lattice_abi::hlc::Hlc>
+pub fn lattice_engines::store::RowStore<I, C, R>::commit_with_catalog<P: lattice_engines::limits::PolicyEvaluator>(&mut self, lattice_engines::store::RowTx<P>, alloc::vec::Vec<lattice_engines::catalog::CatalogOp>, alloc::vec::Vec<lattice_engines::catalog::IndexOp>) -> core::result::Result<u64, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::get<'a, P: lattice_engines::limits::PolicyEvaluator>(&'a self, &'a lattice_engines::store::RowTx<P>, u32, &[u8]) -> core::result::Result<core::option::Option<&'a alloc::vec::Vec<u8>>, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::get_at(&self, lattice_engines::mvcc::Snapshot, u32, &[u8], &impl lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized) -> core::result::Result<core::option::Option<&alloc::vec::Vec<u8>>, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::lookup_at(&self, lattice_engines::mvcc::Snapshot, u32, &[u8], &impl lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::oldest_snapshot(&self) -> lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::store::RowStore<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<Self, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::open_with_indexes(I, C, R, &lattice_core::kernel::Config, alloc::vec::Vec<lattice_engines::index::IndexDef>) -> core::result::Result<Self, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::scan_at<B: core::ops::range::RangeBounds<alloc::vec::Vec<u8>>>(&self, lattice_engines::mvcc::Snapshot, u32, B, &impl lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized) -> core::result::Result<lattice_engines::store::ScanRows<'_>, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::snapshot(&self) -> lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::store::RowStore<I, C, R>::snapshot_as_of_changeset(&self, lattice_core::changeset::ChangeSetId) -> core::option::Option<lattice_engines::mvcc::Snapshot>
+pub fn lattice_engines::store::RowStore<I, C, R>::snapshot_as_of_hlc(&self, lattice_abi::hlc::Hlc) -> lattice_engines::mvcc::Snapshot
+pub fn lattice_engines::store::RowStore<I, C, R>::try_snapshot_as_of_hlc(&self, lattice_abi::hlc::Hlc) -> core::result::Result<lattice_engines::mvcc::Snapshot, lattice_engines::store::RowError>
+pub fn lattice_engines::store::RowStore<I, C, R>::vacuum(&mut self, u64) -> lattice_engines::store::VacuumStats
+pub fn lattice_engines::store::RowStore<I, C, R>::vacuum_horizon(&self, core::option::Option<lattice_engines::mvcc::Snapshot>, u64) -> u64
+pub fn lattice_engines::store::RowStore<I, C, R>::vacuum_if_needed(&mut self, core::option::Option<lattice_engines::mvcc::Snapshot>, u64, usize) -> core::option::Option<lattice_engines::store::VacuumStats>
+pub struct lattice_engines::store::RowTx<P>
+impl<P> lattice_engines::store::RowTx<P>
+pub fn lattice_engines::store::RowTx<P>::delete(&mut self, lattice_engines::rowops::RowKey)
+pub fn lattice_engines::store::RowTx<P>::is_read_only(&self) -> bool
+pub fn lattice_engines::store::RowTx<P>::put(&mut self, lattice_engines::rowops::RowKey, alloc::vec::Vec<u8>)
+pub fn lattice_engines::store::RowTx<P>::snapshot(&self) -> lattice_engines::mvcc::Snapshot
+impl<P: core::clone::Clone> core::clone::Clone for lattice_engines::store::RowTx<P>
+pub fn lattice_engines::store::RowTx<P>::clone(&self) -> Self
+pub struct lattice_engines::store::VacuumStats
+pub lattice_engines::store::VacuumStats::horizon: u64
+pub lattice_engines::store::VacuumStats::index_versions: usize
+pub lattice_engines::store::VacuumStats::row_versions: usize
+impl core::clone::Clone for lattice_engines::store::VacuumStats
+pub fn lattice_engines::store::VacuumStats::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::store::VacuumStats
+impl core::cmp::PartialEq for lattice_engines::store::VacuumStats
+pub fn lattice_engines::store::VacuumStats::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::store::VacuumStats
+pub fn lattice_engines::store::VacuumStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::store::VacuumStats
+impl core::marker::StructuralPartialEq for lattice_engines::store::VacuumStats
+pub type lattice_engines::store::ScanRows<'a> = alloc::vec::Vec<(&'a [u8], &'a alloc::vec::Vec<u8>)>
+pub mod lattice_engines::typed
+pub enum lattice_engines::typed::ColType
+pub lattice_engines::typed::ColType::Bool
+pub lattice_engines::typed::ColType::Bytes
+pub lattice_engines::typed::ColType::Enum(alloc::vec::Vec<alloc::string::String>)
+pub lattice_engines::typed::ColType::Int
+pub lattice_engines::typed::ColType::List(alloc::boxed::Box<lattice_engines::typed::ColType>)
+pub lattice_engines::typed::ColType::Ref
+pub lattice_engines::typed::ColType::Text
+impl core::clone::Clone for lattice_engines::typed::ColType
+pub fn lattice_engines::typed::ColType::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::typed::ColType
+impl core::cmp::PartialEq for lattice_engines::typed::ColType
+pub fn lattice_engines::typed::ColType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::typed::ColType
+pub fn lattice_engines::typed::ColType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::typed::ColType
+pub enum lattice_engines::typed::TypedError
+pub lattice_engines::typed::TypedError::Corrupt
+pub lattice_engines::typed::TypedError::Mismatch(alloc::string::String)
+pub lattice_engines::typed::TypedError::Missing(alloc::string::String)
+pub lattice_engines::typed::TypedError::NotAnObject
+pub lattice_engines::typed::TypedError::OverflowClash(alloc::string::String)
+pub lattice_engines::typed::TypedError::TooDeep
+pub lattice_engines::typed::TypedError::TooLarge
+pub lattice_engines::typed::TypedError::Trailing
+pub lattice_engines::typed::TypedError::Truncated
+pub lattice_engines::typed::TypedError::UnknownVariant(alloc::string::String)
+pub lattice_engines::typed::TypedError::UnsupportedVersion(u8)
+impl core::clone::Clone for lattice_engines::typed::TypedError
+pub fn lattice_engines::typed::TypedError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::typed::TypedError
+impl core::cmp::PartialEq for lattice_engines::typed::TypedError
+pub fn lattice_engines::typed::TypedError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::typed::TypedError
+pub fn lattice_engines::typed::TypedError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::typed::TypedError
+pub struct lattice_engines::typed::Column
+pub lattice_engines::typed::Column::name: alloc::string::String
+pub lattice_engines::typed::Column::nullable: bool
+pub lattice_engines::typed::Column::ty: lattice_engines::typed::ColType
+impl core::clone::Clone for lattice_engines::typed::Column
+pub fn lattice_engines::typed::Column::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::typed::Column
+impl core::cmp::PartialEq for lattice_engines::typed::Column
+pub fn lattice_engines::typed::Column::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::typed::Column
+pub fn lattice_engines::typed::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::typed::Column
+pub struct lattice_engines::typed::TableLayout
+pub lattice_engines::typed::TableLayout::columns: alloc::vec::Vec<lattice_engines::typed::Column>
+pub lattice_engines::typed::TableLayout::type_name: alloc::string::String
+impl core::clone::Clone for lattice_engines::typed::TableLayout
+pub fn lattice_engines::typed::TableLayout::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::typed::TableLayout
+impl core::cmp::PartialEq for lattice_engines::typed::TableLayout
+pub fn lattice_engines::typed::TableLayout::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::typed::TableLayout
+pub fn lattice_engines::typed::TableLayout::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::typed::TableLayout
+pub fn lattice_engines::typed::decode_row(&lattice_engines::typed::TableLayout, &[u8]) -> core::result::Result<lattice_lsl::validate::Value, lattice_engines::typed::TypedError>
+pub fn lattice_engines::typed::encode_row(&lattice_engines::typed::TableLayout, &lattice_lsl::validate::Value) -> core::result::Result<alloc::vec::Vec<u8>, lattice_engines::typed::TypedError>
+pub fn lattice_engines::typed::layouts(&lattice_lsl::check::Compiled) -> alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_engines::typed::TableLayout>
+pub const lattice_engines::LAYER: u8

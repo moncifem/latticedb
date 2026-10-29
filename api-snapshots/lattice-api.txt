@@ -1,0 +1,442 @@
+pub mod lattice_api
+pub mod lattice_api::auth
+pub struct lattice_api::auth::Accounts
+impl lattice_api::auth::Accounts
+pub fn lattice_api::auth::Accounts::exchange(&self, &str, &mut impl lattice_seams::Rng + ?core::marker::Sized) -> core::result::Result<(lattice_api::scram::ScramServer, bool), lattice_api::scram::ScramError>
+pub fn lattice_api::auth::Accounts::parse(&str, lattice_api::auth::DecoySecret) -> core::result::Result<Self, lattice_api::scram::ScramError>
+impl core::fmt::Debug for lattice_api::auth::Accounts
+pub fn lattice_api::auth::Accounts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_api::auth::DecoySecret(_)
+impl lattice_api::auth::DecoySecret
+pub fn lattice_api::auth::DecoySecret::from_bytes(&[u8]) -> core::result::Result<Self, lattice_api::scram::ScramError>
+impl core::fmt::Debug for lattice_api::auth::DecoySecret
+pub fn lattice_api::auth::DecoySecret::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const lattice_api::auth::MAX_ACCOUNTS: usize
+pub const lattice_api::auth::MAX_CREDENTIAL_BYTES: usize
+pub mod lattice_api::cancel
+pub enum lattice_api::cancel::CancelError
+pub lattice_api::cancel::CancelError::ExpiryOverflow
+pub lattice_api::cancel::CancelError::Full
+pub lattice_api::cancel::CancelError::InvalidCapacity
+pub lattice_api::cancel::CancelError::InvalidLifetime
+pub lattice_api::cancel::CancelError::PidExhausted
+pub lattice_api::cancel::CancelError::UnknownKey
+impl core::clone::Clone for lattice_api::cancel::CancelError
+pub fn lattice_api::cancel::CancelError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::cancel::CancelError
+impl core::cmp::PartialEq for lattice_api::cancel::CancelError
+pub fn lattice_api::cancel::CancelError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::cancel::CancelError
+impl core::fmt::Debug for lattice_api::cancel::CancelError
+pub fn lattice_api::cancel::CancelError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::cancel::CancelError
+pub fn lattice_api::cancel::CancelError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::cancel::CancelError
+impl core::marker::StructuralPartialEq for lattice_api::cancel::CancelError
+pub struct lattice_api::cancel::CancelKey
+pub lattice_api::cancel::CancelKey::pid: i32
+pub lattice_api::cancel::CancelKey::secret: i32
+impl core::clone::Clone for lattice_api::cancel::CancelKey
+pub fn lattice_api::cancel::CancelKey::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::cancel::CancelKey
+impl core::cmp::PartialEq for lattice_api::cancel::CancelKey
+pub fn lattice_api::cancel::CancelKey::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::cancel::CancelKey
+pub fn lattice_api::cancel::CancelKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::cancel::CancelKey
+impl core::marker::StructuralPartialEq for lattice_api::cancel::CancelKey
+pub struct lattice_api::cancel::CancelRegistry
+impl lattice_api::cancel::CancelRegistry
+pub fn lattice_api::cancel::CancelRegistry::begin_query(&mut self, lattice_api::cancel::CancelKey, u64) -> core::result::Result<lattice_api::cancel::CancellationToken, lattice_api::cancel::CancelError>
+pub fn lattice_api::cancel::CancelRegistry::cancel(&mut self, lattice_api::cancel::CancelKey, u64) -> bool
+pub fn lattice_api::cancel::CancelRegistry::capacity(&self) -> usize
+pub fn lattice_api::cancel::CancelRegistry::clear(&mut self) -> usize
+pub fn lattice_api::cancel::CancelRegistry::expire(&mut self, u64) -> usize
+pub fn lattice_api::cancel::CancelRegistry::is_empty(&self) -> bool
+pub fn lattice_api::cancel::CancelRegistry::len(&self) -> usize
+pub fn lattice_api::cancel::CancelRegistry::new(usize) -> core::result::Result<Self, lattice_api::cancel::CancelError>
+pub fn lattice_api::cancel::CancelRegistry::register(&mut self, &mut impl lattice_seams::Rng + ?core::marker::Sized, u64, u64) -> core::result::Result<lattice_api::cancel::CancelKey, lattice_api::cancel::CancelError>
+pub fn lattice_api::cancel::CancelRegistry::unregister(&mut self, lattice_api::cancel::CancelKey, u64) -> bool
+pub struct lattice_api::cancel::CancellationToken(_)
+impl lattice_api::cancel::CancellationToken
+pub fn lattice_api::cancel::CancellationToken::is_cancelled(&self) -> bool
+impl core::clone::Clone for lattice_api::cancel::CancellationToken
+pub fn lattice_api::cancel::CancellationToken::clone(&self) -> Self
+impl core::default::Default for lattice_api::cancel::CancellationToken
+pub fn lattice_api::cancel::CancellationToken::default() -> Self
+pub const lattice_api::cancel::MAX_ENTRIES: usize
+pub mod lattice_api::pgwire
+pub enum lattice_api::pgwire::Backend
+pub lattice_api::pgwire::Backend::AuthenticationCleartextPassword
+pub lattice_api::pgwire::Backend::AuthenticationOk
+pub lattice_api::pgwire::Backend::AuthenticationSasl(alloc::vec::Vec<alloc::string::String>)
+pub lattice_api::pgwire::Backend::AuthenticationSaslContinue(alloc::vec::Vec<u8>)
+pub lattice_api::pgwire::Backend::AuthenticationSaslFinal(alloc::vec::Vec<u8>)
+pub lattice_api::pgwire::Backend::BackendKeyData
+pub lattice_api::pgwire::Backend::BackendKeyData::pid: i32
+pub lattice_api::pgwire::Backend::BackendKeyData::secret: i32
+pub lattice_api::pgwire::Backend::BindComplete
+pub lattice_api::pgwire::Backend::CloseComplete
+pub lattice_api::pgwire::Backend::CommandComplete(alloc::string::String)
+pub lattice_api::pgwire::Backend::DataRow(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
+pub lattice_api::pgwire::Backend::EmptyQueryResponse
+pub lattice_api::pgwire::Backend::ErrorResponse
+pub lattice_api::pgwire::Backend::ErrorResponse::code: alloc::string::String
+pub lattice_api::pgwire::Backend::ErrorResponse::message: alloc::string::String
+pub lattice_api::pgwire::Backend::ErrorResponse::severity: alloc::string::String
+pub lattice_api::pgwire::Backend::NoData
+pub lattice_api::pgwire::Backend::ParameterDescription(alloc::vec::Vec<i32>)
+pub lattice_api::pgwire::Backend::ParameterStatus
+pub lattice_api::pgwire::Backend::ParameterStatus::name: alloc::string::String
+pub lattice_api::pgwire::Backend::ParameterStatus::value: alloc::string::String
+pub lattice_api::pgwire::Backend::ParseComplete
+pub lattice_api::pgwire::Backend::PortalSuspended
+pub lattice_api::pgwire::Backend::ReadyForQuery(lattice_api::pgwire::TxStatus)
+pub lattice_api::pgwire::Backend::RowDescription(alloc::vec::Vec<lattice_api::pgwire::Column>)
+impl lattice_api::pgwire::Backend
+pub fn lattice_api::pgwire::Backend::encode(&self, &mut alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_api::pgwire::ProtoError>
+impl core::clone::Clone for lattice_api::pgwire::Backend
+pub fn lattice_api::pgwire::Backend::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::Backend
+impl core::cmp::PartialEq for lattice_api::pgwire::Backend
+pub fn lattice_api::pgwire::Backend::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::pgwire::Backend
+pub fn lattice_api::pgwire::Backend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::Backend
+pub enum lattice_api::pgwire::Frontend
+pub lattice_api::pgwire::Frontend::Bind
+pub lattice_api::pgwire::Frontend::Bind::param_formats: alloc::vec::Vec<i16>
+pub lattice_api::pgwire::Frontend::Bind::params: alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>
+pub lattice_api::pgwire::Frontend::Bind::portal: alloc::string::String
+pub lattice_api::pgwire::Frontend::Bind::result_formats: alloc::vec::Vec<i16>
+pub lattice_api::pgwire::Frontend::Bind::statement: alloc::string::String
+pub lattice_api::pgwire::Frontend::Close(lattice_api::pgwire::Target)
+pub lattice_api::pgwire::Frontend::Describe(lattice_api::pgwire::Target)
+pub lattice_api::pgwire::Frontend::Execute
+pub lattice_api::pgwire::Frontend::Execute::max_rows: i32
+pub lattice_api::pgwire::Frontend::Execute::portal: alloc::string::String
+pub lattice_api::pgwire::Frontend::Flush
+pub lattice_api::pgwire::Frontend::Parse
+pub lattice_api::pgwire::Frontend::Parse::name: alloc::string::String
+pub lattice_api::pgwire::Frontend::Parse::param_types: alloc::vec::Vec<i32>
+pub lattice_api::pgwire::Frontend::Parse::query: alloc::string::String
+pub lattice_api::pgwire::Frontend::Password(alloc::vec::Vec<u8>)
+pub lattice_api::pgwire::Frontend::Query(alloc::string::String)
+pub lattice_api::pgwire::Frontend::SaslInitialResponse
+pub lattice_api::pgwire::Frontend::SaslInitialResponse::data: core::option::Option<alloc::vec::Vec<u8>>
+pub lattice_api::pgwire::Frontend::SaslInitialResponse::mechanism: alloc::string::String
+pub lattice_api::pgwire::Frontend::SaslResponse(alloc::vec::Vec<u8>)
+pub lattice_api::pgwire::Frontend::Sync
+pub lattice_api::pgwire::Frontend::Terminate
+impl core::clone::Clone for lattice_api::pgwire::Frontend
+pub fn lattice_api::pgwire::Frontend::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::Frontend
+impl core::cmp::PartialEq for lattice_api::pgwire::Frontend
+pub fn lattice_api::pgwire::Frontend::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::pgwire::Frontend
+pub fn lattice_api::pgwire::Frontend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::Frontend
+pub enum lattice_api::pgwire::ProtoError
+pub lattice_api::pgwire::ProtoError::BadLength(i64)
+pub lattice_api::pgwire::ProtoError::InvalidField(&'static str)
+pub lattice_api::pgwire::ProtoError::NotUtf8
+pub lattice_api::pgwire::ProtoError::TooLarge
+pub lattice_api::pgwire::ProtoError::Trailing
+pub lattice_api::pgwire::ProtoError::Truncated
+pub lattice_api::pgwire::ProtoError::UnknownTag(u8)
+pub lattice_api::pgwire::ProtoError::UnsupportedProtocol(i32)
+pub lattice_api::pgwire::ProtoError::Unterminated
+impl core::clone::Clone for lattice_api::pgwire::ProtoError
+pub fn lattice_api::pgwire::ProtoError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::ProtoError
+impl core::cmp::PartialEq for lattice_api::pgwire::ProtoError
+pub fn lattice_api::pgwire::ProtoError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::pgwire::ProtoError
+impl core::fmt::Debug for lattice_api::pgwire::ProtoError
+pub fn lattice_api::pgwire::ProtoError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::pgwire::ProtoError
+pub fn lattice_api::pgwire::ProtoError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::ProtoError
+pub enum lattice_api::pgwire::SaslPhase
+pub lattice_api::pgwire::SaslPhase::InitialResponse
+pub lattice_api::pgwire::SaslPhase::Response
+impl core::clone::Clone for lattice_api::pgwire::SaslPhase
+pub fn lattice_api::pgwire::SaslPhase::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::SaslPhase
+impl core::cmp::PartialEq for lattice_api::pgwire::SaslPhase
+pub fn lattice_api::pgwire::SaslPhase::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::pgwire::SaslPhase
+pub fn lattice_api::pgwire::SaslPhase::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::pgwire::SaslPhase
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::SaslPhase
+pub enum lattice_api::pgwire::Startup
+pub lattice_api::pgwire::Startup::Cancel
+pub lattice_api::pgwire::Startup::Cancel::pid: i32
+pub lattice_api::pgwire::Startup::Cancel::secret: i32
+pub lattice_api::pgwire::Startup::GssEncRequest
+pub lattice_api::pgwire::Startup::Params(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>)
+pub lattice_api::pgwire::Startup::SslRequest
+impl core::clone::Clone for lattice_api::pgwire::Startup
+pub fn lattice_api::pgwire::Startup::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::Startup
+impl core::cmp::PartialEq for lattice_api::pgwire::Startup
+pub fn lattice_api::pgwire::Startup::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::pgwire::Startup
+pub fn lattice_api::pgwire::Startup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::Startup
+pub enum lattice_api::pgwire::Target
+pub lattice_api::pgwire::Target::Portal(alloc::string::String)
+pub lattice_api::pgwire::Target::Statement(alloc::string::String)
+impl core::clone::Clone for lattice_api::pgwire::Target
+pub fn lattice_api::pgwire::Target::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::Target
+impl core::cmp::PartialEq for lattice_api::pgwire::Target
+pub fn lattice_api::pgwire::Target::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::pgwire::Target
+pub fn lattice_api::pgwire::Target::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::Target
+pub enum lattice_api::pgwire::TxStatus
+pub lattice_api::pgwire::TxStatus::Failed
+pub lattice_api::pgwire::TxStatus::Idle
+pub lattice_api::pgwire::TxStatus::InTransaction
+impl core::clone::Clone for lattice_api::pgwire::TxStatus
+pub fn lattice_api::pgwire::TxStatus::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::TxStatus
+impl core::cmp::PartialEq for lattice_api::pgwire::TxStatus
+pub fn lattice_api::pgwire::TxStatus::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::pgwire::TxStatus
+pub fn lattice_api::pgwire::TxStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::pgwire::TxStatus
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::TxStatus
+pub struct lattice_api::pgwire::Column
+pub lattice_api::pgwire::Column::column_attr: i16
+pub lattice_api::pgwire::Column::format: i16
+pub lattice_api::pgwire::Column::name: alloc::string::String
+pub lattice_api::pgwire::Column::table_oid: i32
+pub lattice_api::pgwire::Column::type_modifier: i32
+pub lattice_api::pgwire::Column::type_oid: i32
+pub lattice_api::pgwire::Column::type_size: i16
+impl core::clone::Clone for lattice_api::pgwire::Column
+pub fn lattice_api::pgwire::Column::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::pgwire::Column
+impl core::cmp::PartialEq for lattice_api::pgwire::Column
+pub fn lattice_api::pgwire::Column::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::pgwire::Column
+pub fn lattice_api::pgwire::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::pgwire::Column
+pub const lattice_api::pgwire::ENCRYPTION_ACCEPTED: u8
+pub const lattice_api::pgwire::ENCRYPTION_DECLINED: u8
+pub const lattice_api::pgwire::MAX_MESSAGE_LEN: usize
+pub const lattice_api::pgwire::MAX_SASL_BODY_LEN: usize
+pub const lattice_api::pgwire::PROTOCOL_3_0: i32
+pub fn lattice_api::pgwire::decode_frontend(&[u8]) -> core::result::Result<core::option::Option<(lattice_api::pgwire::Frontend, usize)>, lattice_api::pgwire::ProtoError>
+pub fn lattice_api::pgwire::decode_frontend_sasl(&[u8], lattice_api::pgwire::SaslPhase) -> core::result::Result<core::option::Option<(lattice_api::pgwire::Frontend, usize)>, lattice_api::pgwire::ProtoError>
+pub fn lattice_api::pgwire::decode_startup(&[u8]) -> core::result::Result<core::option::Option<(lattice_api::pgwire::Startup, usize)>, lattice_api::pgwire::ProtoError>
+pub mod lattice_api::scram
+pub enum lattice_api::scram::ScramError
+pub lattice_api::scram::ScramError::Crypto
+pub lattice_api::scram::ScramError::InvalidProof
+pub lattice_api::scram::ScramError::InvalidState
+pub lattice_api::scram::ScramError::Malformed
+pub lattice_api::scram::ScramError::OutOfBounds
+pub lattice_api::scram::ScramError::TranscriptMismatch
+pub lattice_api::scram::ScramError::UnsupportedExtension
+pub lattice_api::scram::ScramError::UnsupportedMechanism
+impl core::clone::Clone for lattice_api::scram::ScramError
+pub fn lattice_api::scram::ScramError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::scram::ScramError
+impl core::cmp::PartialEq for lattice_api::scram::ScramError
+pub fn lattice_api::scram::ScramError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::scram::ScramError
+impl core::fmt::Debug for lattice_api::scram::ScramError
+pub fn lattice_api::scram::ScramError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::scram::ScramError
+pub fn lattice_api::scram::ScramError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::scram::ScramError
+impl core::marker::StructuralPartialEq for lattice_api::scram::ScramError
+pub struct lattice_api::scram::ScramServer
+impl lattice_api::scram::ScramServer
+pub fn lattice_api::scram::ScramServer::finish(&mut self, &[u8]) -> core::result::Result<lattice_api::pgwire::Backend, lattice_api::scram::ScramError>
+pub fn lattice_api::scram::ScramServer::initial(&mut self, &str, &[u8]) -> core::result::Result<lattice_api::pgwire::Backend, lattice_api::scram::ScramError>
+pub fn lattice_api::scram::ScramServer::is_authenticated(&self) -> bool
+pub fn lattice_api::scram::ScramServer::new(lattice_api::scram::Verifier, &mut impl lattice_seams::Rng + ?core::marker::Sized) -> Self
+pub fn lattice_api::scram::ScramServer::offer() -> lattice_api::pgwire::Backend
+pub fn lattice_api::scram::ScramServer::with_nonce_suffix(lattice_api::scram::Verifier, &str) -> core::result::Result<Self, lattice_api::scram::ScramError>
+pub struct lattice_api::scram::Verifier
+impl lattice_api::scram::Verifier
+pub fn lattice_api::scram::Verifier::from_keys(&[u8], u32, [u8; 32], [u8; 32]) -> core::result::Result<Self, lattice_api::scram::ScramError>
+pub fn lattice_api::scram::Verifier::from_prepared_password(&[u8], &[u8], u32) -> core::result::Result<Self, lattice_api::scram::ScramError>
+impl core::clone::Clone for lattice_api::scram::Verifier
+pub fn lattice_api::scram::Verifier::clone(&self) -> Self
+impl core::fmt::Debug for lattice_api::scram::Verifier
+pub fn lattice_api::scram::Verifier::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const lattice_api::scram::MAX_ITERATIONS: u32
+pub const lattice_api::scram::MAX_MESSAGE_BYTES: usize
+pub const lattice_api::scram::MAX_NONCE_BYTES: usize
+pub const lattice_api::scram::MECHANISM: &str
+pub const lattice_api::scram::MIN_ITERATIONS: u32
+pub mod lattice_api::session
+pub struct lattice_api::session::Outcome
+pub lattice_api::session::Outcome::close: bool
+pub lattice_api::session::Outcome::encryption_reply: core::option::Option<u8>
+pub lattice_api::session::Outcome::messages: alloc::vec::Vec<lattice_api::pgwire::Backend>
+impl core::clone::Clone for lattice_api::session::Outcome
+pub fn lattice_api::session::Outcome::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::session::Outcome
+impl core::cmp::PartialEq for lattice_api::session::Outcome
+pub fn lattice_api::session::Outcome::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_api::session::Outcome
+pub fn lattice_api::session::Outcome::default() -> Self
+impl core::fmt::Debug for lattice_api::session::Outcome
+pub fn lattice_api::session::Outcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::session::Outcome
+pub struct lattice_api::session::QueryError
+pub lattice_api::session::QueryError::code: alloc::string::String
+pub lattice_api::session::QueryError::message: alloc::string::String
+impl lattice_api::session::QueryError
+pub fn lattice_api::session::QueryError::new(&str, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for lattice_api::session::QueryError
+pub fn lattice_api::session::QueryError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::session::QueryError
+impl core::cmp::PartialEq for lattice_api::session::QueryError
+pub fn lattice_api::session::QueryError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::session::QueryError
+pub fn lattice_api::session::QueryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::session::QueryError
+pub struct lattice_api::session::QueryOutput
+pub lattice_api::session::QueryOutput::columns: alloc::vec::Vec<lattice_api::pgwire::Column>
+pub lattice_api::session::QueryOutput::rows: alloc::vec::Vec<lattice_api::session::Row>
+pub lattice_api::session::QueryOutput::tag: alloc::string::String
+impl core::clone::Clone for lattice_api::session::QueryOutput
+pub fn lattice_api::session::QueryOutput::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::session::QueryOutput
+impl core::cmp::PartialEq for lattice_api::session::QueryOutput
+pub fn lattice_api::session::QueryOutput::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_api::session::QueryOutput
+pub fn lattice_api::session::QueryOutput::default() -> Self
+impl core::fmt::Debug for lattice_api::session::QueryOutput
+pub fn lattice_api::session::QueryOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::session::QueryOutput
+pub struct lattice_api::session::Session<H>
+impl<H: lattice_api::session::QueryHandler> lattice_api::session::Session<H>
+pub fn lattice_api::session::Session<H>::awaiting_startup(&self) -> bool
+pub fn lattice_api::session::Session<H>::handler(&self) -> &H
+pub fn lattice_api::session::Session<H>::is_closed(&self) -> bool
+pub fn lattice_api::session::Session<H>::new(H, i32, i32) -> Self
+pub fn lattice_api::session::Session<H>::on_message(&mut self, lattice_api::pgwire::Frontend) -> lattice_api::session::Outcome
+pub fn lattice_api::session::Session<H>::on_message_with_cancellation(&mut self, lattice_api::pgwire::Frontend, &lattice_api::cancel::CancellationToken) -> lattice_api::session::Outcome
+pub fn lattice_api::session::Session<H>::on_protocol_error(&mut self, &lattice_api::pgwire::ProtoError) -> lattice_api::session::Outcome
+pub fn lattice_api::session::Session<H>::on_startup(&mut self, lattice_api::pgwire::Startup) -> lattice_api::session::Outcome
+pub fn lattice_api::session::Session<H>::sasl_phase(&self) -> core::option::Option<lattice_api::pgwire::SaslPhase>
+pub fn lattice_api::session::Session<H>::tx_status(&self) -> lattice_api::pgwire::TxStatus
+pub fn lattice_api::session::Session<H>::with_scram(H, i32, i32, lattice_api::scram::ScramServer, bool) -> Self
+pub const lattice_api::session::MAX_PORTALS: usize
+pub const lattice_api::session::MAX_STATEMENTS: usize
+pub const lattice_api::session::SERVER_VERSION: &str
+pub trait lattice_api::session::QueryHandler
+pub fn lattice_api::session::QueryHandler::describe(&mut self, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::session::QueryHandler::describe_cancellable(&mut self, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::session::QueryHandler::execute(&mut self, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub fn lattice_api::session::QueryHandler::execute_cancellable(&mut self, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub type lattice_api::session::Row = alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>
+pub mod lattice_api::sync
+pub enum lattice_api::sync::ErrorCode
+pub lattice_api::sync::ErrorCode::Internal
+pub lattice_api::sync::ErrorCode::InvalidCursor
+pub lattice_api::sync::ErrorCode::InvalidScope
+pub lattice_api::sync::ErrorCode::Malformed
+pub lattice_api::sync::ErrorCode::TooManySubscriptions
+pub lattice_api::sync::ErrorCode::UnknownSubscription
+pub lattice_api::sync::ErrorCode::UnsupportedVersion
+impl lattice_api::sync::ErrorCode
+pub const fn lattice_api::sync::ErrorCode::code(self) -> u16
+pub const fn lattice_api::sync::ErrorCode::from_code(u16) -> core::option::Option<lattice_api::sync::ErrorCode>
+impl core::clone::Clone for lattice_api::sync::ErrorCode
+pub fn lattice_api::sync::ErrorCode::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::sync::ErrorCode
+impl core::cmp::PartialEq for lattice_api::sync::ErrorCode
+pub fn lattice_api::sync::ErrorCode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::sync::ErrorCode
+pub fn lattice_api::sync::ErrorCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::sync::ErrorCode
+impl core::marker::StructuralPartialEq for lattice_api::sync::ErrorCode
+pub enum lattice_api::sync::Message
+pub lattice_api::sync::Message::Ack
+pub lattice_api::sync::Message::Ack::cursor: alloc::vec::Vec<u8>
+pub lattice_api::sync::Message::Ack::sub: u32
+pub lattice_api::sync::Message::Error
+pub lattice_api::sync::Message::Error::code: lattice_api::sync::ErrorCode
+pub lattice_api::sync::Message::Error::message: alloc::string::String
+pub lattice_api::sync::Message::Error::sub: u32
+pub lattice_api::sync::Message::Events
+pub lattice_api::sync::Message::Events::events: alloc::vec::Vec<lattice_api::sync::Event>
+pub lattice_api::sync::Message::Events::sub: u32
+pub lattice_api::sync::Message::Hello
+pub lattice_api::sync::Message::Hello::agent: alloc::string::String
+pub lattice_api::sync::Message::Hello::max_version: u16
+pub lattice_api::sync::Message::Hello::min_version: u16
+pub lattice_api::sync::Message::Ping
+pub lattice_api::sync::Message::Ping::nonce: u64
+pub lattice_api::sync::Message::Pong
+pub lattice_api::sync::Message::Pong::nonce: u64
+pub lattice_api::sync::Message::Subscribe
+pub lattice_api::sync::Message::Subscribe::cursor: alloc::vec::Vec<u8>
+pub lattice_api::sync::Message::Subscribe::scope: alloc::string::String
+pub lattice_api::sync::Message::Subscribe::sub: u32
+pub lattice_api::sync::Message::Welcome
+pub lattice_api::sync::Message::Welcome::max_payload: u32
+pub lattice_api::sync::Message::Welcome::server: alloc::string::String
+pub lattice_api::sync::Message::Welcome::version: u16
+impl core::clone::Clone for lattice_api::sync::Message
+pub fn lattice_api::sync::Message::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::sync::Message
+impl core::cmp::PartialEq for lattice_api::sync::Message
+pub fn lattice_api::sync::Message::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::sync::Message
+pub fn lattice_api::sync::Message::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::sync::Message
+pub enum lattice_api::sync::SyncError
+pub lattice_api::sync::SyncError::BadLength(u32)
+pub lattice_api::sync::SyncError::InvalidField(&'static str)
+pub lattice_api::sync::SyncError::NotUtf8
+pub lattice_api::sync::SyncError::TooLarge
+pub lattice_api::sync::SyncError::Trailing
+pub lattice_api::sync::SyncError::Truncated
+pub lattice_api::sync::SyncError::UnknownType(u8)
+impl core::clone::Clone for lattice_api::sync::SyncError
+pub fn lattice_api::sync::SyncError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::sync::SyncError
+impl core::cmp::PartialEq for lattice_api::sync::SyncError
+pub fn lattice_api::sync::SyncError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::sync::SyncError
+impl core::fmt::Debug for lattice_api::sync::SyncError
+pub fn lattice_api::sync::SyncError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::sync::SyncError
+pub fn lattice_api::sync::SyncError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::sync::SyncError
+pub struct lattice_api::sync::Event
+pub lattice_api::sync::Event::cursor: alloc::vec::Vec<u8>
+pub lattice_api::sync::Event::data: alloc::vec::Vec<u8>
+impl core::clone::Clone for lattice_api::sync::Event
+pub fn lattice_api::sync::Event::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::sync::Event
+impl core::cmp::PartialEq for lattice_api::sync::Event
+pub fn lattice_api::sync::Event::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::sync::Event
+pub fn lattice_api::sync::Event::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::sync::Event
+pub const lattice_api::sync::HEADER_LEN: usize
+pub const lattice_api::sync::MAX_CURSOR_LEN: usize
+pub const lattice_api::sync::MAX_ERROR_MESSAGE_LEN: usize
+pub const lattice_api::sync::MAX_EVENTS_PER_FRAME: usize
+pub const lattice_api::sync::MAX_NAME_LEN: usize
+pub const lattice_api::sync::MAX_PAYLOAD: usize
+pub const lattice_api::sync::MAX_SCOPE_LEN: usize
+pub const lattice_api::sync::MIN_NEGOTIATED_PAYLOAD: u32
+pub const lattice_api::sync::VERSION_MAX: u16
+pub const lattice_api::sync::VERSION_MIN: u16
+pub fn lattice_api::sync::decode(&[u8]) -> core::result::Result<core::option::Option<(lattice_api::sync::Message, usize)>, lattice_api::sync::SyncError>
+pub fn lattice_api::sync::decode_with_limit(&[u8], usize) -> core::result::Result<core::option::Option<(lattice_api::sync::Message, usize)>, lattice_api::sync::SyncError>
+pub fn lattice_api::sync::encode(&lattice_api::sync::Message, &mut alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_api::sync::SyncError>
+pub fn lattice_api::sync::negotiate(u16, u16) -> core::result::Result<u16, lattice_api::sync::ErrorCode>
+pub const lattice_api::LAYER: u8

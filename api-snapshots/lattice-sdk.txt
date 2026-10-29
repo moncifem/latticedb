@@ -1,0 +1,213 @@
+pub mod lattice_sdk
+pub mod lattice_sdk::contract
+pub enum lattice_sdk::contract::ContractError
+pub lattice_sdk::contract::ContractError::DuplicateKey(alloc::string::String)
+pub lattice_sdk::contract::ContractError::EmptyLine
+pub lattice_sdk::contract::ContractError::InvalidNumber
+pub lattice_sdk::contract::ContractError::InvalidUtf8
+pub lattice_sdk::contract::ContractError::InvalidValue(&'static str)
+pub lattice_sdk::contract::ContractError::MissingField(&'static str)
+pub lattice_sdk::contract::ContractError::Syntax(&'static str)
+pub lattice_sdk::contract::ContractError::TooDeep
+pub lattice_sdk::contract::ContractError::TooLong
+pub lattice_sdk::contract::ContractError::TooMany
+pub lattice_sdk::contract::ContractError::UnknownField(alloc::string::String)
+pub lattice_sdk::contract::ContractError::UnknownType(alloc::string::String)
+pub lattice_sdk::contract::ContractError::UnsupportedVersion(u64)
+pub lattice_sdk::contract::ContractError::Unterminated
+pub lattice_sdk::contract::ContractError::WrongType(&'static str)
+impl lattice_sdk::contract::ContractError
+pub fn lattice_sdk::contract::ContractError::code(&self) -> lattice_sdk::contract::ErrorCode
+impl core::clone::Clone for lattice_sdk::contract::ContractError
+pub fn lattice_sdk::contract::ContractError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::ContractError
+impl core::cmp::PartialEq for lattice_sdk::contract::ContractError
+pub fn lattice_sdk::contract::ContractError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_sdk::contract::ContractError
+impl core::fmt::Debug for lattice_sdk::contract::ContractError
+pub fn lattice_sdk::contract::ContractError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sdk::contract::ContractError
+pub fn lattice_sdk::contract::ContractError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::ContractError
+pub enum lattice_sdk::contract::ErrorCode
+pub lattice_sdk::contract::ErrorCode::BadRequest
+pub lattice_sdk::contract::ErrorCode::Conflict
+pub lattice_sdk::contract::ErrorCode::Internal
+pub lattice_sdk::contract::ErrorCode::TooLarge
+pub lattice_sdk::contract::ErrorCode::UnknownSession
+pub lattice_sdk::contract::ErrorCode::UnknownTurn
+pub lattice_sdk::contract::ErrorCode::UnknownWatch
+pub lattice_sdk::contract::ErrorCode::UnsupportedVersion
+impl core::clone::Clone for lattice_sdk::contract::ErrorCode
+pub fn lattice_sdk::contract::ErrorCode::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::ErrorCode
+impl core::cmp::PartialEq for lattice_sdk::contract::ErrorCode
+pub fn lattice_sdk::contract::ErrorCode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::contract::ErrorCode
+pub fn lattice_sdk::contract::ErrorCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::contract::ErrorCode
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::ErrorCode
+pub enum lattice_sdk::contract::Kind
+pub lattice_sdk::contract::Kind::Message
+pub lattice_sdk::contract::Kind::Note
+pub lattice_sdk::contract::Kind::ToolCall
+pub lattice_sdk::contract::Kind::ToolResult
+impl core::clone::Clone for lattice_sdk::contract::Kind
+pub fn lattice_sdk::contract::Kind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::Kind
+impl core::cmp::PartialEq for lattice_sdk::contract::Kind
+pub fn lattice_sdk::contract::Kind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::contract::Kind
+pub fn lattice_sdk::contract::Kind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::contract::Kind
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::Kind
+pub enum lattice_sdk::contract::Message
+pub lattice_sdk::contract::Message::Append
+pub lattice_sdk::contract::Message::Append::id: alloc::string::String
+pub lattice_sdk::contract::Message::Append::records: alloc::vec::Vec<lattice_sdk::contract::Record>
+pub lattice_sdk::contract::Message::Append::session: alloc::string::String
+pub lattice_sdk::contract::Message::Append::turn: u64
+pub lattice_sdk::contract::Message::AppendReceipt
+pub lattice_sdk::contract::Message::AppendReceipt::id: alloc::string::String
+pub lattice_sdk::contract::Message::AppendReceipt::receipts: alloc::vec::Vec<lattice_sdk::contract::Receipt>
+pub lattice_sdk::contract::Message::AppendReceipt::session: alloc::string::String
+pub lattice_sdk::contract::Message::AppendReceipt::turn: u64
+pub lattice_sdk::contract::Message::Error
+pub lattice_sdk::contract::Message::Error::code: lattice_sdk::contract::ErrorCode
+pub lattice_sdk::contract::Message::Error::id: core::option::Option<alloc::string::String>
+pub lattice_sdk::contract::Message::Error::message: alloc::string::String
+pub lattice_sdk::contract::Message::Item
+pub lattice_sdk::contract::Message::Item::body: alloc::string::String
+pub lattice_sdk::contract::Message::Item::id: alloc::string::String
+pub lattice_sdk::contract::Message::Item::kind: lattice_sdk::contract::Kind
+pub lattice_sdk::contract::Message::Item::pos: u64
+pub lattice_sdk::contract::Message::Item::rid: alloc::string::String
+pub lattice_sdk::contract::Message::Item::session: alloc::string::String
+pub lattice_sdk::contract::Message::Item::turn: u64
+pub lattice_sdk::contract::Message::Live
+pub lattice_sdk::contract::Message::Live::id: alloc::string::String
+pub lattice_sdk::contract::Message::Live::session: alloc::string::String
+pub lattice_sdk::contract::Message::Ready
+pub lattice_sdk::contract::Message::Ready::head: u64
+pub lattice_sdk::contract::Message::Ready::id: alloc::string::String
+pub lattice_sdk::contract::Message::Ready::session: alloc::string::String
+pub lattice_sdk::contract::Message::SessionCreate
+pub lattice_sdk::contract::Message::SessionCreate::external_id: alloc::string::String
+pub lattice_sdk::contract::Message::SessionCreate::id: alloc::string::String
+pub lattice_sdk::contract::Message::SessionCreate::parent: core::option::Option<alloc::string::String>
+pub lattice_sdk::contract::Message::SessionCreate::source: alloc::string::String
+pub lattice_sdk::contract::Message::SessionCreated
+pub lattice_sdk::contract::Message::SessionCreated::created: bool
+pub lattice_sdk::contract::Message::SessionCreated::id: alloc::string::String
+pub lattice_sdk::contract::Message::SessionCreated::parent: core::option::Option<alloc::string::String>
+pub lattice_sdk::contract::Message::SessionCreated::session: alloc::string::String
+pub lattice_sdk::contract::Message::TurnEnd
+pub lattice_sdk::contract::Message::TurnEnd::id: alloc::string::String
+pub lattice_sdk::contract::Message::TurnEnd::session: alloc::string::String
+pub lattice_sdk::contract::Message::TurnEnd::turn: u64
+pub lattice_sdk::contract::Message::TurnEvent
+pub lattice_sdk::contract::Message::TurnEvent::id: alloc::string::String
+pub lattice_sdk::contract::Message::TurnEvent::pos: u64
+pub lattice_sdk::contract::Message::TurnEvent::session: alloc::string::String
+pub lattice_sdk::contract::Message::TurnEvent::state: lattice_sdk::contract::TurnState
+pub lattice_sdk::contract::Message::TurnEvent::turn: u64
+pub lattice_sdk::contract::Message::TurnStateReply
+pub lattice_sdk::contract::Message::TurnStateReply::id: alloc::string::String
+pub lattice_sdk::contract::Message::TurnStateReply::session: alloc::string::String
+pub lattice_sdk::contract::Message::TurnStateReply::state: lattice_sdk::contract::TurnState
+pub lattice_sdk::contract::Message::TurnStateReply::turn: u64
+pub lattice_sdk::contract::Message::TurnTake
+pub lattice_sdk::contract::Message::TurnTake::id: alloc::string::String
+pub lattice_sdk::contract::Message::TurnTake::session: alloc::string::String
+pub lattice_sdk::contract::Message::Watch
+pub lattice_sdk::contract::Message::Watch::cursor: u64
+pub lattice_sdk::contract::Message::Watch::id: alloc::string::String
+pub lattice_sdk::contract::Message::Watch::session: alloc::string::String
+pub lattice_sdk::contract::Message::WatchStop
+pub lattice_sdk::contract::Message::WatchStop::id: alloc::string::String
+pub lattice_sdk::contract::Message::WatchStopped
+pub lattice_sdk::contract::Message::WatchStopped::id: alloc::string::String
+impl lattice_sdk::contract::Message
+pub fn lattice_sdk::contract::Message::is_request(&self) -> bool
+pub fn lattice_sdk::contract::Message::type_name(&self) -> &'static str
+pub fn lattice_sdk::contract::Message::validate(&self) -> core::result::Result<(), lattice_sdk::contract::ContractError>
+impl core::clone::Clone for lattice_sdk::contract::Message
+pub fn lattice_sdk::contract::Message::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::Message
+impl core::cmp::PartialEq for lattice_sdk::contract::Message
+pub fn lattice_sdk::contract::Message::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::contract::Message
+pub fn lattice_sdk::contract::Message::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::Message
+pub enum lattice_sdk::contract::Status
+pub lattice_sdk::contract::Status::Duplicate
+pub lattice_sdk::contract::Status::Fenced
+pub lattice_sdk::contract::Status::Recorded
+impl core::clone::Clone for lattice_sdk::contract::Status
+pub fn lattice_sdk::contract::Status::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::Status
+impl core::cmp::PartialEq for lattice_sdk::contract::Status
+pub fn lattice_sdk::contract::Status::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::contract::Status
+pub fn lattice_sdk::contract::Status::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::contract::Status
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::Status
+pub enum lattice_sdk::contract::TurnState
+pub lattice_sdk::contract::TurnState::Idle
+pub lattice_sdk::contract::TurnState::Running
+pub lattice_sdk::contract::TurnState::Superseded
+impl core::clone::Clone for lattice_sdk::contract::TurnState
+pub fn lattice_sdk::contract::TurnState::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::TurnState
+impl core::cmp::PartialEq for lattice_sdk::contract::TurnState
+pub fn lattice_sdk::contract::TurnState::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::contract::TurnState
+pub fn lattice_sdk::contract::TurnState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::contract::TurnState
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::TurnState
+pub struct lattice_sdk::contract::Framer
+impl lattice_sdk::contract::Framer
+pub fn lattice_sdk::contract::Framer::finish(&mut self) -> core::option::Option<core::result::Result<alloc::vec::Vec<u8>, lattice_sdk::contract::ContractError>>
+pub fn lattice_sdk::contract::Framer::new() -> Self
+pub fn lattice_sdk::contract::Framer::push(&mut self, &[u8]) -> alloc::vec::Vec<core::result::Result<alloc::vec::Vec<u8>, lattice_sdk::contract::ContractError>>
+impl core::default::Default for lattice_sdk::contract::Framer
+pub fn lattice_sdk::contract::Framer::default() -> Self
+impl core::fmt::Debug for lattice_sdk::contract::Framer
+pub fn lattice_sdk::contract::Framer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_sdk::contract::Receipt
+pub lattice_sdk::contract::Receipt::pos: core::option::Option<u64>
+pub lattice_sdk::contract::Receipt::rid: alloc::string::String
+pub lattice_sdk::contract::Receipt::status: lattice_sdk::contract::Status
+impl core::clone::Clone for lattice_sdk::contract::Receipt
+pub fn lattice_sdk::contract::Receipt::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::Receipt
+impl core::cmp::PartialEq for lattice_sdk::contract::Receipt
+pub fn lattice_sdk::contract::Receipt::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::contract::Receipt
+pub fn lattice_sdk::contract::Receipt::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::Receipt
+pub struct lattice_sdk::contract::Record
+pub lattice_sdk::contract::Record::body: alloc::string::String
+pub lattice_sdk::contract::Record::kind: lattice_sdk::contract::Kind
+pub lattice_sdk::contract::Record::rid: alloc::string::String
+impl core::clone::Clone for lattice_sdk::contract::Record
+pub fn lattice_sdk::contract::Record::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::contract::Record
+impl core::cmp::PartialEq for lattice_sdk::contract::Record
+pub fn lattice_sdk::contract::Record::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::contract::Record
+pub fn lattice_sdk::contract::Record::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::contract::Record
+pub const lattice_sdk::contract::MAX_BODY_BYTES: usize
+pub const lattice_sdk::contract::MAX_EXTERNAL_ID_BYTES: usize
+pub const lattice_sdk::contract::MAX_ID_BYTES: usize
+pub const lattice_sdk::contract::MAX_INT: u64
+pub const lattice_sdk::contract::MAX_LINE_BYTES: usize
+pub const lattice_sdk::contract::MAX_MESSAGE_BYTES: usize
+pub const lattice_sdk::contract::MAX_RECORDS: usize
+pub const lattice_sdk::contract::MAX_RID_BYTES: usize
+pub const lattice_sdk::contract::MAX_SOURCE_BYTES: usize
+pub const lattice_sdk::contract::VERSION: u64
+pub fn lattice_sdk::contract::decode_line(&[u8]) -> core::result::Result<lattice_sdk::contract::Message, lattice_sdk::contract::ContractError>
+pub fn lattice_sdk::contract::encode_line(&lattice_sdk::contract::Message) -> core::result::Result<alloc::string::String, lattice_sdk::contract::ContractError>
+pub const lattice_sdk::LAYER: u8

@@ -1,0 +1,1316 @@
+pub mod lattice_core
+pub mod lattice_core::admission
+pub enum lattice_core::admission::HeaderError
+pub lattice_core::admission::HeaderError::Incomplete
+pub lattice_core::admission::HeaderError::Invalid(alloc::string::String)
+impl core::clone::Clone for lattice_core::admission::HeaderError
+pub fn lattice_core::admission::HeaderError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::admission::HeaderError
+impl core::cmp::PartialEq for lattice_core::admission::HeaderError
+pub fn lattice_core::admission::HeaderError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::admission::HeaderError
+pub fn lattice_core::admission::HeaderError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::admission::HeaderError
+pub struct lattice_core::admission::RecoveryContext
+pub lattice_core::admission::RecoveryContext::required_capabilities: u64
+impl core::clone::Clone for lattice_core::admission::RecoveryContext
+pub fn lattice_core::admission::RecoveryContext::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::admission::RecoveryContext
+impl core::cmp::PartialEq for lattice_core::admission::RecoveryContext
+pub fn lattice_core::admission::RecoveryContext::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::admission::RecoveryContext
+pub fn lattice_core::admission::RecoveryContext::default() -> Self
+impl core::fmt::Debug for lattice_core::admission::RecoveryContext
+pub fn lattice_core::admission::RecoveryContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::admission::RecoveryContext
+impl core::marker::StructuralPartialEq for lattice_core::admission::RecoveryContext
+pub struct lattice_core::admission::SegmentHeader
+pub lattice_core::admission::SegmentHeader::length: usize
+pub lattice_core::admission::SegmentHeader::required_capabilities: u64
+impl core::clone::Clone for lattice_core::admission::SegmentHeader
+pub fn lattice_core::admission::SegmentHeader::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::admission::SegmentHeader
+impl core::cmp::PartialEq for lattice_core::admission::SegmentHeader
+pub fn lattice_core::admission::SegmentHeader::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::admission::SegmentHeader
+pub fn lattice_core::admission::SegmentHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::admission::SegmentHeader
+impl core::marker::StructuralPartialEq for lattice_core::admission::SegmentHeader
+pub const lattice_core::admission::GUARDED_HEADER_LEN: usize
+pub const lattice_core::admission::GUARDED_MAGIC: &[u8; 8]
+pub const lattice_core::admission::KNOWN_CAPABILITIES: u64
+pub const lattice_core::admission::MANAGED_COMPOUND: u64
+pub fn lattice_core::admission::decode_header(&[u8]) -> core::result::Result<lattice_core::admission::SegmentHeader, lattice_core::admission::HeaderError>
+pub fn lattice_core::admission::guarded_header(u64) -> core::result::Result<alloc::vec::Vec<u8>, lattice_core::admission::HeaderError>
+pub mod lattice_core::bugs
+#[non_exhaustive] pub enum lattice_core::bugs::Bug
+pub lattice_core::bugs::Bug::AcceptTornTail
+pub lattice_core::bugs::Bug::AckBeforeSync
+pub lattice_core::bugs::Bug::BatchDuplicateAckedEarly
+pub lattice_core::bugs::Bug::CheckpointIgnoresInFlight
+pub lattice_core::bugs::Bug::CrcSkipsPayload
+pub lattice_core::bugs::Bug::DedupeNotRebuilt
+pub lattice_core::bugs::Bug::DurableLsnOvershoot
+pub lattice_core::bugs::Bug::FenceIgnored
+pub lattice_core::bugs::Bug::FenceNotRebuilt
+pub lattice_core::bugs::Bug::FsyncErrorSwallowed
+pub lattice_core::bugs::Bug::FsyncFailureNotPoisoning
+pub lattice_core::bugs::Bug::HlcCounterStuck
+pub lattice_core::bugs::Bug::HlcRegress
+pub lattice_core::bugs::Bug::HlcSnapshotClamped
+pub lattice_core::bugs::Bug::LsnReusedAfterRecovery
+pub lattice_core::bugs::Bug::ManagedIndexesNotRecovered
+pub lattice_core::bugs::Bug::NoDedupe
+pub lattice_core::bugs::Bug::NoParentDirSync
+pub lattice_core::bugs::Bug::RecoveryDropsLastRecord
+pub lattice_core::bugs::Bug::RequiredGuardOmitted
+pub lattice_core::bugs::Bug::RotateHeaderNotSynced
+pub lattice_core::bugs::Bug::RotateWithoutDirSync
+pub lattice_core::bugs::Bug::RowConflictCheckSkipped
+pub lattice_core::bugs::Bug::RowHistoryOverwritten
+pub lattice_core::bugs::Bug::RowIndexMissingInsert
+pub lattice_core::bugs::Bug::RowIndexPrefixLookup
+pub lattice_core::bugs::Bug::RowIndexStaleEntries
+pub lattice_core::bugs::Bug::RowPartialApply
+pub lattice_core::bugs::Bug::RowPolicyReadSkipped
+pub lattice_core::bugs::Bug::RowPolicyWriteSkipped
+pub lattice_core::bugs::Bug::RowReadOwnWriteIgnored
+pub lattice_core::bugs::Bug::RowRecoveryDropsDeletes
+pub lattice_core::bugs::Bug::RowScanUpperBoundIncluded
+pub lattice_core::bugs::Bug::RowTombstoneSkipped
+pub lattice_core::bugs::Bug::SkipFsync
+pub lattice_core::bugs::Bug::SkipRecoverySync
+pub lattice_core::bugs::Bug::TreeCycleCheckSkipped
+pub lattice_core::bugs::Bug::VacuumDropsVisibleVersion
+impl lattice_core::bugs::Bug
+pub const lattice_core::bugs::Bug::ADMISSION: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::ALL: [lattice_core::bugs::Bug; 21]
+pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::POLICY: [lattice_core::bugs::Bug; 2]
+pub const lattice_core::bugs::Bug::ROW: [lattice_core::bugs::Bug; 4]
+pub const lattice_core::bugs::Bug::STORAGE: [lattice_core::bugs::Bug; 10]
+pub const lattice_core::bugs::Bug::VACUUM: [lattice_core::bugs::Bug; 1]
+impl core::clone::Clone for lattice_core::bugs::Bug
+pub fn lattice_core::bugs::Bug::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::bugs::Bug
+impl core::cmp::Ord for lattice_core::bugs::Bug
+pub fn lattice_core::bugs::Bug::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_core::bugs::Bug
+pub fn lattice_core::bugs::Bug::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_core::bugs::Bug
+pub fn lattice_core::bugs::Bug::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_core::bugs::Bug
+pub fn lattice_core::bugs::Bug::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_core::bugs::Bug
+pub fn lattice_core::bugs::Bug::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_core::bugs::Bug
+impl core::marker::StructuralPartialEq for lattice_core::bugs::Bug
+pub fn lattice_core::bugs::active(lattice_core::bugs::Bug) -> bool
+pub mod lattice_core::chain
+pub enum lattice_core::chain::Verdict
+pub lattice_core::chain::Verdict::BrokenAt(usize)
+pub lattice_core::chain::Verdict::Valid
+impl core::clone::Clone for lattice_core::chain::Verdict
+pub fn lattice_core::chain::Verdict::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::chain::Verdict
+impl core::cmp::PartialEq for lattice_core::chain::Verdict
+pub fn lattice_core::chain::Verdict::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::chain::Verdict
+pub fn lattice_core::chain::Verdict::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::chain::Verdict
+pub struct lattice_core::chain::Chain
+impl lattice_core::chain::Chain
+pub fn lattice_core::chain::Chain::append(&mut self, &[u8]) -> lattice_core::chain::Link
+pub fn lattice_core::chain::Chain::head(&self) -> [u8; 32]
+pub fn lattice_core::chain::Chain::new() -> Self
+impl core::clone::Clone for lattice_core::chain::Chain
+pub fn lattice_core::chain::Chain::clone(&self) -> Self
+impl core::default::Default for lattice_core::chain::Chain
+pub fn lattice_core::chain::Chain::default() -> Self
+impl core::fmt::Debug for lattice_core::chain::Chain
+pub fn lattice_core::chain::Chain::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::chain::Link
+pub lattice_core::chain::Link::entry: alloc::vec::Vec<u8>
+pub lattice_core::chain::Link::hash: [u8; 32]
+impl core::clone::Clone for lattice_core::chain::Link
+pub fn lattice_core::chain::Link::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::chain::Link
+impl core::cmp::PartialEq for lattice_core::chain::Link
+pub fn lattice_core::chain::Link::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::chain::Link
+pub fn lattice_core::chain::Link::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::chain::Link
+pub fn lattice_core::chain::verify(&[lattice_core::chain::Link]) -> lattice_core::chain::Verdict
+pub fn lattice_core::chain::verify_with_head(&[lattice_core::chain::Link], [u8; 32]) -> lattice_core::chain::Verdict
+pub mod lattice_core::changeset
+pub enum lattice_core::changeset::ChangeSetTag
+impl core::clone::Clone for lattice_core::changeset::ChangeSetTag
+pub fn lattice_core::changeset::ChangeSetTag::clone(&self) -> Self
+impl core::fmt::Debug for lattice_core::changeset::ChangeSetTag
+pub fn lattice_core::changeset::ChangeSetTag::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::changeset::ChangeSetTag
+pub enum lattice_core::changeset::DecodeError
+pub lattice_core::changeset::DecodeError::Invalid(&'static str)
+pub lattice_core::changeset::DecodeError::Trailing
+pub lattice_core::changeset::DecodeError::Truncated
+pub lattice_core::changeset::DecodeError::Version(u8)
+impl core::clone::Clone for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::DecodeError
+impl core::cmp::PartialEq for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::changeset::DecodeError
+impl core::fmt::Debug for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::changeset::DecodeError
+pub enum lattice_core::changeset::EncodeError
+pub lattice_core::changeset::EncodeError::PayloadTooLarge(usize)
+pub lattice_core::changeset::EncodeError::TooManyParents(usize)
+impl core::clone::Clone for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::EncodeError
+impl core::cmp::PartialEq for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::changeset::EncodeError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::changeset::EncodeError) -> Self
+impl core::error::Error for lattice_core::changeset::EncodeError
+impl core::fmt::Debug for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::changeset::EncodeError
+pub struct lattice_core::changeset::ChangeSet
+pub lattice_core::changeset::ChangeSet::author: u128
+pub lattice_core::changeset::ChangeSet::hlc: lattice_abi::hlc::Hlc
+pub lattice_core::changeset::ChangeSet::id: lattice_core::changeset::ChangeSetId
+pub lattice_core::changeset::ChangeSet::parents: alloc::vec::Vec<lattice_core::changeset::ChangeSetId>
+pub lattice_core::changeset::ChangeSet::payload: alloc::vec::Vec<u8>
+pub lattice_core::changeset::ChangeSet::turn: core::option::Option<lattice_core::changeset::TurnRef>
+impl lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::decode(&[u8]) -> core::result::Result<Self, lattice_core::changeset::DecodeError>
+pub fn lattice_core::changeset::ChangeSet::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, lattice_core::changeset::EncodeError>
+pub fn lattice_core::changeset::ChangeSet::new(lattice_core::changeset::ChangeSetId, alloc::vec::Vec<u8>) -> Self
+impl core::clone::Clone for lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::ChangeSet
+impl core::cmp::PartialEq for lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::changeset::ChangeSet
+pub struct lattice_core::changeset::Checkpoint
+pub lattice_core::changeset::Checkpoint::change_sets: u64
+pub lattice_core::changeset::Checkpoint::state_crc: u32
+pub lattice_core::changeset::Checkpoint::through_lsn: u64
+impl core::clone::Clone for lattice_core::changeset::Checkpoint
+pub fn lattice_core::changeset::Checkpoint::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::Checkpoint
+impl core::cmp::PartialEq for lattice_core::changeset::Checkpoint
+pub fn lattice_core::changeset::Checkpoint::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::changeset::Checkpoint
+pub fn lattice_core::changeset::Checkpoint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::changeset::Checkpoint
+impl core::marker::StructuralPartialEq for lattice_core::changeset::Checkpoint
+pub struct lattice_core::changeset::TurnRef
+pub lattice_core::changeset::TurnRef::session: u64
+pub lattice_core::changeset::TurnRef::turn: u64
+impl core::clone::Clone for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::TurnRef
+impl core::cmp::Ord for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::changeset::TurnRef
+impl core::marker::StructuralPartialEq for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::decode_checkpoint(&[u8]) -> core::result::Result<lattice_core::changeset::Checkpoint, lattice_core::changeset::DecodeError>
+pub fn lattice_core::changeset::decode_turn_begin(&[u8]) -> core::result::Result<lattice_core::changeset::TurnRef, lattice_core::changeset::DecodeError>
+pub fn lattice_core::changeset::encode_checkpoint(lattice_core::changeset::Checkpoint) -> alloc::vec::Vec<u8>
+pub fn lattice_core::changeset::encode_turn_begin(lattice_core::changeset::TurnRef) -> alloc::vec::Vec<u8>
+pub fn lattice_core::changeset::state_crc(&alloc::collections::btree::set::BTreeSet<lattice_core::changeset::ChangeSetId>, &alloc::collections::btree::map::BTreeMap<u64, u64>) -> u32
+pub type lattice_core::changeset::ChangeSetId = lattice_abi::id::Id<lattice_core::changeset::ChangeSetTag>
+pub mod lattice_core::crc
+pub struct lattice_core::crc::Crc32c(_)
+impl lattice_core::crc::Crc32c
+pub fn lattice_core::crc::Crc32c::finish(&self) -> u32
+pub fn lattice_core::crc::Crc32c::update(&mut self, &[u8])
+impl core::clone::Clone for lattice_core::crc::Crc32c
+pub fn lattice_core::crc::Crc32c::clone(&self) -> Self
+impl core::default::Default for lattice_core::crc::Crc32c
+pub fn lattice_core::crc::Crc32c::default() -> Self
+impl core::fmt::Debug for lattice_core::crc::Crc32c
+pub fn lattice_core::crc::Crc32c::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crc::Crc32c
+pub fn lattice_core::crc::crc32c(&[u8]) -> u32
+pub mod lattice_core::crdt
+pub struct lattice_core::crdt::LwwRegister<T>
+impl<T: core::clone::Clone + core::cmp::Ord> lattice_core::crdt::LwwRegister<T>
+pub fn lattice_core::crdt::LwwRegister<T>::get(&self) -> core::option::Option<&T>
+pub fn lattice_core::crdt::LwwRegister<T>::set(&mut self, lattice_abi::hlc::Hlc, T)
+impl<T: core::clone::Clone + core::cmp::Ord> lattice_core::crdt::Crdt for lattice_core::crdt::LwwRegister<T>
+pub fn lattice_core::crdt::LwwRegister<T>::merge(&mut self, &Self)
+impl<T: core::clone::Clone> core::clone::Clone for lattice_core::crdt::LwwRegister<T>
+pub fn lattice_core::crdt::LwwRegister<T>::clone(&self) -> Self
+impl<T: core::cmp::Eq> core::cmp::Eq for lattice_core::crdt::LwwRegister<T>
+impl<T: core::cmp::PartialEq> core::cmp::PartialEq for lattice_core::crdt::LwwRegister<T>
+pub fn lattice_core::crdt::LwwRegister<T>::eq(&self, &Self) -> bool
+impl<T: core::cmp::PartialEq> core::marker::StructuralPartialEq for lattice_core::crdt::LwwRegister<T>
+impl<T: core::fmt::Debug> core::fmt::Debug for lattice_core::crdt::LwwRegister<T>
+pub fn lattice_core::crdt::LwwRegister<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T> core::default::Default for lattice_core::crdt::LwwRegister<T>
+pub fn lattice_core::crdt::LwwRegister<T>::default() -> Self
+pub struct lattice_core::crdt::OrSet<T: core::cmp::Ord>
+impl<T: core::cmp::Ord + core::clone::Clone> lattice_core::crdt::OrSet<T>
+pub fn lattice_core::crdt::OrSet<T>::add(&mut self, T, lattice_abi::hlc::Hlc)
+pub fn lattice_core::crdt::OrSet<T>::contains(&self, &T) -> bool
+pub fn lattice_core::crdt::OrSet<T>::elements(&self) -> alloc::vec::Vec<T>
+pub fn lattice_core::crdt::OrSet<T>::remove(&mut self, &T)
+impl<T: core::clone::Clone + core::cmp::Ord> core::clone::Clone for lattice_core::crdt::OrSet<T>
+pub fn lattice_core::crdt::OrSet<T>::clone(&self) -> Self
+impl<T: core::cmp::Eq + core::cmp::Ord> core::cmp::Eq for lattice_core::crdt::OrSet<T>
+impl<T: core::cmp::Ord + core::clone::Clone> lattice_core::crdt::Crdt for lattice_core::crdt::OrSet<T>
+pub fn lattice_core::crdt::OrSet<T>::merge(&mut self, &Self)
+impl<T: core::cmp::PartialEq + core::cmp::Ord> core::cmp::PartialEq for lattice_core::crdt::OrSet<T>
+pub fn lattice_core::crdt::OrSet<T>::eq(&self, &Self) -> bool
+impl<T: core::cmp::PartialEq + core::cmp::Ord> core::marker::StructuralPartialEq for lattice_core::crdt::OrSet<T>
+impl<T: core::default::Default + core::cmp::Ord> core::default::Default for lattice_core::crdt::OrSet<T>
+pub fn lattice_core::crdt::OrSet<T>::default() -> Self
+impl<T: core::fmt::Debug + core::cmp::Ord> core::fmt::Debug for lattice_core::crdt::OrSet<T>
+pub fn lattice_core::crdt::OrSet<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::crdt::Rga
+impl lattice_core::crdt::Rga
+pub fn lattice_core::crdt::Rga::chars(&self) -> alloc::vec::Vec<(lattice_core::crdt::CharId, char)>
+pub fn lattice_core::crdt::Rga::delete(&mut self, lattice_core::crdt::CharId) -> bool
+pub fn lattice_core::crdt::Rga::insert(&mut self, core::option::Option<lattice_core::crdt::CharId>, char, lattice_core::crdt::CharId) -> bool
+pub fn lattice_core::crdt::Rga::stored_chars(&self) -> usize
+pub fn lattice_core::crdt::Rga::text(&self) -> alloc::string::String
+impl core::clone::Clone for lattice_core::crdt::Rga
+pub fn lattice_core::crdt::Rga::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt::Rga
+impl core::cmp::PartialEq for lattice_core::crdt::Rga
+pub fn lattice_core::crdt::Rga::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::crdt::Rga
+pub fn lattice_core::crdt::Rga::default() -> Self
+impl core::fmt::Debug for lattice_core::crdt::Rga
+pub fn lattice_core::crdt::Rga::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::crdt::Rga
+impl lattice_core::crdt::Crdt for lattice_core::crdt::Rga
+pub fn lattice_core::crdt::Rga::merge(&mut self, &Self)
+pub trait lattice_core::crdt::Crdt: core::clone::Clone + core::cmp::PartialEq
+pub fn lattice_core::crdt::Crdt::merge(&mut self, &Self)
+impl lattice_core::crdt::Crdt for lattice_core::crdt::Rga
+pub fn lattice_core::crdt::Rga::merge(&mut self, &Self)
+impl<T: core::clone::Clone + core::cmp::Ord> lattice_core::crdt::Crdt for lattice_core::crdt::LwwRegister<T>
+pub fn lattice_core::crdt::LwwRegister<T>::merge(&mut self, &Self)
+impl<T: core::cmp::Ord + core::clone::Clone> lattice_core::crdt::Crdt for lattice_core::crdt::OrSet<T>
+pub fn lattice_core::crdt::OrSet<T>::merge(&mut self, &Self)
+pub type lattice_core::crdt::CharId = lattice_abi::hlc::Hlc
+pub mod lattice_core::crdt_tree
+pub enum lattice_core::crdt_tree::Outcome
+pub lattice_core::crdt_tree::Outcome::Applied
+pub lattice_core::crdt_tree::Outcome::Duplicate
+pub lattice_core::crdt_tree::Outcome::Skipped
+impl core::clone::Clone for lattice_core::crdt_tree::Outcome
+pub fn lattice_core::crdt_tree::Outcome::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_tree::Outcome
+impl core::cmp::PartialEq for lattice_core::crdt_tree::Outcome
+pub fn lattice_core::crdt_tree::Outcome::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::crdt_tree::Outcome
+pub fn lattice_core::crdt_tree::Outcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_tree::Outcome
+impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::Outcome
+pub enum lattice_core::crdt_tree::TreeDecodeError
+pub lattice_core::crdt_tree::TreeDecodeError::BadLength
+pub lattice_core::crdt_tree::TreeDecodeError::BadLength::got: usize
+pub lattice_core::crdt_tree::TreeDecodeError::BadVersion(u8)
+pub lattice_core::crdt_tree::TreeDecodeError::ReservedNode
+impl core::clone::Clone for lattice_core::crdt_tree::TreeDecodeError
+pub fn lattice_core::crdt_tree::TreeDecodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_tree::TreeDecodeError
+impl core::cmp::PartialEq for lattice_core::crdt_tree::TreeDecodeError
+pub fn lattice_core::crdt_tree::TreeDecodeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::crdt_tree::TreeDecodeError
+impl core::fmt::Debug for lattice_core::crdt_tree::TreeDecodeError
+pub fn lattice_core::crdt_tree::TreeDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::crdt_tree::TreeDecodeError
+pub fn lattice_core::crdt_tree::TreeDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_tree::TreeDecodeError
+impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::TreeDecodeError
+pub enum lattice_core::crdt_tree::TreeError
+pub lattice_core::crdt_tree::TreeError::ConflictingOpId
+pub lattice_core::crdt_tree::TreeError::ReservedNode
+impl core::clone::Clone for lattice_core::crdt_tree::TreeError
+pub fn lattice_core::crdt_tree::TreeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_tree::TreeError
+impl core::cmp::PartialEq for lattice_core::crdt_tree::TreeError
+pub fn lattice_core::crdt_tree::TreeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::crdt_tree::TreeError
+impl core::fmt::Debug for lattice_core::crdt_tree::TreeError
+pub fn lattice_core::crdt_tree::TreeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::crdt_tree::TreeError
+pub fn lattice_core::crdt_tree::TreeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_tree::TreeError
+impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::TreeError
+pub struct lattice_core::crdt_tree::NodeId(pub u64)
+impl lattice_core::crdt_tree::NodeId
+pub const lattice_core::crdt_tree::NodeId::ROOT: lattice_core::crdt_tree::NodeId
+pub const lattice_core::crdt_tree::NodeId::TRASH: lattice_core::crdt_tree::NodeId
+impl core::clone::Clone for lattice_core::crdt_tree::NodeId
+pub fn lattice_core::crdt_tree::NodeId::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_tree::NodeId
+impl core::cmp::Ord for lattice_core::crdt_tree::NodeId
+pub fn lattice_core::crdt_tree::NodeId::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_core::crdt_tree::NodeId
+pub fn lattice_core::crdt_tree::NodeId::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_core::crdt_tree::NodeId
+pub fn lattice_core::crdt_tree::NodeId::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_core::crdt_tree::NodeId
+pub fn lattice_core::crdt_tree::NodeId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_core::crdt_tree::NodeId
+pub fn lattice_core::crdt_tree::NodeId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_core::crdt_tree::NodeId
+impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::NodeId
+pub struct lattice_core::crdt_tree::Op
+pub lattice_core::crdt_tree::Op::id: lattice_abi::hlc::Hlc
+pub lattice_core::crdt_tree::Op::node: lattice_core::crdt_tree::NodeId
+pub lattice_core::crdt_tree::Op::parent: lattice_core::crdt_tree::NodeId
+pub lattice_core::crdt_tree::Op::pos: u64
+impl lattice_core::crdt_tree::Op
+pub const lattice_core::crdt_tree::Op::ENCODED_LEN: usize
+pub fn lattice_core::crdt_tree::Op::decode(&[u8]) -> core::result::Result<Self, lattice_core::crdt_tree::TreeDecodeError>
+pub fn lattice_core::crdt_tree::Op::delete(lattice_abi::hlc::Hlc, lattice_core::crdt_tree::NodeId) -> Self
+pub fn lattice_core::crdt_tree::Op::encode(&self) -> [u8; 41]
+pub fn lattice_core::crdt_tree::Op::new(lattice_abi::hlc::Hlc, lattice_core::crdt_tree::NodeId, lattice_core::crdt_tree::NodeId, u64) -> Self
+impl core::clone::Clone for lattice_core::crdt_tree::Op
+pub fn lattice_core::crdt_tree::Op::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_tree::Op
+impl core::cmp::PartialEq for lattice_core::crdt_tree::Op
+pub fn lattice_core::crdt_tree::Op::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::crdt_tree::Op
+pub fn lattice_core::crdt_tree::Op::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_tree::Op
+impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::Op
+pub struct lattice_core::crdt_tree::Snapshot
+pub lattice_core::crdt_tree::Snapshot::entries: alloc::vec::Vec<(lattice_core::crdt_tree::NodeId, lattice_core::crdt_tree::NodeId, u64)>
+impl core::clone::Clone for lattice_core::crdt_tree::Snapshot
+pub fn lattice_core::crdt_tree::Snapshot::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_tree::Snapshot
+impl core::cmp::PartialEq for lattice_core::crdt_tree::Snapshot
+pub fn lattice_core::crdt_tree::Snapshot::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::crdt_tree::Snapshot
+pub fn lattice_core::crdt_tree::Snapshot::default() -> Self
+impl core::fmt::Debug for lattice_core::crdt_tree::Snapshot
+pub fn lattice_core::crdt_tree::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::Snapshot
+pub struct lattice_core::crdt_tree::Tree
+impl lattice_core::crdt_tree::Tree
+pub fn lattice_core::crdt_tree::Tree::apply(&mut self, lattice_core::crdt_tree::Op) -> core::result::Result<lattice_core::crdt_tree::Outcome, lattice_core::crdt_tree::TreeError>
+pub fn lattice_core::crdt_tree::Tree::children(&self, lattice_core::crdt_tree::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = lattice_core::crdt_tree::NodeId> + '_
+pub fn lattice_core::crdt_tree::Tree::contains(&self, lattice_core::crdt_tree::NodeId) -> bool
+pub fn lattice_core::crdt_tree::Tree::is_acyclic(&self) -> bool
+pub fn lattice_core::crdt_tree::Tree::is_deleted(&self, lattice_core::crdt_tree::NodeId) -> bool
+pub fn lattice_core::crdt_tree::Tree::new() -> Self
+pub fn lattice_core::crdt_tree::Tree::op_count(&self) -> usize
+pub fn lattice_core::crdt_tree::Tree::parent(&self, lattice_core::crdt_tree::NodeId) -> core::option::Option<lattice_core::crdt_tree::NodeId>
+pub fn lattice_core::crdt_tree::Tree::snapshot(&self) -> lattice_core::crdt_tree::Snapshot
+impl core::clone::Clone for lattice_core::crdt_tree::Tree
+pub fn lattice_core::crdt_tree::Tree::clone(&self) -> Self
+impl core::default::Default for lattice_core::crdt_tree::Tree
+pub fn lattice_core::crdt_tree::Tree::default() -> Self
+impl core::fmt::Debug for lattice_core::crdt_tree::Tree
+pub fn lattice_core::crdt_tree::Tree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod lattice_core::feed
+pub enum lattice_core::feed::ChangeOp
+pub lattice_core::feed::ChangeOp::Delete
+pub lattice_core::feed::ChangeOp::Upsert(alloc::vec::Vec<u8>)
+impl core::clone::Clone for lattice_core::feed::ChangeOp
+pub fn lattice_core::feed::ChangeOp::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::feed::ChangeOp
+impl core::cmp::PartialEq for lattice_core::feed::ChangeOp
+pub fn lattice_core::feed::ChangeOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::feed::ChangeOp
+pub fn lattice_core::feed::ChangeOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::feed::ChangeOp
+pub enum lattice_core::feed::FeedDecodeError
+pub lattice_core::feed::FeedDecodeError::Invalid(&'static str)
+pub lattice_core::feed::FeedDecodeError::Trailing
+pub lattice_core::feed::FeedDecodeError::Truncated
+pub lattice_core::feed::FeedDecodeError::Version(u8)
+impl core::clone::Clone for lattice_core::feed::FeedDecodeError
+pub fn lattice_core::feed::FeedDecodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::feed::FeedDecodeError
+impl core::cmp::PartialEq for lattice_core::feed::FeedDecodeError
+pub fn lattice_core::feed::FeedDecodeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::feed::FeedDecodeError
+impl core::fmt::Debug for lattice_core::feed::FeedDecodeError
+pub fn lattice_core::feed::FeedDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::feed::FeedDecodeError
+pub fn lattice_core::feed::FeedDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::feed::FeedDecodeError
+pub enum lattice_core::feed::FeedError
+pub lattice_core::feed::FeedError::IndexOutOfRange
+pub lattice_core::feed::FeedError::IndexOutOfRange::index: u32
+pub lattice_core::feed::FeedError::IndexOutOfRange::set_len: u32
+pub lattice_core::feed::FeedError::KeyTooLarge(usize)
+pub lattice_core::feed::FeedError::TooManyChanges(usize)
+pub lattice_core::feed::FeedError::ValueTooLarge(usize)
+pub lattice_core::feed::FeedError::ZeroLsn
+impl core::clone::Clone for lattice_core::feed::FeedError
+pub fn lattice_core::feed::FeedError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::feed::FeedError
+impl core::cmp::PartialEq for lattice_core::feed::FeedError
+pub fn lattice_core::feed::FeedError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::feed::FeedError
+impl core::fmt::Debug for lattice_core::feed::FeedError
+pub fn lattice_core::feed::FeedError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::feed::FeedError
+pub fn lattice_core::feed::FeedError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::feed::FeedError
+pub struct lattice_core::feed::ChangeEvent
+pub lattice_core::feed::ChangeEvent::author: u128
+pub lattice_core::feed::ChangeEvent::change: lattice_core::feed::EntityChange
+pub lattice_core::feed::ChangeEvent::change_set: lattice_core::changeset::ChangeSetId
+pub lattice_core::feed::ChangeEvent::cursor: lattice_core::feed::Cursor
+pub lattice_core::feed::ChangeEvent::hlc: lattice_abi::hlc::Hlc
+pub lattice_core::feed::ChangeEvent::set_len: u32
+pub lattice_core::feed::ChangeEvent::turn: core::option::Option<lattice_core::changeset::TurnRef>
+impl lattice_core::feed::ChangeEvent
+pub fn lattice_core::feed::ChangeEvent::decode(&[u8]) -> core::result::Result<Self, lattice_core::feed::FeedDecodeError>
+pub fn lattice_core::feed::ChangeEvent::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, lattice_core::feed::FeedError>
+impl core::clone::Clone for lattice_core::feed::ChangeEvent
+pub fn lattice_core::feed::ChangeEvent::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::feed::ChangeEvent
+impl core::cmp::PartialEq for lattice_core::feed::ChangeEvent
+pub fn lattice_core::feed::ChangeEvent::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::feed::ChangeEvent
+pub fn lattice_core::feed::ChangeEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::feed::ChangeEvent
+pub struct lattice_core::feed::Cursor
+impl lattice_core::feed::Cursor
+pub const lattice_core::feed::Cursor::ENCODED_LEN: usize
+pub const lattice_core::feed::Cursor::ORIGIN: lattice_core::feed::Cursor
+pub fn lattice_core::feed::Cursor::from_bytes(&[u8]) -> core::result::Result<Self, lattice_core::feed::FeedDecodeError>
+pub fn lattice_core::feed::Cursor::index(self) -> u32
+pub fn lattice_core::feed::Cursor::lsn(self) -> u64
+pub fn lattice_core::feed::Cursor::new(u64, u32) -> core::result::Result<Self, lattice_core::feed::FeedError>
+pub fn lattice_core::feed::Cursor::to_bytes(self) -> [u8; 12]
+impl core::clone::Clone for lattice_core::feed::Cursor
+pub fn lattice_core::feed::Cursor::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::feed::Cursor
+impl core::cmp::Ord for lattice_core::feed::Cursor
+pub fn lattice_core::feed::Cursor::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_core::feed::Cursor
+pub fn lattice_core::feed::Cursor::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_core::feed::Cursor
+pub fn lattice_core::feed::Cursor::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_core::feed::Cursor
+pub fn lattice_core::feed::Cursor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_core::feed::Cursor
+pub fn lattice_core::feed::Cursor::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_core::feed::Cursor
+impl core::marker::StructuralPartialEq for lattice_core::feed::Cursor
+pub struct lattice_core::feed::EntityChange
+pub lattice_core::feed::EntityChange::key: alloc::vec::Vec<u8>
+pub lattice_core::feed::EntityChange::kind: u32
+pub lattice_core::feed::EntityChange::op: lattice_core::feed::ChangeOp
+impl core::clone::Clone for lattice_core::feed::EntityChange
+pub fn lattice_core::feed::EntityChange::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::feed::EntityChange
+impl core::cmp::PartialEq for lattice_core::feed::EntityChange
+pub fn lattice_core::feed::EntityChange::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::feed::EntityChange
+pub fn lattice_core::feed::EntityChange::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::feed::EntityChange
+pub const lattice_core::feed::MAX_KEY_LEN: usize
+pub const lattice_core::feed::MAX_VALUE_LEN: usize
+pub fn lattice_core::feed::events_for(u64, &lattice_core::changeset::ChangeSet, alloc::vec::Vec<lattice_core::feed::EntityChange>) -> core::result::Result<alloc::vec::Vec<lattice_core::feed::ChangeEvent>, lattice_core::feed::FeedError>
+pub mod lattice_core::hlc
+pub enum lattice_core::hlc::HlcError
+pub lattice_core::hlc::HlcError::DriftTooLarge
+pub lattice_core::hlc::HlcError::DriftTooLarge::ahead_ms: u64
+pub lattice_core::hlc::HlcError::DriftTooLarge::max_ms: u64
+pub lattice_core::hlc::HlcError::Exhausted
+impl core::clone::Clone for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::hlc::HlcError
+impl core::cmp::PartialEq for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::hlc::HlcError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::hlc::HlcError) -> Self
+impl core::error::Error for lattice_core::hlc::HlcError
+impl core::fmt::Debug for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::hlc::HlcError
+impl lattice_abi::error::Classify for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::class(&self) -> lattice_abi::error::ErrorClass
+pub struct lattice_core::hlc::HlcClock
+impl lattice_core::hlc::HlcClock
+pub fn lattice_core::hlc::HlcClock::last(&self) -> lattice_abi::hlc::Hlc
+pub fn lattice_core::hlc::HlcClock::new(u32) -> Self
+pub fn lattice_core::hlc::HlcClock::observe(&mut self, lattice_abi::hlc::Hlc, u64, u64) -> core::result::Result<lattice_abi::hlc::Hlc, lattice_core::hlc::HlcError>
+pub fn lattice_core::hlc::HlcClock::restore(u32, lattice_abi::hlc::Hlc) -> Self
+pub fn lattice_core::hlc::HlcClock::tick(&mut self, u64) -> core::result::Result<lattice_abi::hlc::Hlc, lattice_core::hlc::HlcError>
+impl core::clone::Clone for lattice_core::hlc::HlcClock
+pub fn lattice_core::hlc::HlcClock::clone(&self) -> Self
+impl core::fmt::Debug for lattice_core::hlc::HlcClock
+pub fn lattice_core::hlc::HlcClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod lattice_core::kernel
+pub enum lattice_core::kernel::Receipt
+pub lattice_core::kernel::Receipt::Duplicate
+pub lattice_core::kernel::Receipt::Recorded
+pub lattice_core::kernel::Receipt::Recorded::hlc: lattice_abi::hlc::Hlc
+pub lattice_core::kernel::Receipt::Recorded::lsn: u64
+impl core::clone::Clone for lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Receipt::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::kernel::Receipt
+impl core::cmp::PartialEq for lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Receipt::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Receipt::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::kernel::Receipt
+impl core::marker::StructuralPartialEq for lattice_core::kernel::Receipt
+pub struct lattice_core::kernel::Config
+pub lattice_core::kernel::Config::dir: alloc::string::String
+pub lattice_core::kernel::Config::node: u32
+pub lattice_core::kernel::Config::segment_limit: u64
+impl core::clone::Clone for lattice_core::kernel::Config
+pub fn lattice_core::kernel::Config::clone(&self) -> Self
+impl core::default::Default for lattice_core::kernel::Config
+pub fn lattice_core::kernel::Config::default() -> Self
+impl core::fmt::Debug for lattice_core::kernel::Config
+pub fn lattice_core::kernel::Config::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::kernel::Kernel<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng> lattice_core::kernel::Kernel<I, C, R>
+pub fn lattice_core::kernel::Kernel<I, C, R>::apply(&mut self, lattice_core::txn::Txn<lattice_core::txn::Durable>) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Applied>, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::begin(&self, lattice_core::changeset::ChangeSet) -> lattice_core::txn::Txn<lattice_core::txn::Open>
+pub fn lattice_core::kernel::Kernel<I, C, R>::begin_turn(&mut self, lattice_core::changeset::TurnRef) -> core::result::Result<(), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::checkpoint(&mut self) -> core::result::Result<u64, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::commit(&mut self, lattice_core::changeset::ChangeSet) -> core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::commit_batch(&mut self, alloc::vec::Vec<lattice_core::changeset::ChangeSet>) -> alloc::vec::Vec<core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>>
+pub fn lattice_core::kernel::Kernel<I, C, R>::commit_with_capabilities(&mut self, lattice_core::changeset::ChangeSet, u64) -> core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::contains(&self, &lattice_core::changeset::ChangeSetId) -> bool
+pub fn lattice_core::kernel::Kernel<I, C, R>::durable_lsn(&self) -> u64
+pub fn lattice_core::kernel::Kernel<I, C, R>::is_poisoned(&self) -> bool
+pub fn lattice_core::kernel::Kernel<I, C, R>::log(&mut self, lattice_core::txn::Txn<lattice_core::txn::Prepared>) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Logged>, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::log_with_capabilities(&mut self, lattice_core::txn::Txn<lattice_core::txn::Prepared>, u64) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Logged>, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::metrics(&self) -> &lattice_core::metrics::Metrics
+pub fn lattice_core::kernel::Kernel<I, C, R>::new_id(&mut self) -> lattice_core::changeset::ChangeSetId
+pub fn lattice_core::kernel::Kernel<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<(Self, lattice_core::kernel::Recovery), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::open_streaming(I, C, R, &lattice_core::kernel::Config, impl core::ops::function::FnMut(lattice_core::record::Record)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport, core::option::Option<lattice_core::changeset::Checkpoint>), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::open_streaming_with_capabilities(I, C, R, &lattice_core::kernel::Config, u64, impl core::ops::function::FnMut(lattice_core::record::Record, lattice_core::admission::RecoveryContext)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport, core::option::Option<lattice_core::changeset::Checkpoint>), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::prepare(&mut self, lattice_core::txn::Txn<lattice_core::txn::Authorized>) -> core::result::Result<lattice_core::txn::PrepareOutcome, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::publish(&self, lattice_core::txn::Txn<lattice_core::txn::Applied>) -> lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Kernel<I, C, R>::read_from(&self, u64, usize) -> core::result::Result<(alloc::vec::Vec<lattice_core::record::Record>, u64), lattice_core::log::LogError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::read_from_with_context(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<(lattice_core::record::Record, lattice_core::admission::RecoveryContext)>, lattice_core::log::LogError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::scrub(&self) -> core::result::Result<lattice_core::scrub::ScrubReport, lattice_core::log::LogError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::settle(&mut self) -> core::result::Result<usize, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::sync(&mut self, alloc::vec::Vec<lattice_core::txn::Txn<lattice_core::txn::Logged>>) -> core::result::Result<alloc::vec::Vec<lattice_core::txn::Txn<lattice_core::txn::Durable>>, lattice_core::txn::TxnError>
+pub struct lattice_core::kernel::Recovery
+pub lattice_core::kernel::Recovery::checkpoint: core::option::Option<lattice_core::changeset::Checkpoint>
+pub lattice_core::kernel::Recovery::report: lattice_core::log::RecoveryReport
+impl core::clone::Clone for lattice_core::kernel::Recovery
+pub fn lattice_core::kernel::Recovery::clone(&self) -> Self
+impl core::fmt::Debug for lattice_core::kernel::Recovery
+pub fn lattice_core::kernel::Recovery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod lattice_core::ledger
+pub struct lattice_core::ledger::LedgerEntry
+pub lattice_core::ledger::LedgerEntry::json: alloc::string::String
+pub lattice_core::ledger::LedgerEntry::kind: alloc::string::String
+pub lattice_core::ledger::LedgerEntry::lsn: u64
+pub lattice_core::ledger::LedgerEntry::recorded_ms: u64
+impl core::clone::Clone for lattice_core::ledger::LedgerEntry
+pub fn lattice_core::ledger::LedgerEntry::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::ledger::LedgerEntry
+impl core::cmp::PartialEq for lattice_core::ledger::LedgerEntry
+pub fn lattice_core::ledger::LedgerEntry::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::ledger::LedgerEntry
+pub fn lattice_core::ledger::LedgerEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::ledger::LedgerEntry
+pub fn lattice_core::ledger::append<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng>(I, C, R, &str, &str) -> core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>
+pub fn lattice_core::ledger::read<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng>(I, C, R) -> core::result::Result<alloc::vec::Vec<lattice_core::ledger::LedgerEntry>, lattice_core::txn::TxnError>
+pub mod lattice_core::log
+pub enum lattice_core::log::LogError
+pub lattice_core::log::LogError::Corrupt(alloc::string::String)
+pub lattice_core::log::LogError::Io(lattice_seams::IoError)
+pub lattice_core::log::LogError::Poisoned
+pub lattice_core::log::LogError::TooLarge(usize)
+pub lattice_core::log::LogError::UnsupportedCapabilities
+pub lattice_core::log::LogError::UnsupportedCapabilities::required: u64
+pub lattice_core::log::LogError::UnsupportedCapabilities::supported: u64
+impl core::clone::Clone for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::log::LogError
+impl core::cmp::PartialEq for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::log::LogError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::log::LogError) -> Self
+impl core::convert::From<lattice_seams::IoError> for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::from(lattice_seams::IoError) -> Self
+impl core::error::Error for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::log::LogError
+impl lattice_abi::error::Classify for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::class(&self) -> lattice_abi::error::ErrorClass
+pub struct lattice_core::log::Log<I: lattice_seams::Io>
+impl<I: lattice_seams::Io> lattice_core::log::Log<I>
+pub fn lattice_core::log::Log<I>::append(&mut self, u8, &[u8]) -> core::result::Result<u64, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::append_with_capabilities(&mut self, u8, &[u8], u64) -> core::result::Result<u64, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::dir(&self) -> &str
+pub fn lattice_core::log::Log<I>::durable_lsn(&self) -> u64
+pub fn lattice_core::log::Log<I>::io(&self) -> &I
+pub fn lattice_core::log::Log<I>::is_poisoned(&self) -> bool
+pub fn lattice_core::log::Log<I>::next_lsn(&self) -> u64
+pub fn lattice_core::log::Log<I>::open(I, &str, u64) -> core::result::Result<(Self, lattice_core::log::RecoveryReport), lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::open_streaming(I, &str, u64, impl core::ops::function::FnMut(lattice_core::record::Record)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport), lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::open_streaming_with_capabilities(I, &str, u64, u64, impl core::ops::function::FnMut(lattice_core::record::Record, lattice_core::admission::RecoveryContext)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport), lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::read_from(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<lattice_core::record::Record>, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::read_from_with_context(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<(lattice_core::record::Record, lattice_core::admission::RecoveryContext)>, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::required_capabilities(&self) -> u64
+pub fn lattice_core::log::Log<I>::supported_capabilities(&self) -> u64
+pub fn lattice_core::log::Log<I>::sync(&mut self) -> core::result::Result<u64, lattice_core::log::LogError>
+impl<I: core::fmt::Debug + lattice_seams::Io> core::fmt::Debug for lattice_core::log::Log<I>
+pub fn lattice_core::log::Log<I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<I: lattice_seams::Io> core::ops::drop::Drop for lattice_core::log::Log<I>
+pub fn lattice_core::log::Log<I>::drop(&mut self)
+pub struct lattice_core::log::RecoveryReport
+pub lattice_core::log::RecoveryReport::records: u64
+pub lattice_core::log::RecoveryReport::segments: usize
+pub lattice_core::log::RecoveryReport::truncated_bytes: u64
+impl core::clone::Clone for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::log::RecoveryReport
+impl core::cmp::PartialEq for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::default() -> Self
+impl core::fmt::Debug for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::log::RecoveryReport
+pub mod lattice_core::metrics
+pub mod lattice_core::metrics::names
+pub const lattice_core::metrics::names::ALL: [&str; 4]
+pub const lattice_core::metrics::names::COMMIT_DUPLICATE_TOTAL: &str
+pub const lattice_core::metrics::names::COMMIT_ERROR_TOTAL: &str
+pub const lattice_core::metrics::names::COMMIT_LATENCY_SECONDS: &str
+pub const lattice_core::metrics::names::COMMIT_TOTAL: &str
+pub struct lattice_core::metrics::Histogram
+pub lattice_core::metrics::Histogram::count: u64
+pub lattice_core::metrics::Histogram::max: f64
+pub lattice_core::metrics::Histogram::sum: f64
+impl core::clone::Clone for lattice_core::metrics::Histogram
+pub fn lattice_core::metrics::Histogram::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_core::metrics::Histogram
+pub fn lattice_core::metrics::Histogram::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::metrics::Histogram
+pub fn lattice_core::metrics::Histogram::default() -> Self
+impl core::fmt::Debug for lattice_core::metrics::Histogram
+pub fn lattice_core::metrics::Histogram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::metrics::Histogram
+impl core::marker::StructuralPartialEq for lattice_core::metrics::Histogram
+pub struct lattice_core::metrics::Metrics
+impl lattice_core::metrics::Metrics
+pub fn lattice_core::metrics::Metrics::counter(&self, &str) -> u64
+pub fn lattice_core::metrics::Metrics::histogram(&self, &str) -> core::option::Option<lattice_core::metrics::Histogram>
+pub fn lattice_core::metrics::Metrics::incr(&mut self, &'static str)
+pub fn lattice_core::metrics::Metrics::observe(&mut self, &'static str, f64)
+impl core::clone::Clone for lattice_core::metrics::Metrics
+pub fn lattice_core::metrics::Metrics::clone(&self) -> Self
+impl core::default::Default for lattice_core::metrics::Metrics
+pub fn lattice_core::metrics::Metrics::default() -> Self
+impl core::fmt::Debug for lattice_core::metrics::Metrics
+pub fn lattice_core::metrics::Metrics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::metrics::NameError(pub alloc::string::String)
+impl core::clone::Clone for lattice_core::metrics::NameError
+pub fn lattice_core::metrics::NameError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::metrics::NameError
+impl core::cmp::PartialEq for lattice_core::metrics::NameError
+pub fn lattice_core::metrics::NameError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::metrics::NameError
+pub fn lattice_core::metrics::NameError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::metrics::NameError
+pub fn lattice_core::metrics::validate_name(&str) -> core::result::Result<(), lattice_core::metrics::NameError>
+pub mod lattice_core::pipeline
+pub struct lattice_core::pipeline::Backpressure
+pub lattice_core::pipeline::Backpressure::queued: usize
+impl core::clone::Clone for lattice_core::pipeline::Backpressure
+pub fn lattice_core::pipeline::Backpressure::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::pipeline::Backpressure
+impl core::cmp::PartialEq for lattice_core::pipeline::Backpressure
+pub fn lattice_core::pipeline::Backpressure::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::pipeline::Backpressure
+pub fn lattice_core::pipeline::Backpressure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::pipeline::Backpressure
+impl core::marker::StructuralPartialEq for lattice_core::pipeline::Backpressure
+pub struct lattice_core::pipeline::Pipeline<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng> lattice_core::pipeline::Pipeline<I, C, R>
+pub fn lattice_core::pipeline::Pipeline<I, C, R>::drain(&mut self) -> alloc::vec::Vec<(lattice_core::pipeline::Ticket, core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>)>
+pub fn lattice_core::pipeline::Pipeline<I, C, R>::kernel(&self) -> &lattice_core::kernel::Kernel<I, C, R>
+pub fn lattice_core::pipeline::Pipeline<I, C, R>::kernel_mut(&mut self) -> &mut lattice_core::kernel::Kernel<I, C, R>
+pub fn lattice_core::pipeline::Pipeline<I, C, R>::new(lattice_core::kernel::Kernel<I, C, R>, usize, usize) -> Self
+pub fn lattice_core::pipeline::Pipeline<I, C, R>::queued(&self) -> usize
+pub fn lattice_core::pipeline::Pipeline<I, C, R>::submit(&mut self, lattice_core::changeset::ChangeSet) -> core::result::Result<lattice_core::pipeline::Ticket, lattice_core::pipeline::Backpressure>
+pub struct lattice_core::pipeline::Ticket(pub u64)
+impl core::clone::Clone for lattice_core::pipeline::Ticket
+pub fn lattice_core::pipeline::Ticket::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::pipeline::Ticket
+impl core::cmp::Ord for lattice_core::pipeline::Ticket
+pub fn lattice_core::pipeline::Ticket::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_core::pipeline::Ticket
+pub fn lattice_core::pipeline::Ticket::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_core::pipeline::Ticket
+pub fn lattice_core::pipeline::Ticket::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_core::pipeline::Ticket
+pub fn lattice_core::pipeline::Ticket::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::pipeline::Ticket
+impl core::marker::StructuralPartialEq for lattice_core::pipeline::Ticket
+pub mod lattice_core::record
+pub enum lattice_core::record::Decoded
+pub lattice_core::record::Decoded::Corrupt
+pub lattice_core::record::Decoded::Incomplete
+pub lattice_core::record::Decoded::Record(lattice_core::record::Record, usize)
+impl core::clone::Clone for lattice_core::record::Decoded
+pub fn lattice_core::record::Decoded::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::record::Decoded
+impl core::cmp::PartialEq for lattice_core::record::Decoded
+pub fn lattice_core::record::Decoded::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::record::Decoded
+pub fn lattice_core::record::Decoded::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::record::Decoded
+pub enum lattice_core::record::HeaderCheck
+pub lattice_core::record::HeaderCheck::BadMagic
+pub lattice_core::record::HeaderCheck::Ok
+pub lattice_core::record::HeaderCheck::TooShort
+pub lattice_core::record::HeaderCheck::UnsupportedVersion(u32)
+impl core::clone::Clone for lattice_core::record::HeaderCheck
+pub fn lattice_core::record::HeaderCheck::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::record::HeaderCheck
+impl core::cmp::PartialEq for lattice_core::record::HeaderCheck
+pub fn lattice_core::record::HeaderCheck::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::record::HeaderCheck
+pub fn lattice_core::record::HeaderCheck::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::record::HeaderCheck
+#[non_exhaustive] #[repr(u8)] pub enum lattice_core::record::RecordType
+pub lattice_core::record::RecordType::ChangeSet = 1
+pub lattice_core::record::RecordType::Checkpoint = 3
+pub lattice_core::record::RecordType::TurnBegin = 2
+impl lattice_core::record::RecordType
+pub fn lattice_core::record::RecordType::from_u8(u8) -> core::option::Option<Self>
+impl core::clone::Clone for lattice_core::record::RecordType
+pub fn lattice_core::record::RecordType::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::record::RecordType
+impl core::cmp::PartialEq for lattice_core::record::RecordType
+pub fn lattice_core::record::RecordType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::record::RecordType
+pub fn lattice_core::record::RecordType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::record::RecordType
+impl core::marker::StructuralPartialEq for lattice_core::record::RecordType
+pub struct lattice_core::record::Record
+pub lattice_core::record::Record::lsn: u64
+pub lattice_core::record::Record::payload: alloc::vec::Vec<u8>
+pub lattice_core::record::Record::rtype: u8
+impl core::clone::Clone for lattice_core::record::Record
+pub fn lattice_core::record::Record::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::record::Record
+impl core::cmp::PartialEq for lattice_core::record::Record
+pub fn lattice_core::record::Record::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::record::Record
+pub fn lattice_core::record::Record::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::record::Record
+pub const lattice_core::record::FORMAT_VERSION: u32
+pub const lattice_core::record::MAX_PAYLOAD: usize
+pub const lattice_core::record::RECORD_HEADER_LEN: usize
+pub const lattice_core::record::SEGMENT_HEADER_LEN: usize
+pub const lattice_core::record::SEGMENT_MAGIC: &[u8; 8]
+pub fn lattice_core::record::check_header(&[u8]) -> lattice_core::record::HeaderCheck
+pub fn lattice_core::record::decode_record(&[u8], usize) -> lattice_core::record::Decoded
+pub fn lattice_core::record::encode_record(u64, u8, &[u8]) -> alloc::vec::Vec<u8>
+pub fn lattice_core::record::segment_header() -> alloc::vec::Vec<u8>
+pub mod lattice_core::scrub
+pub enum lattice_core::scrub::Issue
+pub lattice_core::scrub::Issue::BadHeader
+pub lattice_core::scrub::Issue::BadHeader::problem: alloc::string::String
+pub lattice_core::scrub::Issue::BadHeader::segment: alloc::string::String
+pub lattice_core::scrub::Issue::DerivedStateMismatch
+pub lattice_core::scrub::Issue::DerivedStateMismatch::what: alloc::string::String
+pub lattice_core::scrub::Issue::DuplicateId
+pub lattice_core::scrub::Issue::DuplicateId::id: lattice_core::changeset::ChangeSetId
+pub lattice_core::scrub::Issue::DuplicateId::lsn: u64
+pub lattice_core::scrub::Issue::FencedWriteLogged
+pub lattice_core::scrub::Issue::FencedWriteLogged::id: lattice_core::changeset::ChangeSetId
+pub lattice_core::scrub::Issue::FencedWriteLogged::lsn: u64
+pub lattice_core::scrub::Issue::HlcNotIncreasing
+pub lattice_core::scrub::Issue::HlcNotIncreasing::lsn: u64
+pub lattice_core::scrub::Issue::MidLogDamage
+pub lattice_core::scrub::Issue::MidLogDamage::offset: usize
+pub lattice_core::scrub::Issue::MidLogDamage::segment: alloc::string::String
+pub lattice_core::scrub::Issue::MissingSegment
+pub lattice_core::scrub::Issue::MissingSegment::expected: u64
+pub lattice_core::scrub::Issue::MissingSegment::found: u64
+pub lattice_core::scrub::Issue::MissingSegment::segment: alloc::string::String
+pub lattice_core::scrub::Issue::TornTail
+pub lattice_core::scrub::Issue::TornTail::bytes: usize
+pub lattice_core::scrub::Issue::TornTail::offset: usize
+pub lattice_core::scrub::Issue::TornTail::segment: alloc::string::String
+pub lattice_core::scrub::Issue::Undecodable
+pub lattice_core::scrub::Issue::Undecodable::lsn: u64
+pub lattice_core::scrub::Issue::Undecodable::what: alloc::string::String
+impl core::clone::Clone for lattice_core::scrub::Issue
+pub fn lattice_core::scrub::Issue::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::scrub::Issue
+impl core::cmp::PartialEq for lattice_core::scrub::Issue
+pub fn lattice_core::scrub::Issue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::scrub::Issue
+pub fn lattice_core::scrub::Issue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::scrub::Issue
+pub struct lattice_core::scrub::ScrubReport
+pub lattice_core::scrub::ScrubReport::change_sets: usize
+pub lattice_core::scrub::ScrubReport::issues: alloc::vec::Vec<lattice_core::scrub::Issue>
+pub lattice_core::scrub::ScrubReport::rebuilt_ids: alloc::collections::btree::set::BTreeSet<lattice_core::changeset::ChangeSetId>
+pub lattice_core::scrub::ScrubReport::rebuilt_turns: alloc::collections::btree::map::BTreeMap<u64, u64>
+pub lattice_core::scrub::ScrubReport::records: usize
+pub lattice_core::scrub::ScrubReport::segments: usize
+impl lattice_core::scrub::ScrubReport
+pub fn lattice_core::scrub::ScrubReport::is_clean(&self) -> bool
+impl core::clone::Clone for lattice_core::scrub::ScrubReport
+pub fn lattice_core::scrub::ScrubReport::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::scrub::ScrubReport
+impl core::cmp::PartialEq for lattice_core::scrub::ScrubReport
+pub fn lattice_core::scrub::ScrubReport::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::scrub::ScrubReport
+pub fn lattice_core::scrub::ScrubReport::default() -> Self
+impl core::fmt::Debug for lattice_core::scrub::ScrubReport
+pub fn lattice_core::scrub::ScrubReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::scrub::ScrubReport
+pub fn lattice_core::scrub::scrub<I: lattice_seams::Io>(&I, &str) -> core::result::Result<lattice_core::scrub::ScrubReport, lattice_seams::IoError>
+pub fn lattice_core::scrub::scrub_with_capabilities<I: lattice_seams::Io>(&I, &str, u64) -> core::result::Result<lattice_core::scrub::ScrubReport, lattice_seams::IoError>
+pub mod lattice_core::txn
+pub enum lattice_core::txn::PrepareOutcome
+pub lattice_core::txn::PrepareOutcome::Duplicate(lattice_core::changeset::ChangeSetId)
+pub lattice_core::txn::PrepareOutcome::Ready(lattice_core::txn::Txn<lattice_core::txn::Prepared>)
+impl core::fmt::Debug for lattice_core::txn::PrepareOutcome
+pub fn lattice_core::txn::PrepareOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum lattice_core::txn::TxnError
+pub lattice_core::txn::TxnError::Clock(lattice_core::hlc::HlcError)
+pub lattice_core::txn::TxnError::Denied(alloc::string::String)
+pub lattice_core::txn::TxnError::Duplicate(lattice_core::changeset::ChangeSetId)
+pub lattice_core::txn::TxnError::Encode(lattice_core::changeset::EncodeError)
+pub lattice_core::txn::TxnError::Fenced
+pub lattice_core::txn::TxnError::Fenced::current: u64
+pub lattice_core::txn::TxnError::Fenced::session: u64
+pub lattice_core::txn::TxnError::Fenced::turn: u64
+pub lattice_core::txn::TxnError::ForeignTransaction
+pub lattice_core::txn::TxnError::InFlight(lattice_core::changeset::ChangeSetId)
+pub lattice_core::txn::TxnError::Invalid(alloc::string::String)
+pub lattice_core::txn::TxnError::Log(lattice_core::log::LogError)
+pub lattice_core::txn::TxnError::NotDurable(u64)
+pub lattice_core::txn::TxnError::StaleTurn
+pub lattice_core::txn::TxnError::StaleTurn::current: u64
+pub lattice_core::txn::TxnError::StaleTurn::turn: u64
+pub lattice_core::txn::TxnError::UnknownTurn(u64)
+impl core::clone::Clone for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::txn::TxnError
+impl core::cmp::PartialEq for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::changeset::EncodeError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::changeset::EncodeError) -> Self
+impl core::convert::From<lattice_core::hlc::HlcError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::hlc::HlcError) -> Self
+impl core::convert::From<lattice_core::log::LogError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::log::LogError) -> Self
+impl core::error::Error for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::txn::TxnError
+impl lattice_abi::error::Classify for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::class(&self) -> lattice_abi::error::ErrorClass
+pub struct lattice_core::txn::AllowAll
+impl core::clone::Clone for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::clone(&self) -> Self
+impl core::default::Default for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::default() -> Self
+impl core::fmt::Debug for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::txn::AllowAll
+impl lattice_core::txn::Policy for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::authorize(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+impl lattice_core::txn::Validator for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::validate(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+pub struct lattice_core::txn::Applied
+impl core::fmt::Debug for lattice_core::txn::Applied
+pub fn lattice_core::txn::Applied::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::txn::Authorized
+impl core::fmt::Debug for lattice_core::txn::Authorized
+pub fn lattice_core::txn::Authorized::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::txn::Durable
+impl core::fmt::Debug for lattice_core::txn::Durable
+pub fn lattice_core::txn::Durable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::txn::Logged
+impl core::fmt::Debug for lattice_core::txn::Logged
+pub fn lattice_core::txn::Logged::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::txn::Open
+impl core::fmt::Debug for lattice_core::txn::Open
+pub fn lattice_core::txn::Open::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::txn::Prepared
+impl core::fmt::Debug for lattice_core::txn::Prepared
+pub fn lattice_core::txn::Prepared::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::txn::Txn<S>
+impl lattice_core::txn::Txn<lattice_core::txn::Applied>
+pub fn lattice_core::txn::Txn<lattice_core::txn::Applied>::lsn(&self) -> u64
+impl lattice_core::txn::Txn<lattice_core::txn::Open>
+pub fn lattice_core::txn::Txn<lattice_core::txn::Open>::validate(self, &dyn lattice_core::txn::Validator) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Validated>, lattice_core::txn::TxnError>
+impl lattice_core::txn::Txn<lattice_core::txn::Validated>
+pub fn lattice_core::txn::Txn<lattice_core::txn::Validated>::authorize(self, &dyn lattice_core::txn::Policy) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Authorized>, lattice_core::txn::TxnError>
+impl<S> lattice_core::txn::Txn<S>
+pub fn lattice_core::txn::Txn<S>::change_set(&self) -> &lattice_core::changeset::ChangeSet
+pub fn lattice_core::txn::Txn<S>::id(&self) -> lattice_core::changeset::ChangeSetId
+impl<S: core::fmt::Debug> core::fmt::Debug for lattice_core::txn::Txn<S>
+pub fn lattice_core::txn::Txn<S>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::txn::Validated
+impl core::fmt::Debug for lattice_core::txn::Validated
+pub fn lattice_core::txn::Validated::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait lattice_core::txn::Policy
+pub fn lattice_core::txn::Policy::authorize(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+impl lattice_core::txn::Policy for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::authorize(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+pub trait lattice_core::txn::Validator
+pub fn lattice_core::txn::Validator::validate(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+impl lattice_core::txn::Validator for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::validate(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+pub enum lattice_core::ChangeSetTag
+impl core::clone::Clone for lattice_core::changeset::ChangeSetTag
+pub fn lattice_core::changeset::ChangeSetTag::clone(&self) -> Self
+impl core::fmt::Debug for lattice_core::changeset::ChangeSetTag
+pub fn lattice_core::changeset::ChangeSetTag::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::changeset::ChangeSetTag
+pub enum lattice_core::DecodeError
+pub lattice_core::DecodeError::Invalid(&'static str)
+pub lattice_core::DecodeError::Trailing
+pub lattice_core::DecodeError::Truncated
+pub lattice_core::DecodeError::Version(u8)
+impl core::clone::Clone for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::DecodeError
+impl core::cmp::PartialEq for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::changeset::DecodeError
+impl core::fmt::Debug for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::changeset::DecodeError
+pub fn lattice_core::changeset::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::changeset::DecodeError
+pub enum lattice_core::EncodeError
+pub lattice_core::EncodeError::PayloadTooLarge(usize)
+pub lattice_core::EncodeError::TooManyParents(usize)
+impl core::clone::Clone for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::EncodeError
+impl core::cmp::PartialEq for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::changeset::EncodeError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::changeset::EncodeError) -> Self
+impl core::error::Error for lattice_core::changeset::EncodeError
+impl core::fmt::Debug for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::changeset::EncodeError
+pub fn lattice_core::changeset::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::changeset::EncodeError
+pub enum lattice_core::HlcError
+pub lattice_core::HlcError::DriftTooLarge
+pub lattice_core::HlcError::DriftTooLarge::ahead_ms: u64
+pub lattice_core::HlcError::DriftTooLarge::max_ms: u64
+pub lattice_core::HlcError::Exhausted
+impl core::clone::Clone for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::hlc::HlcError
+impl core::cmp::PartialEq for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::hlc::HlcError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::hlc::HlcError) -> Self
+impl core::error::Error for lattice_core::hlc::HlcError
+impl core::fmt::Debug for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::hlc::HlcError
+impl lattice_abi::error::Classify for lattice_core::hlc::HlcError
+pub fn lattice_core::hlc::HlcError::class(&self) -> lattice_abi::error::ErrorClass
+pub enum lattice_core::LogError
+pub lattice_core::LogError::Corrupt(alloc::string::String)
+pub lattice_core::LogError::Io(lattice_seams::IoError)
+pub lattice_core::LogError::Poisoned
+pub lattice_core::LogError::TooLarge(usize)
+pub lattice_core::LogError::UnsupportedCapabilities
+pub lattice_core::LogError::UnsupportedCapabilities::required: u64
+pub lattice_core::LogError::UnsupportedCapabilities::supported: u64
+impl core::clone::Clone for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::log::LogError
+impl core::cmp::PartialEq for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::log::LogError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::log::LogError) -> Self
+impl core::convert::From<lattice_seams::IoError> for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::from(lattice_seams::IoError) -> Self
+impl core::error::Error for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::log::LogError
+impl lattice_abi::error::Classify for lattice_core::log::LogError
+pub fn lattice_core::log::LogError::class(&self) -> lattice_abi::error::ErrorClass
+pub enum lattice_core::PrepareOutcome
+pub lattice_core::PrepareOutcome::Duplicate(lattice_core::changeset::ChangeSetId)
+pub lattice_core::PrepareOutcome::Ready(lattice_core::txn::Txn<lattice_core::txn::Prepared>)
+impl core::fmt::Debug for lattice_core::txn::PrepareOutcome
+pub fn lattice_core::txn::PrepareOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum lattice_core::Receipt
+pub lattice_core::Receipt::Duplicate
+pub lattice_core::Receipt::Recorded
+pub lattice_core::Receipt::Recorded::hlc: lattice_abi::hlc::Hlc
+pub lattice_core::Receipt::Recorded::lsn: u64
+impl core::clone::Clone for lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Receipt::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::kernel::Receipt
+impl core::cmp::PartialEq for lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Receipt::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Receipt::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::kernel::Receipt
+impl core::marker::StructuralPartialEq for lattice_core::kernel::Receipt
+pub enum lattice_core::TxnError
+pub lattice_core::TxnError::Clock(lattice_core::hlc::HlcError)
+pub lattice_core::TxnError::Denied(alloc::string::String)
+pub lattice_core::TxnError::Duplicate(lattice_core::changeset::ChangeSetId)
+pub lattice_core::TxnError::Encode(lattice_core::changeset::EncodeError)
+pub lattice_core::TxnError::Fenced
+pub lattice_core::TxnError::Fenced::current: u64
+pub lattice_core::TxnError::Fenced::session: u64
+pub lattice_core::TxnError::Fenced::turn: u64
+pub lattice_core::TxnError::ForeignTransaction
+pub lattice_core::TxnError::InFlight(lattice_core::changeset::ChangeSetId)
+pub lattice_core::TxnError::Invalid(alloc::string::String)
+pub lattice_core::TxnError::Log(lattice_core::log::LogError)
+pub lattice_core::TxnError::NotDurable(u64)
+pub lattice_core::TxnError::StaleTurn
+pub lattice_core::TxnError::StaleTurn::current: u64
+pub lattice_core::TxnError::StaleTurn::turn: u64
+pub lattice_core::TxnError::UnknownTurn(u64)
+impl core::clone::Clone for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::txn::TxnError
+impl core::cmp::PartialEq for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_core::changeset::EncodeError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::changeset::EncodeError) -> Self
+impl core::convert::From<lattice_core::hlc::HlcError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::hlc::HlcError) -> Self
+impl core::convert::From<lattice_core::log::LogError> for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::from(lattice_core::log::LogError) -> Self
+impl core::error::Error for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::txn::TxnError
+impl lattice_abi::error::Classify for lattice_core::txn::TxnError
+pub fn lattice_core::txn::TxnError::class(&self) -> lattice_abi::error::ErrorClass
+pub struct lattice_core::AllowAll
+impl core::clone::Clone for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::clone(&self) -> Self
+impl core::default::Default for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::default() -> Self
+impl core::fmt::Debug for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::txn::AllowAll
+impl lattice_core::txn::Policy for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::authorize(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+impl lattice_core::txn::Validator for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::validate(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+pub struct lattice_core::Applied
+impl core::fmt::Debug for lattice_core::txn::Applied
+pub fn lattice_core::txn::Applied::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::Authorized
+impl core::fmt::Debug for lattice_core::txn::Authorized
+pub fn lattice_core::txn::Authorized::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::ChangeSet
+pub lattice_core::ChangeSet::author: u128
+pub lattice_core::ChangeSet::hlc: lattice_abi::hlc::Hlc
+pub lattice_core::ChangeSet::id: lattice_core::changeset::ChangeSetId
+pub lattice_core::ChangeSet::parents: alloc::vec::Vec<lattice_core::changeset::ChangeSetId>
+pub lattice_core::ChangeSet::payload: alloc::vec::Vec<u8>
+pub lattice_core::ChangeSet::turn: core::option::Option<lattice_core::changeset::TurnRef>
+impl lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::decode(&[u8]) -> core::result::Result<Self, lattice_core::changeset::DecodeError>
+pub fn lattice_core::changeset::ChangeSet::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, lattice_core::changeset::EncodeError>
+pub fn lattice_core::changeset::ChangeSet::new(lattice_core::changeset::ChangeSetId, alloc::vec::Vec<u8>) -> Self
+impl core::clone::Clone for lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::ChangeSet
+impl core::cmp::PartialEq for lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::changeset::ChangeSet
+pub fn lattice_core::changeset::ChangeSet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::changeset::ChangeSet
+pub struct lattice_core::Config
+pub lattice_core::Config::dir: alloc::string::String
+pub lattice_core::Config::node: u32
+pub lattice_core::Config::segment_limit: u64
+impl core::clone::Clone for lattice_core::kernel::Config
+pub fn lattice_core::kernel::Config::clone(&self) -> Self
+impl core::default::Default for lattice_core::kernel::Config
+pub fn lattice_core::kernel::Config::default() -> Self
+impl core::fmt::Debug for lattice_core::kernel::Config
+pub fn lattice_core::kernel::Config::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::Durable
+impl core::fmt::Debug for lattice_core::txn::Durable
+pub fn lattice_core::txn::Durable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::HlcClock
+impl lattice_core::hlc::HlcClock
+pub fn lattice_core::hlc::HlcClock::last(&self) -> lattice_abi::hlc::Hlc
+pub fn lattice_core::hlc::HlcClock::new(u32) -> Self
+pub fn lattice_core::hlc::HlcClock::observe(&mut self, lattice_abi::hlc::Hlc, u64, u64) -> core::result::Result<lattice_abi::hlc::Hlc, lattice_core::hlc::HlcError>
+pub fn lattice_core::hlc::HlcClock::restore(u32, lattice_abi::hlc::Hlc) -> Self
+pub fn lattice_core::hlc::HlcClock::tick(&mut self, u64) -> core::result::Result<lattice_abi::hlc::Hlc, lattice_core::hlc::HlcError>
+impl core::clone::Clone for lattice_core::hlc::HlcClock
+pub fn lattice_core::hlc::HlcClock::clone(&self) -> Self
+impl core::fmt::Debug for lattice_core::hlc::HlcClock
+pub fn lattice_core::hlc::HlcClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::Kernel<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock, R: lattice_seams::Rng> lattice_core::kernel::Kernel<I, C, R>
+pub fn lattice_core::kernel::Kernel<I, C, R>::apply(&mut self, lattice_core::txn::Txn<lattice_core::txn::Durable>) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Applied>, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::begin(&self, lattice_core::changeset::ChangeSet) -> lattice_core::txn::Txn<lattice_core::txn::Open>
+pub fn lattice_core::kernel::Kernel<I, C, R>::begin_turn(&mut self, lattice_core::changeset::TurnRef) -> core::result::Result<(), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::checkpoint(&mut self) -> core::result::Result<u64, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::commit(&mut self, lattice_core::changeset::ChangeSet) -> core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::commit_batch(&mut self, alloc::vec::Vec<lattice_core::changeset::ChangeSet>) -> alloc::vec::Vec<core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>>
+pub fn lattice_core::kernel::Kernel<I, C, R>::commit_with_capabilities(&mut self, lattice_core::changeset::ChangeSet, u64) -> core::result::Result<lattice_core::kernel::Receipt, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::contains(&self, &lattice_core::changeset::ChangeSetId) -> bool
+pub fn lattice_core::kernel::Kernel<I, C, R>::durable_lsn(&self) -> u64
+pub fn lattice_core::kernel::Kernel<I, C, R>::is_poisoned(&self) -> bool
+pub fn lattice_core::kernel::Kernel<I, C, R>::log(&mut self, lattice_core::txn::Txn<lattice_core::txn::Prepared>) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Logged>, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::log_with_capabilities(&mut self, lattice_core::txn::Txn<lattice_core::txn::Prepared>, u64) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Logged>, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::metrics(&self) -> &lattice_core::metrics::Metrics
+pub fn lattice_core::kernel::Kernel<I, C, R>::new_id(&mut self) -> lattice_core::changeset::ChangeSetId
+pub fn lattice_core::kernel::Kernel<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<(Self, lattice_core::kernel::Recovery), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::open_streaming(I, C, R, &lattice_core::kernel::Config, impl core::ops::function::FnMut(lattice_core::record::Record)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport, core::option::Option<lattice_core::changeset::Checkpoint>), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::open_streaming_with_capabilities(I, C, R, &lattice_core::kernel::Config, u64, impl core::ops::function::FnMut(lattice_core::record::Record, lattice_core::admission::RecoveryContext)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport, core::option::Option<lattice_core::changeset::Checkpoint>), lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::prepare(&mut self, lattice_core::txn::Txn<lattice_core::txn::Authorized>) -> core::result::Result<lattice_core::txn::PrepareOutcome, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::publish(&self, lattice_core::txn::Txn<lattice_core::txn::Applied>) -> lattice_core::kernel::Receipt
+pub fn lattice_core::kernel::Kernel<I, C, R>::read_from(&self, u64, usize) -> core::result::Result<(alloc::vec::Vec<lattice_core::record::Record>, u64), lattice_core::log::LogError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::read_from_with_context(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<(lattice_core::record::Record, lattice_core::admission::RecoveryContext)>, lattice_core::log::LogError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::scrub(&self) -> core::result::Result<lattice_core::scrub::ScrubReport, lattice_core::log::LogError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::settle(&mut self) -> core::result::Result<usize, lattice_core::txn::TxnError>
+pub fn lattice_core::kernel::Kernel<I, C, R>::sync(&mut self, alloc::vec::Vec<lattice_core::txn::Txn<lattice_core::txn::Logged>>) -> core::result::Result<alloc::vec::Vec<lattice_core::txn::Txn<lattice_core::txn::Durable>>, lattice_core::txn::TxnError>
+pub struct lattice_core::Log<I: lattice_seams::Io>
+impl<I: lattice_seams::Io> lattice_core::log::Log<I>
+pub fn lattice_core::log::Log<I>::append(&mut self, u8, &[u8]) -> core::result::Result<u64, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::append_with_capabilities(&mut self, u8, &[u8], u64) -> core::result::Result<u64, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::dir(&self) -> &str
+pub fn lattice_core::log::Log<I>::durable_lsn(&self) -> u64
+pub fn lattice_core::log::Log<I>::io(&self) -> &I
+pub fn lattice_core::log::Log<I>::is_poisoned(&self) -> bool
+pub fn lattice_core::log::Log<I>::next_lsn(&self) -> u64
+pub fn lattice_core::log::Log<I>::open(I, &str, u64) -> core::result::Result<(Self, lattice_core::log::RecoveryReport), lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::open_streaming(I, &str, u64, impl core::ops::function::FnMut(lattice_core::record::Record)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport), lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::open_streaming_with_capabilities(I, &str, u64, u64, impl core::ops::function::FnMut(lattice_core::record::Record, lattice_core::admission::RecoveryContext)) -> core::result::Result<(Self, lattice_core::log::RecoveryReport), lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::read_from(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<lattice_core::record::Record>, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::read_from_with_context(&self, u64, usize) -> core::result::Result<alloc::vec::Vec<(lattice_core::record::Record, lattice_core::admission::RecoveryContext)>, lattice_core::log::LogError>
+pub fn lattice_core::log::Log<I>::required_capabilities(&self) -> u64
+pub fn lattice_core::log::Log<I>::supported_capabilities(&self) -> u64
+pub fn lattice_core::log::Log<I>::sync(&mut self) -> core::result::Result<u64, lattice_core::log::LogError>
+impl<I: core::fmt::Debug + lattice_seams::Io> core::fmt::Debug for lattice_core::log::Log<I>
+pub fn lattice_core::log::Log<I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<I: lattice_seams::Io> core::ops::drop::Drop for lattice_core::log::Log<I>
+pub fn lattice_core::log::Log<I>::drop(&mut self)
+pub struct lattice_core::Logged
+impl core::fmt::Debug for lattice_core::txn::Logged
+pub fn lattice_core::txn::Logged::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::Open
+impl core::fmt::Debug for lattice_core::txn::Open
+pub fn lattice_core::txn::Open::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::Prepared
+impl core::fmt::Debug for lattice_core::txn::Prepared
+pub fn lattice_core::txn::Prepared::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::Recovery
+pub lattice_core::Recovery::checkpoint: core::option::Option<lattice_core::changeset::Checkpoint>
+pub lattice_core::Recovery::report: lattice_core::log::RecoveryReport
+impl core::clone::Clone for lattice_core::kernel::Recovery
+pub fn lattice_core::kernel::Recovery::clone(&self) -> Self
+impl core::fmt::Debug for lattice_core::kernel::Recovery
+pub fn lattice_core::kernel::Recovery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::RecoveryReport
+pub lattice_core::RecoveryReport::records: u64
+pub lattice_core::RecoveryReport::segments: usize
+pub lattice_core::RecoveryReport::truncated_bytes: u64
+impl core::clone::Clone for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::log::RecoveryReport
+impl core::cmp::PartialEq for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::default() -> Self
+impl core::fmt::Debug for lattice_core::log::RecoveryReport
+pub fn lattice_core::log::RecoveryReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_core::log::RecoveryReport
+pub struct lattice_core::TurnRef
+pub lattice_core::TurnRef::session: u64
+pub lattice_core::TurnRef::turn: u64
+impl core::clone::Clone for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::changeset::TurnRef
+impl core::cmp::Ord for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_core::changeset::TurnRef
+pub fn lattice_core::changeset::TurnRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::changeset::TurnRef
+impl core::marker::StructuralPartialEq for lattice_core::changeset::TurnRef
+pub struct lattice_core::Txn<S>
+impl lattice_core::txn::Txn<lattice_core::txn::Applied>
+pub fn lattice_core::txn::Txn<lattice_core::txn::Applied>::lsn(&self) -> u64
+impl lattice_core::txn::Txn<lattice_core::txn::Open>
+pub fn lattice_core::txn::Txn<lattice_core::txn::Open>::validate(self, &dyn lattice_core::txn::Validator) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Validated>, lattice_core::txn::TxnError>
+impl lattice_core::txn::Txn<lattice_core::txn::Validated>
+pub fn lattice_core::txn::Txn<lattice_core::txn::Validated>::authorize(self, &dyn lattice_core::txn::Policy) -> core::result::Result<lattice_core::txn::Txn<lattice_core::txn::Authorized>, lattice_core::txn::TxnError>
+impl<S> lattice_core::txn::Txn<S>
+pub fn lattice_core::txn::Txn<S>::change_set(&self) -> &lattice_core::changeset::ChangeSet
+pub fn lattice_core::txn::Txn<S>::id(&self) -> lattice_core::changeset::ChangeSetId
+impl<S: core::fmt::Debug> core::fmt::Debug for lattice_core::txn::Txn<S>
+pub fn lattice_core::txn::Txn<S>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::Validated
+impl core::fmt::Debug for lattice_core::txn::Validated
+pub fn lattice_core::txn::Validated::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const lattice_core::LAYER: u8
+pub trait lattice_core::Policy
+pub fn lattice_core::Policy::authorize(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+impl lattice_core::txn::Policy for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::authorize(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+pub trait lattice_core::Validator
+pub fn lattice_core::Validator::validate(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+impl lattice_core::txn::Validator for lattice_core::txn::AllowAll
+pub fn lattice_core::txn::AllowAll::validate(&self, &lattice_core::changeset::ChangeSet) -> core::result::Result<(), alloc::string::String>
+pub type lattice_core::ChangeSetId = lattice_abi::id::Id<lattice_core::changeset::ChangeSetTag>

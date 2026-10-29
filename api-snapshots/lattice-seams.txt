@@ -1,0 +1,114 @@
+pub mod lattice_seams
+pub mod lattice_seams::conformance
+pub fn lattice_seams::conformance::run<I: lattice_seams::Io>(&mut I)
+pub enum lattice_seams::IoError
+pub lattice_seams::IoError::NoSpace
+pub lattice_seams::IoError::NotFound(alloc::string::String)
+pub lattice_seams::IoError::Other(alloc::string::String)
+impl core::clone::Clone for lattice_seams::IoError
+pub fn lattice_seams::IoError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_seams::IoError
+impl core::cmp::PartialEq for lattice_seams::IoError
+pub fn lattice_seams::IoError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_seams::IoError
+impl core::fmt::Debug for lattice_seams::IoError
+pub fn lattice_seams::IoError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_seams::IoError
+pub fn lattice_seams::IoError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_seams::IoError
+impl lattice_abi::error::Classify for lattice_seams::IoError
+pub fn lattice_seams::IoError::class(&self) -> lattice_abi::error::ErrorClass
+pub struct lattice_seams::OsRng
+impl core::clone::Clone for lattice_seams::OsRng
+pub fn lattice_seams::OsRng::clone(&self) -> Self
+impl core::default::Default for lattice_seams::OsRng
+pub fn lattice_seams::OsRng::default() -> Self
+impl core::fmt::Debug for lattice_seams::OsRng
+pub fn lattice_seams::OsRng::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_seams::OsRng
+impl lattice_seams::Rng for lattice_seams::OsRng
+pub fn lattice_seams::OsRng::next_u64(&mut self) -> u64
+pub struct lattice_seams::StdIo
+impl lattice_seams::StdIo
+pub fn lattice_seams::StdIo::new(impl core::convert::Into<std::path::PathBuf>) -> Self
+impl core::fmt::Debug for lattice_seams::StdIo
+pub fn lattice_seams::StdIo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl lattice_seams::Io for lattice_seams::StdIo
+pub fn lattice_seams::StdIo::append(&mut self, &str, &[u8]) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::create_dir_all(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::exists(&self, &str) -> bool
+pub fn lattice_seams::StdIo::len(&self, &str) -> core::result::Result<u64, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::list(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::lock(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::read_prefix(&self, &str, usize) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::remove(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::sync(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::sync_dir(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::truncate(&mut self, &str, u64) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::unlock(&mut self, &str)
+pub struct lattice_seams::SystemClock
+impl core::clone::Clone for lattice_seams::SystemClock
+pub fn lattice_seams::SystemClock::clone(&self) -> Self
+impl core::default::Default for lattice_seams::SystemClock
+pub fn lattice_seams::SystemClock::default() -> Self
+impl core::fmt::Debug for lattice_seams::SystemClock
+pub fn lattice_seams::SystemClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_seams::SystemClock
+impl lattice_seams::Clock for lattice_seams::SystemClock
+pub fn lattice_seams::SystemClock::now_ms(&self) -> u64
+pub struct lattice_seams::ThreadSpawner
+impl core::clone::Clone for lattice_seams::ThreadSpawner
+pub fn lattice_seams::ThreadSpawner::clone(&self) -> Self
+impl core::default::Default for lattice_seams::ThreadSpawner
+pub fn lattice_seams::ThreadSpawner::default() -> Self
+impl core::fmt::Debug for lattice_seams::ThreadSpawner
+pub fn lattice_seams::ThreadSpawner::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_seams::ThreadSpawner
+impl lattice_seams::Spawner for lattice_seams::ThreadSpawner
+pub fn lattice_seams::ThreadSpawner::spawn(&mut self, alloc::boxed::Box<(dyn core::ops::function::FnOnce() + core::marker::Send + 'static)>)
+pub const lattice_seams::LAYER: u8
+pub trait lattice_seams::Clock
+pub fn lattice_seams::Clock::now_ms(&self) -> u64
+impl lattice_seams::Clock for lattice_seams::SystemClock
+pub fn lattice_seams::SystemClock::now_ms(&self) -> u64
+pub trait lattice_seams::Io
+pub fn lattice_seams::Io::append(&mut self, &str, &[u8]) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::Io::create_dir_all(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::Io::exists(&self, &str) -> bool
+pub fn lattice_seams::Io::len(&self, &str) -> core::result::Result<u64, lattice_seams::IoError>
+pub fn lattice_seams::Io::list(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, lattice_seams::IoError>
+pub fn lattice_seams::Io::lock(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::Io::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_seams::Io::read_prefix(&self, &str, usize) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_seams::Io::remove(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::Io::sync(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::Io::sync_dir(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::Io::truncate(&mut self, &str, u64) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::Io::unlock(&mut self, &str)
+impl lattice_seams::Io for lattice_seams::StdIo
+pub fn lattice_seams::StdIo::append(&mut self, &str, &[u8]) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::create_dir_all(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::exists(&self, &str) -> bool
+pub fn lattice_seams::StdIo::len(&self, &str) -> core::result::Result<u64, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::list(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::lock(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::read_prefix(&self, &str, usize) -> core::result::Result<alloc::vec::Vec<u8>, lattice_seams::IoError>
+pub fn lattice_seams::StdIo::remove(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::sync(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::sync_dir(&mut self, &str) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::truncate(&mut self, &str, u64) -> core::result::Result<(), lattice_seams::IoError>
+pub fn lattice_seams::StdIo::unlock(&mut self, &str)
+pub trait lattice_seams::Net
+pub fn lattice_seams::Net::recv(&mut self, lattice_seams::NodeId) -> core::option::Option<(lattice_seams::NodeId, alloc::vec::Vec<u8>)>
+pub fn lattice_seams::Net::send(&mut self, lattice_seams::NodeId, lattice_seams::NodeId, alloc::vec::Vec<u8>)
+pub trait lattice_seams::Rng
+pub fn lattice_seams::Rng::next_u64(&mut self) -> u64
+impl lattice_seams::Rng for lattice_seams::OsRng
+pub fn lattice_seams::OsRng::next_u64(&mut self) -> u64
+pub trait lattice_seams::Spawner
+pub fn lattice_seams::Spawner::spawn(&mut self, alloc::boxed::Box<(dyn core::ops::function::FnOnce() + core::marker::Send + 'static)>)
+impl lattice_seams::Spawner for lattice_seams::ThreadSpawner
+pub fn lattice_seams::ThreadSpawner::spawn(&mut self, alloc::boxed::Box<(dyn core::ops::function::FnOnce() + core::marker::Send + 'static)>)
+pub type lattice_seams::NodeId = u32

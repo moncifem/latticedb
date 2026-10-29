@@ -1,0 +1,196 @@
+pub mod lattice_abi
+pub mod lattice_abi::error
+#[non_exhaustive] pub enum lattice_abi::error::ErrorClass
+pub lattice_abi::error::ErrorClass::Fatal
+pub lattice_abi::error::ErrorClass::InvariantViolation
+pub lattice_abi::error::ErrorClass::Rejected
+pub lattice_abi::error::ErrorClass::Retryable
+impl core::clone::Clone for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::clone(&self) -> Self
+impl core::cmp::Eq for lattice_abi::error::ErrorClass
+impl core::cmp::PartialEq for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_abi::error::ErrorClass
+impl core::marker::StructuralPartialEq for lattice_abi::error::ErrorClass
+pub trait lattice_abi::error::Classify
+pub fn lattice_abi::error::Classify::class(&self) -> lattice_abi::error::ErrorClass
+pub mod lattice_abi::hlc
+pub struct lattice_abi::hlc::Hlc
+pub lattice_abi::hlc::Hlc::counter: u32
+pub lattice_abi::hlc::Hlc::node: u32
+pub lattice_abi::hlc::Hlc::wall_ms: u64
+impl lattice_abi::hlc::Hlc
+pub const lattice_abi::hlc::Hlc::ENCODED_LEN: usize
+pub fn lattice_abi::hlc::Hlc::from_bytes(&[u8; 16]) -> Self
+pub fn lattice_abi::hlc::Hlc::to_bytes(self) -> [u8; 16]
+impl core::clone::Clone for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::clone(&self) -> Self
+impl core::cmp::Eq for lattice_abi::hlc::Hlc
+impl core::cmp::Ord for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::default() -> Self
+impl core::fmt::Debug for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_abi::hlc::Hlc
+impl core::marker::StructuralPartialEq for lattice_abi::hlc::Hlc
+pub mod lattice_abi::id
+pub enum lattice_abi::id::IdParseError
+pub lattice_abi::id::IdParseError::Character(char)
+pub lattice_abi::id::IdParseError::Length(usize)
+pub lattice_abi::id::IdParseError::Overflow
+impl core::clone::Clone for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_abi::id::IdParseError
+impl core::cmp::PartialEq for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_abi::id::IdParseError
+impl core::fmt::Debug for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_abi::id::IdParseError
+pub struct lattice_abi::id::Id<T>
+impl<T> lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::from_bytes([u8; 16]) -> Self
+pub fn lattice_abi::id::Id<T>::from_parts(u64, u64, u64) -> Self
+pub const fn lattice_abi::id::Id<T>::from_raw(u128) -> Self
+pub fn lattice_abi::id::Id<T>::parse(&str) -> core::result::Result<Self, lattice_abi::id::IdParseError>
+pub const fn lattice_abi::id::Id<T>::raw(self) -> u128
+pub fn lattice_abi::id::Id<T>::timestamp_ms(self) -> u64
+pub fn lattice_abi::id::Id<T>::to_bytes(self) -> [u8; 16]
+impl<T> core::clone::Clone for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::clone(&self) -> Self
+impl<T> core::cmp::Eq for lattice_abi::id::Id<T>
+impl<T> core::cmp::Ord for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::cmp(&self, &Self) -> core::cmp::Ordering
+impl<T> core::cmp::PartialEq for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::eq(&self, &Self) -> bool
+impl<T> core::cmp::PartialOrd for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl<T> core::fmt::Debug for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T> core::fmt::Display for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T> core::hash::Hash for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::hash<H: core::hash::Hasher>(&self, &mut H)
+impl<T> core::marker::Copy for lattice_abi::id::Id<T>
+pub mod lattice_abi::secret
+pub struct lattice_abi::secret::Secret<T: zeroize::Zeroize>(_)
+impl lattice_abi::secret::Secret<alloc::vec::Vec<u8>>
+pub fn lattice_abi::secret::Secret<alloc::vec::Vec<u8>>::ct_eq(&self, &Self) -> bool
+impl<T: zeroize::Zeroize> lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::expose(&self) -> &T
+pub fn lattice_abi::secret::Secret<T>::new(T) -> Self
+impl<T: zeroize::Zeroize> core::fmt::Debug for lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: zeroize::Zeroize> core::fmt::Display for lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: zeroize::Zeroize> core::ops::drop::Drop for lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::drop(&mut self)
+#[non_exhaustive] pub enum lattice_abi::ErrorClass
+pub lattice_abi::ErrorClass::Fatal
+pub lattice_abi::ErrorClass::InvariantViolation
+pub lattice_abi::ErrorClass::Rejected
+pub lattice_abi::ErrorClass::Retryable
+impl core::clone::Clone for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::clone(&self) -> Self
+impl core::cmp::Eq for lattice_abi::error::ErrorClass
+impl core::cmp::PartialEq for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_abi::error::ErrorClass
+pub fn lattice_abi::error::ErrorClass::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_abi::error::ErrorClass
+impl core::marker::StructuralPartialEq for lattice_abi::error::ErrorClass
+pub enum lattice_abi::IdParseError
+pub lattice_abi::IdParseError::Character(char)
+pub lattice_abi::IdParseError::Length(usize)
+pub lattice_abi::IdParseError::Overflow
+impl core::clone::Clone for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_abi::id::IdParseError
+impl core::cmp::PartialEq for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_abi::id::IdParseError
+impl core::fmt::Debug for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_abi::id::IdParseError
+pub fn lattice_abi::id::IdParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_abi::id::IdParseError
+pub struct lattice_abi::Hlc
+pub lattice_abi::Hlc::counter: u32
+pub lattice_abi::Hlc::node: u32
+pub lattice_abi::Hlc::wall_ms: u64
+impl lattice_abi::hlc::Hlc
+pub const lattice_abi::hlc::Hlc::ENCODED_LEN: usize
+pub fn lattice_abi::hlc::Hlc::from_bytes(&[u8; 16]) -> Self
+pub fn lattice_abi::hlc::Hlc::to_bytes(self) -> [u8; 16]
+impl core::clone::Clone for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::clone(&self) -> Self
+impl core::cmp::Eq for lattice_abi::hlc::Hlc
+impl core::cmp::Ord for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::default() -> Self
+impl core::fmt::Debug for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_abi::hlc::Hlc
+pub fn lattice_abi::hlc::Hlc::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_abi::hlc::Hlc
+impl core::marker::StructuralPartialEq for lattice_abi::hlc::Hlc
+pub struct lattice_abi::Id<T>
+impl<T> lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::from_bytes([u8; 16]) -> Self
+pub fn lattice_abi::id::Id<T>::from_parts(u64, u64, u64) -> Self
+pub const fn lattice_abi::id::Id<T>::from_raw(u128) -> Self
+pub fn lattice_abi::id::Id<T>::parse(&str) -> core::result::Result<Self, lattice_abi::id::IdParseError>
+pub const fn lattice_abi::id::Id<T>::raw(self) -> u128
+pub fn lattice_abi::id::Id<T>::timestamp_ms(self) -> u64
+pub fn lattice_abi::id::Id<T>::to_bytes(self) -> [u8; 16]
+impl<T> core::clone::Clone for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::clone(&self) -> Self
+impl<T> core::cmp::Eq for lattice_abi::id::Id<T>
+impl<T> core::cmp::Ord for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::cmp(&self, &Self) -> core::cmp::Ordering
+impl<T> core::cmp::PartialEq for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::eq(&self, &Self) -> bool
+impl<T> core::cmp::PartialOrd for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl<T> core::fmt::Debug for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T> core::fmt::Display for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T> core::hash::Hash for lattice_abi::id::Id<T>
+pub fn lattice_abi::id::Id<T>::hash<H: core::hash::Hasher>(&self, &mut H)
+impl<T> core::marker::Copy for lattice_abi::id::Id<T>
+pub struct lattice_abi::Secret<T: zeroize::Zeroize>(_)
+impl lattice_abi::secret::Secret<alloc::vec::Vec<u8>>
+pub fn lattice_abi::secret::Secret<alloc::vec::Vec<u8>>::ct_eq(&self, &Self) -> bool
+impl<T: zeroize::Zeroize> lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::expose(&self) -> &T
+pub fn lattice_abi::secret::Secret<T>::new(T) -> Self
+impl<T: zeroize::Zeroize> core::fmt::Debug for lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: zeroize::Zeroize> core::fmt::Display for lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: zeroize::Zeroize> core::ops::drop::Drop for lattice_abi::secret::Secret<T>
+pub fn lattice_abi::secret::Secret<T>::drop(&mut self)
+pub const lattice_abi::LAYER: u8
+pub trait lattice_abi::Classify
+pub fn lattice_abi::Classify::class(&self) -> lattice_abi::error::ErrorClass

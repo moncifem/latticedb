@@ -1,0 +1,693 @@
+pub mod lattice_sql
+pub mod lattice_sql::ast
+pub enum lattice_sql::ast::AlterAction
+pub lattice_sql::ast::AlterAction::AddColumn(lattice_sql::ast::ColumnDef)
+pub lattice_sql::ast::AlterAction::DropColumn(lattice_sql::ast::Ident)
+pub lattice_sql::ast::AlterAction::RenameColumn
+pub lattice_sql::ast::AlterAction::RenameColumn::from: lattice_sql::ast::Ident
+pub lattice_sql::ast::AlterAction::RenameColumn::to: lattice_sql::ast::Ident
+pub lattice_sql::ast::AlterAction::RenameTable(lattice_sql::ast::Ident)
+impl core::clone::Clone for lattice_sql::ast::AlterAction
+pub fn lattice_sql::ast::AlterAction::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::AlterAction
+impl core::cmp::PartialEq for lattice_sql::ast::AlterAction
+pub fn lattice_sql::ast::AlterAction::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::AlterAction
+pub fn lattice_sql::ast::AlterAction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::AlterAction
+pub enum lattice_sql::ast::AsOf
+pub lattice_sql::ast::AsOf::Changeset(alloc::boxed::Box<lattice_sql::ast::Expr>)
+pub lattice_sql::ast::AsOf::Timestamp(alloc::boxed::Box<lattice_sql::ast::Expr>)
+impl core::clone::Clone for lattice_sql::ast::AsOf
+pub fn lattice_sql::ast::AsOf::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::AsOf
+impl core::cmp::PartialEq for lattice_sql::ast::AsOf
+pub fn lattice_sql::ast::AsOf::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::AsOf
+pub fn lattice_sql::ast::AsOf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::AsOf
+pub fn lattice_sql::ast::AsOf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::AsOf
+pub enum lattice_sql::ast::BinaryOp
+pub lattice_sql::ast::BinaryOp::Add
+pub lattice_sql::ast::BinaryOp::And
+pub lattice_sql::ast::BinaryOp::Concat
+pub lattice_sql::ast::BinaryOp::Contains
+pub lattice_sql::ast::BinaryOp::Div
+pub lattice_sql::ast::BinaryOp::Eq
+pub lattice_sql::ast::BinaryOp::Gt
+pub lattice_sql::ast::BinaryOp::GtEq
+pub lattice_sql::ast::BinaryOp::JsonGet
+pub lattice_sql::ast::BinaryOp::JsonGetText
+pub lattice_sql::ast::BinaryOp::Lt
+pub lattice_sql::ast::BinaryOp::LtEq
+pub lattice_sql::ast::BinaryOp::Mod
+pub lattice_sql::ast::BinaryOp::Mul
+pub lattice_sql::ast::BinaryOp::NotEq
+pub lattice_sql::ast::BinaryOp::Or
+pub lattice_sql::ast::BinaryOp::Sub
+impl core::clone::Clone for lattice_sql::ast::BinaryOp
+pub fn lattice_sql::ast::BinaryOp::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::BinaryOp
+impl core::cmp::PartialEq for lattice_sql::ast::BinaryOp
+pub fn lattice_sql::ast::BinaryOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::BinaryOp
+pub fn lattice_sql::ast::BinaryOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::ast::BinaryOp
+impl core::marker::StructuralPartialEq for lattice_sql::ast::BinaryOp
+pub enum lattice_sql::ast::DataType
+pub lattice_sql::ast::DataType::BigInt
+pub lattice_sql::ast::DataType::Boolean
+pub lattice_sql::ast::DataType::Bytea
+pub lattice_sql::ast::DataType::Date
+pub lattice_sql::ast::DataType::DoublePrecision
+pub lattice_sql::ast::DataType::Integer
+pub lattice_sql::ast::DataType::Jsonb
+pub lattice_sql::ast::DataType::Numeric(core::option::Option<(u8, core::option::Option<u8>)>)
+pub lattice_sql::ast::DataType::SmallInt
+pub lattice_sql::ast::DataType::Text
+pub lattice_sql::ast::DataType::Timestamptz
+pub lattice_sql::ast::DataType::Uuid
+pub lattice_sql::ast::DataType::Varchar(core::option::Option<u32>)
+impl core::clone::Clone for lattice_sql::ast::DataType
+pub fn lattice_sql::ast::DataType::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::DataType
+impl core::cmp::PartialEq for lattice_sql::ast::DataType
+pub fn lattice_sql::ast::DataType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::DataType
+pub fn lattice_sql::ast::DataType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::DataType
+pub fn lattice_sql::ast::DataType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::ast::DataType
+impl core::marker::StructuralPartialEq for lattice_sql::ast::DataType
+pub enum lattice_sql::ast::ExprKind
+pub lattice_sql::ast::ExprKind::Between
+pub lattice_sql::ast::ExprKind::Between::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Between::high: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Between::low: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Between::negated: bool
+pub lattice_sql::ast::ExprKind::Binary
+pub lattice_sql::ast::ExprKind::Binary::left: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Binary::op: lattice_sql::ast::BinaryOp
+pub lattice_sql::ast::ExprKind::Binary::right: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Cast
+pub lattice_sql::ast::ExprKind::Cast::data_type: lattice_sql::ast::DataType
+pub lattice_sql::ast::ExprKind::Cast::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Column(alloc::vec::Vec<lattice_sql::ast::Ident>)
+pub lattice_sql::ast::ExprKind::Extract
+pub lattice_sql::ast::ExprKind::Extract::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Extract::field: lattice_sql::ast::Ident
+pub lattice_sql::ast::ExprKind::Function(lattice_sql::ast::Function)
+pub lattice_sql::ast::ExprKind::InList
+pub lattice_sql::ast::ExprKind::InList::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::InList::list: alloc::vec::Vec<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::InList::negated: bool
+pub lattice_sql::ast::ExprKind::InSubquery
+pub lattice_sql::ast::ExprKind::InSubquery::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::InSubquery::negated: bool
+pub lattice_sql::ast::ExprKind::InSubquery::query: alloc::boxed::Box<lattice_sql::ast::Query>
+pub lattice_sql::ast::ExprKind::IsNull
+pub lattice_sql::ast::ExprKind::IsNull::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::IsNull::negated: bool
+pub lattice_sql::ast::ExprKind::Like
+pub lattice_sql::ast::ExprKind::Like::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Like::negated: bool
+pub lattice_sql::ast::ExprKind::Like::pattern: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Literal(lattice_sql::ast::Literal)
+pub lattice_sql::ast::ExprKind::Param(u32)
+pub lattice_sql::ast::ExprKind::Position
+pub lattice_sql::ast::ExprKind::Position::haystack: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Position::needle: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Subquery(alloc::boxed::Box<lattice_sql::ast::Query>)
+pub lattice_sql::ast::ExprKind::Trim
+pub lattice_sql::ast::ExprKind::Trim::chars: core::option::Option<alloc::boxed::Box<lattice_sql::ast::Expr>>
+pub lattice_sql::ast::ExprKind::Trim::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Trim::side: lattice_sql::ast::TrimSide
+pub lattice_sql::ast::ExprKind::Unary
+pub lattice_sql::ast::ExprKind::Unary::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Unary::op: lattice_sql::ast::UnaryOp
+impl core::clone::Clone for lattice_sql::ast::ExprKind
+pub fn lattice_sql::ast::ExprKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::ExprKind
+impl core::cmp::PartialEq for lattice_sql::ast::ExprKind
+pub fn lattice_sql::ast::ExprKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::ExprKind
+pub fn lattice_sql::ast::ExprKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::ExprKind
+pub enum lattice_sql::ast::FunctionArgs
+pub lattice_sql::ast::FunctionArgs::List(alloc::vec::Vec<lattice_sql::ast::Expr>)
+pub lattice_sql::ast::FunctionArgs::Star
+impl core::clone::Clone for lattice_sql::ast::FunctionArgs
+pub fn lattice_sql::ast::FunctionArgs::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::FunctionArgs
+impl core::cmp::PartialEq for lattice_sql::ast::FunctionArgs
+pub fn lattice_sql::ast::FunctionArgs::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::FunctionArgs
+pub fn lattice_sql::ast::FunctionArgs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::FunctionArgs
+pub enum lattice_sql::ast::InsertSource
+pub lattice_sql::ast::InsertSource::Query(alloc::boxed::Box<lattice_sql::ast::Query>)
+pub lattice_sql::ast::InsertSource::Values(alloc::vec::Vec<alloc::vec::Vec<lattice_sql::ast::Expr>>)
+impl core::clone::Clone for lattice_sql::ast::InsertSource
+pub fn lattice_sql::ast::InsertSource::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::InsertSource
+impl core::cmp::PartialEq for lattice_sql::ast::InsertSource
+pub fn lattice_sql::ast::InsertSource::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::InsertSource
+pub fn lattice_sql::ast::InsertSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::InsertSource
+pub enum lattice_sql::ast::IsolationLevel
+pub lattice_sql::ast::IsolationLevel::RepeatableRead
+pub lattice_sql::ast::IsolationLevel::Serializable
+impl core::clone::Clone for lattice_sql::ast::IsolationLevel
+pub fn lattice_sql::ast::IsolationLevel::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::IsolationLevel
+impl core::cmp::PartialEq for lattice_sql::ast::IsolationLevel
+pub fn lattice_sql::ast::IsolationLevel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::IsolationLevel
+pub fn lattice_sql::ast::IsolationLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::IsolationLevel
+pub fn lattice_sql::ast::IsolationLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::ast::IsolationLevel
+impl core::marker::StructuralPartialEq for lattice_sql::ast::IsolationLevel
+pub enum lattice_sql::ast::JoinKind
+pub lattice_sql::ast::JoinKind::Cross
+pub lattice_sql::ast::JoinKind::Inner
+pub lattice_sql::ast::JoinKind::Left
+impl core::clone::Clone for lattice_sql::ast::JoinKind
+pub fn lattice_sql::ast::JoinKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::JoinKind
+impl core::cmp::PartialEq for lattice_sql::ast::JoinKind
+pub fn lattice_sql::ast::JoinKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::JoinKind
+pub fn lattice_sql::ast::JoinKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::ast::JoinKind
+impl core::marker::StructuralPartialEq for lattice_sql::ast::JoinKind
+pub enum lattice_sql::ast::Literal
+pub lattice_sql::ast::Literal::Boolean(bool)
+pub lattice_sql::ast::Literal::Null
+pub lattice_sql::ast::Literal::Number(alloc::string::String)
+pub lattice_sql::ast::Literal::String(alloc::string::String)
+impl core::clone::Clone for lattice_sql::ast::Literal
+pub fn lattice_sql::ast::Literal::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Literal
+impl core::cmp::PartialEq for lattice_sql::ast::Literal
+pub fn lattice_sql::ast::Literal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Literal
+pub fn lattice_sql::ast::Literal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Literal
+pub fn lattice_sql::ast::Literal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Literal
+pub enum lattice_sql::ast::SelectItem
+pub lattice_sql::ast::SelectItem::Expr
+pub lattice_sql::ast::SelectItem::Expr::alias: core::option::Option<lattice_sql::ast::Ident>
+pub lattice_sql::ast::SelectItem::Expr::expr: lattice_sql::ast::Expr
+pub lattice_sql::ast::SelectItem::QualifiedWildcard(lattice_sql::ast::Ident)
+pub lattice_sql::ast::SelectItem::Wildcard
+impl core::clone::Clone for lattice_sql::ast::SelectItem
+pub fn lattice_sql::ast::SelectItem::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::SelectItem
+impl core::cmp::PartialEq for lattice_sql::ast::SelectItem
+pub fn lattice_sql::ast::SelectItem::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::SelectItem
+pub fn lattice_sql::ast::SelectItem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::SelectItem
+pub fn lattice_sql::ast::SelectItem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::SelectItem
+pub enum lattice_sql::ast::SetValue
+pub lattice_sql::ast::SetValue::Number(alloc::string::String)
+pub lattice_sql::ast::SetValue::String(alloc::string::String)
+pub lattice_sql::ast::SetValue::Word(alloc::string::String)
+impl core::clone::Clone for lattice_sql::ast::SetValue
+pub fn lattice_sql::ast::SetValue::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::SetValue
+impl core::cmp::PartialEq for lattice_sql::ast::SetValue
+pub fn lattice_sql::ast::SetValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::SetValue
+pub fn lattice_sql::ast::SetValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::SetValue
+pub fn lattice_sql::ast::SetValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::SetValue
+pub enum lattice_sql::ast::Statement
+pub lattice_sql::ast::Statement::AlterTable(lattice_sql::ast::AlterTable)
+pub lattice_sql::ast::Statement::Begin
+pub lattice_sql::ast::Statement::Begin::isolation: core::option::Option<lattice_sql::ast::IsolationLevel>
+pub lattice_sql::ast::Statement::Commit
+pub lattice_sql::ast::Statement::CreateIndex(lattice_sql::ast::CreateIndex)
+pub lattice_sql::ast::Statement::CreateTable(lattice_sql::ast::CreateTable)
+pub lattice_sql::ast::Statement::Delete(lattice_sql::ast::Delete)
+pub lattice_sql::ast::Statement::DropIndex
+pub lattice_sql::ast::Statement::DropIndex::if_exists: bool
+pub lattice_sql::ast::Statement::DropIndex::name: lattice_sql::ast::ObjectName
+pub lattice_sql::ast::Statement::DropTable
+pub lattice_sql::ast::Statement::DropTable::if_exists: bool
+pub lattice_sql::ast::Statement::DropTable::name: lattice_sql::ast::ObjectName
+pub lattice_sql::ast::Statement::Insert(lattice_sql::ast::Insert)
+pub lattice_sql::ast::Statement::Query(alloc::boxed::Box<lattice_sql::ast::Query>)
+pub lattice_sql::ast::Statement::Rollback
+pub lattice_sql::ast::Statement::Set
+pub lattice_sql::ast::Statement::Set::name: lattice_sql::ast::Ident
+pub lattice_sql::ast::Statement::Set::value: core::option::Option<lattice_sql::ast::SetValue>
+pub lattice_sql::ast::Statement::SetTransaction
+pub lattice_sql::ast::Statement::SetTransaction::isolation: lattice_sql::ast::IsolationLevel
+pub lattice_sql::ast::Statement::Show
+pub lattice_sql::ast::Statement::Show::name: lattice_sql::ast::Ident
+pub lattice_sql::ast::Statement::Update(lattice_sql::ast::Update)
+impl core::clone::Clone for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Statement
+impl core::cmp::PartialEq for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Statement
+pub enum lattice_sql::ast::TableConstraint
+pub lattice_sql::ast::TableConstraint::PrimaryKey(alloc::vec::Vec<lattice_sql::ast::Ident>)
+pub lattice_sql::ast::TableConstraint::Unique(alloc::vec::Vec<lattice_sql::ast::Ident>)
+impl core::clone::Clone for lattice_sql::ast::TableConstraint
+pub fn lattice_sql::ast::TableConstraint::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::TableConstraint
+impl core::cmp::PartialEq for lattice_sql::ast::TableConstraint
+pub fn lattice_sql::ast::TableConstraint::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::TableConstraint
+pub fn lattice_sql::ast::TableConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::TableConstraint
+pub fn lattice_sql::ast::TableConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::TableConstraint
+pub enum lattice_sql::ast::TrimSide
+pub lattice_sql::ast::TrimSide::Both
+pub lattice_sql::ast::TrimSide::Leading
+pub lattice_sql::ast::TrimSide::Trailing
+impl core::clone::Clone for lattice_sql::ast::TrimSide
+pub fn lattice_sql::ast::TrimSide::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::TrimSide
+impl core::cmp::PartialEq for lattice_sql::ast::TrimSide
+pub fn lattice_sql::ast::TrimSide::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::TrimSide
+pub fn lattice_sql::ast::TrimSide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::ast::TrimSide
+impl core::marker::StructuralPartialEq for lattice_sql::ast::TrimSide
+pub enum lattice_sql::ast::UnaryOp
+pub lattice_sql::ast::UnaryOp::Minus
+pub lattice_sql::ast::UnaryOp::Not
+pub lattice_sql::ast::UnaryOp::Plus
+impl core::clone::Clone for lattice_sql::ast::UnaryOp
+pub fn lattice_sql::ast::UnaryOp::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::UnaryOp
+impl core::cmp::PartialEq for lattice_sql::ast::UnaryOp
+pub fn lattice_sql::ast::UnaryOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::UnaryOp
+pub fn lattice_sql::ast::UnaryOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::ast::UnaryOp
+impl core::marker::StructuralPartialEq for lattice_sql::ast::UnaryOp
+pub struct lattice_sql::ast::AlterTable
+pub lattice_sql::ast::AlterTable::action: lattice_sql::ast::AlterAction
+pub lattice_sql::ast::AlterTable::name: lattice_sql::ast::ObjectName
+impl core::clone::Clone for lattice_sql::ast::AlterTable
+pub fn lattice_sql::ast::AlterTable::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::AlterTable
+impl core::cmp::PartialEq for lattice_sql::ast::AlterTable
+pub fn lattice_sql::ast::AlterTable::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::AlterTable
+pub fn lattice_sql::ast::AlterTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::AlterTable
+pub fn lattice_sql::ast::AlterTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::AlterTable
+pub struct lattice_sql::ast::Assignment
+pub lattice_sql::ast::Assignment::column: lattice_sql::ast::Ident
+pub lattice_sql::ast::Assignment::value: lattice_sql::ast::Expr
+impl core::clone::Clone for lattice_sql::ast::Assignment
+pub fn lattice_sql::ast::Assignment::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Assignment
+impl core::cmp::PartialEq for lattice_sql::ast::Assignment
+pub fn lattice_sql::ast::Assignment::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Assignment
+pub fn lattice_sql::ast::Assignment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Assignment
+pub struct lattice_sql::ast::ColumnDef
+pub lattice_sql::ast::ColumnDef::data_type: lattice_sql::ast::DataType
+pub lattice_sql::ast::ColumnDef::default: core::option::Option<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ColumnDef::name: lattice_sql::ast::Ident
+pub lattice_sql::ast::ColumnDef::not_null: bool
+pub lattice_sql::ast::ColumnDef::primary_key: bool
+pub lattice_sql::ast::ColumnDef::unique: bool
+impl core::clone::Clone for lattice_sql::ast::ColumnDef
+pub fn lattice_sql::ast::ColumnDef::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::ColumnDef
+impl core::cmp::PartialEq for lattice_sql::ast::ColumnDef
+pub fn lattice_sql::ast::ColumnDef::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::ColumnDef
+pub fn lattice_sql::ast::ColumnDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::ColumnDef
+pub fn lattice_sql::ast::ColumnDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::ColumnDef
+pub struct lattice_sql::ast::CreateIndex
+pub lattice_sql::ast::CreateIndex::columns: alloc::vec::Vec<lattice_sql::ast::Ident>
+pub lattice_sql::ast::CreateIndex::if_not_exists: bool
+pub lattice_sql::ast::CreateIndex::name: core::option::Option<lattice_sql::ast::Ident>
+pub lattice_sql::ast::CreateIndex::table: lattice_sql::ast::ObjectName
+pub lattice_sql::ast::CreateIndex::unique: bool
+impl core::clone::Clone for lattice_sql::ast::CreateIndex
+pub fn lattice_sql::ast::CreateIndex::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::CreateIndex
+impl core::cmp::PartialEq for lattice_sql::ast::CreateIndex
+pub fn lattice_sql::ast::CreateIndex::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::CreateIndex
+pub fn lattice_sql::ast::CreateIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::CreateIndex
+pub fn lattice_sql::ast::CreateIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::CreateIndex
+pub struct lattice_sql::ast::CreateTable
+pub lattice_sql::ast::CreateTable::columns: alloc::vec::Vec<lattice_sql::ast::ColumnDef>
+pub lattice_sql::ast::CreateTable::constraints: alloc::vec::Vec<lattice_sql::ast::TableConstraint>
+pub lattice_sql::ast::CreateTable::if_not_exists: bool
+pub lattice_sql::ast::CreateTable::name: lattice_sql::ast::ObjectName
+impl core::clone::Clone for lattice_sql::ast::CreateTable
+pub fn lattice_sql::ast::CreateTable::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::CreateTable
+impl core::cmp::PartialEq for lattice_sql::ast::CreateTable
+pub fn lattice_sql::ast::CreateTable::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::CreateTable
+pub fn lattice_sql::ast::CreateTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::CreateTable
+pub fn lattice_sql::ast::CreateTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::CreateTable
+pub struct lattice_sql::ast::Delete
+pub lattice_sql::ast::Delete::alias: core::option::Option<lattice_sql::ast::Ident>
+pub lattice_sql::ast::Delete::returning: alloc::vec::Vec<lattice_sql::ast::SelectItem>
+pub lattice_sql::ast::Delete::selection: core::option::Option<lattice_sql::ast::Expr>
+pub lattice_sql::ast::Delete::table: lattice_sql::ast::ObjectName
+impl core::clone::Clone for lattice_sql::ast::Delete
+pub fn lattice_sql::ast::Delete::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Delete
+impl core::cmp::PartialEq for lattice_sql::ast::Delete
+pub fn lattice_sql::ast::Delete::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Delete
+pub fn lattice_sql::ast::Delete::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Delete
+pub fn lattice_sql::ast::Delete::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Delete
+pub struct lattice_sql::ast::Expr
+pub lattice_sql::ast::Expr::kind: lattice_sql::ast::ExprKind
+pub lattice_sql::ast::Expr::span: lattice_sql::error::Span
+impl lattice_sql::ast::Expr
+pub fn lattice_sql::ast::Expr::new(lattice_sql::ast::ExprKind) -> Self
+impl core::clone::Clone for lattice_sql::ast::Expr
+pub fn lattice_sql::ast::Expr::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Expr
+impl core::cmp::PartialEq for lattice_sql::ast::Expr
+pub fn lattice_sql::ast::Expr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Expr
+pub fn lattice_sql::ast::Expr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Expr
+pub fn lattice_sql::ast::Expr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Expr
+pub struct lattice_sql::ast::Function
+pub lattice_sql::ast::Function::args: lattice_sql::ast::FunctionArgs
+pub lattice_sql::ast::Function::distinct: bool
+pub lattice_sql::ast::Function::name: alloc::string::String
+impl core::clone::Clone for lattice_sql::ast::Function
+pub fn lattice_sql::ast::Function::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Function
+impl core::cmp::PartialEq for lattice_sql::ast::Function
+pub fn lattice_sql::ast::Function::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Function
+pub fn lattice_sql::ast::Function::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Function
+pub fn lattice_sql::ast::Function::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Function
+pub struct lattice_sql::ast::Ident
+pub lattice_sql::ast::Ident::span: lattice_sql::error::Span
+pub lattice_sql::ast::Ident::value: alloc::string::String
+impl lattice_sql::ast::Ident
+pub fn lattice_sql::ast::Ident::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for lattice_sql::ast::Ident
+pub fn lattice_sql::ast::Ident::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Ident
+impl core::cmp::PartialEq for lattice_sql::ast::Ident
+pub fn lattice_sql::ast::Ident::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Ident
+pub fn lattice_sql::ast::Ident::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Ident
+pub fn lattice_sql::ast::Ident::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Ident
+pub struct lattice_sql::ast::Insert
+pub lattice_sql::ast::Insert::columns: alloc::vec::Vec<lattice_sql::ast::Ident>
+pub lattice_sql::ast::Insert::returning: alloc::vec::Vec<lattice_sql::ast::SelectItem>
+pub lattice_sql::ast::Insert::source: lattice_sql::ast::InsertSource
+pub lattice_sql::ast::Insert::table: lattice_sql::ast::ObjectName
+impl core::clone::Clone for lattice_sql::ast::Insert
+pub fn lattice_sql::ast::Insert::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Insert
+impl core::cmp::PartialEq for lattice_sql::ast::Insert
+pub fn lattice_sql::ast::Insert::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Insert
+pub fn lattice_sql::ast::Insert::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Insert
+pub fn lattice_sql::ast::Insert::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Insert
+pub struct lattice_sql::ast::Join
+pub lattice_sql::ast::Join::kind: lattice_sql::ast::JoinKind
+pub lattice_sql::ast::Join::on: core::option::Option<lattice_sql::ast::Expr>
+pub lattice_sql::ast::Join::relation: lattice_sql::ast::TableFactor
+impl core::clone::Clone for lattice_sql::ast::Join
+pub fn lattice_sql::ast::Join::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Join
+impl core::cmp::PartialEq for lattice_sql::ast::Join
+pub fn lattice_sql::ast::Join::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Join
+pub fn lattice_sql::ast::Join::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Join
+pub fn lattice_sql::ast::Join::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Join
+pub struct lattice_sql::ast::ObjectName(pub alloc::vec::Vec<lattice_sql::ast::Ident>)
+impl core::clone::Clone for lattice_sql::ast::ObjectName
+pub fn lattice_sql::ast::ObjectName::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::ObjectName
+impl core::cmp::PartialEq for lattice_sql::ast::ObjectName
+pub fn lattice_sql::ast::ObjectName::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::ObjectName
+pub fn lattice_sql::ast::ObjectName::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::ObjectName
+pub fn lattice_sql::ast::ObjectName::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::ObjectName
+pub struct lattice_sql::ast::OrderByItem
+pub lattice_sql::ast::OrderByItem::desc: bool
+pub lattice_sql::ast::OrderByItem::expr: lattice_sql::ast::Expr
+pub lattice_sql::ast::OrderByItem::nulls_first: core::option::Option<bool>
+impl core::clone::Clone for lattice_sql::ast::OrderByItem
+pub fn lattice_sql::ast::OrderByItem::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::OrderByItem
+impl core::cmp::PartialEq for lattice_sql::ast::OrderByItem
+pub fn lattice_sql::ast::OrderByItem::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::OrderByItem
+pub fn lattice_sql::ast::OrderByItem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::OrderByItem
+pub fn lattice_sql::ast::OrderByItem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::OrderByItem
+pub struct lattice_sql::ast::Query
+pub lattice_sql::ast::Query::distinct: bool
+pub lattice_sql::ast::Query::from: alloc::vec::Vec<lattice_sql::ast::TableWithJoins>
+pub lattice_sql::ast::Query::group_by: alloc::vec::Vec<lattice_sql::ast::Expr>
+pub lattice_sql::ast::Query::having: core::option::Option<lattice_sql::ast::Expr>
+pub lattice_sql::ast::Query::limit: core::option::Option<lattice_sql::ast::Expr>
+pub lattice_sql::ast::Query::offset: core::option::Option<lattice_sql::ast::Expr>
+pub lattice_sql::ast::Query::order_by: alloc::vec::Vec<lattice_sql::ast::OrderByItem>
+pub lattice_sql::ast::Query::projection: alloc::vec::Vec<lattice_sql::ast::SelectItem>
+pub lattice_sql::ast::Query::selection: core::option::Option<lattice_sql::ast::Expr>
+impl core::clone::Clone for lattice_sql::ast::Query
+pub fn lattice_sql::ast::Query::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Query
+impl core::cmp::PartialEq for lattice_sql::ast::Query
+pub fn lattice_sql::ast::Query::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Query
+pub fn lattice_sql::ast::Query::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Query
+pub fn lattice_sql::ast::Query::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Query
+pub struct lattice_sql::ast::TableFactor
+pub lattice_sql::ast::TableFactor::alias: core::option::Option<lattice_sql::ast::Ident>
+pub lattice_sql::ast::TableFactor::as_of: core::option::Option<lattice_sql::ast::AsOf>
+pub lattice_sql::ast::TableFactor::name: lattice_sql::ast::ObjectName
+impl core::clone::Clone for lattice_sql::ast::TableFactor
+pub fn lattice_sql::ast::TableFactor::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::TableFactor
+impl core::cmp::PartialEq for lattice_sql::ast::TableFactor
+pub fn lattice_sql::ast::TableFactor::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::TableFactor
+pub fn lattice_sql::ast::TableFactor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::TableFactor
+pub fn lattice_sql::ast::TableFactor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::TableFactor
+pub struct lattice_sql::ast::TableWithJoins
+pub lattice_sql::ast::TableWithJoins::joins: alloc::vec::Vec<lattice_sql::ast::Join>
+pub lattice_sql::ast::TableWithJoins::relation: lattice_sql::ast::TableFactor
+impl core::clone::Clone for lattice_sql::ast::TableWithJoins
+pub fn lattice_sql::ast::TableWithJoins::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::TableWithJoins
+impl core::cmp::PartialEq for lattice_sql::ast::TableWithJoins
+pub fn lattice_sql::ast::TableWithJoins::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::TableWithJoins
+pub fn lattice_sql::ast::TableWithJoins::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::TableWithJoins
+pub fn lattice_sql::ast::TableWithJoins::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::TableWithJoins
+pub struct lattice_sql::ast::Update
+pub lattice_sql::ast::Update::alias: core::option::Option<lattice_sql::ast::Ident>
+pub lattice_sql::ast::Update::assignments: alloc::vec::Vec<lattice_sql::ast::Assignment>
+pub lattice_sql::ast::Update::returning: alloc::vec::Vec<lattice_sql::ast::SelectItem>
+pub lattice_sql::ast::Update::selection: core::option::Option<lattice_sql::ast::Expr>
+pub lattice_sql::ast::Update::table: lattice_sql::ast::ObjectName
+impl core::clone::Clone for lattice_sql::ast::Update
+pub fn lattice_sql::ast::Update::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Update
+impl core::cmp::PartialEq for lattice_sql::ast::Update
+pub fn lattice_sql::ast::Update::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Update
+pub fn lattice_sql::ast::Update::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Update
+pub fn lattice_sql::ast::Update::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Update
+pub mod lattice_sql::error
+pub enum lattice_sql::error::ErrorKind
+pub lattice_sql::error::ErrorKind::Syntax
+pub lattice_sql::error::ErrorKind::TooLarge
+pub lattice_sql::error::ErrorKind::Unsupported
+impl core::clone::Clone for lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ErrorKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::error::ErrorKind
+impl core::cmp::PartialEq for lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ErrorKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::error::ErrorKind
+impl core::marker::StructuralPartialEq for lattice_sql::error::ErrorKind
+pub struct lattice_sql::error::ParseError
+impl lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::kind(&self) -> lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ParseError::lattice_code(&self) -> core::option::Option<&'static str>
+pub fn lattice_sql::error::ParseError::line_col(&self, &str) -> (usize, usize)
+pub fn lattice_sql::error::ParseError::message(&self) -> &str
+pub fn lattice_sql::error::ParseError::span(&self) -> lattice_sql::error::Span
+pub fn lattice_sql::error::ParseError::sqlstate(&self) -> &'static str
+impl core::clone::Clone for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::error::ParseError
+impl core::cmp::PartialEq for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_sql::error::ParseError
+impl core::fmt::Debug for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::error::ParseError
+pub struct lattice_sql::error::Span
+pub lattice_sql::error::Span::end: usize
+pub lattice_sql::error::Span::start: usize
+impl lattice_sql::error::Span
+pub fn lattice_sql::error::Span::join(self, lattice_sql::error::Span) -> lattice_sql::error::Span
+pub fn lattice_sql::error::Span::new(usize, usize) -> Self
+pub fn lattice_sql::error::Span::slice(self, &str) -> core::option::Option<&str>
+impl core::clone::Clone for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::error::Span
+impl core::cmp::PartialEq for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::default() -> Self
+impl core::fmt::Debug for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::error::Span
+pub enum lattice_sql::ErrorKind
+pub lattice_sql::ErrorKind::Syntax
+pub lattice_sql::ErrorKind::TooLarge
+pub lattice_sql::ErrorKind::Unsupported
+impl core::clone::Clone for lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ErrorKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::error::ErrorKind
+impl core::cmp::PartialEq for lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ErrorKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::error::ErrorKind
+impl core::marker::StructuralPartialEq for lattice_sql::error::ErrorKind
+pub enum lattice_sql::Statement
+pub lattice_sql::Statement::AlterTable(lattice_sql::ast::AlterTable)
+pub lattice_sql::Statement::Begin
+pub lattice_sql::Statement::Begin::isolation: core::option::Option<lattice_sql::ast::IsolationLevel>
+pub lattice_sql::Statement::Commit
+pub lattice_sql::Statement::CreateIndex(lattice_sql::ast::CreateIndex)
+pub lattice_sql::Statement::CreateTable(lattice_sql::ast::CreateTable)
+pub lattice_sql::Statement::Delete(lattice_sql::ast::Delete)
+pub lattice_sql::Statement::DropIndex
+pub lattice_sql::Statement::DropIndex::if_exists: bool
+pub lattice_sql::Statement::DropIndex::name: lattice_sql::ast::ObjectName
+pub lattice_sql::Statement::DropTable
+pub lattice_sql::Statement::DropTable::if_exists: bool
+pub lattice_sql::Statement::DropTable::name: lattice_sql::ast::ObjectName
+pub lattice_sql::Statement::Insert(lattice_sql::ast::Insert)
+pub lattice_sql::Statement::Query(alloc::boxed::Box<lattice_sql::ast::Query>)
+pub lattice_sql::Statement::Rollback
+pub lattice_sql::Statement::Set
+pub lattice_sql::Statement::Set::name: lattice_sql::ast::Ident
+pub lattice_sql::Statement::Set::value: core::option::Option<lattice_sql::ast::SetValue>
+pub lattice_sql::Statement::SetTransaction
+pub lattice_sql::Statement::SetTransaction::isolation: lattice_sql::ast::IsolationLevel
+pub lattice_sql::Statement::Show
+pub lattice_sql::Statement::Show::name: lattice_sql::ast::Ident
+pub lattice_sql::Statement::Update(lattice_sql::ast::Update)
+impl core::clone::Clone for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Statement
+impl core::cmp::PartialEq for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::ast::Statement
+pub fn lattice_sql::ast::Statement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Statement
+pub struct lattice_sql::ParseError
+impl lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::kind(&self) -> lattice_sql::error::ErrorKind
+pub fn lattice_sql::error::ParseError::lattice_code(&self) -> core::option::Option<&'static str>
+pub fn lattice_sql::error::ParseError::line_col(&self, &str) -> (usize, usize)
+pub fn lattice_sql::error::ParseError::message(&self) -> &str
+pub fn lattice_sql::error::ParseError::span(&self) -> lattice_sql::error::Span
+pub fn lattice_sql::error::ParseError::sqlstate(&self) -> &'static str
+impl core::clone::Clone for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::error::ParseError
+impl core::cmp::PartialEq for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_sql::error::ParseError
+impl core::fmt::Debug for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::error::ParseError
+pub fn lattice_sql::error::ParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::error::ParseError
+pub struct lattice_sql::Span
+pub lattice_sql::Span::end: usize
+pub lattice_sql::Span::start: usize
+impl lattice_sql::error::Span
+pub fn lattice_sql::error::Span::join(self, lattice_sql::error::Span) -> lattice_sql::error::Span
+pub fn lattice_sql::error::Span::new(usize, usize) -> Self
+pub fn lattice_sql::error::Span::slice(self, &str) -> core::option::Option<&str>
+impl core::clone::Clone for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::error::Span
+impl core::cmp::PartialEq for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::default() -> Self
+impl core::fmt::Debug for lattice_sql::error::Span
+pub fn lattice_sql::error::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::error::Span
+pub const lattice_sql::LAYER: u8
+pub const lattice_sql::MAX_DEPTH: usize
+pub const lattice_sql::MAX_IDENT_LEN: usize
+pub const lattice_sql::MAX_INPUT_LEN: usize
+pub const lattice_sql::MAX_TOKENS: usize
+pub fn lattice_sql::parse_statement(&str) -> core::result::Result<lattice_sql::ast::Statement, lattice_sql::error::ParseError>
+pub fn lattice_sql::parse_statements(&str) -> core::result::Result<alloc::vec::Vec<lattice_sql::ast::Statement>, lattice_sql::error::ParseError>

@@ -1,0 +1,212 @@
+pub mod lattice_lsl
+pub mod lattice_lsl::ast
+pub enum lattice_lsl::ast::Item
+pub lattice_lsl::ast::Item::Enum
+pub lattice_lsl::ast::Item::Enum::line: u32
+pub lattice_lsl::ast::Item::Enum::name: alloc::string::String
+pub lattice_lsl::ast::Item::Enum::variants: alloc::vec::Vec<alloc::string::String>
+pub lattice_lsl::ast::Item::Facet
+pub lattice_lsl::ast::Item::Facet::fields: alloc::vec::Vec<lattice_lsl::ast::FieldDef>
+pub lattice_lsl::ast::Item::Facet::line: u32
+pub lattice_lsl::ast::Item::Facet::name: alloc::string::String
+pub lattice_lsl::ast::Item::Type
+pub lattice_lsl::ast::Item::Type::facets: alloc::vec::Vec<alloc::string::String>
+pub lattice_lsl::ast::Item::Type::fields: alloc::vec::Vec<lattice_lsl::ast::FieldDef>
+pub lattice_lsl::ast::Item::Type::line: u32
+pub lattice_lsl::ast::Item::Type::name: alloc::string::String
+impl core::clone::Clone for lattice_lsl::ast::Item
+pub fn lattice_lsl::ast::Item::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::ast::Item
+impl core::cmp::PartialEq for lattice_lsl::ast::Item
+pub fn lattice_lsl::ast::Item::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::ast::Item
+pub fn lattice_lsl::ast::Item::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::ast::Item
+pub enum lattice_lsl::ast::Ty
+pub lattice_lsl::ast::Ty::Bool
+pub lattice_lsl::ast::Ty::Bytes(core::option::Option<u64>)
+pub lattice_lsl::ast::Ty::Enum(alloc::string::String)
+pub lattice_lsl::ast::Ty::Int(core::option::Option<(i64, i64)>)
+pub lattice_lsl::ast::Ty::List(alloc::boxed::Box<lattice_lsl::ast::Ty>, core::option::Option<u64>)
+pub lattice_lsl::ast::Ty::Ref(alloc::string::String)
+pub lattice_lsl::ast::Ty::Text(core::option::Option<u64>)
+impl core::clone::Clone for lattice_lsl::ast::Ty
+pub fn lattice_lsl::ast::Ty::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::ast::Ty
+impl core::cmp::PartialEq for lattice_lsl::ast::Ty
+pub fn lattice_lsl::ast::Ty::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::ast::Ty
+pub fn lattice_lsl::ast::Ty::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::ast::Ty
+pub struct lattice_lsl::ast::FieldDef
+pub lattice_lsl::ast::FieldDef::line: u32
+pub lattice_lsl::ast::FieldDef::name: alloc::string::String
+pub lattice_lsl::ast::FieldDef::optional: bool
+pub lattice_lsl::ast::FieldDef::ty: lattice_lsl::ast::Ty
+impl core::clone::Clone for lattice_lsl::ast::FieldDef
+pub fn lattice_lsl::ast::FieldDef::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::ast::FieldDef
+impl core::cmp::PartialEq for lattice_lsl::ast::FieldDef
+pub fn lattice_lsl::ast::FieldDef::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::ast::FieldDef
+pub fn lattice_lsl::ast::FieldDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::ast::FieldDef
+pub struct lattice_lsl::ast::Schema
+pub lattice_lsl::ast::Schema::items: alloc::vec::Vec<lattice_lsl::ast::Item>
+impl core::clone::Clone for lattice_lsl::ast::Schema
+pub fn lattice_lsl::ast::Schema::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::ast::Schema
+impl core::cmp::PartialEq for lattice_lsl::ast::Schema
+pub fn lattice_lsl::ast::Schema::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_lsl::ast::Schema
+pub fn lattice_lsl::ast::Schema::default() -> Self
+impl core::fmt::Debug for lattice_lsl::ast::Schema
+pub fn lattice_lsl::ast::Schema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::ast::Schema
+pub mod lattice_lsl::check
+pub struct lattice_lsl::check::Compiled
+pub lattice_lsl::check::Compiled::enums: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
+pub lattice_lsl::check::Compiled::types: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_lsl::check::Field>>
+impl core::clone::Clone for lattice_lsl::check::Compiled
+pub fn lattice_lsl::check::Compiled::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::check::Compiled
+impl core::cmp::PartialEq for lattice_lsl::check::Compiled
+pub fn lattice_lsl::check::Compiled::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_lsl::check::Compiled
+pub fn lattice_lsl::check::Compiled::default() -> Self
+impl core::fmt::Debug for lattice_lsl::check::Compiled
+pub fn lattice_lsl::check::Compiled::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::check::Compiled
+pub struct lattice_lsl::check::Field
+pub lattice_lsl::check::Field::optional: bool
+pub lattice_lsl::check::Field::ty: lattice_lsl::ast::Ty
+impl core::clone::Clone for lattice_lsl::check::Field
+pub fn lattice_lsl::check::Field::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::check::Field
+impl core::cmp::PartialEq for lattice_lsl::check::Field
+pub fn lattice_lsl::check::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::check::Field
+pub fn lattice_lsl::check::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::check::Field
+pub fn lattice_lsl::check::check(&lattice_lsl::ast::Schema) -> core::result::Result<lattice_lsl::check::Compiled, alloc::vec::Vec<lattice_lsl::Diagnostic>>
+pub mod lattice_lsl::compat
+pub struct lattice_lsl::compat::Compat
+pub lattice_lsl::compat::Compat::backward: bool
+pub lattice_lsl::compat::Compat::backward_breaks: alloc::vec::Vec<alloc::string::String>
+pub lattice_lsl::compat::Compat::forward: bool
+pub lattice_lsl::compat::Compat::forward_breaks: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for lattice_lsl::compat::Compat
+pub fn lattice_lsl::compat::Compat::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::compat::Compat
+impl core::cmp::PartialEq for lattice_lsl::compat::Compat
+pub fn lattice_lsl::compat::Compat::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::compat::Compat
+pub fn lattice_lsl::compat::Compat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::compat::Compat
+pub fn lattice_lsl::compat::compare(&lattice_lsl::check::Compiled, &lattice_lsl::check::Compiled) -> lattice_lsl::compat::Compat
+pub mod lattice_lsl::format
+pub fn lattice_lsl::format::format(&lattice_lsl::ast::Schema) -> alloc::string::String
+pub mod lattice_lsl::lens
+pub enum lattice_lsl::lens::LensError
+pub lattice_lsl::lens::LensError::FieldExists(alloc::string::String)
+pub lattice_lsl::lens::LensError::MissingField(alloc::string::String)
+pub lattice_lsl::lens::LensError::NotAnObject
+pub lattice_lsl::lens::LensError::NotReversible(alloc::string::String)
+impl core::clone::Clone for lattice_lsl::lens::LensError
+pub fn lattice_lsl::lens::LensError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::lens::LensError
+impl core::cmp::PartialEq for lattice_lsl::lens::LensError
+pub fn lattice_lsl::lens::LensError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_lsl::lens::LensError
+impl core::fmt::Debug for lattice_lsl::lens::LensError
+pub fn lattice_lsl::lens::LensError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_lsl::lens::LensError
+pub fn lattice_lsl::lens::LensError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::lens::LensError
+pub enum lattice_lsl::lens::Step
+pub lattice_lsl::lens::Step::AddField
+pub lattice_lsl::lens::Step::AddField::default: lattice_lsl::validate::Value
+pub lattice_lsl::lens::Step::AddField::field: alloc::string::String
+pub lattice_lsl::lens::Step::AddField::ty: alloc::string::String
+pub lattice_lsl::lens::Step::DropField
+pub lattice_lsl::lens::Step::DropField::field: alloc::string::String
+pub lattice_lsl::lens::Step::DropField::restore: core::option::Option<lattice_lsl::validate::Value>
+pub lattice_lsl::lens::Step::DropField::ty: alloc::string::String
+pub lattice_lsl::lens::Step::Rename
+pub lattice_lsl::lens::Step::Rename::from: alloc::string::String
+pub lattice_lsl::lens::Step::Rename::to: alloc::string::String
+pub lattice_lsl::lens::Step::Rename::ty: alloc::string::String
+impl core::clone::Clone for lattice_lsl::lens::Step
+pub fn lattice_lsl::lens::Step::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::lens::Step
+impl core::cmp::PartialEq for lattice_lsl::lens::Step
+pub fn lattice_lsl::lens::Step::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::lens::Step
+pub fn lattice_lsl::lens::Step::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::lens::Step
+pub struct lattice_lsl::lens::Lens
+pub lattice_lsl::lens::Lens::steps: alloc::vec::Vec<lattice_lsl::lens::Step>
+impl lattice_lsl::lens::Lens
+pub fn lattice_lsl::lens::Lens::check(&self, &lattice_lsl::check::Compiled, &lattice_lsl::check::Compiled) -> alloc::vec::Vec<alloc::string::String>
+pub fn lattice_lsl::lens::Lens::down(&self, &str, lattice_lsl::validate::Value) -> core::result::Result<lattice_lsl::validate::Value, lattice_lsl::lens::LensError>
+pub fn lattice_lsl::lens::Lens::up(&self, &str, lattice_lsl::validate::Value) -> core::result::Result<lattice_lsl::validate::Value, lattice_lsl::lens::LensError>
+impl core::clone::Clone for lattice_lsl::lens::Lens
+pub fn lattice_lsl::lens::Lens::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::lens::Lens
+impl core::cmp::PartialEq for lattice_lsl::lens::Lens
+pub fn lattice_lsl::lens::Lens::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_lsl::lens::Lens
+pub fn lattice_lsl::lens::Lens::default() -> Self
+impl core::fmt::Debug for lattice_lsl::lens::Lens
+pub fn lattice_lsl::lens::Lens::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::lens::Lens
+pub mod lattice_lsl::parser
+pub const lattice_lsl::parser::MAX_SCHEMA_BYTES: usize
+pub const lattice_lsl::parser::MAX_TYPE_DEPTH: usize
+pub fn lattice_lsl::parser::parse(&str) -> core::result::Result<lattice_lsl::ast::Schema, lattice_lsl::Diagnostic>
+pub mod lattice_lsl::validate
+pub enum lattice_lsl::validate::Value
+pub lattice_lsl::validate::Value::Bool(bool)
+pub lattice_lsl::validate::Value::Bytes(alloc::vec::Vec<u8>)
+pub lattice_lsl::validate::Value::Int(i64)
+pub lattice_lsl::validate::Value::List(alloc::vec::Vec<lattice_lsl::validate::Value>)
+pub lattice_lsl::validate::Value::Object(alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_lsl::validate::Value>)
+pub lattice_lsl::validate::Value::Ref(alloc::string::String)
+pub lattice_lsl::validate::Value::Text(alloc::string::String)
+pub lattice_lsl::validate::Value::Variant(alloc::string::String)
+impl core::clone::Clone for lattice_lsl::validate::Value
+pub fn lattice_lsl::validate::Value::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::validate::Value
+impl core::cmp::PartialEq for lattice_lsl::validate::Value
+pub fn lattice_lsl::validate::Value::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::validate::Value
+pub fn lattice_lsl::validate::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::validate::Value
+pub struct lattice_lsl::validate::Violation
+pub lattice_lsl::validate::Violation::message: alloc::string::String
+pub lattice_lsl::validate::Violation::path: alloc::string::String
+impl core::clone::Clone for lattice_lsl::validate::Violation
+pub fn lattice_lsl::validate::Violation::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::validate::Violation
+impl core::cmp::PartialEq for lattice_lsl::validate::Violation
+pub fn lattice_lsl::validate::Violation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_lsl::validate::Violation
+pub fn lattice_lsl::validate::Violation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::validate::Violation
+pub fn lattice_lsl::validate::validate(&lattice_lsl::check::Compiled, &str, &lattice_lsl::validate::Value) -> core::result::Result<(), alloc::vec::Vec<lattice_lsl::validate::Violation>>
+pub struct lattice_lsl::Diagnostic
+pub lattice_lsl::Diagnostic::col: u32
+pub lattice_lsl::Diagnostic::line: u32
+pub lattice_lsl::Diagnostic::message: alloc::string::String
+impl core::clone::Clone for lattice_lsl::Diagnostic
+pub fn lattice_lsl::Diagnostic::clone(&self) -> Self
+impl core::cmp::Eq for lattice_lsl::Diagnostic
+impl core::cmp::PartialEq for lattice_lsl::Diagnostic
+pub fn lattice_lsl::Diagnostic::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_lsl::Diagnostic
+impl core::fmt::Debug for lattice_lsl::Diagnostic
+pub fn lattice_lsl::Diagnostic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_lsl::Diagnostic
+pub fn lattice_lsl::Diagnostic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_lsl::Diagnostic
+pub const lattice_lsl::LAYER: u8
