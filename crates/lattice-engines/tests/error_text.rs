@@ -2,12 +2,14 @@
 //! mutation testing showed nothing checked them.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[cfg(feature = "row")]
 use lattice_engines::catalog::CatalogError;
 use lattice_engines::limits::{
     AllowAll, DenyAll, LimitError, PolicyEvaluator, RowRef, RowWriteRef, authorize_read,
     authorize_write,
 };
 
+#[cfg(feature = "row")]
 #[test]
 fn catalog_errors_print_their_variant_and_fields() {
     for (error, text) in [
