@@ -6,6 +6,7 @@ members = [
     "crates/lattice-seams",
     "crates/lattice-lsl",
     "crates/lattice-sim",
+    "crates/lattice-sql",
     "crates/lattice-core",
     "crates/lattice-engines",
     "crates/lattice-identity",

@@ -21,6 +21,10 @@ allow = ["lattice-abi"]
 layer = 2
 allow = ["lattice-abi", "lattice-seams"]
 
+[crate.lattice-sql]
+layer = 2
+allow = []
+
 [crate.lattice-core]
 layer = 3
 allow = ["lattice-abi", "lattice-seams", "lattice-lsl"]

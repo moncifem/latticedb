@@ -383,6 +383,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lattice-sql"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "lattice-sys"
 version = "0.1.0-alpha.0"
 dependencies = [

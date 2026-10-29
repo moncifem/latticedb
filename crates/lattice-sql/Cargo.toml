@@ -1,0 +1,16 @@
+[package]
+name = "lattice-sql"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Lattice SQL: lexer, parser and AST for the declared SQL subset."
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1.12.0"
