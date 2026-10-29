@@ -103,3 +103,22 @@ its intervals. Old reports missing confidence/tolerance/threshold provenance rem
 an **unverified** gate verdict. Invalid reports fail ingestion/rendering. No example suite, fixture,
 or unit-test output is automatically ingested as a project eval result. Suites without real reports
 remain missing, and P1-77 remains incomplete until its actual evidence and review requirements hold.
+
+A completed nightly's retained producer evidence can be replayed without rerunning its workloads.
+Dispatch the registered `io-probe` workflow with `scorecard_source_run` set to its positive numeric
+run ID. An empty input keeps the normal I/O probe behavior; the explicit replay mode runs only a
+bounded ledger CLI build and evidence collection. It does not restart the original workflow.
+
+The replay requires the configured nightly workflow ID/path, trusted repository/head repository,
+main ref, completed source and jobs, exact source SHA, and one matching artifact per producer job.
+Current per-producer artifacts identify their run but carry no attempt manifests, so replay accepts
+only an unambiguous first source attempt. It rejects rerun sources rather than assigning old
+artifacts a new attempt. Each downloaded archive's SHA-256 must match GitHub's artifact digest;
+archive expansion, paths and entry counts are bounded. Missing, expired or mismatched artifacts fail.
+
+`tools/scorecard_replay.py` uses the same supported raw `gh api --paginate --slurp` then separate
+`jq` normalization as nightly. It restores the source ledger, checks replay idempotence and existing
+simulation thresholds, and retains all original source conclusions. A clean committed replay
+checkout, its separate code revision and the ledger CLI binary hash are recorded. Replay artifacts
+are named `scorecard-replay-*`, so they cannot accidentally become normal retained history. Reports
+remain unsigned; successful collection does not change the original workflow outcome or sign a gate.

@@ -174,8 +174,8 @@ jobs:
         run: |
           mkdir -p target/scorecard target/history
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > target/current-run.json
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-            --jq '{jobs: [.[].jobs[]]}' > target/jobs.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > target/job-pages.json
+          jq '{jobs: [.[].jobs[]]}' target/job-pages.json > target/jobs.json
           # Retention is bounded. No artifact is evidence of missing earlier history.
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=scorecard-history&per_page=100" > target/artifacts.json
           previous=$(jq -r --arg branch "$GITHUB_REF_NAME" --arg run "$GITHUB_RUN_ID" \

@@ -4,12 +4,16 @@ import copy
 import os
 import zipfile
 import tempfile
+import hashlib
+import subprocess
+import textwrap
 from types import SimpleNamespace
 import unittest
 from pathlib import Path
 
 import scorecard
 import scorecard_metrics as metrics
+import scorecard_replay as replay
 
 BINARY = Path(os.environ.get("LATTICE_SCORECARD_BIN", str(scorecard.ROOT / "target/debug/lattice")))
 
@@ -308,6 +312,70 @@ class MetricEvidenceTests(unittest.TestCase):
             self.assertEqual(value['invalid_evidence'], [])
             self.assertEqual(value['sections']['mutation']['status'], 'observed')
             self.assertEqual(value['sections']['eval_gates']['status'], 'observed')
+
+
+
+class ReplayEvidenceTests(unittest.TestCase):
+    def test_exact_nightly_metadata_shell_handles_multiple_pages_without_unsupported_gh_flags(self):
+        # Execute the production shell prefix, emulating API responses and gh's actual flag rejection.
+        workflow = (scorecard.ROOT / '.github/workflows/nightly.yml').read_text()
+        start = workflow.index('          mkdir -p target/scorecard target/history', workflow.index('fetch retained history'))
+        end = workflow.index('          # Retention', start)
+        script = textwrap.dedent(workflow[start:end])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / 'gh'
+            binary.write_text('#!/usr/bin/env python3\nimport json,sys\n'
+                'args=sys.argv[1:]\n'
+                'if "--slurp" in args and ("--jq" in args or "--template" in args): sys.exit(90)\n'
+                'pages=[{"jobs":[{"id":1}]},{"jobs":[{"id":2}]}]\n'
+                'print(json.dumps(pages if "--slurp" in args else {"id":7}))\n')
+            binary.chmod(0o755)
+            environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                               GITHUB_REPOSITORY='owner/repo', GITHUB_RUN_ID='7', GITHUB_RUN_ATTEMPT='1')
+            subprocess.run(['bash', '-e', '-c', script], cwd=root, env=environment, check=True)
+            self.assertEqual(json.loads((root / 'target/jobs.json').read_text()), {'jobs': [{'id': 1}, {'id': 2}]})
+
+    def test_replay_requires_exact_completed_nightly_source_and_unambiguous_attempt(self):
+        run, job, artifact, workflow = weekly_fixture()
+        run['path'] = workflow['path'] = '.github/workflows/nightly.yml'
+        run['repository']['id'] = run['head_repository']['id'] = 123
+        job['name'] = 'bench'
+        artifact.update(name='evidence-bench', digest='sha256:' + 'a' * 64, size_in_bytes=100)
+        artifact['workflow_run'].update(repository_id=123, head_repository_id=123)
+        self.assertEqual(replay.validate_source(run, workflow, [job], [artifact], 'owner/repo', 'main'), [artifact])
+        for field, value in [('run_attempt', 2), ('status', 'in_progress'), ('head_branch', 'fork'), ('workflow_id', 99)]:
+            with self.assertRaises(ValueError):
+                replay.validate_source(dict(run, **{field: value}), workflow, [job], [artifact], 'owner/repo', 'main')
+        bad = copy.deepcopy(artifact)
+        bad['workflow_run']['head_sha'] = 'b' * 40
+        with self.assertRaises(ValueError):
+            replay.validate_source(run, workflow, [job], [bad], 'owner/repo', 'main')
+        with self.assertRaises(ValueError):
+            replay.validate_source(run, workflow, [job], [], 'owner/repo', 'main')
+
+    def test_replay_rejects_changed_archive_digest_and_path_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / 'evidence.zip'
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('fuzz.log', 'Done 1 runs in 601 second(s)\n')
+            digest = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
+            replay.unpack(path, {'digest': digest}, root / 'good')
+            self.assertTrue((root / 'good/fuzz.log').exists())
+            with self.assertRaises(ValueError):
+                replay.unpack(path, {'digest': 'sha256:' + '0' * 64}, root / 'bad')
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('../escaped', 'bad')
+            digest = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.assertRaises(ValueError):
+                replay.unpack(path, {'digest': digest}, root / 'bad')
+
+    def test_replay_source_run_is_positive_numeric(self):
+        self.assertEqual(replay.positive('40794782229'), '40794782229')
+        for value in ('0', '-1', 'abc', '1; echo bad', '01'):
+            with self.assertRaises(replay.argparse.ArgumentTypeError):
+                replay.positive(value)
 
 
 if __name__ == '__main__':
