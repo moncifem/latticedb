@@ -18,8 +18,28 @@
 //!   a deleted subtree lands in the trash too.
 //! - Siblings are ordered by `(pos, node id)`; `pos` is chosen by the mover.
 //!
-//! The operation log is kept whole (needed to undo and redo), so state grows with the number of
-//! operations. Compaction needs causal stability and is a later phase.
+//! # Compaction and the causal-stability contract
+//!
+//! The operation log is needed to undo and redo, so it grows with the number of operations until it
+//! is compacted. [`Tree::compact`] takes a *stable frontier* `stable` and drops every logged
+//! operation with `id <= stable`. The caller promises, and the tree cannot check:
+//!
+//! - **Every replica has already applied every operation ordered at or before `stable`**, and no
+//!   replica will ever issue or relay a new operation ordered at or before it. The usual source is
+//!   the minimum over all replicas of the clock each has fully caught up to (a replica that is
+//!   offline or has not reported holds the frontier back).
+//! - Under that contract an operation ordered at or before `stable` cannot arrive late, so nothing
+//!   at or below it can ever be undone or redone again. Their effect is already in the materialised
+//!   tree and stays there; only the undo records are discarded. Every later operation is ordered
+//!   after all dropped ones, so it produces the same tree on every replica, compacted or not.
+//! - Re-delivery of a dropped operation (a duplicate) is still harmless: `apply` answers
+//!   [`Outcome::Duplicate`] for any id at or below the frontier without comparing content, so a
+//!   reused id with different content below the frontier is no longer detected.
+//! - The frontier only moves forward; a lower `stable` is a no-op.
+//!
+//! A tree also has a cap on the live op count ([`Tree::with_op_limit`], default
+//! [`DEFAULT_OP_LIMIT`]). A new operation that would exceed it is refused with
+//! [`TreeError::OpLimitReached`]; nothing is dropped silently. Compact and retry.
 //!
 //! # Operation encoding (version 1, little endian, 41 bytes)
 //!
@@ -92,6 +112,12 @@ pub enum TreeError {
     /// An operation with this id was already applied with different content.
     #[error("operation id reused with different content")]
     ConflictingOpId,
+    /// The live op log is at its cap; compact below a stable frontier and retry.
+    #[error("tree op log is full ({limit} live ops); compact below a stable frontier")]
+    OpLimitReached {
+        /// The configured cap.
+        limit: usize,
+    },
 }
 
 /// What [`Tree::apply`] did.
@@ -106,6 +132,9 @@ pub enum Outcome {
 }
 
 const VERSION: u8 = 1;
+
+/// Default cap on the live (uncompacted) op count of a [`Tree`].
+pub const DEFAULT_OP_LIMIT: usize = 1 << 20;
 
 impl Op {
     /// Encoded size in bytes.
@@ -201,6 +230,12 @@ pub struct Snapshot {
 #[derive(Debug, Clone, Default)]
 pub struct Tree {
     log: BTreeMap<Hlc, Entry>,
+    /// Stable frontier: ops at or below it were dropped and cannot arrive late.
+    floor: Option<Hlc>,
+    /// Cap on `log.len()`; `0` is treated as unset and means [`DEFAULT_OP_LIMIT`].
+    limit: usize,
+    /// Ops undone and redone so far (late-op cost counter).
+    replayed: u64,
     parents: BTreeMap<NodeId, (NodeId, u64)>,
     /// `(parent, pos, node)`, for ordered children.
     kids: BTreeSet<(NodeId, u64, NodeId)>,
@@ -210,6 +245,65 @@ impl Tree {
     /// An empty tree: only the two roots exist.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty tree whose live op log may hold at most `limit` ops (at least 1).
+    pub fn with_op_limit(limit: usize) -> Self {
+        Self {
+            limit: limit.max(1),
+            ..Self::default()
+        }
+    }
+
+    fn cap(&self) -> usize {
+        if self.limit == 0 {
+            DEFAULT_OP_LIMIT
+        } else {
+            self.limit
+        }
+    }
+
+    /// The stable frontier passed to [`Tree::compact`] so far, if any.
+    pub fn stable_frontier(&self) -> Option<Hlc> {
+        self.floor
+    }
+
+    /// Total ops undone and redone by late arrivals so far.
+    pub fn replayed_ops(&self) -> u64 {
+        self.replayed
+    }
+
+    /// Drops logged ops with `id <= stable` and returns how many were dropped. The visible tree
+    /// does not change. See the module docs: the caller guarantees every replica has applied all
+    /// ops ordered at or before `stable`, so none of them can arrive late.
+    pub fn compact(&mut self, stable: Hlc) -> usize {
+        if self.floor.is_some_and(|f| f >= stable) {
+            return 0;
+        }
+        self.floor = Some(stable);
+        let keep = self.log.split_off(&Self::just_after(stable));
+        let dropped = self.log.len();
+        self.log = keep;
+        dropped
+    }
+
+    /// The smallest id strictly greater than `id` (ids are totally ordered by their fields).
+    fn just_after(id: Hlc) -> Hlc {
+        match id.node.checked_add(1) {
+            Some(node) => Hlc { node, ..id },
+            None => match id.counter.checked_add(1) {
+                Some(counter) => Hlc {
+                    counter,
+                    node: 0,
+                    ..id
+                },
+                None => Hlc {
+                    wall_ms: id.wall_ms.saturating_add(1),
+                    counter: 0,
+                    node: 0,
+                },
+            },
+        }
     }
 
     /// Applies an operation in any delivery order, any number of times.
@@ -224,11 +318,19 @@ impl Tree {
                 Err(TreeError::ConflictingOpId)
             };
         }
+        if self.floor.is_some_and(|f| op.id <= f) {
+            // Already applied everywhere and compacted away (see the module docs).
+            return Ok(Outcome::Duplicate);
+        }
+        if self.log.len() >= self.cap() {
+            return Err(TreeError::OpLimitReached { limit: self.cap() });
+        }
         let later: Vec<Hlc> = self
             .log
             .range((Bound::Excluded(op.id), Bound::Unbounded))
             .map(|(k, _)| *k)
             .collect();
+        self.replayed += later.len() as u64;
         for k in later.iter().rev() {
             self.undo(*k);
         }
@@ -829,6 +931,279 @@ mod tests {
                 )),
             }
         }
+    }
+
+    // ---- compaction ---------------------------------------------------------------------------
+
+    /// One step of a compaction script.
+    #[derive(Debug, Clone)]
+    enum CStep {
+        Base(Step),
+        /// Compact the replicas selected by the bit mask at the honest stable frontier.
+        Compact(u8),
+    }
+
+    fn arb_csteps() -> impl Strategy<Value = Vec<CStep>> {
+        proptest::collection::vec(
+            prop_oneof![
+                6 => (any::<u8>(), any::<u8>(), any::<u16>(), any::<u16>(), 0u8..3)
+                    .prop_map(|(replica, kind, a, b, pos)| CStep::Base(Step::Local { replica, kind, a, b, pos })),
+                5 => (any::<u8>(), any::<u16>())
+                    .prop_map(|(to, which)| CStep::Base(Step::Deliver { to, which })),
+                2 => any::<u8>().prop_map(CStep::Compact),
+            ],
+            1..60,
+        )
+    }
+
+    /// The honest stable frontier: the largest issued id such that every issued op at or below it
+    /// has been applied by every replica. Clocks strictly increase with each step, so no future op
+    /// can be ordered at or below it.
+    fn honest_stable(issued: &[Op], seen: &[BTreeSet<Hlc>]) -> Option<Hlc> {
+        let mut ids: Vec<Hlc> = issued.iter().map(|o| o.id).collect();
+        ids.sort();
+        let mut frontier = None;
+        for id in ids {
+            if seen.iter().all(|s| s.contains(&id)) {
+                frontier = Some(id);
+            } else {
+                break;
+            }
+        }
+        frontier
+    }
+
+    /// Like `run_script`, but replicas compact at random honest stable points. Ids come from a
+    /// clock that strictly increases per step. Ends with shuffled, duplicated delivery of every op
+    /// everywhere (including to compacted replicas) and compares with the uncompacted oracle.
+    fn run_compacting_script(replicas: usize, steps: &[CStep], shuffle: u64) -> Result<(), String> {
+        let mut trees: Vec<Tree> = (0..replicas).map(|_| Tree::new()).collect();
+        let mut seen: Vec<BTreeSet<Hlc>> = vec![BTreeSet::new(); replicas];
+        let mut issued: Vec<Op> = Vec::new();
+        let mut fresh = vec![0u64; replicas];
+        for (clock, step) in (1u64..).zip(steps) {
+            match step {
+                CStep::Base(Step::Local {
+                    replica,
+                    kind,
+                    a,
+                    b,
+                    pos,
+                }) => {
+                    let r = usize::from(*replica) % replicas;
+                    let (Some(tree), Some(f)) = (trees.get_mut(r), fresh.get_mut(r)) else {
+                        continue;
+                    };
+                    let snap = tree.snapshot();
+                    let node_choice = pick(&snap, *a, false);
+                    let id = Hlc {
+                        wall_ms: clock,
+                        counter: 0,
+                        node: u32::try_from(r).unwrap_or(0),
+                    };
+                    let op = match kind % 3 {
+                        0 => {
+                            *f += 1;
+                            let node = NodeId(100 * (r as u64 + 1) + *f);
+                            Op::new(id, node, pick(&snap, *b, false), u64::from(*pos))
+                        }
+                        1 if node_choice != NodeId::ROOT => {
+                            Op::new(id, node_choice, pick(&snap, *b, true), u64::from(*pos))
+                        }
+                        _ if node_choice != NodeId::ROOT => Op::delete(id, node_choice),
+                        _ => continue,
+                    };
+                    tree.apply(op).map_err(|e| e.to_string())?;
+                    seen[r].insert(op.id);
+                    issued.push(op);
+                }
+                CStep::Base(Step::Deliver { to, which }) => {
+                    if issued.is_empty() {
+                        continue;
+                    }
+                    let op = issued[usize::from(*which) % issued.len()];
+                    let r = usize::from(*to) % replicas;
+                    let Some(tree) = trees.get_mut(r) else {
+                        continue;
+                    };
+                    tree.apply(op).map_err(|e| e.to_string())?;
+                    seen[r].insert(op.id);
+                }
+                CStep::Compact(mask) => {
+                    let Some(stable) = honest_stable(&issued, &seen) else {
+                        continue;
+                    };
+                    for (r, tree) in trees.iter_mut().enumerate() {
+                        if mask & (1 << (r % 8)) != 0 {
+                            let before = tree.snapshot();
+                            tree.compact(stable);
+                            if tree.snapshot() != before {
+                                return Err("compaction changed the visible tree".into());
+                            }
+                        }
+                    }
+                }
+            }
+            if trees.iter().any(|t| !t.is_acyclic()) {
+                return Err("cycle in a replica".into());
+            }
+        }
+        let expected = oracle(&issued);
+        let mut uncompacted = Tree::new();
+        for op in &issued {
+            uncompacted.apply(*op).map_err(|e| e.to_string())?;
+        }
+        if uncompacted.snapshot() != expected {
+            return Err("uncompacted replica differs from the ordered replay".into());
+        }
+        for (r, tree) in trees.iter_mut().enumerate() {
+            let mut batch: Vec<(u64, Op)> = issued
+                .iter()
+                .chain(issued.iter())
+                .enumerate()
+                .map(|(i, op)| {
+                    let key = (i as u64 + 1)
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(shuffle.wrapping_mul(r as u64 + 1))
+                        .rotate_left(17);
+                    (key, *op)
+                })
+                .collect();
+            batch.sort_by_key(|(k, _)| *k);
+            for (_, op) in batch {
+                tree.apply(op).map_err(|e| e.to_string())?;
+            }
+            if tree.snapshot() != expected {
+                return Err(format!("compacted replica {r} diverged from the oracle"));
+            }
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn compaction_at_honest_stable_points_preserves_convergence(
+            replicas in 2usize..5,
+            steps in arb_csteps(),
+            shuffle in any::<u64>(),
+        ) {
+            prop_assert_eq!(run_compacting_script(replicas, &steps, shuffle), Ok(()));
+        }
+    }
+
+    fn chain(count: u64) -> Vec<Op> {
+        // Node i hangs under node i-1; wall time i.
+        (1..=count)
+            .map(|i| {
+                let parent = if i == 1 { NodeId::ROOT } else { n(i - 1) };
+                Op::new(t(i, 0), n(i), parent, 0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compaction_never_changes_the_visible_tree_and_shrinks_the_log() {
+        let ops = chain(50);
+        let mut tree = build(&ops);
+        let before = tree.snapshot();
+        assert_eq!(tree.compact(t(30, 0)), 30);
+        assert_eq!(tree.op_count(), 20);
+        assert_eq!(tree.snapshot(), before);
+        assert_eq!(tree.stable_frontier(), Some(t(30, 0)));
+        // A lower frontier is a no-op; the frontier never moves back.
+        assert_eq!(tree.compact(t(10, 0)), 0);
+        assert_eq!(tree.stable_frontier(), Some(t(30, 0)));
+        // Duplicates of dropped ops and of kept ops are ignored.
+        assert_eq!(tree.apply(ops[0]), Ok(Outcome::Duplicate));
+        assert_eq!(tree.apply(ops[40]), Ok(Outcome::Duplicate));
+        assert_eq!(tree.snapshot(), before);
+        assert_eq!(tree.op_count(), 20);
+        // A late op above the frontier still orders correctly among the kept ops.
+        let late = Op::new(t(35, 1), n(5), NodeId::ROOT, 7);
+        let mut plain = build(&ops);
+        tree.apply(late).unwrap();
+        plain.apply(late).unwrap();
+        assert_eq!(tree.snapshot(), plain.snapshot());
+        // Compacting everything leaves the tree intact and the log empty.
+        tree.compact(t(100, 0));
+        assert_eq!(tree.op_count(), 0);
+        assert_eq!(tree.snapshot(), plain.snapshot());
+    }
+
+    #[test]
+    fn the_op_cap_errors_cleanly_and_compaction_frees_room() {
+        let ops = chain(5);
+        let mut tree = Tree::with_op_limit(3);
+        for op in &ops[..3] {
+            tree.apply(*op).unwrap();
+        }
+        let before = tree.snapshot();
+        assert_eq!(
+            tree.apply(ops[3]),
+            Err(TreeError::OpLimitReached { limit: 3 })
+        );
+        assert_eq!(tree.snapshot(), before, "a refused op changes nothing");
+        assert_eq!(tree.op_count(), 3);
+        // Duplicates are still accepted at the cap.
+        assert_eq!(tree.apply(ops[0]), Ok(Outcome::Duplicate));
+        tree.compact(t(2, 0));
+        tree.apply(ops[3]).unwrap();
+        tree.apply(ops[4]).unwrap();
+        assert_eq!(tree.op_count(), 3);
+        assert_eq!(tree.parent(n(5)), Some(n(4)));
+        assert_eq!(Tree::new().cap(), DEFAULT_OP_LIMIT);
+    }
+
+    /// Late-op cost before and after compaction; run with `--nocapture` to see the numbers.
+    #[test]
+    fn late_op_cost_before_and_after_compaction() {
+        const BASE: u64 = 2000;
+        const LATE: u64 = 100;
+        // Base history at even wall times 2, 4, ..., 4000, all created under the root.
+        let base: Vec<Op> = (1..=BASE)
+            .map(|i| Op::new(t(2 * i, 0), n(i), NodeId::ROOT, 0))
+            .collect();
+        // Late ops (from a slow replica) at odd wall times spread over `[from, 2 * BASE)`.
+        let window = |from: u64| -> Vec<Op> {
+            let step = (2 * BASE - from) / LATE;
+            (0..LATE)
+                .map(|k| {
+                    let wall = from + 1 + k * step - (k * step) % 2;
+                    Op::new(t(wall, 1), n(k + 1), NodeId::ROOT, 5)
+                })
+                .collect()
+        };
+        let run = |compact_at: Option<u64>, late: &[Op]| {
+            let mut tree = build(&base);
+            if let Some(w) = compact_at {
+                tree.compact(t(w, 0));
+            }
+            let live = tree.op_count();
+            let start = tree.replayed_ops();
+            for op in late {
+                tree.apply(*op).unwrap();
+            }
+            (live, tree.replayed_ops() - start, tree)
+        };
+        // Without compaction the slow replica's ops may land anywhere in history.
+        let spread = window(0);
+        let (live_a, replay_a, tree_a) = run(None, &spread);
+        // With an honest frontier at 90% of history, late ops can only land above it.
+        let frontier = 2 * BASE * 9 / 10;
+        let recent = window(frontier);
+        let (live_b, replay_b, tree_b) = run(Some(frontier), &recent);
+        let (_, replay_c, _) = run(None, &recent);
+        println!(
+            "tree compaction, {BASE} base ops, {LATE} late ops\n\
+             uncompacted, late ops anywhere in history: live {live_a}, replayed {replay_a}\n\
+             uncompacted, late ops above 90%: live {BASE}, replayed {replay_c}\n\
+             compacted at 90%, late ops above it: live {live_b}, replayed {replay_b}"
+        );
+        assert_eq!(live_a as u64, BASE);
+        assert_eq!(live_b as u64, BASE / 10);
+        assert_eq!(replay_b, replay_c, "same late ops cost the same either way");
+        assert!(replay_b < replay_a);
+        assert!(tree_a.is_acyclic() && tree_b.is_acyclic());
     }
 
     #[test]

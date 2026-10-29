@@ -164,6 +164,10 @@ between minor versions; format changes are called out explicitly.
   timers, `invalid_scope` and `invalid_cursor` errors). Simulation with random disconnects, restarts
   and duplicate frames shows no gap or duplicate against an independent oracle. Not wired to a
   socket or the change feed yet.
+- `lattice-core` tree CRDT: `Tree::compact(stable)` drops applied ops at or below a causal-stability
+  frontier (contract stated in the module docs), `Tree::with_op_limit` caps the live op count and a full log
+  returns `TreeError::OpLimitReached` instead of dropping anything (default cap `DEFAULT_OP_LIMIT`). The 41-byte op
+  encoding is unchanged. Not yet wired to sync; computing the frontier is the caller's job (issue 308).
 
 ### Changed
 
