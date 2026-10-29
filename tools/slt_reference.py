@@ -7,27 +7,53 @@ Every `statement ok` must succeed, every `statement error CODE` must fail with t
 every `query` must return the expected values. Records that expect `0A000` are skipped: they are
 constructs PostgreSQL accepts and Lattice rejects. Each statement runs in its own connection, so
 scripts that depend on one session (BEGIN ... COMMIT) cannot be checked here and are listed in
-SESSION_SCRIPTS. Exits non-zero on any mismatch.
+SESSION_SCRIPTS. Exits non-zero on any mismatch, when no script is given or checked (an unmatched glob arrives as
+its literal text or as nothing), or when the server fails a `select 1` preflight.
 """
+import re
 import subprocess
 import sys
 
 SESSION_SCRIPTS = {"transactions.test"}
+# psql exits 1 for a fatal error, 2 when the connection to the server failed and 3 for an error in a
+# script. Only 2 (or a missing binary) means the server was never reached; with `-c`, a rejected
+# statement exits 1 and prints `ERROR:  <SQLSTATE>` under VERBOSITY=sqlstate.
+CONNECTION_FAILURE = 2
+SQLSTATE = re.compile(r"^ERROR:\s+([0-9A-Z]{5})\s*$", re.M)
+
+
+class ServerUnreachable(Exception):
+    pass
 
 
 def psql(sql):
-    p = subprocess.run(
-        ["psql", "-qAt", "-F", "\t", "-v", "VERBOSITY=sqlstate", "-c", sql],
-        capture_output=True, text=True,
-    )
+    try:
+        p = subprocess.run(
+            ["psql", "-qAt", "-F", "\t", "-v", "VERBOSITY=sqlstate", "-c", sql],
+            capture_output=True, text=True,
+        )
+    except OSError as e:
+        raise ServerUnreachable(f"cannot run psql: {e}") from e
+    if p.returncode == CONNECTION_FAILURE:
+        raise ServerUnreachable(p.stderr.strip() or "psql could not connect")
     return p.returncode, p.stdout, p.stderr
+
+
+def preflight():
+    """The server must answer `select 1` before any record counts as evidence."""
+    rc, out, err = psql("select 1")
+    if rc != 0 or out.strip() != "1":
+        raise ServerUnreachable(f"select 1 failed (exit {rc}): {err.strip() or out.strip()}")
 
 
 def check(path):
     lines = open(path).read().split("\n")
     i = 0
     bad = 0
-    psql("drop schema public cascade; create schema public;")
+    rc, _, err = psql("drop schema public cascade; create schema public;")
+    if rc != 0:
+        print(f"{path}: cannot reset the schema: {err.strip()}")
+        return 1
 
     def block(stop_at_separator):
         nonlocal i
@@ -57,9 +83,16 @@ def check(path):
             if rc == 0:
                 print(f"{path}: expected an error: {sql!r}")
                 bad += 1
-            elif code and code not in err:
-                print(f"{path}: expected {code}, got {err.strip()!r}: {sql!r}")
-                bad += 1
+            else:
+                # rc is non-zero and the server was reached (exit 2 raised above), so this is a
+                # query error. A stated code must be the SQLSTATE psql reported.
+                got = SQLSTATE.search(err)
+                if got is None:
+                    print(f"{path}: expected an error with a SQLSTATE, got {err.strip()!r}: {sql!r}")
+                    bad += 1
+                elif code and got.group(1) != code:
+                    print(f"{path}: expected {code}, got {got.group(1)}: {sql!r}")
+                    bad += 1
         elif words[0] == "query":
             sql = block(True)
             i += 1
@@ -85,13 +118,31 @@ def check(path):
 
 
 def main():
+    paths = sys.argv[1:]
+    if not paths:
+        print("no scripts matched: an empty set proves nothing")
+        return 1
+    try:
+        preflight()
+    except ServerUnreachable as e:
+        print(f"reference server not usable: {e}")
+        return 1
     total = 0
-    for path in sys.argv[1:]:
+    checked = 0
+    for path in paths:
         if path.rsplit("/", 1)[-1] in SESSION_SCRIPTS:
             print(f"skipping {path}: needs one session")
             continue
-        total += check(path)
-    print(f"mismatches: {total}")
+        try:
+            total += check(path)
+        except ServerUnreachable as e:
+            print(f"{path}: reference server lost: {e}")
+            return 1
+        checked += 1
+    if checked == 0:
+        print("no script was checked")
+        return 1
+    print(f"checked {checked} scripts, mismatches: {total}")
     return 1 if total else 0
 
 
