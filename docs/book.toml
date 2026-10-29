@@ -1,0 +1,21 @@
+# mdBook configuration for the documentation site. Run `python3 tools/docs_summary.py` first: it stages
+# docs/ (plus README, CONTRIBUTING and formats/) into target/docs-src and writes SUMMARY.md there.
+# See docs/site-setup.md and .github/workflows/docs-site.yml.
+
+[book]
+title = "Lattice documentation"
+description = "Design, specification, decisions and status of the Lattice database."
+language = "en"
+src = "../target/docs-src"
+
+[build]
+build-dir = "../target/docs-book"
+create-missing = false
+
+[output.html]
+site-url = "/latticedb/"
+git-repository-url = "https://github.com/moncifem/latticedb"
+edit-url-template = "https://github.com/moncifem/latticedb/edit/main/docs/{path}"
+additional-js = ["theme/mermaid-init.js"]
+default-theme = "light"
+preferred-dark-theme = "coal"
