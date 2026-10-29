@@ -291,6 +291,8 @@ jobs:
     needs: row-fault-plan
     strategy:
       fail-fast: false
+      # Bound incremental row-runner contention while retaining all forty selections.
+      max-parallel: 8
       matrix:
         profile: [clean, crash-heavy, disk-faulty, hostile, everything]
         shard: [0, 1, 2, 3, 4, 5, 6, 7]

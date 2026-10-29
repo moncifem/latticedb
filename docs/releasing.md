@@ -183,3 +183,7 @@ The earlier 2500-history shards completed in 72–351 seconds including build in
 [40881355427](https://github.com/moncifem/latticedb/actions/runs/40881355427). Scaling to 25,000 histories
 per shard is a capacity estimate, not a measured completion guarantee for this new campaign.
 Actual million-history execution and seven-calendar-night evidence remain pending until observed.
+
+At most eight row-fault shards execute together. All forty selections still run; this bounds
+incremental runner contention with pull-request checks without reducing the million-history plan.
+The central seed day remains frozen across queued waves and midnight boundaries.
