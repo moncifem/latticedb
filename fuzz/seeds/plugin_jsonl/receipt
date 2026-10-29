@@ -1,0 +1,1 @@
+{"v":1,"t":"append.receipt","id":"r4","session":"s1","turn":1,"receipts":[{"rid":"m1","status":"duplicate","pos":2},{"rid":"m2","status":"fenced"}]}

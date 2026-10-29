@@ -12,6 +12,14 @@ cargo +nightly fuzz run wal_record corpus/wal_record seeds/wal_record
 - Every fixed crash adds its minimized input to `seeds/<target>/` and a regression test beside the code it broke.
 - The nightly matrix gives its configured targets ten minutes. The weekly and manual `fuzz-24h` workflows have separate target matrices and budgets; adding a nightly target does not add it to those runs.
 
+## Plugin JSONL target
+
+`plugin_jsonl` feeds arbitrary bytes to the agent plugin contract decoder (`lattice_sdk::contract`). A line
+that decodes must re-encode to a canonical line that decodes to the same message; the same bytes are also
+run through the bounded line framer. Seeds in `seeds/plugin_jsonl/` cover each message family, a wrong
+version, an unknown field, a duplicate key, a float, a lone surrogate, CRLF, invalid UTF-8 and a truncated
+stream. The target is not yet in the nightly, weekly or 24-hour matrices.
+
 ## Row codec targets
 
 - `row_ops` decodes versioned row-write batches, then requires canonical byte-exact re-encoding and an equal second decode.

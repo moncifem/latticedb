@@ -80,6 +80,11 @@ between minor versions; format changes are called out explicitly.
   transaction-local reads and index lookups. Vacuum prunes derived commit metadata; timestamp
   resolution clamps to the floor and threshold maintenance respects retention/oldest-open inputs.
   WAL history and kernel deduplication state are retained.
+- Agent plugin contract v1 (`formats/plugin-contract-v1.md`, draft): line-delimited JSON for session
+  identity by source and external id, idempotent create, append receipts (`recorded`, `duplicate`,
+  `fenced`), resumable watch streams and turn events, with 13 worked transcripts. `lattice-sdk` gains a
+  strict, bounded codec for it, a conformance suite with a reference plugin and one broken plugin per rule,
+  and a `plugin_jsonl` fuzz target (not yet in the scheduled fuzz matrices). No plugin talks to a server yet.
 
 ### Changed
 

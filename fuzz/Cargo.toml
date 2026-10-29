@@ -17,6 +17,7 @@ lattice-seams = { path = "../crates/lattice-seams" }
 lattice-sim = { path = "../crates/lattice-sim" }
 lattice-api = { path = "../crates/lattice-api" }
 lattice-sql = { path = "../crates/lattice-sql" }
+lattice-sdk = { path = "../crates/lattice-sdk" }
 
 # Not part of the main workspace: fuzzing needs nightly.
 [workspace]
@@ -94,6 +95,13 @@ bench = false
 [[bin]]
 name = "typed_row_decode"
 path = "fuzz_targets/typed_row_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_jsonl"
+path = "fuzz_targets/plugin_jsonl.rs"
 test = false
 doc = false
 bench = false

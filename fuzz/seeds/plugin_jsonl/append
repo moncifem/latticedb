@@ -1,0 +1,1 @@
+{"v":1,"t":"append","id":"r3","session":"s1","turn":1,"records":[{"rid":"m1","kind":"message","body":"Fix the flaky test"},{"rid":"m2","kind":"tool_call","body":"{\"cmd\":\"cargo test\"}"}]}

@@ -11,5 +11,8 @@ description = "Generated and handwritten client SDKs (Rust first)."
 lattice-abi = { path = "../lattice-abi" }
 lattice-lsl = { path = "../lattice-lsl" }
 
+[dev-dependencies]
+proptest = "1.12.0"
+
 [lints]
 workspace = true
