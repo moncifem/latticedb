@@ -74,4 +74,14 @@ jobs:
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -q -m "docs: sync wiki from main at ${SOURCE_SHA}"
-          git push origin HEAD
+          if ! out="$(git push origin HEAD 2>&1)"; then
+            # GitHub's documentation does not promise that GITHUB_TOKEN can push to the wiki. If the
+            # push is refused for permission reasons, skip with a notice instead of a red run.
+            if grep -qiE "denied|403|not permitted|forbidden" <<<"${out}"; then
+              echo "${out}" >&2
+              echo "::notice title=Wiki push refused::GITHUB_TOKEN may not push to the wiki repository. A token with write access to it would be needed; see docs/site-setup.md. Nothing was pushed."
+              exit 0
+            fi
+            echo "${out}" >&2
+            exit 1
+          fi

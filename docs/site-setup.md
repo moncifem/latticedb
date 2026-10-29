@@ -1,7 +1,8 @@
 # Docs site and wiki: owner setup
 
 The workflows `docs-site.yml` and `wiki-sync.yml` publish the documents in `docs/` as a website and as
-a small read-only wiki. Neither works until the repository owner does the two one-time steps below.
+a small read-only wiki. Neither publishes anything until the repository owner does the one-time steps below; until then the
+workflows skip with a notice and stay green.
 Agents and contributors cannot do them: they are repository settings.
 
 **Until step 1 is done the site is not live**, and the link
@@ -15,12 +16,16 @@ notice and does nothing.
 3. Run the workflow once: Actions, `docs-site`, Run workflow on `main` (or merge any change under `docs/`).
    The `deploy` job uses the `github-pages` environment, which GitHub creates when Pages is enabled.
    If you restrict that environment's deployment branches, allow `main`.
-4. The first successful run prints the site URL in the job summary. The expected URL is
+4. Set the repository variable `PAGES_ENABLED` to `true` (Settings, Secrets and variables, Actions,
+   Variables tab). Without it the workflow builds the site, prints a notice and does not deploy, so
+   `main` stays green.
+5. The first successful run prints the site URL in the job summary. The expected URL is
    `https://moncifem.github.io/latticedb/`.
 
-Until Pages is enabled, the `deploy` job on `main` fails at `actions/deploy-pages` (no Pages site). The
-`build` job, which runs on every pull request and checks the links, is unaffected and is the check that
-matters for contributors.
+Why a variable and not a check of the Pages API: GitHub's REST documentation for "Get a GitHub Pages
+site" names only the classic `repo` scope and does not say what `GITHUB_TOKEN` needs, so a probe could
+fail for the wrong reason. A variable needs no token permission. The `build` job runs on every pull
+request, checks the links and is the check that matters for contributors.
 
 ## 2. Initialize the wiki
 
@@ -35,12 +40,16 @@ web UI; a repository with the wiki enabled but no page has nothing to push to
 3. Run Actions, `wiki-sync`, Run workflow on `main`. From then on every push to `main` that changes
    `docs/**` regenerates the pages.
 
-`wiki-sync` pushes with the workflow's own `GITHUB_TOKEN` (`contents: write` on that one job). No
-personal access token or secret is needed. If the push is ever rejected with a 403, the log says so;
-GitHub's documentation does not promise this behaviour for every account type, so that would be the
-point to add a token secret instead. Until step 2 is done the workflow detects that the wiki repository
-does not exist (`git ls-remote` answers "Repository not found", which is what it answers today), prints
-a notice and ends successfully.
+`wiki-sync` pushes with the workflow's own `GITHUB_TOKEN` (`contents: write` on that one job). I could
+not confirm in the official documentation that this token may push to `<repo>.wiki.git`: the pages I
+checked (automatic token authentication, adding or editing wiki pages) do not mention it. Third-party
+wiki-sync actions say it works with `contents: write` once a first page exists. So the workflow tries it,
+and if the push is refused (denied, 403, forbidden) it prints a notice and ends green without pushing.
+If you see that notice, the fix is a token with write access to the wiki repository stored as a secret,
+which needs a change to the workflow: ask for it on #311.
+
+Until step 2 is done the workflow detects that the wiki repository does not exist (`git ls-remote`
+answers "Repository not found", which is what it answers today), prints a notice and ends successfully.
 
 ## How the pieces fit
 

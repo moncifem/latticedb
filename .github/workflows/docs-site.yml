@@ -1,8 +1,10 @@
 name: docs-site
 # Builds the documentation site from docs/ with mdBook. Every pull request that touches the documents
 # builds it and checks relative links; nothing is deployed from a pull request. A push to main also
-# deploys to GitHub Pages. The deploy job needs Pages enabled by the owner (Settings, Pages, Source:
-# GitHub Actions); until then it fails at deploy-pages and the build job is unaffected. See
+# deploys to GitHub Pages. Deploying is skipped (green, with a notice) until the owner has enabled Pages
+# (Settings, Pages, Source: GitHub Actions) and set the repository variable PAGES_ENABLED to true. A
+# variable is used because it needs no token permission; the Pages REST endpoint is documented for
+# classic tokens only and its GITHUB_TOKEN permission is not stated. See
 # docs/site-setup.md. Uses pull_request, never pull_request_target.
 on:
   pull_request:
@@ -45,10 +47,27 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    outputs:
+      deploy: ${{ steps.gate.outputs.deploy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Decide whether to deploy
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PAGES_ENABLED: ${{ vars.PAGES_ENABLED }}
+        run: |
+          if [ "${EVENT_NAME}" = "pull_request" ] || [ "${REF}" != "refs/heads/main" ]; then
+            echo "deploy=false" >> "${GITHUB_OUTPUT}"
+          elif [ "${PAGES_ENABLED}" = "true" ]; then
+            echo "deploy=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "deploy=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=Pages deploy skipped::The site was built but not deployed: the owner has not set the repository variable PAGES_ENABLED=true. See docs/site-setup.md."
+          fi
       - name: Tests for the staging and wiki scripts
         run: python3 -m unittest discover -s tools -p 'test_docs_*.py'
       - name: Install mdBook (pinned release, checksum verified)
@@ -69,7 +88,7 @@ jobs:
           mdbook build docs --dest-dir "${GITHUB_WORKSPACE}/target/docs-book"
           test -f target/docs-book/index.html
       - name: Upload the Pages artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: steps.gate.outputs.deploy == 'true'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: target/docs-book
@@ -77,7 +96,7 @@ jobs:
   deploy:
     name: deploy
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: needs.build.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
