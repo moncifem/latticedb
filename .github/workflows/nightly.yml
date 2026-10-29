@@ -26,8 +26,16 @@ jobs:
           day=$(( $(date -u +%s) / 86400 ))
           from=$(( day * 1000000 + ${{ matrix.shard }} * 250000 ))
           echo "seeds $from to $(( from + 249999 ))"
+          mkdir -p target/evidence
           cargo run -q --release -p lattice-testkit --bin sim_runner -- \
-            --seeds 250000 --steps 150 --from "$from" --profile ${{ matrix.profile }}
+            --seeds 250000 --steps 150 --from "$from" --profile ${{ matrix.profile }} --ledger target/evidence
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: evidence-sim-${{ matrix.profile }}-${{ matrix.shard }}
+          path: target/evidence/
+          if-no-files-found: warn
   determinism-and-planted-bugs:
     runs-on: ubuntu-latest
     steps:
@@ -56,7 +64,17 @@ jobs:
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
         with: { tool: cargo-fuzz }
       - name: fuzz ${{ matrix.target }} for 10 minutes
-        run: cd fuzz && cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=600
+        run: |
+          set -o pipefail
+          cd fuzz
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=600 2>&1 | tee fuzz.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: evidence-fuzz-${{ matrix.target }}
+          path: fuzz/fuzz.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
@@ -99,7 +117,14 @@ jobs:
         with: { toolchain: 1.99.1 }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: benchmarks against the ci-ubuntu baseline (a shared runner is noisy, so only a 3x slowdown fails)
-        run: cargo run -q --release -p lattice-bench --bin bench_runner -- --profile ci-ubuntu --scale 5 --tolerance 2.0
+        run: cargo run -q --release -p lattice-bench --bin bench_runner -- --profile ci-ubuntu --scale 5 --tolerance 2.0 --ledger target/evidence
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: evidence-bench
+          path: target/evidence/
+          if-no-files-found: warn
   config-formats:
     runs-on: ubuntu-latest
     steps:
@@ -118,3 +143,76 @@ jobs:
           curl -sSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
           echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tla2tools.jar" | sha256sum --check
           TLA2TOOLS=$PWD/tla2tools.jar tla/check-all.sh
+  scorecard:
+    # Collection does not change any producer's exit status or gate volumes.
+    if: always()
+    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: scorecard-history-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: evidence-*
+          path: target/observations
+      - name: build ledger CLI and test scorecard ingestion
+        run: |
+          cargo build -q -p lattice-cli
+          python3 -m unittest discover -s tools -p 'test_scorecard.py'
+      - name: fetch retained history and immutable job metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p target/scorecard target/history
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > target/current-run.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '{jobs: [.[].jobs[]]}' > target/jobs.json
+          # Retention is bounded. No artifact is evidence of missing earlier history.
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=scorecard-history&per_page=100" > target/artifacts.json
+          previous=$(jq -r --arg branch "$GITHUB_REF_NAME" --arg run "$GITHUB_RUN_ID" \
+            '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == $branch and (.workflow_run.id | tostring) != $run)] | first | .id // empty' target/artifacts.json)
+          if [ -n "$previous" ]; then
+            previous_run=$(jq -r --arg id "$previous" '.artifacts[] | select((.id | tostring) == $id) | .workflow_run.id' target/artifacts.json)
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$previous_run" > target/previous-run.json
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$previous/zip" > target/history.zip
+            python3 tools/scorecard.py restore-history --archive target/history.zip --output target/history/history.json \
+              --run-metadata target/previous-run.json --current-metadata target/current-run.json \
+              --repository "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME" --artifact-id "$previous"
+          fi
+      - name: ingest observed results and render unsigned scorecard
+        run: |
+          python3 tools/scorecard.py ingest --lattice "$PWD/target/debug/lattice" \
+            --ledger target/scorecard-ledger --history target/history/history.json \
+            --history-provenance target/history/history-provenance.json \
+            --jobs target/jobs.json --artifacts target/observations --repository "$GITHUB_REPOSITORY" \
+            --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --revision "$GITHUB_SHA"
+          python3 tools/scorecard.py report --lattice "$PWD/target/debug/lattice" \
+            --ledger target/scorecard-ledger --output target/scorecard --producer target/current-run.json
+          cat target/scorecard/scorecard.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: scorecard-history
+          path: target/scorecard/
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: scorecard-ledger
+          path: |
+            target/scorecard-ledger/
+            target/jobs.json
+          if-no-files-found: warn
+          retention-days: 90

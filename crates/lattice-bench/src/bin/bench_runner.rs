@@ -30,26 +30,6 @@ fn main() -> ExitCode {
     for (name, ns) in &current {
         println!("{name:<36} {ns:>12.1} ns/op");
     }
-    if let Some(ledger) = arg(&args, "--ledger") {
-        let results = current
-            .iter()
-            .map(|(name, ns)| format!("\"{name}\":{ns:.1}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let json =
-            format!("{{\"profile\":\"{profile}\",\"scale\":{scale},\"ns_per_op\":{{{results}}}}}");
-        let recorded = std::fs::create_dir_all(&ledger)
-            .map_err(|e| e.to_string())
-            .and_then(|()| {
-                lattice_core::ledger::append(StdIo::new(ledger), SystemClock, OsRng, "bench", &json)
-                    .map(|_| ())
-                    .map_err(|e| format!("{e:?}"))
-            });
-        if let Err(e) = recorded {
-            eprintln!("could not record the run in the ledger: {e}");
-            return ExitCode::from(2);
-        }
-    }
     if args.iter().any(|a| a == "--write-baseline") {
         if let Err(e) = std::fs::create_dir_all(&dir)
             .and_then(|()| std::fs::write(&file, render_results(&current)))
@@ -72,7 +52,42 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match compare(&baseline, &current, tolerance) {
+    // Record only after comparison. Legacy fields remain readable; old records without a
+    // verdict are measurements, never evidence that the comparison passed.
+    let comparison = compare(&baseline, &current, tolerance);
+    if let Some(ledger) = arg(&args, "--ledger") {
+        let verdict = match &comparison {
+            Ok(regressions) if regressions.is_empty() => "passed",
+            Ok(_) => "failed",
+            Err(_) => "error",
+        };
+        let deltas: std::collections::BTreeMap<_, _> =
+            baseline
+                .iter()
+                .filter_map(|(name, base)| {
+                    current.get(name).map(|now| (name, serde_json::json!({
+                "baseline_ns": base, "current_ns": now, "slowdown": (now / base) - 1.0
+            })))
+                })
+                .collect();
+        let json = serde_json::json!({
+            "profile": profile, "scale": scale, "ns_per_op": current,
+            "tolerance": tolerance, "verdict": verdict, "deltas": deltas
+        })
+        .to_string();
+        let recorded = std::fs::create_dir_all(&ledger)
+            .map_err(|e| e.to_string())
+            .and_then(|()| {
+                lattice_core::ledger::append(StdIo::new(ledger), SystemClock, OsRng, "bench", &json)
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:?}"))
+            });
+        if let Err(e) = recorded {
+            eprintln!("could not record the run in the ledger: {e}");
+            return ExitCode::from(2);
+        }
+    }
+    match comparison {
         Ok(regs) if regs.is_empty() => {
             println!(
                 "no regression beyond {:.0} percent against profile `{profile}`",

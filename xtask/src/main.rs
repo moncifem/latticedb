@@ -175,18 +175,8 @@ fn sim(args: &[&str]) -> Result<(), String> {
 fn scorecard(args: &[&str]) -> Result<(), String> {
     let dir = args.first().copied().unwrap_or("target/ledger");
     run(
-        "cargo",
-        &[
-            "run",
-            "-q",
-            "-p",
-            "lattice-cli",
-            "--",
-            "ledger",
-            "show",
-            "--dir",
-            dir,
-        ],
+        "python3",
+        &["tools/scorecard.py", "report", "--ledger", dir],
     )?;
     println!("thresholds:");
     run(

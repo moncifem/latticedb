@@ -267,3 +267,39 @@ fn ledger_check_passes_a_clean_latest_run_and_fails_each_kind_of_bad_one() {
     assert_eq!(code(&o), 1);
     assert!(out(&o).contains("no simulation run in the ledger"));
 }
+
+#[test]
+fn validated_results_round_trip_and_reject_oversized_or_nonobject_input() {
+    let dir = workdir("record-export");
+    let file = write(
+        &dir,
+        "result.json",
+        "{\"runs\":10,\"failing\":0,\"incomplete\":0}",
+    );
+    let args = [
+        "ledger",
+        "record",
+        "--dir",
+        dir.to_str().unwrap(),
+        "--kind",
+        "sim",
+        "--json",
+        &file,
+    ];
+    assert_eq!(code(&lattice(&args)), 0);
+    let exported = lattice(&["ledger", "export", "--dir", dir.to_str().unwrap()]);
+    assert_eq!(code(&exported), 0);
+    let entries: serde_json::Value = serde_json::from_str(&out(&exported)).unwrap();
+    assert_eq!(entries.as_array().unwrap().len(), 1);
+    assert_eq!(entries[0]["kind"], "sim");
+    let value: serde_json::Value =
+        serde_json::from_str(entries[0]["json"].as_str().unwrap()).unwrap();
+    assert_eq!(value["runs"], 10);
+    for bad in ["[]".to_string(), "{".to_string(), " ".repeat(65537)] {
+        std::fs::write(&file, bad).unwrap();
+        assert_eq!(code(&lattice(&args)), 1);
+    }
+    let exported = lattice(&["ledger", "export", "--dir", dir.to_str().unwrap()]);
+    let entries: serde_json::Value = serde_json::from_str(&out(&exported)).unwrap();
+    assert_eq!(entries.as_array().unwrap().len(), 1);
+}

@@ -74,6 +74,60 @@ fn ledger_show<I: Io>(io: I) -> Result<String, String> {
     Ok(out)
 }
 
+/// Additive JSON interchange over the existing opaque results payload; no WAL format change.
+fn ledger_export<I: Io>(io: I) -> Result<String, String> {
+    let entries = ledger::read(io, SystemClock, OsRng).map_err(|e| format!("{e:?}"))?;
+    let values: Vec<_> = entries
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "lsn": e.lsn, "recorded_ms": e.recorded_ms, "kind": e.kind, "json": e.json
+            })
+        })
+        .collect();
+    serde_json::to_string(&values).map_err(|e| e.to_string())
+}
+
+const MAX_RESULT_BYTES: u64 = 64 * 1024;
+
+fn validate_result(kind: &str, json: &str) -> Result<String, String> {
+    if kind.is_empty()
+        || kind.len() > 64
+        || !kind
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+    {
+        return Err("kind must contain 1..64 lowercase ASCII letters, digits, '-' or '_'".into());
+    }
+    if json.len() as u64 > MAX_RESULT_BYTES {
+        return Err("result exceeds 64 KiB".into());
+    }
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if !value.is_object() {
+        return Err("result must be a JSON object".into());
+    }
+    serde_json::to_string(&value).map_err(|e| e.to_string())
+}
+
+fn ledger_record(args: &[String]) -> Result<(), String> {
+    use std::io::Read;
+    let kind = arg(args, "--kind").ok_or("missing --kind")?;
+    let file = arg(args, "--json").ok_or("missing --json FILE")?;
+    // Bounded read also handles a file that grows after being opened.
+    let mut json = String::new();
+    std::fs::File::open(file)
+        .map_err(|e| e.to_string())?
+        .take(MAX_RESULT_BYTES + 1)
+        .read_to_string(&mut json)
+        .map_err(|e| e.to_string())?;
+    let json = validate_result(&kind, &json)?;
+    let dir = arg(args, "--dir").unwrap_or_else(|| ".".into());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    ledger::append(StdIo::new(dir), SystemClock, OsRng, &kind, &json)
+        .map(|_| ())
+        .map_err(|e| format!("{e:?}"))
+}
+
 /// One simulation entry read strictly: every count must be a non-negative integer.
 struct SimRun {
     runs: u64,
@@ -257,6 +311,28 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("ledger") if args.get(1).map(String::as_str) == Some("export") => {
+            let dir = arg(&args, "--dir").unwrap_or_else(|| ".".into());
+            match ledger_export(StdIo::new(dir)) {
+                Ok(text) => {
+                    println!("{text}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("cannot export ledger: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Some("ledger") if args.get(1).map(String::as_str) == Some("record") => {
+            match ledger_record(&args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("cannot record result: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Some("ledger") if args.get(1).map(String::as_str) == Some("check") => {
             let dir = arg(&args, "--dir").unwrap_or_else(|| ".".into());
             match ledger_check(StdIo::new(dir)) {
@@ -279,6 +355,8 @@ fn main() -> ExitCode {
             eprintln!("usage: lattice doctor [--dir DATA_DIR] [--wal NAME]");
             eprintln!("       lattice ledger show [--dir DIR]");
             eprintln!("       lattice ledger check [--dir DIR]");
+            eprintln!("       lattice ledger export [--dir DIR]");
+            eprintln!("       lattice ledger record --kind KIND --json FILE [--dir DIR]");
             eprintln!(
                 "       lattice lsl check FILE | fmt FILE [--write|--check] | compat OLD NEW"
             );
@@ -295,6 +373,18 @@ mod tests {
     use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
     use lattice_testkit::scenario::{SharedClock, SharedIo};
     use std::rc::Rc;
+
+    #[test]
+    fn record_payload_is_bounded_and_cannot_inject_a_kind_delimiter() {
+        assert!(validate_result("sim\nbench", "{}").is_err());
+        assert!(validate_result("sim", "[]").is_err());
+        assert!(validate_result("sim", "{broken}").is_err());
+        assert!(validate_result("sim", &" ".repeat(MAX_RESULT_BYTES as usize + 1)).is_err());
+        assert_eq!(
+            validate_result("ci-job", "{ \"n\": 1 }").unwrap(),
+            "{\"n\":1}"
+        );
+    }
 
     /// Builds a small log on simulated storage and returns the disk.
     fn disk_with_log() -> SharedIo {

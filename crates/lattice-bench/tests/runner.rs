@@ -119,3 +119,41 @@ fn the_tolerance_boundary_is_inclusive() {
     assert_eq!(compare(&base, &cur, 0.24).unwrap().len(), 1);
     assert!(render_results(&cur).contains("125.0"));
 }
+
+#[test]
+fn ledger_verdict_describes_the_completed_comparison() {
+    use lattice_seams::{OsRng, StdIo, SystemClock};
+    for (case, baseline, expected_code, verdict) in [
+        (
+            "pass",
+            Some("{\"hlc_tick\":1000000000.0}"),
+            0,
+            Some("passed"),
+        ),
+        ("fail", Some("{\"hlc_tick\":0.001}"), 1, Some("failed")),
+        ("error", Some("{\"vanished\":1.0}"), 2, Some("error")),
+        ("absent", None, 2, None),
+    ] {
+        let dir = workdir(&format!("verdict-{case}"));
+        if let Some(baseline) = baseline {
+            write_baseline(&dir, "p", baseline);
+        }
+        let ledger = dir.join("results");
+        let output = run(
+            &dir,
+            &["--profile", "p", "--ledger", ledger.to_str().unwrap()],
+        );
+        assert_eq!(code(&output), expected_code);
+        if let Some(verdict) = verdict {
+            let entries =
+                lattice_core::ledger::read(StdIo::new(&ledger), SystemClock, OsRng).unwrap();
+            assert_eq!(entries.len(), 1);
+            let value: serde_json::Value = serde_json::from_str(&entries[0].json).unwrap();
+            assert_eq!(value["verdict"], verdict);
+            assert!(value["ns_per_op"].is_object());
+            assert!(value["deltas"].is_object());
+        } else {
+            assert!(!ledger.exists());
+        }
+    }
+}

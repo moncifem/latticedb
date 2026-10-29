@@ -41,6 +41,11 @@ jobs:
       - run: ${{ matrix.command }}
         env:
           PROPTEST_CASES: ${{ matrix.cases }}
+      - name: scorecard evidence semantics and real ledger ingestion
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo build -q -p lattice-cli
+          python3 -m unittest discover -s tools -p 'test_scorecard.py'
   gate-macos:
     # Not part of the pull request gate: macOS runners queue for minutes. It runs on every push to
     # main, so a macOS-only failure is caught right after the merge.
