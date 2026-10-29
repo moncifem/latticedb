@@ -25,13 +25,11 @@ fn server(max_connections: usize, read_timeout: Duration) -> ServerHandle {
 }
 fn connect(address: SocketAddr) -> TcpStream {
     let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
-    stream.set_nodelay(true).unwrap();
+    // The server may already have refused and reset a flood connection; on macOS the option
+    // setters then fail, which is not a test failure (the following read reports the outcome).
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_nodelay(true);
     stream
 }
 fn startup() -> Vec<u8> {
@@ -461,6 +459,9 @@ fn bounded_control_slots_cannot_make_shutdown_wait_for_slow_startup_clients() {
     }
     std::thread::sleep(Duration::from_millis(100));
     let mut excess = connect(address);
+    let (tag, error) = message(&mut excess);
+    assert_eq!(tag, b'E');
+    assert!(error.windows(7).any(|bytes| bytes == b"C53300\0"));
     closed(&mut excess);
     let start = Instant::now();
     server.shutdown().unwrap();
@@ -545,22 +546,63 @@ fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
     let server = server(2, Duration::from_secs(3));
     for _ in 0..300 {
         let mut client = connect(server.local_addr());
-        client.write_all(&startup()).unwrap();
+        let _ = client.write_all(&startup());
         drop(client);
     }
-    let until = Instant::now() + Duration::from_secs(5);
+    // Deterministic drain: wait on the server's own worker count instead of sleeping. Connections
+    // still in the kernel backlog are accepted later, so a refusal below is retried, not fatal.
+    let until = Instant::now() + Duration::from_secs(10);
+    while server.open_connections() != 0 {
+        assert!(Instant::now() < until, "abandoned workers never drained");
+        std::thread::yield_now();
+    }
     loop {
         assert!(Instant::now() < until, "slots were never released");
         let mut next = connect(server.local_addr());
-        next.write_all(&startup()).unwrap();
-        let (tag, payload) = message(&mut next);
-        if tag == b'R' {
-            assert_eq!(payload, vec![0; 4]);
-            ready_after_auth(&mut next);
-            break;
+        let _ = next.write_all(&startup());
+        // A refusal at capacity is FATAL 53300 (or, if the peer raced the close, a reset); retry.
+        match try_message(&mut next) {
+            Some((b'R', payload)) => {
+                assert_eq!(payload, vec![0; 4]);
+                ready_after_auth(&mut next);
+                break;
+            }
+            Some((tag, error)) => {
+                assert_eq!(tag, b'E');
+                assert!(error.windows(7).any(|bytes| bytes == b"C53300\0"));
+            }
+            None => {}
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::yield_now();
     }
+    server.shutdown().unwrap();
+}
+fn try_message(stream: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
+    let mut tag = [0];
+    stream.read_exact(&mut tag).ok()?;
+    let mut length = [0; 4];
+    stream.read_exact(&mut length).ok()?;
+    let mut payload = vec![0; (i32::from_be_bytes(length) as usize).checked_sub(4)?];
+    stream.read_exact(&mut payload).ok()?;
+    Some((tag[0], payload))
+}
+
+#[test]
+fn connections_beyond_worker_capacity_get_fatal_53300_not_a_silent_close() {
+    // Capacity is max_connections (1) plus 8 control workers; idle clients hold all of them.
+    let server = server(1, Duration::from_secs(5));
+    let idle: Vec<TcpStream> = (0..9).map(|_| connect(server.local_addr())).collect();
+    let until = Instant::now() + Duration::from_secs(5);
+    while server.open_connections() < 9 {
+        assert!(Instant::now() < until, "workers never filled");
+        std::thread::yield_now();
+    }
+    let mut refused = connect(server.local_addr());
+    let (tag, error) = message(&mut refused);
+    assert_eq!(tag, b'E');
+    assert!(error.windows(7).any(|bytes| bytes == b"C53300\0"));
+    closed(&mut refused);
+    drop(idle);
     server.shutdown().unwrap();
 }
 fn ready_after_auth(stream: &mut TcpStream) {

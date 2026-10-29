@@ -34,7 +34,7 @@ use lattice_seams::OsRng;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -126,6 +126,7 @@ type Registry = Arc<Mutex<RegistryState>>;
 pub struct ServerHandle {
     address: SocketAddr,
     stopping: Arc<AtomicBool>,
+    open: Arc<AtomicUsize>,
     acceptor: Option<JoinHandle<io::Result<()>>>,
 }
 impl ServerHandle {
@@ -163,12 +164,24 @@ impl ServerHandle {
         let address = listener.local_addr()?;
         let stopping = Arc::new(AtomicBool::new(false));
         let stop = stopping.clone();
+        let open = Arc::new(AtomicUsize::new(0));
+        let open_count = open.clone();
         let acceptor = thread::Builder::new()
             .name("pg-accept".into())
-            .spawn(move || accept(listener, config, stop, registry, Arc::new(factory)))?;
+            .spawn(move || {
+                accept(
+                    listener,
+                    config,
+                    stop,
+                    registry,
+                    Arc::new(factory),
+                    open_count,
+                )
+            })?;
         Ok(Self {
             address,
             stopping,
+            open,
             acceptor: Some(acceptor),
         })
     }
@@ -179,6 +192,13 @@ impl ServerHandle {
         self.acceptor
             .as_ref()
             .is_none_or(|acceptor| acceptor.is_finished())
+    }
+
+    /// Number of connection workers the accept thread currently tracks (accepted and not yet
+    /// reaped). It lags a closed connection by at most one accept-loop iteration (about 5 ms), and
+    /// connections still waiting in the kernel backlog are not counted.
+    pub fn open_connections(&self) -> usize {
+        self.open.load(Ordering::Acquire)
     }
 
     /// Actual bound address, including the selected port when binding port zero.
@@ -238,6 +258,20 @@ fn classify(error: &io::Error) -> AcceptFailure {
     }
 }
 
+/// Best-effort FATAL 53300 for a connection refused before any worker serves it. Never blocks the
+/// accept loop: the socket is non-blocking and a full send buffer simply drops the message.
+fn refuse_at_capacity(socket: &TcpStream) {
+    let mut bytes = Vec::new();
+    let encoded = fatal("53300", "sorry, too many clients already")
+        .messages
+        .iter()
+        .all(|message| message.encode(&mut bytes).is_ok());
+    if encoded && socket.set_nonblocking(true).is_ok() {
+        let _ = (&*socket).write(&bytes);
+    }
+    let _ = socket.shutdown(Shutdown::Both);
+}
+
 /// Reports only the error kind and count; accept errors carry no client data.
 #[allow(clippy::print_stderr)]
 fn report_accept_error(error: &io::Error, consecutive: u32) {
@@ -253,6 +287,7 @@ fn accept<H, F>(
     stopping: Arc<AtomicBool>,
     registry: Registry,
     factory: Arc<F>,
+    open: Arc<AtomicUsize>,
 ) -> io::Result<()>
 where
     H: QueryHandler + 'static,
@@ -277,14 +312,15 @@ where
                     index += 1;
                 }
             }
+            open.store(workers.len(), Ordering::Release);
             match listener.accept() {
                 Ok((socket, _)) => {
                     consecutive = 0;
                     if workers.len() == config.max_connections + CONTROL_CONNECTION_RESERVE {
-                        // With no classification worker available, close without inventing a reply
-                        // to a packet that may be CancelRequest. Normal startup admission below
-                        // returns 53300 after the first packet has been classified.
-                        let _ = socket.shutdown(Shutdown::Both);
+                        // No worker is free to classify the first packet, so a CancelRequest on this
+                        // connection is lost. Like PostgreSQL, answer with FATAL 53300 and close,
+                        // without waiting for the peer: one non-blocking write of a few bytes.
+                        refuse_at_capacity(&socket);
                         continue;
                     }
                     // A socket that fails setup or a failed spawn drops only that client.
@@ -292,6 +328,7 @@ where
                         start_worker(socket, &config, &registry, &factory, &handshakes)
                     {
                         workers.push(worker);
+                        open.store(workers.len(), Ordering::Release);
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
