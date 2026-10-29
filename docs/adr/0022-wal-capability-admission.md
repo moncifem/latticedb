@@ -23,6 +23,13 @@ The owner explicitly accepted RFC 0008 / ADR 0022 and waived this specific seven
 response and merge condition: exact final-head green CI. This does not accept or waive PR 209's
 separate managed LCIX format/hold; engine activation remains separate.
 
+## Implementation note: empty-tail promotion (issue 307)
+
+The in-place truncate and rewrite of an empty tail named in the decision could lose already durable
+required bits on a crash between the truncate and the new header. The writer now stages the new
+header in a `<first lsn>.guard` file first; see the amendment in RFC 0008. The amendment is proposed
+and awaits the owner; this ADR's status is unchanged.
+
 ## Consequences
 
 This adds header preflight and explicit engine capability plumbing without changing record framing.

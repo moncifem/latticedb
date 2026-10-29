@@ -16,7 +16,9 @@ unchanged v1 encoding and start at offset 32. Existing v1 headers/records remain
 Legacy readers refuse the distinct magic. Explicit engine support is required even in a kernel
 that understands the header. Preflight the full chain before callbacks/repair, preserve cumulative
 requirements, and sync guard file/directory before appending a protected record. A short newest
-creation may be repaired only before any guarded record could be acknowledged. Check the RFC for
+creation may be repaired only before any guarded record could be acknowledged. While an empty tail's
+header is replaced, the writer keeps a transient `<first lsn, 20 digits>.guard` file in the WAL
+directory (not a segment; readers ignore it; see the RFC 0008 amendment). Check the RFC for
 empty-tail promotion, rollback and capability propagation requirements. New engine activation is
 not enabled by this implementation branch or by corpus inclusion.
 

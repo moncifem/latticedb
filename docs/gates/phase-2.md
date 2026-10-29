@@ -289,6 +289,38 @@ admission/allocation budgets remain unresolved. This supplies no mixed-version a
 downgrade, online backfill, accepted checkpoint composition, release or phase gate sign-off.
 
 
+## Guard and managed-index review follow-ups (issues 234 and 307)
+
+PRs 222 and 209 were already merged on main when this follow-up started; the drafts were not stale.
+Main already wrote LCIX only through `commit_with_capabilities(MANAGED_COMPOUND)`, opened managed mode
+with support for bit 0 and callback mode with zero, and had tests for an unguarded LCIX refusal
+(`valid_literal_compound_without_a_segment_guard_is_refused_without_repair`), zero-support refusal
+(`legacy_callback_and_zero_support_readers_refuse_guarded_history_before_replay`) and an omitted
+guard (`an_omitted_guard_on_actual_compound_commit_is_caught_by_engine_recovery`). Added here:
+
+- Issue 307: the empty-tail guard rewrite stages the new header in a fresh `.guard` file before the
+  truncate. The crash-point sweep (SimIo power cuts at every mutating operation of the rewrite, a
+  disk that persists a truncate at once, clean and crash-heavy profiles, four seeds) passes, and with
+  `Bug::GuardRewriteUnstaged` (the old in-place rewrite) it loses the durable bit. This amends
+  RFC 0008's promotion step; the amendment awaits the owner. The hosted guarded-upgrade matrix was not
+  re-run locally.
+- Issue 234: every engine append of an unguarded kernel commit asserts it cannot carry LCIX
+  (`catalog::check_guard`, unit test). Recovery validates each catalog record against the recovered
+  catalog by borrow and applies it once; a test counts whole-catalog copies during replay (zero; the
+  old code made one per record). Per-version snapshots are still stored, so memory remains linear in
+  the number of versions times the live catalog.
+- DDL through `commit_with_catalog` now needs `PolicyEvaluator::authorize_ddl`, denied by default
+  (`AllowAll` grants it; `commit_catalog` is the host path and binds `AllowAll`). Witnessed with
+  `Bug::DdlPolicySkipped`. Index builds still read every row; the DDL grant is the control.
+- A test replays a hand-framed pre-guard log with LCAT records through the managed, catalog-only and
+  callback readers and checks the bytes are unchanged; another documents that a rule-breaking LCAT
+  record still refuses recovery.
+
+The bit-0-only format cannot yet exercise a rewrite from A to A|B in production; the sweep widens the
+known-capability set per thread in tests only. Local verification covered focused tests and Clippy
+for `lattice-core` and `lattice-engines`; the workspace gate, mutation, Miri and the ignored
+hosted matrices are left to CI. The registry now has 40 bits.
+
 ## Strict HLC history resolver (P2-14 foundation)
 
 `RowStore::try_snapshot_as_of_hlc` adds a checked full-HLC predecessor lookup: expired requests fail

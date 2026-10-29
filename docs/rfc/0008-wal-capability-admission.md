@@ -91,6 +91,19 @@ requires bit 0:
 4. Append and sync the normal record. Acknowledgement follows existing kernel commit/apply rules.
    Every subsequent rollover preserves the cumulative mask, even for ordinary LROW writes.
 
+Amendment proposed with the fix for issue 307 (owner acceptance pending; the status above is unchanged).
+Step 2's in-place truncate and rewrite of an empty tail can lose bits that tail had already made
+durable: a crash after the truncate leaves a short header that recovery repairs from the previous
+segment, which may carry fewer bits (for example a legacy segment followed by an empty tail promoted
+to bit A, then rewritten to A|B). The writer now stages the complete new header in a fresh file named
+`<first lsn, 20 digits>.guard` in the WAL directory (create, sync file, sync directory) before it
+truncates the tail, then rewrites the tail header, syncs it, removes the staged file and syncs the
+directory. Staged files are not segments: every reader ignores them, so shipped v1 readers and
+preflight are unaffected. Recovery of a torn newest header takes the union of the previous segment's
+bits and a valid staged header for the same first LSN (admitted against the caller's support before
+any callback or repair), then removes every staged file after repair. Nonempty tails and rollover
+are unchanged: they already create a new segment before any bit is lost.
+
 A crash after a durable guard but before the first LCIX record may conservatively prohibit downgrade.
 A crash during a short empty-header rewrite may let an old reader restore an empty v1 tail, but no
 LCIX record or acknowledged data was present there. A new append still must establish the durable

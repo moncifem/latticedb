@@ -190,8 +190,19 @@ between minor versions; format changes are called out explicitly.
   Superseded runs of one pull request are cancelled.
 - Optimize test builds of workspace crates so the deterministic simulator runs faster in every
   platform gate, retaining debug assertions, overflow checks, test cases and seed budgets.
+- **Breaking (engines API):** `RowStore::commit_with_catalog` with table or index changes now requires
+  the transaction's `PolicyEvaluator::authorize_ddl`, which denies by default; `AllowAll` grants it.
+  `commit_catalog` (host path) is unchanged. Format change: while an empty WAL tail's guard header is
+  rewritten, a transient `<first lsn>.guard` file exists in the WAL directory (not a segment; readers
+  ignore it); the RFC 0008 amendment awaits owner acceptance.
 
 ### Fixed
+
+- Installing a WAL guard on an empty tail can no longer lose required capability bits that tail had
+  already made durable if it crashes mid-rewrite (issue 307); crash-point sweep added.
+- Recovery of catalog changes no longer copies the whole catalog per record, and engines assert that an
+  unguarded kernel commit cannot carry an LCIX payload (issue 234). A test replays a pre-guard log
+  with LCAT records.
 
 - Serial merger resolves unambiguous same-workflow check retries instead of treating superseded
   cancelled/failed runs as current; ambiguous history and the latest pending/failure still block.
