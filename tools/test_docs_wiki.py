@@ -10,7 +10,7 @@ from test_docs_summary import write
 def fixture(root: Path) -> None:
     write(root, "README.md", "![b](docs/assets/b.png)\n\n# Lattice\n\n[road](docs/roadmap.md) [lic](LICENSE) [c](CONTRIBUTING.md#setup)\n")
     write(root, "LICENSE", "x")
-    write(root, "CONTRIBUTING.md", "# Contributing\n\nSee `docs/x.md` and [gl](docs/glossary.md).\n")
+    write(root, "CONTRIBUTING.md", "# Contributing\n\nSee `docs/x.md` and [gl](docs/glossary.md).\n\n## Setup\n")
     write(root, "docs/roadmap.md", "# Roadmap\n\n[gate](gates/phase-1.md)\n")
     write(root, "docs/glossary.md", "# Glossary\n")
     write(root, "docs/gates/phase-1.md", "# Phase 1 status\n")
@@ -70,6 +70,19 @@ class DocsWikiTests(unittest.TestCase):
         self.assertLess(page.index("phase-1.md"), page.index("phase-2.md"))
         self.assertLess(page.index("phase-2.md"), page.index("phase-10.md"))
         self.assertIn(dw.BOARD_URL, page)
+
+    def test_anchor_beyond_the_excerpt_goes_to_github(self):
+        write(self.root, "docs/roadmap.md", "# Roadmap\n\n[a](ARCHITECTURE.md#5-section) [b](ARCHITECTURE.md#4-section)\n")
+        files, errors = dw.generate(self.root)
+        self.assertEqual(errors, [])
+        road = files["Roadmap.md"]
+        self.assertIn(f"({ds.REPO_URL}/blob/main/docs/ARCHITECTURE.md#5-section)", road)
+        self.assertIn("(Architecture-overview#4-section)", road)
+
+    def test_symlinked_gate_page_is_skipped(self):
+        (self.root / "docs" / "gates" / "phase-9.md").symlink_to(self.root / "docs" / "gates" / "phase-1.md")
+        files, _ = dw.generate(self.root)
+        self.assertNotIn("phase-9.md", files["Gates-and-board.md"])
 
     def test_broken_link_is_an_error(self):
         write(self.root, "docs/glossary.md", "# Glossary\n\n[x](nope.md)\n")

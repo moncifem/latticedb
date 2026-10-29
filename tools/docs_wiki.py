@@ -75,7 +75,22 @@ def architecture_excerpt(text: str) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def make_fixer(root: Path, source: str, wiki_of: dict[str, str], errors: list[str]):
+def heading_slugs(text: str) -> set[str]:
+    """GitHub-style anchors of the headings outside code fences (duplicates ignored)."""
+    slugs, in_fence = set(), False
+    for line in text.split("\n"):
+        if re.match(r"^\s*(```|~~~)", line):
+            in_fence = not in_fence
+            continue
+        m = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
+        if m and not in_fence:
+            slug = re.sub(r"[^\w\- ]", "", m.group(1).lower()).replace(" ", "-")
+            slugs.add(slug)
+    return slugs
+
+
+def make_fixer(root: Path, source: str, wiki_of: dict[str, str], errors: list[str],
+               anchors: dict[str, set[str]]):
     def fix(target: str) -> str:
         if not target or target.startswith("#") or ds._SCHEME.match(target) or target.startswith("//"):
             return target
@@ -88,6 +103,10 @@ def make_fixer(root: Path, source: str, wiki_of: dict[str, str], errors: list[st
             errors.append(f"{source}: link {target!r} leaves the repository")
             return target
         if repo_path in wiki_of:
+            # An anchor the mirrored page does not contain (the architecture page is an excerpt)
+            # goes to the full document on GitHub instead of a dead wiki anchor.
+            if frag and frag[1:] not in anchors.get(repo_path, {frag[1:]}):
+                return ds.github_url(root, repo_path) + frag
             return wiki_of[repo_path] + frag
         if repo_path and (root / repo_path).exists():
             return ds.github_url(root, repo_path) + frag
@@ -106,7 +125,10 @@ def gates_page(root: Path) -> str:
         "## Gate records",
         "",
     ]
-    gate_files = sorted((root / "docs" / "gates").glob("*.md"), key=lambda p: ds.natural_key(p.name))
+    gate_files = sorted(
+        (p for p in (root / "docs" / "gates").glob("*.md") if p.is_file() and not p.is_symlink()),
+        key=lambda p: ds.natural_key(p.name),
+    )
     for path in gate_files:
         rel = path.relative_to(root).as_posix()
         title = ds.first_heading(path.read_text(encoding="utf-8")) or path.stem
@@ -135,21 +157,29 @@ def generate(root: Path) -> tuple[dict[str, str], list[str]]:
     errors: list[str] = []
     wiki_of = {src: name for name, src in PAGES.items() if src}
     files: dict[str, str] = {}
+    texts: dict[str, str] = {}
     for name, src in PAGES.items():
         if src is None:
-            body = gates_page(root)
-            files[f"{name}.md"] = banner("docs/gates") + body
             continue
         text = (root / src).read_text(encoding="utf-8")
         if name == "Home":
             text = strip_leading_images(text)
         if name == "Architecture-overview":
             text = architecture_excerpt(text)
+        texts[name] = text
+    anchors = {src: heading_slugs(texts[name]) for name, src in PAGES.items() if src}
+    for name, src in PAGES.items():
+        if src is None:
+            body = gates_page(root)
+            files[f"{name}.md"] = banner("docs/gates") + body
+            continue
+        text = texts[name]
+        if name == "Architecture-overview":
             text += (
                 f"\nThis is the opening of the design document. Read the whole of it in "
                 f"[`{src}`]({ds.github_url(root, src)}).\n"
             )
-        text = ds.rewrite_links(text, make_fixer(root, src, wiki_of, errors))
+        text = ds.rewrite_links(text, make_fixer(root, src, wiki_of, errors, anchors))
         files[f"{name}.md"] = banner(src) + text.rstrip("\n") + "\n"
     side = ["**Lattice**", ""]
     for name in PAGES:

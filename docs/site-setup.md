@@ -66,4 +66,7 @@ answers "Repository not found", which is what it answers today), prints a notice
 ## What not to do
 
 - Do not edit wiki pages by hand. The next sync overwrites them. Edit `docs/` and open a pull request.
+- Do not keep anything else in the wiki. The sync replaces the whole wiki: every file in it that is not
+  one of the generated pages (for example a hand-written `_Footer.md` or an uploaded image) is deleted
+  by the next sync.
 - Do not enable deployments from a branch; the workflow is the only publisher.

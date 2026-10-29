@@ -29,7 +29,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 REPO_URL = "https://github.com/moncifem/latticedb"
 BRANCH = "main"
@@ -147,10 +147,12 @@ def order_key(page_src: str):
 def discover(root: Path) -> list[Page]:
     candidates: list[str] = []
     for top in ("README.md", "CONTRIBUTING.md"):
-        if (root / top).is_file():
+        if (root / top).is_file() and not (root / top).is_symlink():
             candidates.append(top)
     for base in ("docs", "formats"):
         for path in sorted((root / base).rglob("*.md")):
+            if path.is_symlink() or not path.is_file():
+                continue
             candidates.append(path.relative_to(root).as_posix())
     pages: list[Page] = []
     for src in candidates:
@@ -173,7 +175,8 @@ def discover(root: Path) -> list[Page]:
 # --- links ---------------------------------------------------------------------------------------
 
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
-_INLINE = re.compile(r"(\]\(\s*<?)([^)\s>]+)(>?(?:\s+\"[^\"]*\")?\s*\))")
+_INLINE = re.compile(r"(\]\(\s*)([^)\s<>]+)((?:\s+\"[^\"]*\")?\s*\))")
+_INLINE_ANGLE = re.compile(r"(\]\(\s*<)([^>\n]+)(>(?:\s+\"[^\"]*\")?\s*\))")
 _REFDEF = re.compile(r"^(\s{0,3}\[[^\]]+\]:\s*<?)(\S+?)(>?\s*(?:\"[^\"]*\")?\s*)$")
 _ATTR = re.compile(r"""((?:href|src)\s*=\s*["'])([^"']+)(["'])""")
 _CODE_SPAN = re.compile(r"(`+)(?:(?!\1).)+?\1")
@@ -197,7 +200,7 @@ def rewrite_links(text: str, fix) -> str:
             continue
         masked = _mask_code(line)
         edits = []  # (start, end, new)
-        for rx in (_INLINE, _ATTR):
+        for rx in (_INLINE, _INLINE_ANGLE, _ATTR):
             for m in rx.finditer(masked):
                 edits.append((m.start(2), m.end(2), fix(line[m.start(2):m.end(2)])))
         m = _REFDEF.match(masked)
@@ -216,13 +219,13 @@ def split_target(target: str) -> tuple[str, str]:
 
 def github_url(root: Path, repo_path: str) -> str:
     kind = "tree" if (root / repo_path).is_dir() else "blob"
-    return f"{REPO_URL}/{kind}/{BRANCH}/{repo_path}"
+    return f"{REPO_URL}/{kind}/{BRANCH}/{quote(repo_path)}"
 
 
 def github_url_for(repo_path: str) -> str:
     """GitHub URL for a repository path without touching the filesystem (a path without a dot is a tree)."""
     kind = "blob" if posixpath.splitext(repo_path)[1] else "tree"
-    return f"{REPO_URL}/{kind}/{BRANCH}/{repo_path}"
+    return f"{REPO_URL}/{kind}/{BRANCH}/{quote(repo_path)}"
 
 
 def resolve_repo_path(src: str, path: str) -> str | None:
@@ -257,7 +260,7 @@ class LinkFixer:
                 dest = repo_path[len("docs/"):]
             if dest is not None:
                 rel = posixpath.relpath(dest, posixpath.dirname(page.dest) or ".")
-                return rel + frag
+                return quote(rel) + frag
             if repo_path and (self.root / repo_path).exists():
                 return github_url(self.root, repo_path) + frag
             self.errors.append(f"{page.src}: broken link {target!r} (no such file {repo_path!r})")
@@ -272,7 +275,7 @@ def collect_assets(root: Path) -> set[str]:
     base = root / "docs" / "assets"
     if not base.is_dir():
         return set()
-    return {p.relative_to(root).as_posix() for p in sorted(base.rglob("*")) if p.is_file()}
+    return {p.relative_to(root).as_posix() for p in sorted(base.rglob("*")) if p.is_file() and not p.is_symlink()}
 
 
 def md_escape(title: str) -> str:

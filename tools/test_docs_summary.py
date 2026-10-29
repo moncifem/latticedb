@@ -143,6 +143,25 @@ class DocsSummaryTests(unittest.TestCase):
         write(self.root, "docs/guide.md", "# Guide\n\n[x](missing.md)\n")
         self.assertEqual(ds.main(["--root", str(self.root), "--out", "target/o"]), 1)
 
+    def test_symlinks_are_skipped(self):
+        (self.root / "docs" / "link.md").symlink_to(self.root / "docs" / "guide.md")
+        (self.root / "docs" / "assets" / "ln.png").symlink_to(self.root / "docs" / "assets" / "b.png")
+        out, errors = self.stage()
+        self.assertEqual(errors, [])
+        self.assertNotIn("link.md", (out / "SUMMARY.md").read_text())
+        self.assertFalse((out / "assets" / "ln.png").exists())
+
+    def test_paths_are_quoted(self):
+        write(self.root, "docs/my guide.md", "# Spaced\n")
+        write(self.root, "crates/x/a b.md", "x\n")
+        write(self.root, "docs/guide.md", "# Guide\n\n[a](<my guide.md>) [b](<../crates/x/a b.md>) [c](<roadmap.md>)\n")
+        out, errors = self.stage()
+        self.assertEqual(errors, [])
+        text = (out / "guide.md").read_text()
+        self.assertIn("(<my%20guide.md>)", text)
+        self.assertIn("(<roadmap.md>)", text)
+        self.assertIn(f"{ds.REPO_URL}/blob/main/crates/x/a%20b.md", text)
+
     def test_natural_key(self):
         names = ["10-a.md", "2-a.md", "README.md", "Z.md", "b.md"]
         self.assertEqual(sorted(names, key=ds.natural_key), ["2-a.md", "10-a.md", "b.md", "README.md", "Z.md"])
