@@ -66,6 +66,96 @@ pub fn to_json(suite: &str, dataset_hash: &str, provider: &str, report: &GateRep
     )
 }
 
+/// Complete scorecard evidence, preserving exact numbers and threshold/dataset provenance.
+/// The legacy `to_json` format remains unchanged. No example or provider is run by this function.
+/// Refuses a mismatched gate report or dataset hash rather than authenticating inconsistent inputs.
+pub fn to_evidence_json(
+    suite: &str,
+    dataset: &crate::dataset::Dataset,
+    provider: &str,
+    thresholds: &[crate::gate::Threshold],
+    report: &GateReport,
+) -> Result<String, String> {
+    use std::collections::{BTreeMap, BTreeSet};
+    if suite.is_empty()
+        || provider.is_empty()
+        || dataset.name.is_empty()
+        || dataset.provenance.is_empty()
+        || dataset.version == 0
+        || crate::dataset::content_hash(&dataset.examples) != dataset.hash
+    {
+        return Err("invalid suite/provider or dataset provenance/hash".into());
+    }
+    let mut names = BTreeSet::new();
+    for t in thresholds {
+        if t.name.is_empty()
+            || !names.insert(&t.name)
+            || !t.lower_bound.is_finite()
+            || !t.tolerance.is_finite()
+            || t.tolerance < 0.0
+            || !(t.confidence > 0.0 && t.confidence < 1.0)
+        {
+            return Err("invalid or duplicate threshold".into());
+        }
+    }
+    if thresholds.is_empty() || report.rows.len() != thresholds.len() {
+        return Err("missing gate thresholds or rows".into());
+    }
+    if report
+        .rows
+        .iter()
+        .any(|row| row.result.is_some_and(|m| m.n > dataset.examples.len()))
+    {
+        return Err("metric sample count exceeds dataset examples".into());
+    }
+    let results: BTreeMap<_, _> = report
+        .rows
+        .iter()
+        .filter_map(|row| row.result.map(|result| (row.name.clone(), result)))
+        .collect();
+    if crate::gate::evaluate(thresholds, &results) != *report {
+        return Err("report disagrees with the supplied thresholds/results".into());
+    }
+    // f64's shortest round-trip representation avoids moving a value across a gate boundary.
+    let exact = |v: f64| {
+        if v.is_finite() {
+            v.to_string()
+        } else {
+            "null".into()
+        }
+    };
+    let mut rows = Vec::new();
+    for (row, threshold) in report.rows.iter().zip(thresholds) {
+        let (value, lo, hi, n) = row
+            .result
+            .map_or(("null".into(), "null".into(), "null".into(), 0), |m| {
+                (exact(m.value), exact(m.ci_lo), exact(m.ci_hi), m.n)
+            });
+        rows.push(format!(
+            "{{\"metric\":\"{}\",\"value\":{value},\"ci_lo\":{lo},\"ci_hi\":{hi},\"n\":{n},\"bound\":{},\"confidence\":{},\"tolerance\":{},\"passed\":{},\"reason\":\"{}\"}}",
+            esc_json(&row.name), exact(threshold.lower_bound), exact(threshold.confidence),
+            exact(threshold.tolerance), row.passed, esc_json(&row.reason)
+        ));
+    }
+    let split = match dataset.split {
+        crate::dataset::Split::Dev => "dev",
+        crate::dataset::Split::Test => "test",
+    };
+    Ok(format!(
+        "{{\"schema\":2,\"suite\":\"{}\",\"dataset_hash\":\"{}\",\"dataset\":{{\"name\":\"{}\",\"version\":{},\"split\":\"{split}\",\"provenance\":\"{}\",\"hash\":\"{}\",\"examples\":{}}},\"provider\":\"{}\",\"passed\":{},\"metrics\":[{}]}}",
+        esc_json(suite),
+        esc_json(&dataset.hash),
+        esc_json(&dataset.name),
+        dataset.version,
+        esc_json(&dataset.provenance),
+        esc_json(&dataset.hash),
+        dataset.examples.len(),
+        esc_json(provider),
+        report.passed,
+        rows.join(",")
+    ))
+}
+
 /// A small HTML table for people. Every inserted string is escaped.
 pub fn to_html(suite: &str, provider: &str, report: &GateReport) -> String {
     let mut out = format!(
@@ -117,6 +207,60 @@ mod tests {
             }],
             passed: false,
         }
+    }
+
+    #[test]
+    fn enriched_report_keeps_exact_gate_fields_and_dataset_provenance() {
+        use crate::dataset::{Dataset, Example, Split};
+        use crate::gate::{Threshold, evaluate};
+        use std::collections::BTreeMap;
+        let dataset = Dataset::new(
+            "unit-data",
+            1,
+            Split::Test,
+            "unit fixture",
+            vec![Example {
+                input: "input".into(),
+                expected: vec!["label".into()],
+            }],
+        );
+        let thresholds = vec![Threshold {
+            name: "f1".into(),
+            lower_bound: 0.800000035,
+            confidence: 0.95,
+            tolerance: 0.0,
+        }];
+        let results = BTreeMap::from([(
+            "f1".into(),
+            MetricResult {
+                value: 0.80000004,
+                ci_lo: 0.80000003,
+                ci_hi: 0.9,
+                n: 1,
+            },
+        )]);
+        let report = evaluate(&thresholds, &results);
+        assert!(!report.passed);
+        let raw = to_evidence_json("suite", &dataset, "provider", &thresholds, &report).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["schema"], 2);
+        assert_eq!(value["dataset"]["provenance"], "unit fixture");
+        assert_eq!(value["dataset"]["hash"], dataset.hash);
+        assert_eq!(value["metrics"][0]["bound"], 0.800000035);
+        assert_eq!(value["metrics"][0]["ci_lo"], 0.80000003);
+        assert_eq!(value["metrics"][0]["confidence"], 0.95);
+        assert_eq!(value["metrics"][0]["tolerance"], 0.0);
+        assert_eq!(value["passed"], false);
+        let legacy = to_json("suite", &dataset.hash, "provider", &report);
+        assert!(!legacy.contains("confidence") && !legacy.contains("schema"));
+        let mut mismatched = report.clone();
+        mismatched.passed = true;
+        assert!(to_evidence_json("suite", &dataset, "provider", &thresholds, &mismatched).is_err());
+        let mut changed_data = dataset.clone();
+        changed_data.examples.clear();
+        assert!(
+            to_evidence_json("suite", &changed_data, "provider", &thresholds, &report).is_err()
+        );
     }
 
     #[test]

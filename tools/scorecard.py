@@ -119,6 +119,14 @@ def report(entries, root=ROOT):
             and count(f.get('seconds')) and f['seconds'] > 0 and count(f.get('runs')) and f['runs'] > 0]
     invalid += ['invalid or incomplete fuzz observation'] * (len(by('fuzz')) - len(fuzz))
     benches = by('bench')
+    import scorecard_metrics
+    metrics = {'mutation': [], 'eval': []}
+    for kind in metrics:
+        for observation in by(kind):
+            try:
+                metrics[kind].append(scorecard_metrics.validate_record(kind, observation))
+            except (ValueError, TypeError, KeyError) as error:
+                invalid.append(f'invalid {kind} observation: {error}')
     pending, named = [], {f'I{i}': [] for i in range(1, 15)}
     # This inventory is deliberately source-only; comments and test names cannot prove execution.
     for path in sorted((root / 'crates').rglob('*.rs')):
@@ -164,8 +172,8 @@ def report(entries, root=ROOT):
                 'retained shard results do not prove all nightly shards completed']),
             'fuzz': section(fuzz, ['only successful libFuzzer completion summaries count; missing/cancelled logs do not',
                 'lifetime cumulative hours are unknown outside retained observations']),
-            'mutation': section([], ['module mutation scores and survived/missed counts are not ingested yet']),
-            'eval_gates': section([], ['suite metrics with confidence intervals, thresholds and dataset/provider provenance are missing']),
+            'mutation': section(metrics['mutation'], ['only the reported planned universe/observed outcomes are covered; unrun, timeout and unviable counts are not killed mutants']),
+            'eval_gates': section(metrics['eval'], ['legacy reports without exact thresholds/confidence/tolerance remain unverified; suites without actual reports remain missing']),
             'benchmarks': section(benches, ['legacy records lacking verdict are measurements only',
                 'ns/op microbenchmarks do not establish p50/p99 commit latency or product throughput']),
             'risk_register': section([{'declared_rows': risk_rows, 'mitigation_status': 'unverified'}] if risk_rows else [],

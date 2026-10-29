@@ -32,6 +32,9 @@ jobs:
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
   mutation:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -52,11 +55,20 @@ jobs:
           cargo mutants -p lattice-abi -p lattice-evalkit -p lattice-sim -p lattice-seams
           -p lattice-cli -p lattice-bench -p lattice-sdk --test-workspace=false
           --timeout 120 --no-shuffle -j 2 --output target/mutants-crates
+      - name: preserve exact mutation producer provenance
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --jq '{id,run_attempt,head_sha,workflow_id,path,head_branch}' > target/mutants-producer.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
+          overwrite: true
           name: mutants
           path: |
+            target/mutants-producer.json
             target/mutants/mutants.out
             target/mutants-crates/mutants.out
           if-no-files-found: ignore

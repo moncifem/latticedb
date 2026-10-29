@@ -189,12 +189,16 @@ jobs:
               --repository "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME" --artifact-id "$previous"
           fi
       - name: ingest observed results and render unsigned scorecard
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 tools/scorecard.py ingest --lattice "$PWD/target/debug/lattice" \
             --ledger target/scorecard-ledger --history target/history/history.json \
             --history-provenance target/history/history-provenance.json \
             --jobs target/jobs.json --artifacts target/observations --repository "$GITHUB_REPOSITORY" \
             --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --revision "$GITHUB_SHA"
+          python3 tools/scorecard_metrics.py ingest-weekly --lattice "$PWD/target/debug/lattice" \
+            --ledger target/scorecard-ledger --repository "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME"
           python3 tools/scorecard.py report --lattice "$PWD/target/debug/lattice" \
             --ledger target/scorecard-ledger --output target/scorecard --producer target/current-run.json
           cat target/scorecard/scorecard.md >> "$GITHUB_STEP_SUMMARY"

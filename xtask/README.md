@@ -62,3 +62,44 @@ never lifetime budgets. Reports retain both per-result provenance and artifact o
 
 Focused checks: `python3 -m unittest discover -s tools -p 'test_scorecard.py'`, CLI integration
 tests, and benchmark runner integration tests. Nightly runs the Python checks before ingestion.
+
+Mutation and eval observations are supported by `tools/scorecard_metrics.py`. Nightly reads the
+latest retained completed **weekly workflow's** `mutants` artifact from the same repository/ref,
+checking the configured weekly workflow ID/path, head repository, exact run/revision, completed
+mutation job and artifact identity. Future weekly artifacts include an exact run/attempt manifest.
+Legacy artifacts are accepted only for attempt one; ambiguous rerun artifacts are rejected.
+The weekly run may have failed elsewhere: its conclusion and the mutation job conclusion are
+retained independently. Existing weekly commands, budgets and failure propagation are unchanged.
+
+Mutation ingestion supports the cargo-mutants 27 JSON schema (`outcomes.json` plus the generated
+`mutants.json` universe); unknown versions, inconsistent counters, duplicate outcomes and malformed
+archives fail collection. Reports show per-package/source-file planned, tested, unrun, killed,
+survived, timeout, unviable and unclassified counts, plus missing artifact groups. The score is
+`killed / (killed + survived)`: timeout, unviable, unclassified and unrun cases are excluded from
+that denominator, never counted as kills. A partial/cancelled run, failed/missing baseline or empty
+denominator has no verified module score. Timeouts and survivors preclude an observed clean module.
+No module observation implies that unreported modules, other mutation groups or the project passed.
+Raw JSON SHA-256 hashes and immutable run/job/artifact provenance travel with each observation.
+
+For an actual external Evalkit suite result, call the additive `report::to_evidence_json` producer
+API with its Dataset, provider, exact thresholds and GateReport. It checks the dataset content hash,
+sample-count bounds and existing gate convention, preserves round-trip floating-point values,
+and includes dataset name/version/split/provenance plus each metric's confidence and tolerance.
+The legacy `report::to_json` output and signature stay unchanged.
+
+Import an actual report explicitly:
+
+```sh
+python3 tools/scorecard_metrics.py ingest-eval --ledger DIR --lattice /absolute/path/to/lattice \
+  --report actual-report.json --source actual-producer.json
+```
+
+The source file must identify repository, run_id, attempt, job_id and revision. This explicit local
+association is labelled caller supplied; it is not authenticated as a GitHub artifact. The importer
+retains a hash of the exact input and deduplicates it, checks finite values/interval/sample counts,
+and recomputes each metric and suite verdict from the exact bounds/tolerances. This verifies the
+reported gate fields, not independent execution of the provider or statistical recomputation of
+its intervals. Old reports missing confidence/tolerance/threshold provenance remain visible with
+an **unverified** gate verdict. Invalid reports fail ingestion/rendering. No example suite, fixture,
+or unit-test output is automatically ingested as a project eval result. Suites without real reports
+remain missing, and P1-77 remains incomplete until its actual evidence and review requirements hold.

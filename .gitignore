@@ -8,3 +8,7 @@
 /backlog/P*.md
 /benches/baselines/local
 /mutants.out*/
+
+# Python automation bytecode
+__pycache__/
+*.py[cod]

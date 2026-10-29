@@ -302,6 +302,7 @@ dependencies = [
  "blake3",
  "lattice-abi",
  "proptest",
+ "serde_json",
  "thiserror",
  "toml",
 ]

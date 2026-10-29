@@ -1,11 +1,17 @@
 """Evidence semantics, independent of Cargo/network and long nightly workloads."""
 import json
+import copy
+import os
+import zipfile
 import tempfile
 from types import SimpleNamespace
 import unittest
 from pathlib import Path
 
 import scorecard
+import scorecard_metrics as metrics
+
+BINARY = Path(os.environ.get("LATTICE_SCORECARD_BIN", str(scorecard.ROOT / "target/debug/lattice")))
 
 
 def entry(kind, value):
@@ -80,9 +86,9 @@ class EvidenceTests(unittest.TestCase):
                 scorecard.validate_history_origin(dict(previous, **changes), current, 'owner/repo', 'main', '20')
 
 
-@unittest.skipUnless((scorecard.ROOT / 'target/debug/lattice').exists(), 'build lattice-cli for real ledger integration')
+@unittest.skipUnless(BINARY.exists(), 'build lattice-cli for real ledger integration')
 class RealLedgerTests(unittest.TestCase):
-    binary = str(scorecard.ROOT / 'target/debug/lattice')
+    binary = str(BINARY)
 
     def test_ci_ingestion_uses_real_ledger_and_deduplicates_retries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,6 +126,188 @@ class RealLedgerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 scorecard.export_ledger(tmp, self.binary)
             self.assertEqual(segment.read_bytes(), original)
+
+
+
+def mutation_fixture(summaries, planned_count=None, baseline='Success', ended=True):
+    # Schema fixtures, never project observations: checked against cargo-mutants27 serialization.
+    planned = [{'package': 'test-only', 'file': 'src/module.rs', 'name': f'mutant {n}',
+                'function': None, 'span': {'start': {'line': n + 1, 'column': 1},
+                                          'end': {'line': n + 1, 'column': 2}},
+                'replacement': 'false', 'genre': 'FnValue', 'diff': 'test fixture'}
+               for n in range(planned_count if planned_count is not None else len(summaries))]
+    scenarios = [{'scenario': 'Baseline', 'summary': baseline}]
+    for mutant, summary in zip(planned, summaries):
+        scenario = {k: v for k, v in mutant.items() if k != 'diff'}
+        scenarios.append({'scenario': {'Mutant': scenario}, 'summary': summary})
+    result = {'outcomes': scenarios, 'total_mutants': len(summaries),
+              'cargo_mutants_version': '27.1.0', 'start_time': '2026-10-29T00:00:00Z',
+              'end_time': '2026-10-29T00:01:00Z' if ended else None}
+    for field, summary in [('caught', 'CaughtMutant'), ('missed', 'MissedMutant'), ('timeout', 'Timeout'),
+                           ('unviable', 'Unviable'), ('success', 'Success')]:
+        result[field] = summaries.count(summary)
+    return result, planned
+
+
+def eval_fixture():
+    return {'schema': 2, 'suite': 'test-only-suite', 'provider': 'test-only-provider', 'dataset_hash': 'a' * 64,
+            'dataset': {'name': 'test-only-data', 'version': 1, 'split': 'test', 'hash': 'a' * 64, 'examples': 100,
+                        'provenance': 'unit test fixture; not a project eval result'},
+            'passed': True, 'metrics': [{'metric': 'f1', 'value': .9, 'ci_lo': .79, 'ci_hi': .95, 'n': 100,
+                                       'bound': .8, 'confidence': .95, 'tolerance': .02,
+                                       'passed': True, 'reason': ''}]}
+
+
+def weekly_fixture():
+    run = {'id': 1, 'run_attempt': 1, 'workflow_id': 2, 'head_sha': 'a' * 40,
+           'head_branch': 'main', 'status': 'completed', 'event': 'schedule',
+           'path': '.github/workflows/weekly.yml', 'repository': {'full_name': 'owner/repo'},
+           'head_repository': {'full_name': 'owner/repo'}, 'conclusion': 'failure'}
+    job = {'id': 3, 'run_id': 1, 'run_attempt': 1, 'head_sha': 'a' * 40,
+           'name': 'mutation', 'status': 'completed', 'conclusion': 'failure', 'html_url': 'https://example.test/job/3'}
+    artifact = {'id': 4, 'name': 'mutants', 'expired': False,
+                'workflow_run': {'id': 1, 'head_sha': 'a' * 40, 'head_branch': 'main'}}
+    workflow = {'id': 2, 'path': '.github/workflows/weekly.yml'}
+    return run, job, artifact, workflow
+
+
+class MetricEvidenceTests(unittest.TestCase):
+    def test_mutation_denominator_and_all_outcome_counts_are_explicit(self):
+        raw, planned = mutation_fixture(['CaughtMutant', 'CaughtMutant', 'MissedMutant', 'Timeout', 'Unviable'])
+        row, = metrics.mutation_rows(raw, planned, 'failure')
+        self.assertEqual(row['score_denominator'], 3)
+        self.assertAlmostEqual(row['mutation_score'], 2 / 3)
+        self.assertEqual(row['counts'], {'planned': 5, 'tested': 5, 'unrun': 0, 'killed': 2,
+                                        'survived': 1, 'timeout': 1, 'unviable': 1, 'unclassified': 0})
+        self.assertEqual(row['score_status'], 'failed')
+        self.assertEqual(metrics.validate_record('mutation', row), row)
+
+    def test_partial_cancelled_or_failed_baseline_never_has_passing_score(self):
+        for raw, planned, conclusion in [(*mutation_fixture(['CaughtMutant'], 3, ended=False), 'failure'),
+                                         (*mutation_fixture(['CaughtMutant']), 'cancelled'),
+                                         (*mutation_fixture(['CaughtMutant'], baseline='Failure'), 'failure')]:
+            row, = metrics.mutation_rows(raw, planned, conclusion)
+            self.assertIsNone(row['mutation_score'])
+            self.assertEqual(row['score_status'], 'unverified')
+        raw, planned = mutation_fixture(['Timeout'])
+        row, = metrics.mutation_rows(raw, planned, 'failure')
+        self.assertIsNone(row['mutation_score'])
+        self.assertEqual(row['score_denominator'], 0)
+
+    def test_mutation_schema_counter_and_duplicate_mismatches_are_rejected(self):
+        raw, planned = mutation_fixture(['CaughtMutant'])
+        for field, value in [('caught', True), ('caught', 2), ('total_mutants', 2), ('cargo_mutants_version', '99.0.0')]:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                metrics.mutation_rows(dict(raw, **{field: value}), planned, 'success')
+        with self.assertRaises(ValueError):
+            metrics.mutation_rows(raw, planned + planned, 'success')
+        bad = copy.deepcopy(raw)
+        bad['outcomes'][-1]['summary'] = 'Unknown'
+        with self.assertRaises(ValueError):
+            metrics.mutation_rows(bad, planned, 'success')
+
+    def test_exact_eval_gate_fields_and_provenance_are_preserved(self):
+        value = metrics.eval_row(eval_fixture())
+        self.assertEqual(value['verification_status'], 'verified_gate_fields')
+        self.assertTrue(value['gate_verdict'])
+        self.assertEqual(value['metrics'][0]['confidence'], .95)
+        self.assertEqual(value['dataset']['provenance'], 'unit test fixture; not a project eval result')
+        raw = eval_fixture()
+        raw['metrics'][0].update(value=.80000004, ci_lo=.80000003, bound=.800000035, tolerance=0)
+        self.assertFalse(raw['metrics'][0]['ci_lo'] >= raw['metrics'][0]['bound'])
+        raw['metrics'][0]['passed'] = raw['passed'] = False
+        self.assertFalse(metrics.eval_row(raw)['gate_verdict'])
+
+    def test_legacy_eval_claim_is_explicitly_unverified(self):
+        raw = eval_fixture()
+        del raw['schema'], raw['dataset'], raw['metrics'][0]['confidence'], raw['metrics'][0]['tolerance']
+        value = metrics.eval_row(raw)
+        self.assertEqual(value['verification_status'], 'unverified_legacy_report')
+        self.assertIsNone(value['gate_verdict'])
+
+    def test_inconsistent_eval_gates_and_unknown_schema_are_rejected(self):
+        for mutate in (lambda r: r.update(passed=False),
+                       lambda r: r['metrics'][0].update(passed=False),
+                       lambda r: r['metrics'][0].update(n=0),
+                       lambda r: r['metrics'][0].update(confidence=1),
+                       lambda r: r['metrics'][0].update(tolerance=-1),
+                       lambda r: r['metrics'][0].update(ci_lo=.96),
+                       lambda r: r.update(schema=99),
+                       lambda r: r['dataset'].update(hash='b' * 64)):
+            raw = eval_fixture()
+            mutate(raw)
+            with self.assertRaises(ValueError):
+                metrics.eval_row(raw)
+
+    def test_invalid_numeric_types_do_not_become_metric_evidence(self):
+        raw, planned = mutation_fixture(['CaughtMutant'])
+        row, = metrics.mutation_rows(raw, planned, 'success')
+        with self.assertRaises(ValueError):
+            metrics.validate_record('mutation', dict(row, mutation_score=True))
+        with self.assertRaises(ValueError):
+            metrics.validate_record('mutation', dict(row, score_denominator=True))
+        evaluate = eval_fixture()
+        evaluate['metrics'][0]['value'] = 10 ** 1000
+        with self.assertRaises(ValueError):
+            metrics.eval_row(evaluate)
+        evaluate = eval_fixture()
+        evaluate['schema'] = True
+        with self.assertRaises(ValueError):
+            metrics.eval_row(evaluate)
+
+    def test_weekly_trust_boundary_requires_exact_workflow_repository_ref_and_attempt(self):
+        run, job, artifact, workflow = weekly_fixture()
+        origin = metrics.validate_weekly_origin(run, job, artifact, workflow, 'owner/repo', 'main')
+        self.assertEqual(origin['authentication'], 'legacy_unambiguous_attempt_one')
+        self.assertEqual(origin['run_conclusion'], 'failure')
+        for field, value in [('workflow_id', 99), ('head_branch', 'other'), ('status', 'in_progress'),
+                             ('head_repository', {'full_name': 'fork/repo'}), ('run_attempt', 2)]:
+            with self.assertRaises(ValueError):
+                metrics.validate_weekly_origin(dict(run, **{field: value}), job, artifact, workflow, 'owner/repo', 'main')
+        manifest = {key: run[key] for key in ('id', 'run_attempt', 'head_sha', 'workflow_id', 'path', 'head_branch')}
+        self.assertEqual(metrics.validate_weekly_origin(run, job, artifact, workflow, 'owner/repo', 'main', manifest)['authentication'],
+                         'exact_producer_manifest')
+        manifest['run_attempt'] = 2
+        with self.assertRaises(ValueError):
+            metrics.validate_weekly_origin(run, job, artifact, workflow, 'owner/repo', 'main', manifest)
+
+    def test_real_schema_zip_import_binds_module_and_raw_file_hashes(self):
+        raw, planned = mutation_fixture(['CaughtMutant', 'MissedMutant'])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'mutants.zip'
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('mutants/mutants.out/outcomes.json', json.dumps(raw))
+                archive.writestr('mutants/mutants.out/mutants.json', json.dumps(planned))
+            values = metrics.import_mutation_archive(path, *weekly_fixture(), 'owner/repo', 'main')
+            self.assertEqual(len(values), 1)
+            self.assertEqual(values[0]['source']['artifact_id'], 4)
+            self.assertRegex(values[0]['source']['outcomes_sha256'], r'^[a-f0-9]{64}$')
+            self.assertEqual(values[0]['counts']['survived'], 1)
+
+    def test_invalid_stored_metric_is_missing_and_diagnostic_not_a_pass(self):
+        raw = eval_fixture()
+        raw['passed'] = False
+        value = scorecard.report([entry('eval', raw)])
+        self.assertEqual(value['sections']['eval_gates']['status'], 'missing')
+        self.assertIn('suite verdict', value['invalid_evidence'][0])
+
+    @unittest.skipUnless(BINARY.exists(), 'build lattice-cli for real ledger integration')
+    def test_metric_evidence_roundtrips_and_deduplicates_in_real_lattice(self):
+        raw, planned = mutation_fixture(['CaughtMutant'])
+        mutation, = metrics.mutation_rows(raw, planned, 'success')
+        mutation['source'] = {'key': 'owner/repo/1/1/3/mutation/unit-test'}
+        evaluate = metrics.eval_row(eval_fixture())
+        evaluate['source'] = {'key': 'owner/repo/1/1/3/eval/unit-test'}
+        with tempfile.TemporaryDirectory() as ledger:
+            for _ in range(2):
+                metrics.append_unique(str(BINARY), ledger, 'mutation', [mutation])
+                metrics.append_unique(str(BINARY), ledger, 'eval', [evaluate])
+            entries = scorecard.export_ledger(ledger, str(BINARY))
+            self.assertEqual(len(entries), 2)
+            value = scorecard.report(entries)
+            self.assertEqual(value['invalid_evidence'], [])
+            self.assertEqual(value['sections']['mutation']['status'], 'observed')
+            self.assertEqual(value['sections']['eval_gates']['status'], 'observed')
 
 
 if __name__ == '__main__':
