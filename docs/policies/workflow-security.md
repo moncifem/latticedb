@@ -39,7 +39,9 @@ that is disabled here).
 These match the `workflows` row of [`docs/review-policy.md`](../review-policy.md):
 
 - Pin every action by full commit SHA with the exact version in a trailing comment (`# v7.0.1`, not
-  `# v2`). Prefer a release at least two weeks old.
+  `# v2`) wherever the action publishes versioned tags. Two pins carry a moving ref instead, because
+  that is what the SHA was taken from: `Swatinem/rust-cache` (`# v2`) and `dtolnay/rust-toolchain`
+  (`# stable`, a branch). zizmor accepts both. Prefer a release at least two weeks old.
 - `permissions: {}` or `contents: read` at the top; widen per job, never at workflow level.
 - `actions/checkout` sets `persist-credentials: false` unless the job pushes with git, and then says
   so.
@@ -49,14 +51,15 @@ These match the `workflows` row of [`docs/review-policy.md`](../review-policy.md
 
 ## Triage record (first run)
 
-Findings of the first run on `main`, with zizmor 1.30.1 online, regular persona: 54 before, 0 after.
+Findings of the first run on `main`, with zizmor 1.30.1 online, regular persona: 69 findings before (54 of them are also reported offline; the other 15 are
+the online-only `ref-version-mismatch` audit), 0 after.
 
 | Audit | Count | Decision |
 |---|---|---|
 | artipacked | 45 | Fixed: `persist-credentials: false` on every checkout. No job pushes with git; the one `git ls-remote` on a public repository needs no credentials. |
-| template-injection | 3 | Fixed: values moved to `env:` (`github.base_ref` in `pr.yml`, `github.repository` and `inputs.ref` in `package.yml`). The remaining informational one, `job.services.postgres.id` in `sql-planner-spike.yml`, is a runner-generated container id, not attacker input; left as is. |
+| template-injection | 3 | Fixed: values moved to `env:` and used as quoted shell variables (`github.base_ref` in `pr.yml`, `inputs.ref` in `package.yml`, and the informational `job.services.postgres.id` in `sql-planner-spike.yml`, a runner-generated container id). Neither zizmor nor actionlint checks how the moved variable is quoted, so each use was read by hand: a variable inside single quotes is passed literally. |
 | ref-version-mismatch | 15 | Fixed: the `taiki-e/install-action` comments said `# v2` while the SHA is `v2.87.33`. |
-| cache-poisoning | 1 | Fixed: tagged releases and release archives no longer restore the Rust cache (`release.yml`, `package.yml`). Nightly and rehearsal runs keep it. Cost: a tagged release builds from scratch. |
+| cache-poisoning | 1 | Fixed: `release.yml` has no Rust cache step (its gate and rehearsals build from scratch), and `package.yml` skips the cache when the channel is `release`. Nightly builds keep it. Cost: a release gate takes a full build. |
 | dangerous-triggers | 1 | Kept, with a reason in `.github/zizmor.yml`: `main-guard.yml` needs `workflow_run`, filters on event, branch and conclusion, checks out its own revision and runs no code or artifacts from the failed run. |
 | self-repository | 4 | Disabled, reason in `.github/zizmor.yml`: `$/` is a July 2026 GitHub syntax needing runner 2.336.0 or newer; `./` still works and support in actionlint is not verified. |
 

@@ -35,11 +35,8 @@ jobs:
           fi
           grep -q "^## \[$version\]" CHANGELOG.md \
             || { echo "CHANGELOG.md has no section for $version" >&2; exit 1; }
-      # A tagged release gate starts from an empty cache, so a poisoned cache cannot influence it.
-      - if: github.ref_type != 'tag'
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          lookup-only: true
+      # No Rust cache in this workflow: the release gate and its rehearsal start from an empty cache,
+      # so a poisoned cache cannot influence what gets published (zizmor cache-poisoning).
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
         with: { tool: cargo-deny }
       - name: the release commit passes the full gate
