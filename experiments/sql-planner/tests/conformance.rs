@@ -227,7 +227,62 @@ fn optimized_relational_edges(parse: Parse) {
         run("SELECT id FROM tickets WHERE id = $1", &[Value::Int(2)]),
         vec![vec![Value::Int(2)]]
     );
+    assert_eq!(
+        run(
+            "SELECT id, priority > 5 OR NULL FROM tickets ORDER BY (priority > 5 OR NULL), id LIMIT 4",
+            &[]
+        ),
+        vec![
+            vec![Value::Int(-2), Value::Bool(true)],
+            vec![Value::Int(6), Value::Bool(true)],
+            vec![Value::Int(0), Value::Null],
+            vec![Value::Int(1), Value::Null]
+        ]
+    );
+    assert_eq!(
+        run(
+            "SELECT owner + 1, COUNT(*) FROM tickets GROUP BY owner HAVING COUNT(*) > 1 ORDER BY owner + 1",
+            &[]
+        ),
+        vec![vec![Value::Int(4), Value::Int(2)]]
+    );
+    assert_eq!(
+        run(
+            "SELECT tickets.id FROM users INNER JOIN tickets ON users.id = tickets.owner WHERE tickets.id >= 2 AND tickets.id < 4 ORDER BY tickets.id",
+            &[]
+        ),
+        vec![vec![Value::Int(2)], vec![Value::Int(3)]]
+    );
+    for sql in [
+        "SELECT COUNT(*) + priority FROM tickets",
+        "SELECT COUNT(*) FROM tickets HAVING priority > 0",
+        "SELECT id FROM tickets ORDER BY COUNT(*)",
+        "SELECT id FROM tickets HAVING id = 1",
+    ] {
+        let error = execute(&mut db, &mut session, &parse(sql).unwrap(), &[]).unwrap_err();
+        assert_eq!(
+            (error.state.as_str(), error.code.as_str()),
+            ("0A000", "LSQL-0002")
+        );
+    }
+    let mut run = |sql: &str, params: &[Value]| {
+        execute(&mut db, &mut session, &parse(sql).unwrap(), params).unwrap()
+    };
     run("BEGIN", &[]);
+    run(
+        "UPDATE tickets SET priority = 123 WHERE id = 2 RETURNING id,priority",
+        &[],
+    );
+    assert_eq!(
+        run(
+            "SELECT id,priority FROM tickets WHERE id >= 1 AND id <= 2 ORDER BY id",
+            &[]
+        ),
+        vec![
+            vec![Value::Int(1), Value::Int(1)],
+            vec![Value::Int(2), Value::Int(123)]
+        ]
+    );
     run("INSERT INTO tickets(id,owner,priority) VALUES(50,3,1)", &[]);
     assert_eq!(
         run("SELECT id FROM tickets WHERE id >= 50 AND id < 51", &[]),

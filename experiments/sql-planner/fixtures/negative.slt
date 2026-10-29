@@ -25,3 +25,17 @@ INSERT INTO tickets(id,owner,priority) VALUES(2,1,1)
 
 statement error 23502 LSQL-0004
 INSERT INTO tickets(id,owner,priority) VALUES(99,1,NULL)
+
+
+# Aggregate expressions must not silently consume an arbitrary representative row.
+statement error 0A000 LSQL-0002
+SELECT COUNT(*) + priority FROM tickets
+
+statement error 0A000 LSQL-0002
+SELECT COUNT(*) FROM tickets HAVING priority > 0
+
+statement error 0A000 LSQL-0002
+SELECT id FROM tickets ORDER BY COUNT(*)
+
+statement error 0A000 LSQL-0002
+SELECT id FROM tickets HAVING id = 1

@@ -89,7 +89,14 @@ fn query(plan: &Plan) -> Result<(String, usize)> {
                 sql.push_str(&format!(" HAVING {}", render(e)));
             }
             if !q.order.is_empty() {
-                sql.push_str(&format!(" ORDER BY {}", list(&q.order)));
+                sql.push_str(&format!(
+                    " ORDER BY {}",
+                    q.order
+                        .iter()
+                        .map(|e| format!("{} ASC NULLS LAST", render(e)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
             if let Some(n) = q.limit {
                 sql.push_str(&format!(" LIMIT {n}"));

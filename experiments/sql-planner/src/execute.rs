@@ -143,6 +143,68 @@ fn matches(
     }
 }
 
+/// PostgreSQL's default ascending order puts NULL after every non-NULL value.
+fn sql_order(left: &[Value], right: &[Value]) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    for (a, b) in left.iter().zip(right) {
+        let order = match (a, b) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => Ordering::Greater,
+            (_, Value::Null) => Ordering::Less,
+            _ => a.cmp(b),
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+fn grouped(e: &Expr, keys: &[Expr]) -> bool {
+    if keys.contains(e) {
+        return true;
+    }
+    match e {
+        Expr::Col(_) => false,
+        Expr::Binary(a, _, b) => grouped(a, keys) && grouped(b, keys),
+        _ => true,
+    }
+}
+
+/// Extract only conjuncts whose columns belong to one join input. Keep the complete residual
+/// predicate at the join output; this is a generic relational pushdown, not a fixture answer.
+fn scoped_filter(
+    e: Option<&Expr>,
+    positions: &BTreeMap<String, usize>,
+    low: usize,
+    high: usize,
+) -> Option<Expr> {
+    fn local(e: &Expr, positions: &BTreeMap<String, usize>, low: usize, high: usize) -> bool {
+        match e {
+            Expr::Col(name) => positions
+                .get(name)
+                .is_some_and(|at| *at >= low && *at < high),
+            Expr::Binary(a, _, b) => {
+                local(a, positions, low, high) && local(b, positions, low, high)
+            }
+            Expr::Count => false,
+            _ => true,
+        }
+    }
+    let e = e?;
+    if let Expr::Binary(a, op, b) = e
+        && op == "and"
+    {
+        return match (
+            scoped_filter(Some(a), positions, low, high),
+            scoped_filter(Some(b), positions, low, high),
+        ) {
+            (Some(a), Some(b)) => Some(Expr::Binary(Box::new(a), "and".into(), Box::new(b))),
+            (a, b) => a.or(b),
+        };
+    }
+    local(e, positions, low, high).then(|| e.clone())
+}
+
 pub fn execute<I: Io, C: Clock, R: Rng>(
     db: &mut Db<I, C, R>,
     s: &mut Session,
@@ -249,11 +311,47 @@ fn inner<I: Io, C: Clock, R: Rng>(
             let base = if q.join.is_none() {
                 db.scan_filtered(s, &q.table, &q.historical, &q.filter, params)?
             } else {
-                db.scan(s, &q.table, &q.historical)?
+                let local = scoped_filter(q.filter.as_ref(), &positions, 0, names.len());
+                let scanned = db.scan_filtered(s, &q.table, &q.historical, &local, params)?;
+                let mut filtered = Vec::new();
+                for row in scanned {
+                    if matches(
+                        &local,
+                        &IndexedRow {
+                            positions: &positions,
+                            values: &row,
+                        },
+                        0,
+                        params,
+                    )? {
+                        filtered.push(row);
+                    }
+                }
+                filtered
             };
             let mut rows = Vec::new();
             if let Some((join, on)) = &q.join {
-                let right = db.scan(s, join, &q.historical)?;
+                let local = scoped_filter(q.filter.as_ref(), &positions, names.len(), usize::MAX);
+                let right_positions = positions
+                    .iter()
+                    .filter(|(_, at)| **at >= names.len())
+                    .map(|(name, at)| (name.clone(), at - names.len()))
+                    .collect::<BTreeMap<_, _>>();
+                let scanned = db.scan_filtered(s, join, &q.historical, &local, params)?;
+                let mut right = Vec::new();
+                for row in scanned {
+                    if matches(
+                        &local,
+                        &IndexedRow {
+                            positions: &right_positions,
+                            values: &row,
+                        },
+                        0,
+                        params,
+                    )? {
+                        right.push(row);
+                    }
+                }
                 // A deterministic equality index replaces the quadratic cross product. Other
                 // predicates retain nested-loop execution and the full ON/WHERE checks.
                 let equality = if let Expr::Binary(a, op, b) = on {
@@ -322,7 +420,8 @@ fn inner<I: Io, C: Clock, R: Rng>(
             }
             let aggregate = !q.group.is_empty()
                 || q.columns.iter().any(Expr::count)
-                || q.having.as_ref().is_some_and(Expr::count);
+                || q.having.is_some()
+                || q.order.iter().any(Expr::count);
             let mut out = Vec::new();
             if aggregate {
                 let mut groups = BTreeMap::<Vec<Value>, (usize, Vec<Value>)>::new();
@@ -369,7 +468,7 @@ fn inner<I: Io, C: Clock, R: Rng>(
                 }
             }
             if !q.order.is_empty() {
-                out.sort_by(|a, b| a.0.cmp(&b.0));
+                out.sort_by(|a, b| sql_order(&a.0, &b.0));
             }
             if let Some(n) = q.limit {
                 out.truncate(n);
@@ -471,6 +570,9 @@ pub fn bind(plan: &Plan) -> Result<()> {
                     cols.remove(&c);
                 }
                 validate(on, &cols)?;
+                if on.count() {
+                    return Err(Error::unsupported("aggregate in JOIN ON"));
+                }
             }
             for e in q
                 .columns
@@ -484,15 +586,18 @@ pub fn bind(plan: &Plan) -> Result<()> {
             }
             let aggregate = !q.group.is_empty()
                 || q.columns.iter().any(Expr::count)
-                || q.having.as_ref().is_some_and(Expr::count);
+                || q.having.is_some()
+                || q.order.iter().any(Expr::count);
             if aggregate {
-                for e in q.columns.iter().chain(q.order.iter()) {
-                    if !e.count()
-                        && !q.group.contains(e)
-                        && !matches!(e, Expr::Lit(_) | Expr::Param(_))
-                    {
+                for e in q
+                    .columns
+                    .iter()
+                    .chain(q.having.iter())
+                    .chain(q.order.iter())
+                {
+                    if !grouped(e, &q.group) {
                         return Err(Error::unsupported(
-                            "nonaggregate projection must be a group key",
+                            "ungrouped column in aggregate projection/HAVING/ORDER BY",
                         ));
                     }
                 }

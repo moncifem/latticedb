@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import measure
 
 class TimeoutBoundary(unittest.TestCase):
@@ -70,5 +71,24 @@ class ScalarCodec(unittest.TestCase):
         self.assertFalse(measure.same_rows([[None]],[[]]))
         for invalid in ([[1.0]],[[{'Int':1}]],[[2**63]],[[['nested']]],{'rows':[]}):
             with self.assertRaises(ValueError):measure.scalar_rows(invalid)
+
+class SharedCompileBoundary(unittest.TestCase):
+    def test_shared_compile_failure_never_attempts_candidate_builds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)
+            argv=['measure.py','--output',str(root/'out'),'--target-root',str(root/'target'),
+                  '--dsn','not-connected','--functional-retry']
+            with patch.object(sys,'argv',argv), \
+                 patch.object(measure.platform,'platform',return_value='test-runner'), \
+                 patch.object(measure,'preflight',return_value={'complete':True}), \
+                 patch.object(measure.subprocess,'check_output',side_effect=['abc','']), \
+                 patch.object(measure,'command',side_effect=[{'exit':0},{'exit':1}]) as commands:
+                self.assertEqual(measure.main(),1)
+            self.assertEqual(commands.call_count,2)
+            self.assertEqual(commands.call_args_list[1].args[0][1],'check')
+            report=__import__('json').loads((root/'out'/'report.json').read_text())
+            self.assertEqual(report['candidates'],{})
+            self.assertFalse(report['measurements_complete'])
+            self.assertIn('compile preflight failed',report['failures'][0]['coordinator'])
 
 if __name__=='__main__':unittest.main()

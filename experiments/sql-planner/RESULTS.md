@@ -140,3 +140,44 @@ read-only agreement, without exposing RowTx's private policy-bound buffer. A rem
 compile preflight uses a separate target before candidate builds, preserving clean target isolation
 and C5 measurement scope. The next result must establish compilation, conformance and measurement;
 these source corrections alone establish none of them.
+
+
+The submitted-row overlay is an independent buffer from RowTx, but it mirrors rows selected by the
+SQL executor. Its envelope comparison checks bridge publication fidelity, not independent correctness
+of those SQL choices. SQL correctness remains checked by the complete PostgreSQL comparisons and
+literal conformance expectations. The process-kill verifier independently reconstructs each complete
+WAL envelope from the submitted UPDATE sequence and fixed seed rows (`id % 7`), checks observed
+receipts, all final rows/indexes/log scrub, and a second reopen. These independent oracles remain in
+place; an executor choosing the wrong row/value or omitting writes must not move the expected SQL
+answer along with the actual one.
+
+## First optimized scalar-codec comparison
+
+[Run 40900147776](https://github.com/moncifem/latticedb/actions/runs/40900147776), source
+`62667ab3d1f5265913ce89371cde2ce37ec9d9f1`, completed all candidate builds, release conformance
+tests, repeated simulator traces, nine negative fixtures, PostgreSQL comparisons and three
+process-kill checks per candidate. Source status and experiment input hashes stayed unchanged.
+Artifact `12909940513` was verified against ZIP SHA256
+`6772a2f458935710fd934e5242b6413cc94b81711944d86384a96de52d3ca01f`.
+
+| Candidate | Point ratio | 10,000-row range ratio | Join ratio | Group ratio |
+|---|---:|---:|---:|---:|
+| custom | 0.4342 | 2.1553 | 4.5819 | 4.1396 |
+| sqlparser + custom | 0.4864 | 2.2629 | 5.2550 | 4.3556 |
+| DataFusion | 2.4488 | 2.1041 | 3.2154 | 3.7704 |
+
+Point and range measurements meet the fixed 3x threshold; **joins and groups still fail it for all
+three candidates**. Thus C4 does not pass. Custom/parser dependency policy passed. DataFusion's zstd
+policy failures were the only recorded workflow failures; its strict C2 source-audit failure and
+historical C5 clean-build threshold failure also remain. This functional run supplies no new clean
+build evidence and does not accept the ADR.
+
+Remaining measured engine medians were 19.2–20.1 ms for custom/parser joins and 12.7–13.1 ms for
+grouping. The next bounded change removes the second primary-key map rebuilt during every scan,
+merging actual pending rows directly into the already ordered snapshot stream. Generic table-local
+conjuncts are evaluated before joining; the complete ON/WHERE predicates still run afterward.
+Independent review also identified default ascending NULL ordering and incomplete aggregate binding.
+The continuation adds explicit NULLS LAST comparison, PostgreSQL/literal regressions using nullable
+boolean expressions, and explicit rejection fixtures for ungrouped aggregate references. These
+changes await fresh conformance and measurements; the recorded timings above are not results for
+the subsequent source.

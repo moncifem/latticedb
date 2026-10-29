@@ -183,6 +183,7 @@ def representatives(binary,candidate,root,output,dsn,rows):
                 assert same_rows(actual,expected),(candidate,name,actual[:5],expected[:5])
                 cases.append({'construct':name,'sql':sql,'postgres_sql':reference,'params':params,'prepared':prepared,'client_ns':elapsed,'engine_ns':engine,'row_count':len(actual),'results_match':True})
             run('join_filter','SELECT tickets.id, users.name FROM tickets INNER JOIN users ON tickets.owner = users.id WHERE tickets.priority >= $1 ORDER BY tickets.id LIMIT 5',(5,))
+            run('ascending_nulls_last','SELECT id, priority > 5 OR NULL FROM tickets ORDER BY (priority > 5 OR NULL), id LIMIT 8')
             run('group_having','SELECT owner, COUNT(*) FROM tickets GROUP BY owner HAVING COUNT(*) >= $1 ORDER BY owner',(1,))
             run('update_returning','UPDATE tickets SET priority = priority + 1 WHERE id = $1 RETURNING id, priority',(2,))
             run('as_of',f"SELECT id, priority FROM tickets AS OF CHANGESET '{baseline}' WHERE id = $1",(2,),reference='SELECT id, priority FROM tickets_at_seed WHERE id = $1')

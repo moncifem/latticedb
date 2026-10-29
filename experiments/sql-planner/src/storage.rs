@@ -198,7 +198,6 @@ impl<I: Io, C: Clock, R: Rng> Db<I, C, R> {
         use std::ops::Bound;
         let (id, _) = schema(table)?;
         let snap = self.snapshot(s, historical)?;
-        let mut rows = BTreeMap::new();
         self.rows
             .check_snapshot(snap)
             .map_err(|e| Error::storage(e.to_string()))?;
@@ -231,28 +230,44 @@ impl<I: Io, C: Clock, R: Rng> Db<I, C, R> {
                 .scan_at(snap, id, bounds.clone(), &AllowAll)
                 .map_err(|e| Error::storage(e.to_string()))?
         };
-        for (k, v) in stored {
-            rows.insert(
-                k.to_vec(),
-                serde_json::from_slice::<Vec<Value>>(v)
-                    .map_err(|e| Error::storage(e.to_string()))?,
-            );
-        }
-        if historical.is_none() {
-            for ((t, k), v) in &s.pending {
-                if *t == id && !empty && in_bounds(k) {
-                    match v {
-                        Some(v) => {
-                            rows.insert(k.clone(), v.clone());
-                        }
-                        None => {
-                            rows.remove(k);
-                        }
-                    }
+        // Both streams already have primary-key order. Merge only actual transaction overlay
+        // entries, without cloning every stored key into a second ordered map on each read.
+        let mut overlay = s
+            .pending
+            .iter()
+            .filter(|((table, key), _)| {
+                historical.is_none() && *table == id && !empty && in_bounds(key)
+            })
+            .peekable();
+        let mut values = Vec::with_capacity(stored.len());
+        for (key, bytes) in stored {
+            while overlay
+                .peek()
+                .is_some_and(|((_, pending_key), _)| pending_key.as_slice() < key)
+            {
+                if let Some((_, Some(row))) = overlay.next() {
+                    values.push(row.clone());
                 }
             }
+            if overlay
+                .peek()
+                .is_some_and(|((_, pending_key), _)| pending_key.as_slice() == key)
+            {
+                if let Some((_, Some(row))) = overlay.next() {
+                    values.push(row.clone());
+                }
+            } else {
+                values.push(
+                    serde_json::from_slice::<Vec<Value>>(bytes)
+                        .map_err(|e| Error::storage(e.to_string()))?,
+                );
+            }
         }
-        let values = rows.into_values().collect::<Vec<_>>();
+        for (_, row) in overlay {
+            if let Some(row) = row {
+                values.push(row.clone());
+            }
+        }
         self.event(|| serde_json::json!({"scan":table,"snapshot":snap.as_of,"rows":values,"primary_bounds":format!("{bounds:?}")}));
         Ok(values)
     }
