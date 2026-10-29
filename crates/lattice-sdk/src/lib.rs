@@ -9,3 +9,5 @@ pub mod contract;
 pub const LAYER: u8 = 6;
 
 pub mod client;
+
+pub mod mcp;
