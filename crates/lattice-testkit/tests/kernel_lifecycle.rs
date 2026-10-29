@@ -387,3 +387,42 @@ fn default_recovery_metadata_and_cursor_agree_with_streaming_trace() {
     assert_eq!(report1.records, rec.report.records);
     assert!(streamed.windows(2).all(|w| w[1].lsn == w[0].lsn + 1));
 }
+
+#[test]
+fn reading_notices_a_damaged_segment_header() {
+    let (disk, clock) = fresh();
+    let mut k = kernel(&disk, &clock);
+    for i in 0..12 {
+        let id = k.new_id();
+        k.commit(ChangeSet::new(id, vec![i; 40])).unwrap();
+    }
+    let mut segs: Vec<String> = disk
+        .list("wal")
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.ends_with(".seg"))
+        .collect();
+    segs.sort();
+    assert!(
+        segs.len() > 2,
+        "the small segment limit should have rotated"
+    );
+    assert!(k.read_from(1, 100).is_ok());
+
+    // Flip a byte of the first segment's header: the reader must refuse, not skip the segment.
+    let first = format!("wal/{}", segs[0]);
+    let mut bytes = disk.read(&first).unwrap();
+    bytes[0] ^= 0xFF;
+    let mut io = disk.clone();
+    io.truncate(&first, 0).unwrap();
+    io.append(&first, &bytes).unwrap();
+    io.sync(&first).unwrap();
+    assert!(k.read_from(1, 100).is_err());
+
+    // Restoring the byte makes the log readable again, so the refusal was about the header alone.
+    bytes[0] ^= 0xFF;
+    io.truncate(&first, 0).unwrap();
+    io.append(&first, &bytes).unwrap();
+    io.sync(&first).unwrap();
+    assert!(k.read_from(1, 100).is_ok());
+}
