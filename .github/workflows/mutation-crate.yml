@@ -1,0 +1,45 @@
+name: mutation-crate
+# Mutation testing of one crate on demand, for crates the weekly campaign does not plan yet (the SQL
+# crate, the row engines). Sixteen shards keep each job well inside the six-hour limit. Survivors are
+# listed in the job log and the full result is kept as an artifact. Run it by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: crate to mutate, for example lattice-sql
+        required: true
+        default: lattice-sql
+permissions:
+  contents: read
+jobs:
+  mutation:
+    name: mutation (${{ inputs.package }}, shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with: { shared-key: mutation-crate }
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-mutants@27.1.0 }
+      - name: mutate shard ${{ matrix.shard }} of 16
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          mkdir -p target
+          cargo mutants -p "$PACKAGE" --test-workspace=false --timeout 120 --no-shuffle -j 2 \
+            --shard "${{ matrix.shard }}/16" --output target/mutants-out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: mutants-${{ inputs.package }}-${{ matrix.shard }}
+          path: target/mutants-out/
+          if-no-files-found: warn
+          retention-days: 30
