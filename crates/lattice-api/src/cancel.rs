@@ -12,8 +12,11 @@
 //! success branch is unavoidable when signaling a matching token. This is fixed-work source code,
 //! not a formal guarantee of identical timings on every compiler and processor. Production callers
 //! must supply a cryptographically secure [`Rng`]; deterministic tests can supply a seeded seam.
-//! PIDs are never reused within a registry, so an expired credential cannot target a new connection
-//! even when the RNG repeats a secret. Create one registry for the server lifetime, not per query.
+//! PIDs come from a wrapping counter over `1..=i32::MAX` that skips PIDs held by active
+//! registrations, so allocation never exhausts however many connections open and close. A PID is
+//! reused only after about 2^31 further allocations, and never while its previous holder is active.
+//! Create one registry for the server lifetime, not per query. Hosts should register only after the
+//! client has authenticated, so unauthenticated connections cannot consume slots.
 
 use lattice_seams::Rng;
 #[cfg(loom)]
@@ -78,7 +81,7 @@ pub enum CancelError {
     ExpiryOverflow,
     /// All configured slots are occupied by live connections.
     Full,
-    /// Every positive signed 32-bit PID has been issued; PIDs are deliberately not reused.
+    /// Retained for compatibility. PIDs wrap and skip active ones, so this is never returned.
     PidExhausted,
     /// The credential is unknown, expired or has been unregistered.
     UnknownKey,
@@ -195,19 +198,19 @@ impl CancelRegistry {
             .checked_add(lifetime)
             .ok_or(CancelError::ExpiryOverflow)?;
         self.expire(now);
-        if self.next_pid > i32::MAX as u32 {
-            return Err(CancelError::PidExhausted);
+        if !self.entries.iter().any(|entry| !entry.active) {
+            return Err(CancelError::Full);
         }
+        let pid = self.allocate_pid();
         let entry = self
             .entries
             .iter_mut()
             .find(|entry| !entry.active)
             .ok_or(CancelError::Full)?;
         let key = CancelKey {
-            pid: self.next_pid as i32,
+            pid,
             secret: rng.next_u64() as i32,
         };
-        self.next_pid += 1;
         *entry = Entry {
             active: true,
             key,
@@ -261,6 +264,37 @@ impl CancelRegistry {
             return true;
         }
         false
+    }
+
+    /// Next PID from the wrapping counter, skipping PIDs of active registrations. At most
+    /// `capacity` PIDs are active and a free slot exists, so a free PID is found within
+    /// `capacity` steps.
+    fn allocate_pid(&mut self) -> i32 {
+        let mut active: Vec<i32> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.active)
+            .map(|entry| entry.key.pid)
+            .collect();
+        active.sort_unstable();
+        let mut candidate = if (1..=i32::MAX as u32).contains(&self.next_pid) {
+            self.next_pid as i32
+        } else {
+            1
+        };
+        while active.binary_search(&candidate).is_ok() {
+            candidate = if candidate == i32::MAX {
+                1
+            } else {
+                candidate + 1
+            };
+        }
+        self.next_pid = if candidate == i32::MAX {
+            1
+        } else {
+            candidate as u32 + 1
+        };
+        candidate
     }
 
     fn find_slot(&self, key: CancelKey) -> Option<usize> {
@@ -415,11 +449,32 @@ mod tests {
         let last = registry.register(&mut rng, 0, 5).unwrap();
         assert_eq!(last.pid, i32::MAX);
         registry.unregister(last, 0);
-        assert_eq!(
-            registry.register(&mut rng, 0, 5),
-            Err(CancelError::PidExhausted)
-        );
-        assert_eq!(rng.0, 2);
+        let wrapped = registry.register(&mut rng, 0, 5).unwrap();
+        assert_eq!(wrapped.pid, 1);
+        assert_eq!(rng.0, 3);
+    }
+
+    #[test]
+    fn open_and_close_flood_never_exhausts_and_wrap_skips_active_pids() {
+        let mut registry = CancelRegistry::new(3).unwrap();
+        let mut rng = Counter(0);
+        // Start-and-close across the wrap point with one long-lived connection holding PID 1.
+        let held = registry.register(&mut rng, 0, 100).unwrap();
+        assert_eq!(held.pid, 1);
+        registry.next_pid = i32::MAX as u32 - 2;
+        for _ in 0..10 {
+            let key = registry.register(&mut rng, 0, 100).unwrap();
+            assert_ne!(key.pid, held.pid);
+            assert!((1..=i32::MAX).contains(&key.pid));
+            assert!(registry.unregister(key, 0));
+        }
+        // Two actives next to the counter are both skipped.
+        registry.next_pid = i32::MAX as u32;
+        let a = registry.register(&mut rng, 0, 100).unwrap();
+        let b = registry.register(&mut rng, 0, 100).unwrap();
+        assert_eq!((a.pid, b.pid), (i32::MAX, 2));
+        assert_eq!(registry.register(&mut rng, 0, 100), Err(CancelError::Full));
+        assert!(registry.cancel(held, 0));
     }
 
     #[test]

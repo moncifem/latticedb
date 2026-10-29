@@ -3,6 +3,19 @@
 //! This is a bounded listener with local development trust or configured SCRAM over mandatory TLS.
 //! The default `SELECT 1` handler does not open a database. Cancel requests signal a cooperative
 //! handler; they cannot preempt blocking I/O or undo a committed operation.
+//!
+//! Robustness: a failure that belongs to one connection (a reset before accept, a socket option
+//! that fails on a reset socket, a thread that cannot be spawned) drops that socket and the
+//! listener keeps accepting. Only a fatal listener error ends the accept loop. Cancel keys are
+//! registered only after authentication succeeds, so unauthenticated clients cannot consume
+//! registry slots. Pre-authentication startup packets are capped at [`MAX_STARTUP_PACKET_LEN`]
+//! bytes and must arrive within [`PRE_STARTUP_TIMEOUT`].
+//!
+//! TLS handshakes are limited globally (64 starts per second) and per client address (16 starts per
+//! second per IPv4 address or IPv6 /64, in a table of at most 1024 addresses). Residual risk: a
+//! client with many source addresses can still exhaust the global budget, and the per-address
+//! table fails closed for new addresses while it is full of recent ones. This is a resource bound,
+//! not a denial-of-service guarantee; see ADR 0020.
 #![forbid(unsafe_code)]
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -15,8 +28,9 @@ use lattice_api::cancel::{CancelKey, CancelRegistry, CancellationToken};
 use lattice_api::pgwire::{self, Backend, Column, Frontend, ProtoError, Startup};
 use lattice_api::session::{Outcome, QueryError, QueryHandler, QueryOutput, Session};
 use lattice_seams::OsRng;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -45,6 +59,8 @@ pub struct ServerConfig {
     /// bounded workers let startup/cancel packets be classified when SQL sessions fill the limit.
     pub max_connections: usize,
     /// Maximum time to receive a complete startup or frontend frame, including slow partial reads.
+    /// For an authenticated session this also acts as a connection idle timeout: a client that sends
+    /// nothing for this long is disconnected, so pools must send keepalive traffic or raise it.
     pub read_timeout: Duration,
     /// Socket write timeout for replies.
     pub write_timeout: Duration,
@@ -65,6 +81,17 @@ impl Default for ServerConfig {
         }
     }
 }
+
+/// Largest accepted pre-authentication startup packet (PostgreSQL's own limit is 10000 bytes).
+pub const MAX_STARTUP_PACKET_LEN: usize = 10_000;
+
+/// Longest a client may take to deliver one pre-authentication startup-phase packet, further
+/// bounded by the configured read and startup timeouts.
+pub const PRE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+const GLOBAL_TLS_STARTS_PER_SECOND: usize = 64;
+const PER_IP_TLS_STARTS_PER_SECOND: usize = 16;
+const MAX_TRACKED_ADDRESSES: usize = 1024;
 
 /// Additional transport workers reserved for startup/cancel classification at the SQL-session cap.
 /// Flooding these slots can still delay/refuse cancellation; this is a resource bound, not a DoS guarantee.
@@ -187,7 +214,7 @@ where
     F: Fn() -> H + Send + Sync + 'static,
 {
     let mut workers: Vec<Worker> = Vec::new();
-    let handshakes = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let handshakes = Arc::new(Mutex::new(HandshakeLimiter::default()));
     let result = (|| {
         while !stopping.load(Ordering::Acquire) {
             let mut index = 0;
@@ -198,7 +225,7 @@ where
                 {
                     // A panicked worker ends only its own connection; the listener keeps accepting.
                     let worker = workers.swap_remove(index);
-                    let _ = worker.thread.join();
+                    let _ = worker.thread.join(); // A join error never aborts the loop.
                 } else {
                     index += 1;
                 }
@@ -229,7 +256,16 @@ where
                         error.kind(),
                         io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset
                     ) => {}
-                Err(error) => return Err(error),
+                // Fatal listener errors: the socket is unusable or the arguments are invalid.
+                Err(error)
+                    if error.kind() == io::ErrorKind::InvalidInput
+                        || error.raw_os_error() == Some(9) =>
+                {
+                    return Err(error);
+                }
+                // Anything else (descriptor exhaustion, memory pressure, a firewall refusal) is
+                // transient: back off briefly and keep serving the connections already admitted.
+                Err(_) => thread::sleep(Duration::from_millis(50)),
             }
         }
         Ok(())
@@ -255,7 +291,7 @@ fn start_worker<H, F>(
     config: &ServerConfig,
     registry: &Registry,
     factory: &Arc<F>,
-    handshakes: &Arc<Mutex<std::collections::VecDeque<Instant>>>,
+    handshakes: &Arc<Mutex<HandshakeLimiter>>,
 ) -> io::Result<Worker>
 where
     H: QueryHandler + 'static,
@@ -266,6 +302,7 @@ where
     socket.set_nonblocking(false)?;
     socket.set_write_timeout(Some(config.write_timeout))?;
     socket.set_nodelay(true)?;
+    let peer = socket.peer_addr()?.ip();
     let controller = socket.try_clone()?;
     let connection_config = config.clone();
     let handshake_limit = handshakes.clone();
@@ -284,6 +321,7 @@ where
                 connection_registry,
                 connection_factory,
                 handshake_limit,
+                peer,
             );
         })?;
     Ok(Worker {
@@ -335,14 +373,6 @@ impl From<io::Error> for FrameError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
     }
-}
-
-fn frame(
-    socket: &mut Transport,
-    startup: bool,
-    timeout: Duration,
-) -> Result<Option<Vec<u8>>, FrameError> {
-    frame_bounded(socket, startup, timeout, pgwire::MAX_MESSAGE_LEN)
 }
 
 fn frame_bounded(
@@ -457,18 +487,58 @@ fn fatal(code: &str, message: impl Into<String>) -> Outcome {
     }
 }
 
-fn admit_handshake(starts: &mut std::collections::VecDeque<Instant>, now: Instant) -> bool {
+/// Sliding one-second windows of TLS handshake starts: one global and one per client address.
+#[derive(Default)]
+struct HandshakeLimiter {
+    global: VecDeque<Instant>,
+    per_address: HashMap<IpAddr, VecDeque<Instant>>,
+}
+const WINDOW: Duration = Duration::from_secs(1);
+fn expire(starts: &mut VecDeque<Instant>, now: Instant) {
     while starts
         .front()
-        .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1))
+        .is_some_and(|t| now.saturating_duration_since(*t) >= WINDOW)
     {
         starts.pop_front();
     }
-    if starts.len() == 64 {
-        return false;
+}
+impl HandshakeLimiter {
+    /// IPv6 clients are keyed by /64 so one host cannot rotate through its whole prefix.
+    fn key(address: IpAddr) -> IpAddr {
+        match address {
+            IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(
+                u128::from(v6) & 0xffff_ffff_ffff_ffff_0000_0000_0000_0000,
+            )),
+            v4 => v4,
+        }
     }
-    starts.push_back(now);
-    true
+
+    /// Admits one handshake start, or records nothing. Memory is bounded by
+    /// `MAX_TRACKED_ADDRESSES * PER_IP_TLS_STARTS_PER_SECOND` timestamps.
+    fn admit(&mut self, address: IpAddr, now: Instant) -> bool {
+        expire(&mut self.global, now);
+        if self.global.len() >= GLOBAL_TLS_STARTS_PER_SECOND {
+            return false;
+        }
+        let key = Self::key(address);
+        if !self.per_address.contains_key(&key) && self.per_address.len() >= MAX_TRACKED_ADDRESSES {
+            self.per_address.retain(|_, starts| {
+                expire(starts, now);
+                !starts.is_empty()
+            });
+            if self.per_address.len() >= MAX_TRACKED_ADDRESSES {
+                return false;
+            }
+        }
+        let starts = self.per_address.entry(key).or_default();
+        expire(starts, now);
+        if starts.len() >= PER_IP_TLS_STARTS_PER_SECOND {
+            return false;
+        }
+        starts.push_back(now);
+        self.global.push_back(now);
+        true
+    }
 }
 
 fn connection<H, F>(
@@ -476,17 +546,19 @@ fn connection<H, F>(
     config: ServerConfig,
     registry: Registry,
     factory: Arc<F>,
-    handshakes: Arc<Mutex<std::collections::VecDeque<Instant>>>,
+    handshakes: Arc<Mutex<HandshakeLimiter>>,
+    peer: IpAddr,
 ) -> io::Result<()>
 where
     H: QueryHandler + 'static,
     F: Fn() -> H + Send + Sync + 'static,
 {
     let timeout = config.read_timeout;
+    let pre_startup = timeout.min(PRE_STARTUP_TIMEOUT);
     // Classify startup before SQL admission: CancelRequest uses its own short-lived connection and
     // must remain routable while all registered SQL sessions are busy.
     loop {
-        let input = match frame(&mut socket, true, timeout) {
+        let input = match frame_bounded(&mut socket, true, pre_startup, MAX_STARTUP_PACKET_LEN) {
             Ok(Some(input)) => input,
             Ok(None) => return Ok(()),
             Err(FrameError::Io(error)) => return Err(error),
@@ -523,12 +595,12 @@ where
                         socket.write_all(&[pgwire::ENCRYPTION_DECLINED])?
                     }
                     Authentication::ScramTls { tls, .. } => {
-                        // Bound expensive TLS starts globally: burst 64, at most 64 in any second.
+                        // Bound expensive TLS starts globally (64/s) and per client address (16/s).
                         {
                             let mut starts = handshakes
                                 .lock()
                                 .map_err(|_| io::Error::other("TLS admission unavailable"))?;
-                            if !admit_handshake(&mut starts, Instant::now()) {
+                            if !starts.admit(peer, Instant::now()) {
                                 return Err(io::Error::other("TLS handshake rate exceeded"));
                             }
                         }
@@ -551,20 +623,9 @@ where
                     send(&mut socket, fatal("28000", "TLS required"))?;
                     return Ok(());
                 }
-                let registration = match Registration::new(registry) {
-                    Ok(registration) => registration,
-                    Err(_) => {
-                        send(
-                            &mut socket,
-                            fatal("53300", "connection registration unavailable"),
-                        )?;
-                        return Ok(());
-                    }
-                };
+                // The cancel key is registered only once authentication succeeds (see `bind_key`).
                 let mut session = match &config.authentication {
-                    Authentication::DevelopmentTrust => {
-                        Session::new(factory(), registration.key.pid, registration.key.secret)
-                    }
+                    Authentication::DevelopmentTrust => Session::new(factory(), 0, 0),
                     Authentication::ScramTls { accounts, .. } => {
                         let users: Vec<_> =
                             params.iter().filter(|(key, _)| key == "user").collect();
@@ -586,23 +647,25 @@ where
                                 return Ok(());
                             }
                         };
-                        Session::with_scram(
-                            factory(),
-                            registration.key.pid,
-                            registration.key.secret,
-                            exchange,
-                            known,
-                        )
+                        Session::with_scram(factory(), 0, 0, exchange, known)
                     }
                 };
+                let mut registration = None;
                 let outcome = session.on_startup(Startup::Params(params));
+                let outcome = bind_key(outcome, &registry, &mut registration);
                 let close = outcome.close;
                 send(&mut socket, outcome)?;
                 if session.sasl_phase().is_none() {
                     socket.authenticated();
                 }
                 if !close {
-                    serve(&mut socket, timeout, &registration, &mut session)?;
+                    serve(
+                        &mut socket,
+                        timeout,
+                        &registry,
+                        &mut registration,
+                        &mut session,
+                    )?;
                 }
                 drop(session);
                 drop(registration);
@@ -613,10 +676,42 @@ where
     }
 }
 
+/// Registers a cancel key when `outcome` completes authentication (it carries `BackendKeyData`) and
+/// substitutes the real key for the placeholder. If registration is unavailable the outcome becomes a
+/// fatal 53300 and the client never receives `AuthenticationOk`.
+fn bind_key(
+    mut outcome: Outcome,
+    registry: &Registry,
+    registration: &mut Option<Registration>,
+) -> Outcome {
+    let completes = outcome
+        .messages
+        .iter()
+        .any(|message| matches!(message, Backend::BackendKeyData { .. }));
+    if !completes {
+        return outcome;
+    }
+    match Registration::new(registry.clone()) {
+        Ok(created) => {
+            let key = created.key;
+            for message in &mut outcome.messages {
+                if let Backend::BackendKeyData { pid, secret } = message {
+                    *pid = key.pid;
+                    *secret = key.secret;
+                }
+            }
+            *registration = Some(created);
+            outcome
+        }
+        Err(_) => fatal("53300", "connection registration unavailable"),
+    }
+}
+
 fn serve<H: QueryHandler>(
     socket: &mut Transport,
     timeout: Duration,
-    registration: &Registration,
+    registry: &Registry,
+    registration: &mut Option<Registration>,
     session: &mut Session<H>,
 ) -> io::Result<()> {
     while !session.is_closed() {
@@ -649,7 +744,10 @@ fn serve<H: QueryHandler>(
                         &message,
                         Frontend::Query(_) | Frontend::Parse { .. } | Frontend::Execute { .. }
                     ) {
-                    registration.begin_query()?
+                    registration
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("query before registration"))?
+                        .begin_query()?
                 } else {
                     CancellationToken::default()
                 };
@@ -658,6 +756,7 @@ fn serve<H: QueryHandler>(
             Ok(None) => session.on_protocol_error(&ProtoError::Truncated),
             Err(error) => session.on_protocol_error(&error),
         };
+        let outcome = bind_key(outcome, registry, registration);
         let close = outcome.close;
         send(socket, outcome)?;
         if session.sasl_phase().is_none() && !close {
@@ -814,17 +913,69 @@ mod tests {
         }
     }
     #[test]
-    fn tls_start_window_bounds_bursts_and_expires_without_sleeping() {
+    fn tls_start_windows_bound_global_and_per_address_without_sleeping() {
         let now = Instant::now();
-        let mut starts = std::collections::VecDeque::new();
-        for _ in 0..64 {
-            assert!(admit_handshake(&mut starts, now));
+        let ip = |n: u8| IpAddr::from([10, 0, 0, n]);
+        let mut limiter = HandshakeLimiter::default();
+        // One address is limited alone and leaves the global budget for others.
+        for _ in 0..PER_IP_TLS_STARTS_PER_SECOND {
+            assert!(limiter.admit(ip(1), now));
         }
-        assert!(!admit_handshake(
-            &mut starts,
-            now + Duration::from_millis(999)
+        assert!(!limiter.admit(ip(1), now + Duration::from_millis(999)));
+        assert!(limiter.admit(ip(2), now));
+        assert!(limiter.admit(ip(1), now + Duration::from_secs(1)));
+        // The global limit still binds many addresses; rejected starts consume nothing.
+        let mut limiter = HandshakeLimiter::default();
+        for n in 0..GLOBAL_TLS_STARTS_PER_SECOND {
+            assert!(limiter.admit(IpAddr::from([10, 1, 0, n as u8]), now));
+        }
+        assert!(!limiter.admit(ip(9), now));
+        assert_eq!(limiter.global.len(), GLOBAL_TLS_STARTS_PER_SECOND);
+        assert!(limiter.admit(ip(9), now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn tls_address_table_is_bounded_and_ipv6_is_keyed_by_prefix() {
+        let now = Instant::now();
+        let mut limiter = HandshakeLimiter::default();
+        for n in 0..MAX_TRACKED_ADDRESSES {
+            limiter.per_address.insert(
+                IpAddr::from([10, 2, (n / 256) as u8, (n % 256) as u8]),
+                VecDeque::from([now]),
+            );
+        }
+        assert!(!limiter.admit(IpAddr::from([10, 9, 9, 9]), now));
+        assert_eq!(limiter.per_address.len(), MAX_TRACKED_ADDRESSES);
+        // Once the recorded starts expire, space is reclaimed.
+        assert!(limiter.admit(IpAddr::from([10, 9, 9, 9]), now + Duration::from_secs(1)));
+        assert_eq!(limiter.per_address.len(), 1);
+        let a: IpAddr = "2001:db8::1".parse().unwrap();
+        let b: IpAddr = "2001:db8::ffff".parse().unwrap();
+        let c: IpAddr = "2001:db8:0:1::1".parse().unwrap();
+        assert_eq!(HandshakeLimiter::key(a), HandshakeLimiter::key(b));
+        assert_ne!(HandshakeLimiter::key(a), HandshakeLimiter::key(c));
+    }
+
+    #[test]
+    fn key_is_bound_only_when_authentication_completes() {
+        let registry = Arc::new(Mutex::new(RegistryState::new(1).unwrap()));
+        let mut registration = None;
+        let pending = bind_key(Outcome::default(), &registry, &mut registration);
+        assert!(registration.is_none() && pending.messages.is_empty());
+        assert!(registry.lock().unwrap().entries.is_empty());
+        let placeholder = || Outcome {
+            messages: vec![Backend::BackendKeyData { pid: 0, secret: 0 }],
+            ..Outcome::default()
+        };
+        let done = bind_key(placeholder(), &registry, &mut registration);
+        assert_eq!(registration.as_ref().unwrap().key.pid, 1);
+        assert!(matches!(
+            done.messages.first(),
+            Some(Backend::BackendKeyData { pid: 1, .. })
         ));
-        assert!(admit_handshake(&mut starts, now + Duration::from_secs(1)));
-        assert_eq!(starts.len(), 1);
+        // With the only slot held, a second completion is refused with 53300.
+        let mut other = None;
+        let full = bind_key(placeholder(), &registry, &mut other);
+        assert!(other.is_none() && full.close);
     }
 }

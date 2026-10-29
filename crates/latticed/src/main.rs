@@ -31,7 +31,7 @@ fn run() -> Result<(), String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N]\nLoopback development trust by default; SELECT 1 only. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N]\nLoopback development trust by default; SELECT 1 only. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. The read timeout also disconnects idle sessions."
             );
             return Ok(());
         }

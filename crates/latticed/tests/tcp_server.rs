@@ -506,3 +506,81 @@ fn a_panicked_connection_worker_does_not_stop_the_listener() {
     ready(&mut next);
     server.shutdown().unwrap();
 }
+
+#[test]
+fn reset_and_abandoned_connections_never_stop_the_listener() {
+    let server = server(4, Duration::from_secs(3));
+    for round in 0..60 {
+        let mut client = connect(server.local_addr());
+        match round % 3 {
+            // Close before sending anything.
+            0 => {}
+            // Leave the server's reply unread so closing resets the connection.
+            1 => {
+                client.write_all(&startup()).unwrap();
+                std::thread::sleep(Duration::from_millis(15));
+            }
+            // Reset in the middle of a startup packet.
+            _ => client.write_all(&[0, 0, 0, 80, 0, 3]).unwrap(),
+        }
+        drop(client);
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(Instant::now() < until, "listener stopped accepting");
+        let mut next = connect(server.local_addr());
+        next.write_all(&startup()).unwrap();
+        let (tag, payload) = message(&mut next);
+        if tag == b'R' {
+            assert_eq!(payload, vec![0; 4]);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
+    let server = server(2, Duration::from_secs(3));
+    for _ in 0..300 {
+        let mut client = connect(server.local_addr());
+        client.write_all(&startup()).unwrap();
+        drop(client);
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(Instant::now() < until, "slots were never released");
+        let mut next = connect(server.local_addr());
+        next.write_all(&startup()).unwrap();
+        let (tag, payload) = message(&mut next);
+        if tag == b'R' {
+            assert_eq!(payload, vec![0; 4]);
+            ready_after_auth(&mut next);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.shutdown().unwrap();
+}
+fn ready_after_auth(stream: &mut TcpStream) {
+    assert_eq!(message(stream).0, b'S');
+    assert_eq!(message(stream).0, b'S');
+    let (tag, key) = message(stream);
+    assert_eq!(tag, b'K');
+    assert!(i32::from_be_bytes(key[..4].try_into().unwrap()) > 0);
+    assert_eq!(message(stream), (b'Z', vec![b'I']));
+}
+
+#[test]
+fn oversized_pre_authentication_startup_packet_is_refused_without_a_body() {
+    let server = server(2, Duration::from_secs(3));
+    let mut client = connect(server.local_addr());
+    client
+        .write_all(&(latticed::MAX_STARTUP_PACKET_LEN as i32 + 1).to_be_bytes())
+        .unwrap();
+    let (tag, error) = message(&mut client);
+    assert_eq!(tag, b'E');
+    assert!(error.windows(7).any(|bytes| bytes == b"C08P01\0"));
+    server.shutdown().unwrap();
+}

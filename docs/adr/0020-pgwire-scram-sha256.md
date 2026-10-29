@@ -39,3 +39,14 @@ Future integration must define prepared-password provisioning, account lookup an
 behavior, transport protection, rate/timeout bounds, authentication state transitions and driver
 conformance. These primitives do not implement those boundaries, change the current listener to
 password authentication, establish measured constant-time behavior on every target or pass a phase gate.
+
+## Listener hardening (issue 231)
+
+The host registers a cancel key only after SCRAM succeeds, so unauthenticated clients occupy no
+registry slot, and cancel PIDs come from a wrapping counter that skips active PIDs. TLS handshake
+starts are limited globally (64 per second) and per client address (16 per second per IPv4 address or
+IPv6 /64, at most 1024 tracked addresses; the table fails closed for new addresses while full).
+Residual risk: a client controlling many source addresses can still exhaust the global budget and
+block TLS for others, and addresses behind one NAT share a budget. Operators needing stronger
+protection should rate limit in front of the listener. Pre-authentication startup packets are capped
+at 10000 bytes. The read timeout also acts as the idle timeout of authenticated sessions.
