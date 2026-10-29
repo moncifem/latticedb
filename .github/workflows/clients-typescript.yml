@@ -1,0 +1,47 @@
+name: clients-typescript
+# Builds and tests the TypeScript client against the vectors the Rust side wrote. The Rust side of
+# the same check (the vector file must match the Rust codecs) runs in the `pr` workflow.
+on:
+  pull_request:
+    paths:
+      - 'clients/typescript/**'
+      - 'conformance/**'
+      - '.github/workflows/clients-typescript.yml'
+permissions:
+  contents: read
+concurrency:
+  group: clients-typescript-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  typescript:
+    name: typescript (node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.3
+          package-manager-cache: false
+      - name: No runtime dependencies
+        run: |
+          node -e '
+            const p = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
+            if (p.dependencies && Object.keys(p.dependencies).length > 0) {
+              console.error("the client must have no runtime dependencies");
+              process.exit(1);
+            }
+          '
+      - name: Install the pinned toolchain
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Compile (strict)
+        run: npx --no-install tsc -p tsconfig.json
+      - name: Test
+        env:
+          LATTICE_TS_CASES: "20000"
+        run: node --test "dist/test/*.test.js"
