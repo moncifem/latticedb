@@ -113,25 +113,24 @@ RFC and an ADR first (`docs/rfc`, `docs/adr`).
 
 ## Risk gate and review
 
-Pull requests that touch an invariant (label `invariant`), an on-disk or wire format (label
-`format-change`), recovery, or the write-ahead log need an independent review before merge. A reviewer
-who did not write the change reads the diff, checks the claims against the code and records
-findings on the pull request; the author fixes the valid ones. A maintainer then adds the
-`reviewed` label. Ordinary changes need green required checks only. A format change is never merged
-on a reviewer's say-so alone: see "Owner decisions".
+A pull request that touches a risky path needs an independent review before merge. The paths are
+`formats/**`, `crates/lattice-core/**`, authentication code in `crates/lattice-api`, `layers.toml`,
+`.github/**`, the protection and governance tools, and `docs/rfc` and `docs/adr`; the single source is
+[`docs/review-policy.md`](review-policy.md). The `risk-gate` check fails on such a pull request until
+the owner adds the `reviewed` label, which happens only after a reviewer who did not write the change
+has read the diff, checked the claims against the code and recorded findings on the pull request. A
+format change is never merged on a reviewer's say-so alone: see "Owner decisions". The `claims` check
+adds the `overlap` label when another open pull request touches the same files; sort it out with that
+author before merging.
 
 ## Merging
 
-Authors open pull requests and do not merge them. One coordinator merges, after the required
-checks are green on the exact head commit (`gh pr checks <n>`) and, where the risk gate applies, the
-`reviewed` label is present. Merging is by rebase (`gh pr merge --rebase --delete-branch`); merge
-commits are not used and branches are deleted on merge. The `main` checks are listed in
-`tools/branch-protection.json`.
-
-`tools/merge-pr.sh`, a serial merger that refuses to merge on a red check, a missing `reviewed`
-label or an unready merge state, arrives with its own pull request; until it is on `main`, the
-coordinator runs the same checks by hand. Administrators can technically merge a red pull request,
-so always look at the checks yourself.
+Authors open pull requests and do not merge them. One coordinator merges with
+[`tools/merge-pr.sh`](../tools/merge-pr.sh) (see [`docs/merging.md`](merging.md)): it merges serially,
+brings a branch that is behind `main` up to date, waits for the checks on the new head and refuses to
+merge on a failed check or an unknown state. Merging is by rebase; merge commits are not used and
+branches are deleted on merge. The required checks are listed in `tools/branch-protection.json`. If
+`main` goes red, see [`docs/main-guard.md`](main-guard.md).
 
 ## Owner decisions
 
