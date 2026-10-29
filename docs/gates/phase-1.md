@@ -84,7 +84,8 @@ NS8 exist there as pending specs with their owning phase and are listed by `carg
 
 The development listener now uses shared-memory cancellation state, so the earlier lack-of-threading
 rationale no longer closes this part of E1-13. Four Loom models use the actual registry/token code,
-substituting instrumented Arc/AtomicBool and an external model mutex. They cover cancellation versus
+substituting instrumented Arc/AtomicBool and an external model mutex. The standalone model tool
+compiles the actual source by path and keeps its dependencies outside the shipped workspace. They cover cancellation versus
 query replacement, unregister versus query start, stale keys versus slot reuse, and a negative control
 that must find a lost cancel action. Model selection is checked before CI execution; no execution or
 preemption subset is configured. Hosted execution evidence remains pending until its run completes.

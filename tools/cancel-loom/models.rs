@@ -2,7 +2,9 @@
 #![cfg(loom)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use lattice_api::cancel::{CancelError, CancelRegistry};
+#[path = "../../crates/lattice-api/src/cancel.rs"]
+mod cancel;
+use cancel::{CancelError, CancelRegistry};
 use lattice_seams::Rng;
 use loom::sync::{Arc, Mutex};
 use loom::thread;

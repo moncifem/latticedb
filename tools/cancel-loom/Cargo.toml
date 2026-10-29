@@ -1,0 +1,21 @@
+[package]
+name = "lattice-cancel-models"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99.1"
+license = "Apache-2.0"
+publish = false
+
+# Test-tool dependencies must not enter the shipped workspace dependency graph.
+[workspace]
+
+[dependencies]
+loom = "=0.7.2"
+lattice-seams = { path = "../../crates/lattice-seams" }
+
+[[test]]
+name = "cancel_loom"
+path = "models.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(loom)'] }

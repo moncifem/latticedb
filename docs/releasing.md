@@ -128,7 +128,7 @@ path was restored from cache; it produced no mutation result and is not replacem
 It follows [Loom’s conditional instrumentation pattern](https://docs.rs/loom/0.7.2/loom/);
 the model explores Loom-supported executions, not a complete processor memory-model proof. It selects
 exactly four models before execution, retains selection/run logs and fails on any model failure.
-`RUSTFLAGS="--cfg loom" cargo test -p lattice-api --test cancel_loom` substitutes Loom's Arc and
+`RUSTFLAGS="--cfg loom" cargo test --manifest-path tools/cancel-loom/Cargo.toml --locked --test cancel_loom` substitutes Loom's Arc and
 atomic flag in the actual registry token code. Default builds retain standard synchronization.
 The tests use a Loom mutex for the registry's documented external serialization contract.
 
@@ -138,3 +138,9 @@ a reused slot. A negative control deliberately loses a cancel action and must ex
 This checks the actual registry and token implementation; it does not model sockets, TLS, the host's
 closing/admission latch, or concurrent engine access. A branch/CI timeout is a failure, not completed
 model evidence. Run model enumeration on hosted CI rather than the development laptop.
+
+
+The standalone `tools/cancel-loom` package compiles the actual registry source file by path; it
+contains no copied registry implementation. Its tool-only lockfile keeps Loom's tracing dependencies
+outside the shipped workspace graph, where the `lazy_static` ban remains unchanged. A dedicated locked
+dependency audit applies to the model tool; this isolation is not a waiver for runtime dependencies.
