@@ -267,6 +267,17 @@ class MergerTests(unittest.TestCase):
                                                  'state': 'SUCCESS', 'createdAt': timestamp})
             with self.assertRaises(merge_pr.Unknown): merge_pr.assess(value, merge_pr.MINIMUM)
 
+    def test_unknown_optional_check_fields_never_merge(self):
+        for status, conclusion in [('COMPLETED', None), ('COMPLETED', 'UNKNOWN_RESULT'),
+                                   ('FUTURE_LIFECYCLE', 'SUCCESS')]:
+            value = clean()
+            value['statusCheckRollup'].append({'__typename': 'CheckRun', 'name': 'optional',
+                                              'status': status, 'conclusion': conclusion})
+            with self.assertRaises(merge_pr.Unknown): merge_pr.assess(value, merge_pr.MINIMUM)
+            result, calls = self.invoke({'views': [value]}, '1')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(self.merges(calls))
+
     def test_missing_configuration_cannot_remove_the_six_context_minimum(self):
         required = merge_pr.required_contexts()
         self.assertTrue(merge_pr.MINIMUM.issubset(required))

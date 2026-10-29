@@ -141,6 +141,10 @@ def assess(snapshot, required, repo=None):
             name = row.get('name')
             status = row.get('status')
             conclusion = row.get('conclusion')
+            if status not in ('COMPLETED', 'QUEUED', 'IN_PROGRESS', 'WAITING', 'PENDING', 'REQUESTED'):
+                raise Unknown('unknown check lifecycle')
+            if status == 'COMPLETED' and conclusion not in FAILED | {'SUCCESS', 'NEUTRAL', 'SKIPPED'}:
+                raise Unknown('unknown terminal check conclusion')
             if conclusion in FAILED:
                 raise Refused('a check failed on the observed head')
             success = status == 'COMPLETED' and conclusion == 'SUCCESS'
