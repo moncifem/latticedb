@@ -71,3 +71,9 @@ The guarantee assumes no concurrent authorized actor weakens live protection dur
 The tool never uses `--admin`, squash/merge commits, force pushes, or credential inspection. It does
 not review code or authorize owner-gated format, phase-gate or release decisions. Complete those
 before requesting any merge. A green check or publication waiver is not blanket format acceptance.
+
+## When main goes red
+
+The proposed [main guard](main-guard.md) evaluates required-check failures and can prepare a draft
+revert candidate after separate owner activation. Publication remains disabled by default. Follow its
+provenance, review and fresh-CI requirements; it never merges a revert or changes main protection.
