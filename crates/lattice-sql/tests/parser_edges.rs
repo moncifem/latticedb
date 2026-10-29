@@ -10,6 +10,8 @@
 use lattice_sql::ast::{SelectItem, Statement};
 use lattice_sql::{ErrorKind, MAX_DEPTH, parse_statement};
 
+type Shape = (&'static str, Box<dyn Fn(usize) -> String>);
+
 fn refused(sql: &str, kind: ErrorKind, message: &str) {
     let e = parse_statement(sql).unwrap_err();
     assert_eq!(e.kind(), kind, "`{sql}`: {e}");
@@ -24,7 +26,7 @@ fn unsupported(sql: &str, message: &str) {
 fn the_nesting_limit_is_exact_for_every_shape() {
     // Each shape is accepted one level below its limit and refused at it. Subqueries count twice
     // (the query and the expression that holds it), so their limit is half.
-    let flat: Vec<(&str, Box<dyn Fn(usize) -> String>)> = vec![
+    let flat: Vec<Shape> = vec![
         (
             "parentheses",
             Box::new(|n| format!("SELECT {}1{}", "(".repeat(n), ")".repeat(n))),
@@ -64,7 +66,7 @@ fn the_nesting_limit_is_exact_for_every_shape() {
         let e = parse_statement(&make(MAX_DEPTH - 1)).unwrap_err();
         assert_eq!(e.kind(), ErrorKind::TooLarge, "{name}: {e}");
     }
-    let subqueries: Vec<(&str, Box<dyn Fn(usize) -> String>)> = vec![
+    let subqueries: Vec<Shape> = vec![
         (
             "scalar subqueries",
             Box::new(|n| format!("SELECT {}1{}", "(SELECT ".repeat(n), ")".repeat(n))),
