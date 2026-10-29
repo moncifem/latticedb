@@ -22,3 +22,6 @@ pub mod sync;
 pub mod subscribe;
 
 pub mod backpressure;
+
+#[cfg(test)]
+mod conformance;
