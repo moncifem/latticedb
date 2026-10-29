@@ -14,6 +14,25 @@ format changes in its notes.
 Scheduled verification is separate from packaging: the `nightly` and `weekly` workflows run the
 simulator, fuzzing, model checking and heavier suites and report failures; they publish nothing.
 
+### Fuzz, mutation and property coverage of the scheduled workflows
+
+- Every `[[bin]]` in `fuzz/Cargo.toml` except `trivial` is in the nightly (ten minutes), weekly (five
+  hours) and manual 24-hour matrices. `tools/check_fuzz_matrices.py` fails the pull request gate
+  (`fuzz-build` job) when one is missing, and the same job runs
+  `cargo check --manifest-path fuzz/Cargo.toml --bins --locked` so a broken target fails before 02:00 UTC.
+  The check compiles without the sanitizer; it is not a fuzzing run.
+- The weekly mutation campaign has four groups: `dependent` (core, lsl), `self` (abi, evalkit, sim,
+  seams, cli, bench, sdk), `engines` (engines, sql, api; workspace tests) and `edge` (testkit, sys,
+  latticed; package tests). Shards hold at most 24 mutants and the plan fails above 256 shards. The
+  mutant counts of the two new groups have not been listed yet, so the first weekly plan decides
+  whether that ceiling fits; a plan failure is reported by the weekly run, not hidden.
+- The nightly `proptest-sql` job runs the `lattice-sql` properties at 1,000,000 cases (estimate: well
+  under the 90-minute budget; not measured). `lattice-engines` is not in it: its model-based and
+  managed-index properties open stores and write files per case, so a million cases is an estimated
+  several hours and has not been measured.
+- Fuzz and sanitizer jobs use the pinned toolchain `nightly-2026-10-27` and `cargo-fuzz@0.13.2`; the
+  pull request gate pins `cargo-deny@0.20.2`. Move them together, deliberately.
+
 ## What a release contains
 
 - `lattice-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` and
