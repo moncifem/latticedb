@@ -264,3 +264,12 @@ host, with one warmup each and nine alternating pairs at scale 5. Raw ledgers, c
 hashes and failure receipts accompany diagnostic ratio/dispersion summaries. It changes no regression
 budget and supplies no historical SQL baseline or ADR C4 verdict. Hosted execution is pending; see
 [the protocol](foundation-comparison.md) before dispatching or interpreting results.
+
+### Merge procedure checks that stay with the owner
+
+`tools/merge_pr.py` checks required status contexts, the head it validated and branch freshness. It
+does not check that the pull request comes from this repository rather than a fork, and it does not
+read review state (an approving review, the `reviewed` label on risky paths, an unresolved change
+request). Those are owner-procedure checks: before queueing a merge, confirm the head repository is
+`moncifem/latticedb` and that the review requirements for the touched paths are met. A green merger
+run is not evidence of either.
