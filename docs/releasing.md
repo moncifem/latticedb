@@ -144,3 +144,42 @@ The standalone `tools/cancel-loom` package compiles the actual registry source f
 contains no copied registry implementation. Its tool-only lockfile keeps Loom's tracing dependencies
 outside the shipped workspace graph, where the `lazy_static` ban remains unchanged. A dedicated locked
 dependency audit applies to the model tool; this isolation is not a waiver for runtime dependencies.
+
+
+## Daily million-history row-fault campaign
+
+This configuration supersedes the initial 50,000-history nightly described above. The existing
+20 bounded named tests and full ignored 10,000-seed-per-profile aggregate remain available for
+manual regressions; their oracle and budgets are retained. E2-1's configured nightly workload is
+now **1,000,000 observed profile/seed histories**, split into five profiles × eight shards × 25,000
+histories, each with a 150-step budget. A numeric seed is reused across different fault profiles;
+the distinct workload identity is the `(profile, seed)` pair. This is not 1,000,000 histories per
+profile, 1,000,000 fully verified histories, seven successful nights, or a signed gate.
+
+A host planning job freezes one UTC epoch day for the entire run, including queued shards crossing
+midnight. For day `D`, each profile covers the half-open range `D*200000..(D+1)*200000`; shard `S`
+covers `D*200000+S*25000..D*200000+(S+1)*25000`. Consecutive days have adjacent, non-overlapping
+ranges within each profile. Integer overflow is rejected. Retrying a failed shard may reuse the
+original plan day; the plan and execution attempt numbers remain separate in retained metadata.
+Manual runs on the same day intentionally replay that day's window and do not count as extra nights.
+
+The host-only `lattice-bench` example `row_fault_runner` parses explicit command-line inputs and
+imports the actual deterministic `row_faults.rs` oracle. No date, environment, or argument reads
+enter the engine workload. Its compiled preflight selection must match the complete 40-shard
+campaign plan before execution, and successful execution must report exactly 25,000 terminal
+observations. Empty, partial or malformed reports fail; a panic leaves counts unavailable rather
+than inventing a completed score. `--plan-only` performs no histories. The explicit
+`--diagnostic-seeds 1..128` mode is marked diagnostic-only and cannot be presented as nightly volume.
+
+Each shard retains the complete plan, its compiled selection, runner binary SHA256, stdout/stderr
+and JSON results under `evidence-row-faults-<profile>-<shard>`. Results include repository, revision,
+run/attempt, UTC day, profile, shard, endpoints, step budget and observed/verified/rot-censored/
+cut-short counts. Full-step verified histories are reported separately. Bit rot remains censored;
+cut-short histories still receive the original terminal oracle check. These raw row results are
+not silently added to the scorecard's existing simulation totals. The collector and failure reporter
+wait for both the planning job and row matrix. The per-shard timeout remains 120 minutes.
+
+The earlier 2500-history shards completed in 72–351 seconds including build in audited run
+[40881355427](https://github.com/moncifem/latticedb/actions/runs/40881355427). Scaling to 25,000 histories
+per shard is a capacity estimate, not a measured completion guarantee for this new campaign.
+Actual million-history execution and seven-calendar-night evidence remain pending until observed.

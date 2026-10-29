@@ -288,11 +288,12 @@ jobs:
 
   row-faults:
     name: row-faults (${{ matrix.profile }}, ${{ matrix.shard }})
+    needs: row-fault-plan
     strategy:
       fail-fast: false
       matrix:
-        profile: [clean, crash_heavy, disk_faulty, hostile, everything]
-        shard: [0, 1, 2, 3]
+        profile: [clean, crash-heavy, disk-faulty, hostile, everything]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -300,24 +301,90 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: 1.99.1 }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: exact row-fault shard (2500 seeds, 150 steps; 10,000 seeds per profile)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: evidence-row-fault-plan
+          path: row-plan
+      - name: compile the host runner with the actual row oracle
+        run: |
+          cargo build --release -p lattice-bench --example row_fault_runner
+          sha256sum target/release/examples/row_fault_runner > row-runner.sha256
+      - name: exact row-fault shard (25,000 histories, 150 steps; 1,000,000 total per night)
         env:
           ROW_PROFILE: ${{ matrix.profile }}
           ROW_SHARD: ${{ matrix.shard }}
+          ROW_DAY: ${{ needs.row-fault-plan.outputs.day }}
         run: |
           set -euo pipefail
-          selected="gate_shards::${ROW_PROFILE}_${ROW_SHARD}"
-          # A misspelled test filter otherwise exits successfully after executing zero tests.
-          cargo test -p lattice-engines --release --test row_faults "$selected" -- --ignored --exact --list > row-faults-selection.txt
-          grep -Fx "$selected: test" row-faults-selection.txt
-          test "$(grep -c ': test$' row-faults-selection.txt)" -eq 1
-          cargo test -p lattice-engines --release --test row_faults "$selected" -- --ignored --exact --nocapture 2>&1 | tee row-faults.log
+          args=(--day "$ROW_DAY" --profile "$ROW_PROFILE" --shard "$ROW_SHARD"
+                --repository "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID"
+                --attempt "$GITHUB_RUN_ATTEMPT" --revision "$GITHUB_SHA")
+          # Preflight the compiled entry and compare it to the complete shared campaign plan.
+          target/release/examples/row_fault_runner "${args[@]}" --plan-only --output row-selection.json
+          python3 - <<'PYCODE'
+          import json
+          plan = json.load(open('row-plan/row-fault-plan.json'))
+          compiled = json.load(open('row-selection.json'))
+          selected = compiled['selection']
+          assert compiled['status'] == 'plan_only' and compiled['counts'] is None
+          assert selected['mode'] == 'nightly_volume' and selected['planned_observed'] == 25000
+          assert len(plan['shards']) == 40 and plan['total_histories'] == 1000000
+          assert selected['utc_day'] == plan['utc_day'] and selected['steps'] == plan['steps'] == 150
+          matches = [row for row in plan['shards'] if row['profile'] == selected['profile'] and row['shard'] == selected['shard']]
+          assert len(matches) == 1
+          assert all(selected[key] == matches[0][key] for key in ('from','to_exclusive','planned_observed'))
+          assert all(compiled['source'][key] == plan['source'][key] for key in ('repository','run_id','revision'))
+          # A failed-job retry may reuse the original successful plan job. Preserve both attempts.
+          assert compiled['source']['attempt'] >= plan['source']['attempt']
+          print('exact compiled selection matches complete shared plan', selected)
+          PYCODE
+          target/release/examples/row_fault_runner "${args[@]}" --output row-faults.json 2>&1 | tee row-faults.log
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           overwrite: true
           name: evidence-row-faults-${{ matrix.profile }}-${{ matrix.shard }}
           path: |
-            row-faults-selection.txt
+            row-plan/row-fault-plan.json
+            row-selection.json
+            row-runner.sha256
+            row-faults.json
             row-faults.log
           if-no-files-found: warn
+  row-fault-plan:
+    # Capture the UTC day once. Queued shards crossing midnight must retain the same seed window.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      day: ${{ steps.plan.outputs.day }}
+    steps:
+      - name: freeze the exact daily million-history plan
+        id: plan
+        run: |
+          python3 - <<'PYCODE'
+          import json, os, time
+          day = int(time.time()) // 86400
+          base = day * 200000
+          assert base + 200000 <= 2**64 - 1
+          profiles = ['clean','crash-heavy','disk-faulty','hostile','everything']
+          shards = [{'profile':profile,'shard':shard,'from':base+shard*25000,
+                     'to_exclusive':base+(shard+1)*25000,'planned_observed':25000}
+                    for profile in profiles for shard in range(8)]
+          assert len(shards) == 40 and sum(row['planned_observed'] for row in shards) == 1000000
+          for profile in profiles:
+              rows = [row for row in shards if row['profile'] == profile]
+              assert rows[0]['from'] == base and rows[-1]['to_exclusive'] == base + 200000
+              assert all(left['to_exclusive'] == right['from'] for left, right in zip(rows,rows[1:]))
+          plan = {'schema':1,'utc_day':day,'steps':150,'total_histories':1000000,'shards':shards,
+                  'source':{'repository':os.environ['GITHUB_REPOSITORY'],'run_id':int(os.environ['GITHUB_RUN_ID']),
+                            'attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'revision':os.environ['GITHUB_SHA']}}
+          with open('row-fault-plan.json','w') as output: json.dump(plan,output,indent=2)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write(f'day={day}\n')
+          print(json.dumps(plan))
+          PYCODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          overwrite: true
+          name: evidence-row-fault-plan
+          path: row-fault-plan.json
+          if-no-files-found: error
