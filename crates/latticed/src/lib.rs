@@ -1,17 +1,19 @@
 //! Host TCP adapter for the sans-I/O PostgreSQL session.
 //!
 //! This is a bounded, trust-authenticated development listener with a `SELECT 1` handler. It does
-//! not open a database, authenticate users, serve TLS or implement cancellation requests.
+//! not open a database, authenticate users or serve TLS. Cancel requests signal a cooperative
+//! handler; they cannot preempt blocking I/O or undo a committed operation.
 #![forbid(unsafe_code)]
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
-use lattice_api::pgwire::{self, Backend, Column, ProtoError};
+use lattice_api::cancel::{CancelKey, CancelRegistry, CancellationToken};
+use lattice_api::pgwire::{self, Backend, Column, Frontend, ProtoError, Startup};
 use lattice_api::session::{Outcome, QueryError, QueryHandler, QueryOutput, Session};
-use lattice_seams::{OsRng, Rng};
+use lattice_seams::OsRng;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -20,7 +22,8 @@ use std::time::{Duration, Instant};
 pub struct ServerConfig {
     /// Address to bind. The default listens only on localhost.
     pub address: SocketAddr,
-    /// Maximum simultaneous connection workers; connections above it receive SQLSTATE 53300.
+    /// Maximum registered SQL sessions; excess startups receive SQLSTATE 53300. Eight additional
+    /// bounded workers let startup/cancel packets be classified when SQL sessions fill the limit.
     pub max_connections: usize,
     /// Maximum time to receive a complete startup or frontend frame, including slow partial reads.
     pub read_timeout: Duration,
@@ -38,6 +41,12 @@ impl Default for ServerConfig {
     }
 }
 
+/// Additional transport workers reserved for startup/cancel classification at the SQL-session cap.
+/// Flooding these slots can still delay/refuse cancellation; this is a resource bound, not a DoS guarantee.
+pub const CONTROL_CONNECTION_RESERVE: usize = 8;
+
+type Registry = Arc<Mutex<CancelRegistry>>;
+
 /// An active listener. Explicit shutdown and drop both close active sockets and join every worker.
 pub struct ServerHandle {
     address: SocketAddr,
@@ -47,6 +56,17 @@ pub struct ServerHandle {
 impl ServerHandle {
     /// Binds before returning, so bind/configuration failures never hide in a background thread.
     pub fn start(config: ServerConfig) -> io::Result<Self> {
+        Self::start_with_handler(config, || SelectOne)
+    }
+
+    /// Starts with one handler per admitted SQL connection. The factory runs outside registry locks.
+    /// Cooperative handlers override QueryHandler's cancellation-aware methods and poll their token
+    /// before committing work. Legacy blocking handlers cannot be forcibly interrupted.
+    pub fn start_with_handler<H, F>(config: ServerConfig, factory: F) -> io::Result<Self>
+    where
+        H: QueryHandler + 'static,
+        F: Fn() -> H + Send + Sync + 'static,
+    {
         if config.max_connections == 0
             || config.max_connections > 1024
             || config.read_timeout.is_zero()
@@ -58,6 +78,9 @@ impl ServerHandle {
                 "nonzero timeouts and 1..=1024 connections required",
             ));
         }
+        let registry = Arc::new(Mutex::new(
+            CancelRegistry::new(config.max_connections).map_err(io::Error::other)?,
+        ));
         let listener = TcpListener::bind(config.address)?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?;
@@ -65,7 +88,7 @@ impl ServerHandle {
         let stop = stopping.clone();
         let acceptor = thread::Builder::new()
             .name("pg-accept".into())
-            .spawn(move || accept(listener, config, stop))?;
+            .spawn(move || accept(listener, config, stop, registry, Arc::new(factory)))?;
         Ok(Self {
             address,
             stopping,
@@ -105,13 +128,18 @@ struct Worker {
     thread: JoinHandle<()>,
 }
 
-fn accept(
+fn accept<H, F>(
     listener: TcpListener,
     config: ServerConfig,
     stopping: Arc<AtomicBool>,
-) -> io::Result<()> {
+    registry: Registry,
+    factory: Arc<F>,
+) -> io::Result<()>
+where
+    H: QueryHandler + 'static,
+    F: Fn() -> H + Send + Sync + 'static,
+{
     let mut workers: Vec<Worker> = Vec::new();
-    let mut next_pid = 1i32;
     let result = (|| {
         while !stopping.load(Ordering::Acquire) {
             let mut index = 0;
@@ -130,39 +158,34 @@ fn accept(
                 }
             }
             match listener.accept() {
-                Ok((mut socket, _)) => {
+                Ok((socket, _)) => {
                     // Accepted sockets can inherit O_NONBLOCK on some hosts (notably macOS).
                     // Workers use blocking I/O with explicit deadlines, independently of accept.
                     socket.set_nonblocking(false)?;
                     socket.set_write_timeout(Some(config.write_timeout))?;
-                    if workers.len() == config.max_connections {
-                        let _ = send(
-                            &mut socket,
-                            Outcome {
-                                messages: vec![Backend::ErrorResponse {
-                                    severity: "FATAL".into(),
-                                    code: "53300".into(),
-                                    message: "too many connections".into(),
-                                }],
-                                close: true,
-                                ..Outcome::default()
-                            },
-                        );
+                    if workers.len() == config.max_connections + CONTROL_CONNECTION_RESERVE {
+                        // With no classification worker available, close without inventing a reply
+                        // to a packet that may be CancelRequest. Normal startup admission below
+                        // returns 53300 after the first packet has been classified.
                         let _ = socket.shutdown(Shutdown::Both);
                         continue;
                     }
                     socket.set_nodelay(true)?;
                     let controller = socket.try_clone()?;
                     let timeout = config.read_timeout;
-                    let pid = next_pid;
-                    next_pid = next_pid.checked_add(1).unwrap_or(1);
-                    let secret = OsRng.next_u64() as i32;
+                    let connection_registry = registry.clone();
+                    let connection_factory = factory.clone();
                     let worker =
                         thread::Builder::new()
-                            .name(format!("pg-{pid}"))
+                            .name("pg-connection".into())
                             .spawn(move || {
                                 // Disconnects, malformed input and timeouts end this connection, not the listener.
-                                let _ = connection(socket, timeout, pid, secret);
+                                let _ = connection(
+                                    socket,
+                                    timeout,
+                                    connection_registry,
+                                    connection_factory,
+                                );
                             })?;
                     workers.push(Worker {
                         socket: controller,
@@ -178,6 +201,9 @@ fn accept(
         }
         Ok(())
     })();
+    // Cancellation comes before joining CPU-bound cooperative handlers. Recover a poisoned mutex
+    // only for shutdown/cleanup; normal admission and query operations fail closed on poison.
+    clear_registry(&registry);
     // Shutdown is independent of each client's configured timeout, including partial-frame clients.
     for worker in &workers {
         let _ = worker.socket.shutdown(Shutdown::Both);
@@ -281,38 +307,168 @@ fn frame(
     Ok(Some(bytes))
 }
 
-fn connection(mut socket: TcpStream, timeout: Duration, pid: i32, secret: i32) -> io::Result<()> {
-    let mut session = Session::new(SelectOne, pid, secret);
+fn lock_registry(registry: &Mutex<CancelRegistry>) -> io::Result<MutexGuard<'_, CancelRegistry>> {
+    registry
+        .lock()
+        .map_err(|_| io::Error::other("cancel registry poisoned"))
+}
+
+fn clear_registry(registry: &Mutex<CancelRegistry>) {
+    let mut registry = match registry.lock() {
+        Ok(registry) => registry,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    registry.clear();
+}
+
+struct Registration {
+    registry: Registry,
+    key: CancelKey,
+}
+impl Registration {
+    fn new(registry: Registry) -> io::Result<Self> {
+        // A key is valid for this connection's lifetime, not a wall-clock TTL that could silently
+        // invalidate the client's only BackendKeyData. Drop unregisters it, even on worker unwind.
+        let key = lock_registry(&registry)?
+            .register(&mut OsRng, 0, u64::MAX)
+            .map_err(io::Error::other)?;
+        Ok(Self { registry, key })
+    }
+    fn begin_query(&self) -> io::Result<CancellationToken> {
+        lock_registry(&self.registry)?
+            .begin_query(self.key, 0)
+            .map_err(io::Error::other)
+    }
+}
+impl Drop for Registration {
+    fn drop(&mut self) {
+        let mut registry = match self.registry.lock() {
+            Ok(registry) => registry,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        registry.unregister(self.key, 0);
+    }
+}
+
+fn fatal(code: &str, message: impl Into<String>) -> Outcome {
+    Outcome {
+        messages: vec![Backend::ErrorResponse {
+            severity: "FATAL".into(),
+            code: code.into(),
+            message: message.into(),
+        }],
+        close: true,
+        ..Outcome::default()
+    }
+}
+
+fn connection<H, F>(
+    mut socket: TcpStream,
+    timeout: Duration,
+    registry: Registry,
+    factory: Arc<F>,
+) -> io::Result<()>
+where
+    H: QueryHandler + 'static,
+    F: Fn() -> H + Send + Sync + 'static,
+{
+    // Classify startup before SQL admission: CancelRequest uses its own short-lived connection and
+    // must remain routable while all registered SQL sessions are busy.
+    loop {
+        let input = match frame(&mut socket, true, timeout) {
+            Ok(Some(input)) => input,
+            Ok(None) => return Ok(()),
+            Err(FrameError::Io(error)) => return Err(error),
+            Err(FrameError::Protocol(error)) => {
+                send(&mut socket, fatal("08P01", error.to_string()))?;
+                return Ok(());
+            }
+        };
+        let startup = match pgwire::decode_startup(&input) {
+            Ok(Some((startup, _))) => startup,
+            Ok(None) => {
+                send(&mut socket, fatal("08P01", "truncated startup"))?;
+                return Ok(());
+            }
+            Err(error) => {
+                send(&mut socket, fatal("08P01", error.to_string()))?;
+                return Ok(());
+            }
+        };
+        match startup {
+            Startup::Cancel { pid, secret } => {
+                lock_registry(&registry)?.cancel(CancelKey { pid, secret }, 0);
+                let _ = socket.shutdown(Shutdown::Both);
+                return Ok(());
+            }
+            Startup::SslRequest | Startup::GssEncRequest => {
+                socket.write_all(&[pgwire::ENCRYPTION_DECLINED])?
+            }
+            Startup::Params(params) => {
+                let registration = match Registration::new(registry) {
+                    Ok(registration) => registration,
+                    Err(_) => {
+                        send(
+                            &mut socket,
+                            fatal("53300", "connection registration unavailable"),
+                        )?;
+                        return Ok(());
+                    }
+                };
+                let mut session =
+                    Session::new(factory(), registration.key.pid, registration.key.secret);
+                let outcome = session.on_startup(Startup::Params(params));
+                let close = outcome.close;
+                send(&mut socket, outcome)?;
+                if !close {
+                    serve(&mut socket, timeout, &registration, &mut session)?;
+                }
+                drop(session);
+                drop(registration);
+                let _ = socket.shutdown(Shutdown::Both);
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn serve<H: QueryHandler>(
+    socket: &mut TcpStream,
+    timeout: Duration,
+    registration: &Registration,
+    session: &mut Session<H>,
+) -> io::Result<()> {
     while !session.is_closed() {
-        let input = match frame(&mut socket, session.awaiting_startup(), timeout) {
+        let input = match frame(socket, false, timeout) {
             Ok(Some(input)) => input,
             Ok(None) => break,
             Err(FrameError::Io(error)) => return Err(error),
             Err(FrameError::Protocol(error)) => {
-                send(&mut socket, session.on_protocol_error(&error))?;
+                send(socket, session.on_protocol_error(&error))?;
                 break;
             }
         };
-        let outcome = if session.awaiting_startup() {
-            match pgwire::decode_startup(&input) {
-                Ok(Some((message, _))) => session.on_startup(message),
-                Ok(None) => session.on_protocol_error(&ProtoError::Truncated),
-                Err(error) => session.on_protocol_error(&error),
+        let outcome = match pgwire::decode_frontend(&input) {
+            Ok(Some((message, _))) => {
+                let token = if matches!(
+                    &message,
+                    Frontend::Query(_) | Frontend::Parse { .. } | Frontend::Execute { .. }
+                ) {
+                    registration.begin_query()?
+                } else {
+                    CancellationToken::default()
+                };
+                session.on_message_with_cancellation(message, &token)
             }
-        } else {
-            match pgwire::decode_frontend(&input) {
-                Ok(Some((message, _))) => session.on_message(message),
-                Ok(None) => session.on_protocol_error(&ProtoError::Truncated),
-                Err(error) => session.on_protocol_error(&error),
-            }
+            Ok(None) => session.on_protocol_error(&ProtoError::Truncated),
+            Err(error) => session.on_protocol_error(&error),
         };
         let close = outcome.close;
-        send(&mut socket, outcome)?;
+        send(socket, outcome)?;
         if close {
             break;
         }
     }
-    let _ = socket.shutdown(Shutdown::Both);
     Ok(())
 }
 
@@ -374,5 +530,38 @@ impl QueryHandler for SelectOne {
     }
     fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError> {
         select_one(sql)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
+    use super::*;
+    #[test]
+    fn poisoned_registry_is_fail_closed_normally_but_shutdown_still_cancels_tokens() {
+        let registry = Arc::new(Mutex::new(CancelRegistry::new(1).unwrap()));
+        let key = registry
+            .lock()
+            .unwrap()
+            .register(&mut OsRng, 0, u64::MAX)
+            .unwrap();
+        let token = registry.lock().unwrap().begin_query(key, 0).unwrap();
+        let poison = registry.clone();
+        assert!(
+            thread::spawn(move || {
+                let _guard = poison.lock().unwrap();
+                panic!("test registry poison");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(lock_registry(&registry).is_err());
+        clear_registry(&registry);
+        assert!(token.is_cancelled());
+        let registration = Registration {
+            registry: registry.clone(),
+            key,
+        };
+        drop(registration); // Cleanup must not panic on the same poisoned mutex.
     }
 }
