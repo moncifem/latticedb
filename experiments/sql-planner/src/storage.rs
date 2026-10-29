@@ -1,11 +1,12 @@
 //! The only storage boundary: actual MVCC snapshots and RowTx publication through the WAL.
 use crate::{
     Error, Result,
-    ast::{Historical, Value},
+    ast::{Expr, Historical, Value},
 };
 use lattice_core::record::{Decoded, SEGMENT_HEADER_LEN, decode_record};
 use lattice_core::{ChangeSet, Config};
 use lattice_engines::{
+    limits::AllowAll,
     mvcc::Snapshot,
     rowops,
     store::{RowError, RowStore, RowTx},
@@ -183,10 +184,54 @@ impl<I: Io, C: Clock, R: Rng> Db<I, C, R> {
         table: &str,
         historical: &Option<Historical>,
     ) -> Result<Vec<Vec<Value>>> {
+        self.scan_filtered(s, table, historical, &None, &[])
+    }
+    /// Push only proven primary-key bounds; the executor still checks the complete predicate.
+    pub fn scan_filtered(
+        &mut self,
+        s: &Session,
+        table: &str,
+        historical: &Option<Historical>,
+        filter: &Option<Expr>,
+        params: &[Value],
+    ) -> Result<Vec<Vec<Value>>> {
+        use std::ops::Bound;
         let (id, _) = schema(table)?;
         let snap = self.snapshot(s, historical)?;
         let mut rows = BTreeMap::new();
-        for (k, v) in self.rows.scan_at(snap, id, ..) {
+        self.rows
+            .check_snapshot(snap)
+            .map_err(|e| Error::storage(e.to_string()))?;
+        let bounds = primary_bounds(table, filter.as_ref(), params);
+        let in_bounds = |k: &Vec<u8>| {
+            let lower = match &bounds.0 {
+                Bound::Included(v) => k >= v,
+                Bound::Excluded(v) => k > v,
+                Bound::Unbounded => true,
+            };
+            let upper = match &bounds.1 {
+                Bound::Included(v) => k <= v,
+                Bound::Excluded(v) => k < v,
+                Bound::Unbounded => true,
+            };
+            lower && upper
+        };
+        // Contradictory bounds are empty, rather than panicking inside BTreeMap::range.
+        let empty = match (&bounds.0, &bounds.1) {
+            (Bound::Included(a), Bound::Included(b)) => a > b,
+            (Bound::Included(a) | Bound::Excluded(a), Bound::Included(b) | Bound::Excluded(b)) => {
+                a >= b
+            }
+            _ => false,
+        };
+        let stored = if empty {
+            vec![]
+        } else {
+            self.rows
+                .scan_at(snap, id, bounds.clone(), &AllowAll)
+                .map_err(|e| Error::storage(e.to_string()))?
+        };
+        for (k, v) in stored {
             rows.insert(
                 k.to_vec(),
                 serde_json::from_slice::<Vec<Value>>(v)
@@ -195,7 +240,7 @@ impl<I: Io, C: Clock, R: Rng> Db<I, C, R> {
         }
         if historical.is_none() {
             for ((t, k), v) in &s.pending {
-                if *t == id {
+                if *t == id && !empty && in_bounds(k) {
                     match v {
                         Some(v) => {
                             rows.insert(k.clone(), v.clone());
@@ -208,7 +253,7 @@ impl<I: Io, C: Clock, R: Rng> Db<I, C, R> {
             }
         }
         let values = rows.into_values().collect::<Vec<_>>();
-        self.event(|| serde_json::json!({"scan":table,"snapshot":snap.as_of,"rows":values}));
+        self.event(|| serde_json::json!({"scan":table,"snapshot":snap.as_of,"rows":values,"primary_bounds":format!("{bounds:?}")}));
         Ok(values)
     }
     pub fn stage(&mut self, s: &mut Session, table: &str, row: Vec<Value>) -> Result<()> {
@@ -330,4 +375,109 @@ pub fn read_receipts(io: &impl Io) -> Result<Vec<Receipt>> {
         }
     }
     Ok(out)
+}
+
+/// The existing key codec orders signed negatives after nonnegatives. An equality is always safe;
+/// interval pushdown is limited to a proven nonnegative lower bound, leaving every other case to
+/// the full predicate. Do not treat an unproven upper bound as a complete signed-key range.
+pub fn primary_bounds(
+    table: &str,
+    filter: Option<&Expr>,
+    params: &[Value],
+) -> (std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>) {
+    use std::ops::Bound::{self, Excluded, Included, Unbounded};
+    fn value(e: &Expr, params: &[Value]) -> Option<i64> {
+        match e {
+            Expr::Lit(Value::Int(n)) => Some(*n),
+            Expr::Param(n) => {
+                n.checked_sub(1)
+                    .and_then(|at| params.get(at))
+                    .and_then(|v| match v {
+                        Value::Int(n) => Some(*n),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        }
+    }
+    fn terms(e: &Expr, table: &str, params: &[Value], out: &mut Vec<(String, i64)>) {
+        if let Expr::Binary(a, op, b) = e {
+            if op == "and" {
+                terms(a, table, params, out);
+                terms(b, table, params, out);
+                return;
+            }
+            let col =
+                |e: &Expr| matches!(e, Expr::Col(c) if c == "id" || c == &format!("{table}.id"));
+            if col(a)
+                && let Some(n) = value(b, params)
+            {
+                out.push((op.clone(), n));
+            } else if col(b)
+                && let Some(n) = value(a, params)
+            {
+                let reversed = match op.as_str() {
+                    ">" => "<",
+                    "<" => ">",
+                    ">=" => "<=",
+                    "<=" => ">=",
+                    "=" => "=",
+                    _ => return,
+                };
+                out.push((reversed.into(), n));
+            }
+        }
+    }
+    let mut comparisons = vec![];
+    if let Some(e) = filter {
+        terms(e, table, params, &mut comparisons);
+    }
+    if let Some((_, n)) = comparisons.iter().find(|(op, _)| op == "=") {
+        let key = n.to_be_bytes().to_vec();
+        return (Included(key.clone()), Included(key));
+    }
+    let mut lo: Bound<i64> = Unbounded;
+    let mut hi: Bound<i64> = Unbounded;
+    for (op, n) in comparisons {
+        match op.as_str() {
+            ">" | ">=" if n >= 0 => {
+                let next = if op == ">" { Excluded(n) } else { Included(n) };
+                let stronger = match &lo {
+                    Unbounded => true,
+                    Included(v) => n > *v || n == *v && op == ">",
+                    Excluded(v) => n > *v,
+                };
+                if stronger {
+                    lo = next;
+                }
+            }
+            "<" | "<=" => {
+                let next = if op == "<" { Excluded(n) } else { Included(n) };
+                let stronger = match &hi {
+                    Unbounded => true,
+                    Included(v) => n < *v || n == *v && op == "<",
+                    Excluded(v) => n < *v,
+                };
+                if stronger {
+                    hi = next;
+                }
+            }
+            _ => {}
+        }
+    }
+    if matches!(lo, Unbounded) || matches!(hi,Included(n)|Excluded(n) if n<0) {
+        return (Unbounded, Unbounded);
+    }
+    let bytes = |b: Bound<i64>| match b {
+        Included(n) => Included(n.to_be_bytes().to_vec()),
+        Excluded(n) => Excluded(n.to_be_bytes().to_vec()),
+        Unbounded => Unbounded,
+    };
+    // An unbounded upper edge must stop before negative keys, which sort after positive keys.
+    let hi = if matches!(hi, Unbounded) {
+        Excluded(i64::MIN.to_be_bytes().to_vec())
+    } else {
+        bytes(hi)
+    };
+    (bytes(lo), hi)
 }

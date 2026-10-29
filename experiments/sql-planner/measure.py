@@ -2,6 +2,8 @@
 """Manual CI experiment. Missing/failed candidate evidence is retained, never filled with estimates."""
 import argparse, hashlib, json, os, pathlib, platform, queue, signal, shutil, statistics, subprocess, sys, tempfile, threading, time, traceback
 
+from criteria import assess
+
 HERE = pathlib.Path(__file__).resolve().parent
 MANIFEST = HERE / 'Cargo.toml'
 FEATURES = {'custom': [], 'parser': ['parser'], 'datafusion': ['datafusion']}
@@ -320,6 +322,11 @@ def main():
                 else:
                     row['added_clean_build_s_vs_bridge']=row['clean_build']['elapsed_s']-baseline['elapsed_s'] if baseline['exit']==0 else None
                     row['C5_added_build_under_60s']=row['added_clean_build_s_vs_bridge'] is not None and row['added_clean_build_s_vs_bridge']<60
+                tests=['cargo','test','--locked','--release','--manifest-path',str(MANIFEST),'--target-dir',str(candidate_target),'--lib','--test','conformance']
+                if features:tests+=['--features',','.join(features)]
+                row['conformance']=command(tests,out/f'{candidate}-conformance.log')
+                if row['conformance']['exit']!=0:
+                    report['failures'].append({'candidate':candidate,'stage':'conformance','error':'candidate regression tests failed; raw log retained'})
                 timing=candidate_target/'cargo-timings'
                 if timing.exists():shutil.copytree(timing,out/f'{candidate}-cargo-timings',dirs_exist_ok=True)
                 tree=['cargo','tree','--locked','--manifest-path',str(MANIFEST),'--edges','normal','--prefix','none']
@@ -378,6 +385,8 @@ def main():
     except BaseException as error:
         report['failures'].append({'coordinator':repr(error),'traceback':traceback.format_exc()});report['measurements_complete']=False
     finally:
+        report['assessment']=assess(report)
+        save(out/'criteria.json',report['assessment'])
         save(out/'report.json',report)
         shutil.rmtree(data_root,ignore_errors=True)
     return 0 if report.get('measurements_complete') else 1

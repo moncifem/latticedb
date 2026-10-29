@@ -68,3 +68,49 @@ fields. PostgreSQL results, semantic checks and failure logs remain useful; thos
 are diagnostics only. The first retry can still be cold if no cache exists. Fresh clean experiments
 remain the default and never restore this target cache. Performance binaries still exclude fault
 hooks; barriers are built only after query measurements.
+
+## Retained functional retry (recovered during continuation)
+
+[Run 40803782042](https://github.com/moncifem/latticedb/actions/runs/40803782042) executed source
+`5e750af6195f5ea0c523a8eff4d25e1e92c7d5ad` in `functional_retry` mode. The retained artifact
+`12867943294` was downloaded and verified against GitHub's ZIP SHA256
+`c8752482ce02c336a6cab1a7b8a00a89367790ee8e5be56704ab61fc3659f6dc`.
+The run failed; its successfully completed stages are retained evidence, not an overall pass.
+
+All candidates completed the PostgreSQL representative comparisons, nine negative fixtures, repeated
+observable simulator traces and three process-kill/reopen checks. The four measured client median
+ratios to PostgreSQL were:
+
+| Candidate | Point | 10,000-row range | Join | Group |
+|---|---:|---:|---:|---:|
+| custom | 72.318 | 10.840 | 430.499 | 9.781 |
+| sqlparser + custom | 64.865 | 10.783 | 452.181 | 10.678 |
+| DataFusion | 33.886 | 6.870 | 4.857 | 4.294 |
+
+**All twelve ratios fail the unchanged C4 threshold of 3.** These include the distinct client codecs
+and transport costs described in README.md; no equivalent pure-executor timing is claimed. There is
+still no comparable Phase 1 SQL baseline. Functional-retry compiler durations cannot establish C5.
+
+The only recorded run-failure stages were dependency-policy checks. The experiment manifest lacked
+its Apache-2.0 license metadata, failing all three candidate license checks. DataFusion additionally
+reported Tokio RUSTSEC-2026-0386 and zstd/zstd-safe RUSTSEC-2026-0391, RUSTSEC-2026-0398 and
+RUSTSEC-2026-0403. Its pinned datafusion-common enables arrow-ipc's zstd feature unconditionally;
+Arrow 59's zstd 0.13 constraint cannot select the advisory's patched zstd >=0.14.3 / zstd-safe >=8.2.0.
+No advisory is ignored. The continuation adds the missing own-package license and updates the
+experiment's compatible Tokio pin to 1.53.3; a fresh policy run is required. The existing DataFusion
+C2 source-audit failure is independent of these dependency findings.
+
+### Prototype changes awaiting fresh measurements
+
+The original custom point query scanned and decoded every row. Joins built a new string-keyed
+expression environment for every pair in a Cartesian product; nonaggregate output allocated a
+singleton group per row. The continuation adds conservative primary-key bounds in the shared real
+RowStore bridge, borrowed indexed-row evaluation, deterministic equality-indexed joins with a general
+predicate fallback, and count/representative aggregate state. DataFusion receives the same proven
+single-table bounds but continues to plan and evaluate its complete relational query itself.
+No decoded-row cache, query-result cache, fixture-specific answer, benchmark/oracle relaxation or
+production dependency change is introduced. Original failed ratios above remain visible.
+
+`criteria.json` recomputes median ratios from raw samples and records all C1–C7 evidence limits. It
+never accepts ADR 0013. New remote measurements and independent review remain necessary; C1's absent
+budget and unrecorded historical effort-days remain unresolved, and C7 remains qualified.

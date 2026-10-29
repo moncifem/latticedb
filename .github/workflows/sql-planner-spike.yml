@@ -42,7 +42,7 @@ jobs:
           shared-key: sql-planner-functional
           cache-on-failure: true
       - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
-        with: { tool: cargo-deny }
+        with: { tool: cargo-deny@0.20.2 }
       - name: record runner and source context
         run: |
           mkdir -p planner-evidence
@@ -51,6 +51,8 @@ jobs:
           free -b > planner-evidence/memory.txt
           df -T "$RUNNER_TEMP" > planner-evidence/filesystem.txt
           rustc -Vv > planner-evidence/rustc.txt
+          cargo deny --version > planner-evidence/cargo-deny.txt
+          python3 -c 'import json,os; print(json.dumps({k:os.environ[k] for k in ("GITHUB_REPOSITORY","GITHUB_RUN_ID","GITHUB_RUN_ATTEMPT","GITHUB_SHA","GITHUB_WORKFLOW_REF")}))' > planner-evidence/run.json
           git rev-parse HEAD > planner-evidence/revision.txt
           git status --porcelain > planner-evidence/status-before.txt
           docker inspect --format '{{.Image}}' '${{ job.services.postgres.id }}' > planner-evidence/postgres-image.txt
@@ -66,11 +68,12 @@ jobs:
         run: python3 -m unittest discover -s experiments/sql-planner -p test_measure.py
       - name: candidate experiment (mode recorded explicitly)
         env:
+          FUNCTIONAL_RETRY: ${{ inputs.functional_retry }}
           FUNCTIONAL_CACHE_HIT: ${{ steps.functional_cache.outputs.cache-hit }}
         run: |
           mode_args=()
           target_root="$RUNNER_TEMP/sql-planner-clean"
-          if [ "${{ inputs.functional_retry }}" = "true" ]; then
+          if [ "$FUNCTIONAL_RETRY" = "true" ]; then
             mode_args=(--functional-retry)
             target_root="$PWD/experiments/sql-planner/functional-target"
           fi

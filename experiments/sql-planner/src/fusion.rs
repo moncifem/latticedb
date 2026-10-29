@@ -392,7 +392,20 @@ pub async fn execute<I: Io, C: Clock, R: Rng>(
         let context=SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
         let historical=match plan{Plan::Select(q)=>q.historical.clone(),_=>None};
         let snapshot=db.snapshot(s,&historical)?.as_of;
-        for table in ["tickets","users"]{let rows=db.scan(s,table,&historical)?;let batch=batch(table,&rows)?;let memory=MemTable::try_new(batch.schema(),vec![vec![batch]]).map_err(candidate)?;
+        let tables=match plan {
+            Plan::Select(q)=> {let mut tables=vec![q.table.as_str()];if let Some((join,_))=&q.join {if join!=&q.table {tables.push(join);}} tables},
+            Plan::Update{table,..}=>vec![table.as_str()],
+            _=>vec![],
+        };
+        for table in tables {
+            // Shared storage bound pushdown changes only the snapshot input. DataFusion still
+            // plans and evaluates the complete original relational predicate and projection.
+            let filter=match plan {
+                Plan::Select(q) if q.join.is_none()=>q.filter.clone(),
+                Plan::Update{filter,..}=>filter.clone(),
+                _=>None,
+            };
+            let rows=db.scan_filtered(s,table,&historical,&filter,params)?;let batch=batch(table,&rows)?;let memory=MemTable::try_new(batch.schema(),vec![vec![batch]]).map_err(candidate)?;
             context.register_table(table,Arc::new(SnapshotProvider{memory,table:table.into(),lsn:snapshot,events:events.clone()})).map_err(candidate)?;}
         let(sql,width)=query(plan)?;let frame=context.sql(&sql).await.map_err(candidate)?.with_param_values(params.iter().map(scalar).collect::<Vec<_>>()).map_err(candidate)?;
         db.event(||serde_json::json!({"datafusion_logical":frame.logical_plan().display_indent().to_string()}));

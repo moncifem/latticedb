@@ -28,9 +28,26 @@ fn env(table: &str, row: &[Value]) -> Result<Env> {
         })
         .collect())
 }
-pub fn eval(e: &Expr, row: &Env, count: usize, params: &[Value]) -> Result<Value> {
+pub trait RowLookup {
+    fn column(&self, name: &str) -> Option<&Value>;
+}
+impl RowLookup for Env {
+    fn column(&self, name: &str) -> Option<&Value> {
+        self.get(name)
+    }
+}
+struct IndexedRow<'a> {
+    positions: &'a BTreeMap<String, usize>,
+    values: &'a [Value],
+}
+impl RowLookup for IndexedRow<'_> {
+    fn column(&self, name: &str) -> Option<&Value> {
+        self.positions.get(name).and_then(|at| self.values.get(*at))
+    }
+}
+pub fn eval(e: &Expr, row: &impl RowLookup, count: usize, params: &[Value]) -> Result<Value> {
     match e {
-        Expr::Col(c) => row.get(c).cloned().ok_or_else(|| {
+        Expr::Col(c) => row.column(c).cloned().ok_or_else(|| {
             Error::new(
                 "42703",
                 "LSQL-0003",
@@ -102,10 +119,20 @@ fn validate(e: &Expr, cols: &BTreeSet<String>) -> Result<()> {
         _ => Ok(()),
     }
 }
-fn project(exprs: &[Expr], row: &Env, count: usize, params: &[Value]) -> Result<Vec<Value>> {
+fn project(
+    exprs: &[Expr],
+    row: &impl RowLookup,
+    count: usize,
+    params: &[Value],
+) -> Result<Vec<Value>> {
     exprs.iter().map(|e| eval(e, row, count, params)).collect()
 }
-fn matches(filter: &Option<Expr>, row: &Env, count: usize, params: &[Value]) -> Result<bool> {
+fn matches(
+    filter: &Option<Expr>,
+    row: &impl RowLookup,
+    count: usize,
+    params: &[Value],
+) -> Result<bool> {
     match filter {
         None => Ok(true),
         Some(e) => match eval(e, row, count, params)? {
@@ -203,75 +230,142 @@ fn inner<I: Io, C: Clock, R: Rng>(
             if let Some((_, on)) = &q.join {
                 validate(on, &cols)?;
             }
+            let mut positions = BTreeMap::new();
+            let (_, names) = schema(&q.table)?;
+            for (at, name) in names.iter().enumerate() {
+                positions.insert(name.to_string(), at);
+                positions.insert(format!("{}.{name}", q.table), at);
+            }
+            if let Some((join, _)) = &q.join {
+                for (at, name) in schema(join)?.1.iter().enumerate() {
+                    if positions.contains_key(*name) {
+                        positions.remove(*name);
+                    } else {
+                        positions.insert(name.to_string(), names.len() + at);
+                    }
+                    positions.insert(format!("{join}.{name}"), names.len() + at);
+                }
+            }
+            let base = if q.join.is_none() {
+                db.scan_filtered(s, &q.table, &q.historical, &q.filter, params)?
+            } else {
+                db.scan(s, &q.table, &q.historical)?
+            };
             let mut rows = Vec::new();
-            let base = db.scan(s, &q.table, &q.historical)?;
             if let Some((join, on)) = &q.join {
                 let right = db.scan(s, join, &q.historical)?;
-                for a in &base {
-                    for b in &right {
-                        let mut r = env(&q.table, a)?;
-                        let other = env(join, b)?;
-                        for (k, v) in other {
-                            if !k.contains('.') && r.contains_key(&k) {
-                                r.remove(&k);
-                            } else {
-                                r.insert(k, v);
+                // A deterministic equality index replaces the quadratic cross product. Other
+                // predicates retain nested-loop execution and the full ON/WHERE checks.
+                let equality = if let Expr::Binary(a, op, b) = on {
+                    if op == "=" {
+                        if let (Expr::Col(a), Expr::Col(b)) = (a.as_ref(), b.as_ref()) {
+                            match (positions.get(a), positions.get(b)) {
+                                (Some(a), Some(b)) if *a < names.len() && *b >= names.len() => {
+                                    Some((*a, *b - names.len()))
+                                }
+                                (Some(a), Some(b)) if *b < names.len() && *a >= names.len() => {
+                                    Some((*b, *a - names.len()))
+                                }
+                                _ => None,
                             }
+                        } else {
+                            None
                         }
-                        if eval(on, &r, 0, params)? == Value::Bool(true) {
-                            rows.push(r);
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let mut index = BTreeMap::<Value, Vec<&Vec<Value>>>::new();
+                if let Some((_, right_at)) = equality {
+                    for row in &right {
+                        if row[right_at] != Value::Null {
+                            index.entry(row[right_at].clone()).or_default().push(row);
+                        }
+                    }
+                }
+                for left in base {
+                    let candidates = if let Some((left_at, _)) = equality {
+                        index.get(&left[left_at]).cloned().unwrap_or_default()
+                    } else {
+                        right.iter().collect()
+                    };
+                    for right in candidates {
+                        let mut joined = left.clone();
+                        joined.extend(right.iter().cloned());
+                        let view = IndexedRow {
+                            positions: &positions,
+                            values: &joined,
+                        };
+                        if eval(on, &view, 0, params)? == Value::Bool(true)
+                            && matches(&q.filter, &view, 0, params)?
+                        {
+                            rows.push(joined);
                         }
                     }
                 }
             } else {
-                for r in base {
-                    rows.push(env(&q.table, &r)?);
-                }
-            }
-            let mut filtered = Vec::new();
-            for r in rows {
-                if matches(&q.filter, &r, 0, params)? {
-                    filtered.push(r);
+                for row in base {
+                    if matches(
+                        &q.filter,
+                        &IndexedRow {
+                            positions: &positions,
+                            values: &row,
+                        },
+                        0,
+                        params,
+                    )? {
+                        rows.push(row);
+                    }
                 }
             }
             let aggregate = !q.group.is_empty()
                 || q.columns.iter().any(Expr::count)
                 || q.having.as_ref().is_some_and(Expr::count);
-            let mut groups = BTreeMap::<Vec<Value>, Vec<Env>>::new();
+            let mut out = Vec::new();
             if aggregate {
-                for r in filtered {
-                    let k = project(&q.group, &r, 0, params)?;
-                    groups.entry(k).or_default().push(r);
+                let mut groups = BTreeMap::<Vec<Value>, (usize, Vec<Value>)>::new();
+                for row in rows {
+                    let key = project(
+                        &q.group,
+                        &IndexedRow {
+                            positions: &positions,
+                            values: &row,
+                        },
+                        0,
+                        params,
+                    )?;
+                    let entry = groups.entry(key).or_insert_with(|| (0, row));
+                    entry.0 += 1;
                 }
                 if q.group.is_empty() && groups.is_empty() {
-                    groups.insert(vec![], vec![]);
+                    groups.insert(vec![], (0, vec![]));
+                }
+                for (count, row) in groups.into_values() {
+                    let view = IndexedRow {
+                        positions: &positions,
+                        values: &row,
+                    };
+                    if matches(&q.having, &view, count, params)? {
+                        out.push((
+                            project(&q.order, &view, count, params)?,
+                            project(&q.columns, &view, count, params)?,
+                        ));
+                    }
                 }
             } else {
-                for (i, r) in filtered.into_iter().enumerate() {
-                    groups.insert(vec![Value::Int(i as i64)], vec![r]);
-                }
-            }
-            let mut out = Vec::new();
-            for group in groups.into_values() {
-                let empty = Env::new();
-                let row = group.first().unwrap_or(&empty);
-                if matches(&q.having, row, group.len(), params)? {
-                    if aggregate {
-                        for e in q.columns.iter().chain(q.order.iter()) {
-                            if !e.count()
-                                && !q.group.contains(e)
-                                && !matches!(e, Expr::Lit(_) | Expr::Param(_))
-                            {
-                                return Err(Error::unsupported(
-                                    "nonaggregate projection must be a group key",
-                                ));
-                            }
-                        }
+                for row in rows {
+                    let view = IndexedRow {
+                        positions: &positions,
+                        values: &row,
+                    };
+                    if matches(&q.having, &view, 1, params)? {
+                        out.push((
+                            project(&q.order, &view, 1, params)?,
+                            project(&q.columns, &view, 1, params)?,
+                        ));
                     }
-                    out.push((
-                        project(&q.order, row, group.len(), params)?,
-                        project(&q.columns, row, group.len(), params)?,
-                    ));
                 }
             }
             if !q.order.is_empty() {

@@ -3,8 +3,8 @@
 This is an isolated, unfinished experiment for P2-10 / issue #119. ADR 0013 remains **proposed**.
 Its seven criteria are fixed in `../../docs/adr/0013-sql-planner-and-executor.md`; this directory does
 not replace them or select a winner. Historical clean-build and simulator observations, including a failed first harness run, are recorded
-in [RESULTS.md](RESULTS.md). PostgreSQL comparisons and complete dependency-policy review remain
-missing until a corrected run finishes; effort-days remain unknown. A workflow or source implementation
+in [RESULTS.md](RESULTS.md). The retained functional retry completed PostgreSQL comparisons but failed all C4 ratios and
+dependency policy; see RESULTS.md. Fresh optimized measurements remain pending; effort-days remain unknown. A workflow or source implementation
 is not successful execution evidence.
 
 The nested `[workspace]` and lockfile keep all experiment dependencies out of the production graph
@@ -139,7 +139,7 @@ Published source APIs were checked through official documentation / Context7 and
 archives: sqlparser 0.63.0, DataFusion 55.2.0 (including datafusion-catalog/session), and their
 checksummed standalone lockfile. DataFusion itself uses sqlparser 0.62.0, so the separate 0.63 parser
 candidate adds a recorded duplicate; it is not hidden when measuring the dependency graph. Tokio
-1.52.3, futures 0.3.32 and async-trait 0.1.89 are exact compatible experiment pins, not assertions that
+1.53.3, futures 0.3.32 and async-trait 0.1.89 are exact compatible experiment pins, not assertions that
 these are the newest releases. Official APIs consulted:
 
 - https://docs.rs/sqlparser/0.63.0/sqlparser/

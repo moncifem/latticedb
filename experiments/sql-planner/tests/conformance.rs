@@ -159,3 +159,96 @@ fn independent_parsers_lower_to_identical_plans() {
         );
     }
 }
+
+fn optimized_relational_edges(parse: Parse) {
+    let mut db = Db::open(
+        SimIo::new(31, FaultProfile::clean()),
+        SimClock::new(1000),
+        SeededRng::new(32),
+    )
+    .unwrap();
+    db.seed(12).unwrap();
+    let baseline = db.receipts.last().unwrap().changeset.clone();
+    let mut session = Session::default();
+    let mut run = |sql: &str, params: &[Value]| {
+        execute(&mut db, &mut session, &parse(sql).unwrap(), params).unwrap()
+    };
+    run(
+        "INSERT INTO tickets(id,owner,priority) VALUES($1,3,9)",
+        &[Value::Int(-2)],
+    );
+    for (sql, expected) in [
+        (
+            "SELECT id FROM tickets WHERE id = $1",
+            vec![vec![Value::Int(-2)]],
+        ),
+        (
+            "SELECT id FROM tickets WHERE id < 1 ORDER BY id",
+            vec![vec![Value::Int(-2)], vec![Value::Int(0)]],
+        ),
+        (
+            "SELECT id FROM tickets WHERE id >= 0 AND id < 3 ORDER BY id",
+            vec![
+                vec![Value::Int(0)],
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+            ],
+        ),
+        (
+            "SELECT id FROM tickets WHERE 0 <= id AND 3 > id ORDER BY id",
+            vec![
+                vec![Value::Int(0)],
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+            ],
+        ),
+        ("SELECT id FROM tickets WHERE id > 2 AND id <= 2", vec![]),
+        ("SELECT id FROM tickets WHERE id = 2 AND id = 3", vec![]),
+        (
+            "SELECT id FROM tickets WHERE id = $1 OR id = 2 ORDER BY id",
+            vec![vec![Value::Int(-2)], vec![Value::Int(2)]],
+        ),
+        (
+            "SELECT COUNT(*) FROM tickets WHERE id > 50",
+            vec![vec![Value::Int(0)]],
+        ),
+        (
+            "SELECT tickets.id, users.id FROM tickets INNER JOIN users ON tickets.id < users.id WHERE users.id < 2 AND tickets.id >= 0 ORDER BY tickets.id",
+            vec![vec![Value::Int(0), Value::Int(1)]],
+        ),
+        (
+            "SELECT tickets.id FROM users INNER JOIN tickets ON tickets.owner = users.id WHERE users.id = 3 ORDER BY tickets.id",
+            vec![vec![Value::Int(-2)], vec![Value::Int(3)]],
+        ),
+    ] {
+        assert_eq!(run(sql, &[Value::Int(-2)]), expected, "{sql}");
+    }
+    assert_eq!(
+        run("SELECT id FROM tickets WHERE id = $1", &[Value::Int(2)]),
+        vec![vec![Value::Int(2)]]
+    );
+    run("BEGIN", &[]);
+    run("INSERT INTO tickets(id,owner,priority) VALUES(50,3,1)", &[]);
+    assert_eq!(
+        run("SELECT id FROM tickets WHERE id >= 50 AND id < 51", &[]),
+        vec![vec![Value::Int(50)]]
+    );
+    assert!(
+        run(
+            &format!("SELECT id FROM tickets AS OF CHANGESET '{baseline}' WHERE id = $1"),
+            &[Value::Int(-2)]
+        )
+        .is_empty()
+    );
+    run("ROLLBACK", &[]);
+    assert!(run("SELECT id FROM tickets WHERE id = 50", &[]).is_empty());
+}
+#[test]
+fn custom_optimized_bounds_join_and_group_edges() {
+    optimized_relational_edges(custom::parse);
+}
+#[cfg(feature = "parser")]
+#[test]
+fn sqlparser_optimized_bounds_join_and_group_edges() {
+    optimized_relational_edges(lattice_sql_planner_spike::parsed::parse);
+}
