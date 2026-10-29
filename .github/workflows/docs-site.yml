@@ -1,0 +1,95 @@
+name: docs-site
+# Builds the documentation site from docs/ with mdBook. Every pull request that touches the documents
+# builds it and checks relative links; nothing is deployed from a pull request. A push to main also
+# deploys to GitHub Pages. The deploy job needs Pages enabled by the owner (Settings, Pages, Source:
+# GitHub Actions); until then it fails at deploy-pages and the build job is unaffected. See
+# docs/site-setup.md. Uses pull_request, never pull_request_target.
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "formats/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "tools/docs_summary.py"
+      - "tools/test_docs_summary.py"
+      - ".github/workflows/docs-site.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "formats/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "tools/docs_summary.py"
+      - "tools/test_docs_summary.py"
+      - ".github/workflows/docs-site.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: docs-site-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Pinned release binary. The checksum is the sha256 GitHub publishes for this asset
+  # (rust-lang/mdBook release v0.5.4, mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz).
+  MDBOOK_VERSION: v0.5.4
+  MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tests for the staging and wiki scripts
+        run: python3 -m unittest discover -s tools -p 'test_docs_*.py'
+      - name: Install mdBook (pinned release, checksum verified)
+        run: |
+          set -euo pipefail
+          archive="mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -sSfL -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/${archive}"
+          echo "${MDBOOK_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict -
+          mkdir -p "${RUNNER_TEMP}/mdbook-bin"
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}/mdbook-bin" mdbook
+          echo "${RUNNER_TEMP}/mdbook-bin" >> "${GITHUB_PATH}"
+      - name: Stage docs, generate SUMMARY.md and check relative links
+        run: python3 tools/docs_summary.py --out target/docs-src
+      - name: Build the site
+        run: |
+          mdbook --version
+          mdbook build docs --dest-dir "${GITHUB_WORKSPACE}/target/docs-book"
+          test -f target/docs-book/index.html
+      - name: Upload the Pages artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: target/docs-book
+
+  deploy:
+    name: deploy
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write # publish the artifact to GitHub Pages
+      id-token: write # deploy-pages verifies the deployment source with an OIDC token
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

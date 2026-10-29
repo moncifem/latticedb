@@ -1,0 +1,77 @@
+name: wiki-sync
+# Mirrors a small set of pages generated from docs/ into the repository wiki (a separate git repository,
+# <repo>.wiki.git). The wiki is read-only in practice: the next sync overwrites any hand edit.
+# It pushes with the workflow's own GITHUB_TOKEN (contents: write on this one job); no secret is used.
+# The wiki repository only exists after a first page is saved in the web UI, so until the owner has done
+# that the job prints a notice and ends successfully. See docs/site-setup.md.
+# Runs on push to main and by hand; never on pull requests and never with pull_request_target.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "tools/docs_wiki.py"
+      - "tools/docs_summary.py"
+      - ".github/workflows/wiki-sync.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: sync
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # the token must be able to push to the wiki git repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tests for the wiki generator
+        run: python3 -m unittest discover -s tools -p 'test_docs_*.py'
+      - name: Generate the wiki pages
+        run: python3 tools/docs_wiki.py --out "${RUNNER_TEMP}/wiki-pages"
+      - name: Push to the wiki repository
+        env:
+          WIKI_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          wiki_url="https://github.com/${REPO}.wiki.git"
+          auth="$(printf 'x-access-token:%s' "${WIKI_TOKEN}" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth}"
+          export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
+
+          if ! probe="$(git ls-remote "${wiki_url}" 2>&1 >/dev/null)"; then
+            if grep -qi "not found" <<<"${probe}"; then
+              echo "::notice title=Wiki not initialized::The wiki repository does not exist yet. The owner must create the first page in the web UI; see docs/site-setup.md. Nothing was pushed."
+              exit 0
+            fi
+            echo "${probe}" >&2
+            exit 1
+          fi
+
+          git clone --quiet "${wiki_url}" "${RUNNER_TEMP}/wiki"
+          cd "${RUNNER_TEMP}/wiki"
+          git rm -rq --ignore-unmatch .
+          cp "${RUNNER_TEMP}"/wiki-pages/* .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::notice title=Wiki up to date::No page changed."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "docs: sync wiki from main at ${SOURCE_SHA}"
+          git push origin HEAD
