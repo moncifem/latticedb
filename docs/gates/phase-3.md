@@ -83,7 +83,10 @@ in-memory function `merge_rows` that merges a remote row change into a local row
 (last-writer-wins register, observed-remove set, or plain). It is not wired to the row store, the catalog or sync,
 has no byte encoding, and CRDT state is not persisted, so recovery of CRDT state, delta replication through change
 sets and the simulator-level N-replica check of WP42 are still open. One local run of
-`cargo test -p lattice-engines --lib merge` (12 tests, default proptest settings): commutativity, associativity,
+`cargo test -p lattice-engines --lib merge` (14 tests, default proptest settings): commutativity, associativity,
 idempotence and convergence of replicas applying shuffled, duplicated orders of the same changes held against an
-oracle computed from the change set; five deliberately wrong merge variants were each caught by the matching law
-check. The full `cargo xtask ci` gate was not run locally.
+oracle computed from the change set; nine deliberately wrong merge variants were each caught by the convergence check (five also by the law check). The full `cargo xtask ci` gate was not run locally.
+P3-05 fact: I5 for column merge holds only while the union of changes fits the bounds (256 columns, 1 024 set
+elements, 4 096 tags); beyond them `merge_rows` refuses and a replica can diverge, so I5 is open there until
+compaction exists. Row delete uses the interim rule in RFC 0011. Row-store wiring, persisted CRDT state and
+simulator-level N-replica checks are not done.

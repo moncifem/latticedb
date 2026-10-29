@@ -19,7 +19,9 @@
 //!   the row with the greater `(plain stamp, plain values)` win as a whole, the same
 //!   whole-row last-writer-wins a non-CRDT table gets today.
 //! - Row delete: a delete at HLC `d` hides every write whose stamp is `<= d` (delete wins ties).
-//!   A write with a greater stamp shows again. Cells are kept, never dropped, so the merge stays a
+//!   A write with a greater stamp shows again, even one that is all nulls (the row is then live).
+//!   A forged huge delete HLC would hide all later writes, so the caller must reject remote HLCs
+//!   beyond a drift bound before merging; this module does not know the clock. Cells are kept, never dropped, so the merge stays a
 //!   join of states; reclaiming them is compaction, which is out of scope.
 
 use lattice_abi::Hlc;
@@ -166,17 +168,19 @@ impl MergeRow {
         at: Hlc,
         values: Vec<Option<Vec<u8>>>,
     ) -> Result<bool, MergeError> {
-        let wanted = self
+        let plain_columns: Vec<usize> = self
             .cells
             .iter()
-            .filter(|c| matches!(c, Cell::Plain(_)))
-            .count();
-        if values.len() != wanted {
+            .enumerate()
+            .filter(|(_, c)| matches!(c, Cell::Plain(_)))
+            .map(|(i, _)| i)
+            .collect();
+        if values.len() != plain_columns.len() {
             return Err(MergeError::Shape);
         }
-        for (i, v) in values.iter().enumerate() {
+        for (column, v) in plain_columns.iter().zip(&values) {
             if let Some(v) = v {
-                check_value(i, v)?;
+                check_value(*column, v)?;
             }
         }
         // Same order as the merge: the greater (stamp, values) wins, so a write is never applied
@@ -222,7 +226,10 @@ impl MergeRow {
         }
     }
 
-    /// Adds `element` to set column `column` under a unique `tag`.
+    /// Adds `element` to set column `column` under a unique `tag`. The tag is the HLC of the add
+    /// change, unique per node by I4; a tag reused for two adds is the caller's bug (removing one
+    /// element then also cancels the other). The set is cloned to keep the operation atomic, which
+    /// costs O(set size), bounded by [`MAX_SET_TAGS`]; the same holds for the remove operations.
     pub fn set_add(&mut self, column: usize, element: Vec<u8>, tag: Hlc) -> Result<(), MergeError> {
         check_value(column, &element)?;
         let cell = self.set_cell(column)?;
@@ -295,7 +302,8 @@ impl MergeRow {
         self.check(kinds)?;
         let floor = self.deleted_at;
         let plain_visible = self.plain_stamp.is_some_and(|s| visible(&s, floor));
-        let mut any = false;
+        // A visible plain write makes the row live even when every plain value is null.
+        let mut any = plain_visible;
         let mut cells = Vec::with_capacity(self.cells.len());
         for cell in &self.cells {
             cells.push(match cell {
@@ -574,16 +582,18 @@ mod tests {
                 }
             });
         }
-        let any = cells.iter().any(|c| match c {
-            CellView::Value(v) => v.is_some(),
-            CellView::Elements(e) => !e.is_empty(),
-        });
+        let any = plain.as_ref().is_some_and(|(t, _)| up(t))
+            || cells.iter().any(|c| match c {
+                CellView::Value(v) => v.is_some(),
+                CellView::Elements(e) => !e.is_empty(),
+            });
         RowView {
             live: floor.is_none() || any,
             cells,
         }
     }
 
+    type ViewFn = fn(&MergeRow) -> RowView;
     type MergeFn = fn(&[MergeKind], &MergeRow, &MergeRow) -> Result<MergeRow, MergeError>;
 
     fn fold(merge: MergeFn, changes: &[MergeRow]) -> MergeRow {
@@ -616,7 +626,11 @@ mod tests {
 
     /// Replicas apply the same change set in different shuffled, duplicated orders. Returns false
     /// when their final rows differ from each other or from the oracle.
-    fn converges(merge: MergeFn, ops: &[Op], orders: &[Vec<usize>]) -> bool {
+    fn real_view(r: &MergeRow) -> RowView {
+        r.view(&KINDS).unwrap()
+    }
+
+    fn converges(merge: MergeFn, view: ViewFn, ops: &[Op], orders: &[Vec<usize>]) -> bool {
         if ops.is_empty() {
             return true;
         }
@@ -632,7 +646,7 @@ mod tests {
             let mut all = seq;
             all.extend(changes.iter().cloned());
             let row = fold(merge, &all);
-            if row.view(&KINDS).unwrap() != expected {
+            if view(&row) != expected {
                 return false;
             }
             match &reference {
@@ -742,7 +756,7 @@ mod tests {
             ops in arb_ops(),
             orders in proptest::collection::vec(proptest::collection::vec(0usize..16, 0..24), 2..5),
         ) {
-            prop_assert!(converges(real, &ops, &orders));
+            prop_assert!(converges(real, real_view, &ops, &orders));
         }
 
         #[test]
@@ -790,9 +804,9 @@ mod tests {
             Config::default(),
             TestRng::deterministic_rng(proptest::test_runner::RngAlgorithm::ChaCha),
         );
-        let strat = (arb_row(), arb_row(), arb_row());
+        let strategy = (arb_row(), arb_row(), arb_row());
         for _ in 0..3000 {
-            let (a, b, c) = strat.new_tree(&mut runner).unwrap().current();
+            let (a, b, c) = strategy.new_tree(&mut runner).unwrap().current();
             if let Some(law) = broken_law(merge, &a, &b, &c) {
                 return Some(law);
             }
@@ -816,32 +830,152 @@ mod tests {
         assert_eq!(find_violation(wrong_delete_loses), Some("commutativity"));
     }
 
+    fn wrong_plain_columns_mixed(
+        k: &[MergeKind],
+        a: &MergeRow,
+        b: &MergeRow,
+    ) -> Result<MergeRow, MergeError> {
+        // Per-column maximum instead of one winner for all plain columns: a valid join, but it
+        // mixes values of different writers.
+        let mut m = merge_rows(k, a, b)?;
+        for ((cell, l), r) in m.cells.iter_mut().zip(&a.cells).zip(&b.cells) {
+            if let (Cell::Plain(slot), Cell::Plain(x), Cell::Plain(y)) = (cell, l, r) {
+                *slot = x.clone().max(y.clone());
+            }
+        }
+        Ok(m)
+    }
+
+    fn wrong_lww_drops_byte_tie_break(
+        k: &[MergeKind],
+        a: &MergeRow,
+        b: &MergeRow,
+    ) -> Result<MergeRow, MergeError> {
+        let mut m = merge_rows(k, a, b)?;
+        for ((cell, l), r) in m.cells.iter_mut().zip(&a.cells).zip(&b.cells) {
+            if let (Cell::Lww(slot), Cell::Lww(x), Cell::Lww(y)) = (cell, l, r) {
+                let by_stamp = |o: &Option<(Hlc, Vec<u8>)>| o.as_ref().map(|(t, _)| *t);
+                *slot = if by_stamp(y) > by_stamp(x) {
+                    y.clone()
+                } else {
+                    x.clone()
+                };
+            }
+        }
+        Ok(m)
+    }
+
+    fn wrong_plain_stamp_is_min(
+        k: &[MergeKind],
+        a: &MergeRow,
+        b: &MergeRow,
+    ) -> Result<MergeRow, MergeError> {
+        let mut m = merge_rows(k, a, b)?;
+        m.plain_stamp = a.plain_stamp.min(b.plain_stamp);
+        Ok(m)
+    }
+
+    /// A reader that shows a write stamped exactly at the delete (`>=` instead of `>`).
+    fn wrong_view_tie_visible(r: &MergeRow) -> RowView {
+        let mut shifted = r.clone();
+        // Stamps are compared with `>`, so lowering the delete by one step in the total order is
+        // the same as comparing with `>=`; build that predecessor from the HLC fields.
+        shifted.deleted_at = r.deleted_at.and_then(|d| {
+            if d.node > 0 {
+                Some(Hlc {
+                    node: d.node - 1,
+                    ..d
+                })
+            } else if d.counter > 0 {
+                Some(Hlc {
+                    counter: d.counter - 1,
+                    node: u32::MAX,
+                    ..d
+                })
+            } else if d.wall_ms > 0 {
+                Some(Hlc {
+                    wall_ms: d.wall_ms - 1,
+                    counter: u32::MAX,
+                    node: u32::MAX,
+                })
+            } else {
+                None
+            }
+        });
+        shifted.view(&KINDS).unwrap()
+    }
+
     #[test]
     fn the_convergence_check_can_fail_for_wrong_variants() {
         let mut runner = TestRunner::new_with_rng(
             Config::default(),
             TestRng::deterministic_rng(proptest::test_runner::RngAlgorithm::ChaCha),
         );
-        let strat = (
+        let strategy = (
             arb_ops(),
             proptest::collection::vec(proptest::collection::vec(0usize..16, 0..24), 2..5),
         );
-        let variants: [(&str, MergeFn); 3] = [
-            ("lww", wrong_arrival_order_lww),
-            ("removes", wrong_forget_remote_removes),
-            ("delete", wrong_delete_loses),
+        // (name, merge, view). The first five are the variants the law check also catches.
+        let variants: [(&str, MergeFn, ViewFn); 9] = [
+            ("arrival-order register", wrong_arrival_order_lww, real_view),
+            (
+                "dropped remote removes",
+                wrong_forget_remote_removes,
+                real_view,
+            ),
+            ("toggling removes", wrong_toggle_removed, real_view),
+            ("averaged delete stamp", wrong_average_delete, real_view),
+            ("lost delete", wrong_delete_loses, real_view),
+            ("plain columns mixed", wrong_plain_columns_mixed, real_view),
+            (
+                "register without byte tie-break",
+                wrong_lww_drops_byte_tie_break,
+                real_view,
+            ),
+            ("plain stamp is min", wrong_plain_stamp_is_min, real_view),
+            ("delete shows ties", real, wrong_view_tie_visible),
         ];
-        for (name, v) in variants {
-            let mut caught = false;
-            let mut real_ok = true;
-            for _ in 0..3000 {
-                let (ops, orders) = strat.new_tree(&mut runner).unwrap().current();
-                caught |= !converges(v, &ops, &orders);
-                real_ok &= converges(real, &ops, &orders);
-            }
-            assert!(real_ok, "the real merge must converge");
+        let mut samples = Vec::new();
+        for _ in 0..3000 {
+            samples.push(strategy.new_tree(&mut runner).unwrap().current());
+        }
+        assert!(
+            samples
+                .iter()
+                .all(|(o, ord)| converges(real, real_view, o, ord))
+        );
+        for (name, m, v) in variants {
+            let caught = samples.iter().any(|(o, ord)| !converges(m, v, o, ord));
             assert!(caught, "wrong variant {name} was not caught");
         }
+    }
+
+    #[test]
+    fn a_tag_reused_across_elements_is_a_caller_bug() {
+        // Tags must be unique per add (the HLC of the add change, unique per node by I4). If two
+        // elements share a tag, removing one cancels the other: the merge cannot tell them apart.
+        let k = [MergeKind::OrSet];
+        let mut r = MergeRow::empty(&k).unwrap();
+        let tag = hlc(1, 0, 1);
+        r.set_add(0, b"x".to_vec(), tag).unwrap();
+        r.set_add(0, b"y".to_vec(), tag).unwrap();
+        r.set_remove(0, b"x").unwrap();
+        assert_eq!(r.view(&k).unwrap().cells, vec![CellView::Elements(vec![])]);
+    }
+
+    #[test]
+    fn a_null_reinsert_after_a_delete_is_live_and_errors_name_the_column() {
+        let k = [MergeKind::Lww, MergeKind::None];
+        let mut r = MergeRow::empty(&k).unwrap();
+        r.delete(hlc(5, 0, 1));
+        assert!(!r.view(&k).unwrap().live);
+        r.write_plain(hlc(6, 0, 1), vec![None]).unwrap();
+        assert!(r.view(&k).unwrap().live);
+        // The plain value is column 1, not plain index 0.
+        assert_eq!(
+            r.write_plain(hlc(7, 0, 1), vec![Some(vec![0; MAX_VALUE_LEN + 1])]),
+            Err(MergeError::ValueTooLarge(1))
+        );
     }
 
     #[test]

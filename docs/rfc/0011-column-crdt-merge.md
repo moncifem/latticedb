@@ -45,36 +45,62 @@ truth for the same ordering.
   `(plain stamp, plain values)` supplies all of them. This is the whole-row last-writer-wins that a
   non-CRDT table has, and it keeps plain columns from mixing values of different writes.
 
-**Deletes.** A row delete carries only an HLC (RFC 0009's delete event has no observed-set), so an
-observed-remove at row level is not possible without new bytes. The rule: a delete at `d` hides
-every write stamped `<= d` (delete wins ties); a write stamped `> d` is visible again. The state
-keeps all cells and only the maximum `d`; visibility is computed when reading. Consequences:
-a write that was concurrent with the delete but carries a smaller HLC is hidden (delete wins),
-a concurrent write with a greater HLC survives (resurrects). Set removes inside a column stay
-add-wins. `docs/ARCHITECTURE.md` names "CRDT merge" for text, sets and registers and gives no row
-delete rule, so the row-level rule above is this RFC's proposal and an open question (below).
+**Deletes (interim rule, accepted by the tech lead on 2026-10-29 under the owner's delegation).**
+A delete at HLC `d` hides every write stamped at or before `d`. A write stamped after `d` shows
+again, and a delete wins ties. A concurrent write with a lower HLC is hidden; one with a higher HLC
+revives the row. Hidden cells are kept (the state keeps all cells and only the maximum `d`;
+visibility is computed on read), so nothing is lost physically. A row delete carries only an HLC
+(RFC 0009's delete event has no observed set), so an observed row remove is not possible without new
+bytes. Set removes inside a column stay add-wins. The wiring slice must:
+
+1. stamp an insert on all columns at one HLC, and treat a non-insert write to a deleted row as a
+   `Conflict` entity, not a revival;
+2. reject remote HLCs beyond a drift bound before merging (a forged `delete(u64::MAX)` would hide
+   every later write forever; this module does not know the clock).
+
+Upgrading to observed-remove (add-wins for writes concurrent with a delete) needs the feed to carry
+observed parents or a version vector: a separate RFC. The current rule stays a valid join under it.
+
+**Wiring requirements for kinds.**
+
+- The default kind `None` is whole-row last-writer-wins and a write must carry all plain columns,
+  so concurrent edits of different plain columns lose one of them. The wiring slice must carry a
+  changed-column set, or default synced columns to `Lww`.
+- Workflow-state columns must not be `Lww`: they are server-arbitrated and produce `Conflict`
+  entities (P3-09).
+- The `MergeKind` list is versioned with the schema. Rows merged under different lists fail with a
+  `Shape` error rather than merging.
+- An add tag is the HLC of the add change, unique per node by I4. A tag reused for two adds is a
+  caller bug (removing one element then cancels the other); a test records this.
 
 **Bounds.** At most 256 columns, 65 536 bytes per value or element, 1 024 elements and 4 096 add
 tags and 4 096 removed tags per set column. Inputs and the merged result are checked; on a breach
-`merge_rows` returns an error and the caller keeps the local row. The laws hold for any change set
-whose union fits the bounds; a set whose union does not fit is rejected, and which of its changes
-lands first would then matter. The wiring slice must quarantine such a change, not skip it silently.
-No function panics or indexes; all maps are ordered maps, so results are deterministic.
+`merge_rows` returns an error and nothing is merged. I5 holds only while the union of all changes
+fits the bounds. Beyond them the replica is in a degraded, alarmed state: it keeps the local row,
+reports the refused change, and may diverge from replicas that applied the changes in another order.
+The earlier idea of quarantining such a change is dropped, because skipping it cannot restore
+convergence. Compaction of tombstones and tags (open question 3) is therefore a prerequisite for
+wiring, not a follow-up. No function panics or indexes; all maps are ordered maps, so results are
+deterministic. Set mutators clone the cell to stay atomic, which costs O(set size), bounded by the
+tag limit.
 
 **Tests.** Property tests of commutativity, associativity and idempotence; replicas applying
 shuffled, duplicated orders of the same changes must reach identical rows (I5) and match an oracle
 computed from the change set by definition; a single-replica cross-check against the `lattice-core`
-register and set; and deliberately wrong merge variants (arrival-order register, dropped remote
-removes, toggling removes, averaged delete stamp, lost delete) that the same checks must catch.
+register and set; and nine deliberately wrong variants (arrival-order register, dropped remote removes, toggling
+removes, averaged delete stamp, lost delete, plain columns mixed across writers, register without
+the byte tie-break, plain stamp as minimum, delete that shows ties) that the convergence check must
+catch; the first five also fail the law check.
 
 ### Open questions
 
-1. Is hiding a lower-HLC concurrent write behind a delete the intended row-delete rule, or should
-   a delete be an observed-remove (needs the feed to carry observed stamps: a format change)?
+1. Row delete rule: decided as the interim rule above (tech lead, 2026-10-29). Observed-remove at
+   row level stays a possible later upgrade.
 2. Where CRDT state lives: delta tags in the existing cell bytes cannot be told from value bytes, so
    persisting register stamps and set tags needs a new cell encoding and a recovery rule. Not
    decided here; stop point for the stored form is a separate RFC and ADR.
 3. Tombstone and tag reclamation (compaction) needs causal stability, as ADR 0010 notes for text.
+   It is a prerequisite for wiring, because I5 holds only within the bounds.
 
 ## Alternatives
 
