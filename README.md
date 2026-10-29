@@ -38,7 +38,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, replayed indexes and in-memory version vacuum; reads below the vacuum floor return an error |
 | Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; trust authentication, plaintext and a `SELECT 1` placeholder handler |
 | SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
-| Statement controls | Row-policy, cancellation, deadline and memory-budget primitives; store/executor enforcement is not wired yet |
+| Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
 | Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
 
@@ -46,7 +46,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 flowchart TB
   subgraph ahead["Not built yet"]
     direction LR
-    sql["SQL server"] ~~~ pol["Agent policy"] ~~~ sync["Live sync"] ~~~ ws["Team workspace"]
+    sql["SQL server"] ~~~ pol["Authenticated agent policy"] ~~~ sync["Live sync"] ~~~ ws["Team workspace"]
   end
   subgraph have["Works today"]
     direction TB
@@ -60,7 +60,8 @@ flowchart TB
   ahead -.-> have
 ```
 
-Storage-backed SQL execution, PostgreSQL driver conformance, live sync, policy enforcement and the connected workspace are still ahead.
+Storage-backed SQL execution, PostgreSQL driver conformance, live sync, authenticated agent permissions and the connected workspace are still ahead.
+Row policies currently come from a trusted host; the development listener still uses trust authentication.
 See the [delivery plan](docs/spec/README.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
 
 ## Try the foundations

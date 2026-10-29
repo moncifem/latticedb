@@ -146,8 +146,8 @@ PRs [197](https://github.com/moncifem/latticedb/pull/197),
   registry is not connected to the TCP listener or query executor yet.
 - `lattice-engines::limits` provides per-row read/write policy hooks, explicit allow/deny policies,
   seam-clock deadlines, cancellation and live-byte reservation accounting. Unit/property tests
-  validate these primitives; no scan/write policy enforcement, query abort/rollback or allocator RSS
-  limit is claimed before integration. WP32 remains open.
+  validate these primitives. The subsequent row-store integration is recorded below; query
+  abort/rollback and allocator RSS enforcement remain open. WP32 remains open.
 - Vacuum now prunes row commit-time/id metadata below its floor while preserving kernel dedupe and
   all WAL bytes. Public row/index/table/transaction reads return `SnapshotTooOld` below the floor,
   including absent-key and transaction-local reads; expired read-only commits also fail. Timestamp
@@ -158,3 +158,19 @@ PRs [197](https://github.com/moncifem/latticedb/pull/197),
 These changes do not sign Phase 1 or establish a Phase 2 exit criterion. Earlier missing-work lists
 above are historical snapshots: vacuum and the TCP development adapter are now implemented to the
 scope described here; the SQL parser exists, while the planner/executor and wire-driver gate do not.
+
+
+## Row-store policy integration (2026-10-29)
+
+PR [215](https://github.com/moncifem/latticedb/pull/215) binds a host-supplied evaluator to each
+row transaction and requires an explicit evaluator for snapshot reads. Point reads, scans, index
+lookups and transaction-local reads filter denied rows. Commit checks every final old-to-new
+transition after conflict/floor checks and before encoding, RNG use or WAL append; any denial
+rejects the whole batch. Recovery and scrub retain all authoritative rows. `begin()` explicitly
+selects the Phase 2 allow-all policy; a host requiring restrictions uses `begin_with_policy`.
+
+Focused tests cover actor separation, generated actor/reopen models, whole-batch denial with
+unchanged WAL/RNG witnesses and both planted policy bypasses. Independent review found no blocking
+defect. Evaluator identity remains bound, but interior-mutable authorization state is controlled by
+the trusted host and is not snapshotted. This is not authenticated PostgreSQL session isolation,
+SQL grants, executor deadline/memory enforcement or completion of P2-17/P2-18.

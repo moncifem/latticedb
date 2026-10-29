@@ -5,6 +5,8 @@
 //! are authorized before its change set reaches the WAL. Staging a proposed mutation is not a
 //! commit and does not bypass the policy on reads of transaction-local values. An evaluator can
 //! carry the authenticated principal; this module neither authenticates nor persists policy.
+//! Evaluators are supplied by a trusted host. Binding one to a transaction does not freeze any
+//! interior-mutable authorization state; the host controls that state and the explicit allow-all path.
 //! Default trait methods deny access. Phase 2's allow-all integration must select [`AllowAll`]
 //! explicitly; an omitted policy must never accidentally become an authorization bypass.
 //!
@@ -144,7 +146,7 @@ pub fn authorize_read(
     }
 }
 
-/// Checks the complete transition before staging a write; denial must reject that write.
+/// Checks a final old-to-new transition before commit reaches the WAL; denial rejects the batch.
 pub fn authorize_write(
     policy: &(impl PolicyEvaluator + ?Sized),
     row: RowWriteRef<'_>,

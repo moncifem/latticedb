@@ -61,7 +61,12 @@ between minor versions; format changes are called out explicitly.
   with a `SELECT 1` placeholder, frame deadlines and explicit shutdown. It uses plaintext/trust auth
   and does not open a database.
 - Bounded cancel-key registration and per-query tokens, plus row-policy hooks, seam-clock deadlines
-  and live-memory reservations. Store, listener and executor enforcement remain separate work.
+  and live-memory reservations. Deadline/memory enforcement and query abort/rollback remain executor work.
+- **Breaking (engine API):** snapshot reads require an explicit policy evaluator, and row transactions
+  bind their evaluator at creation. Point reads, scans, index lookups and transaction-local reads hide
+  denied rows; a denied final write transition rejects the whole batch before WAL writes or RNG use.
+  `begin()` retains the explicit Phase 2 allow-all path. Evaluators come from a trusted host, not an
+  authenticated SQL session; recovery and consistency checks retain the complete authoritative state.
 - **Breaking (engine API):** snapshot reads now return errors below the vacuum floor, including
   transaction-local reads and index lookups. Vacuum prunes derived commit metadata; timestamp
   resolution clamps to the floor and threshold maintenance respects retention/oldest-open inputs.
