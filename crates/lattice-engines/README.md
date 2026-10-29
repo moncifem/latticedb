@@ -30,3 +30,8 @@ See [the Phase 2 status](../../docs/gates/phase-2.md).
 against specific public-operation witnesses and clean controls. The seeded `row_sim` and `row_faults`
 workloads retain their original four-defect contract. These are complementary bounded checks; see the
 Phase 2 gate record for the remaining soak, north-star and branch evidence.
+
+`cargo test -p lattice-engines --test row_process_kill -- --nocapture` complements simulation with
+eight real child-process terminations and two clean controls, verifying acknowledged log/row batches
+and index/history recovery. OS process termination preserves the page cache; this does not test power
+loss or establish soak-volume evidence.

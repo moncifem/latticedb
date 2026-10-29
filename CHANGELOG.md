@@ -16,6 +16,9 @@ between minor versions; format changes are called out explicitly.
 - Ten distinct storage defect witnesses with independent semantic oracles, clean controls and guard
   cleanup checks; the existing four-defect randomized workload remains unchanged.
 
+- Real-process NS1 row recovery checks with observed commit receipts, complete-batch history oracles,
+  index/log scrubbers and a second recovery after eight writer terminations.
+
 - Phase review evidence packages from `cargo xtask gate`, with declared criteria, source provenance,
   invariant traceability and optional ledger diagnostics, without inferring or signing a gate pass.
 

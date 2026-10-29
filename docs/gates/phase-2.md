@@ -84,6 +84,27 @@ ten-defect slice of E2-4; it does not establish soak coverage, branch fault hist
 acceptance, or the Phase 2 gate. The randomized row workloads retain their existing four-defect
 contract; the new deterministic suite explicitly covers all ten through public storage operations.
 
+## NS1 with real log and row processes (E2-7)
+
+`cargo test -p lattice-engines --test row_process_kill -- --nocapture` runs two completed-burst
+controls and eight seeded kill schedules against real files and child processes. Children publish
+submission messages before commit and acknowledgement receipts only after commit returns and stdout
+is flushed. The controller confirms each writer is still alive, kills it, drains complete protocol
+messages, and independently matches recovered WAL batches to submitted envelopes and receipt LSNs.
+It compares current and historical rows and exact index lookups with its folded model, requires clean
+log/index scrubbers, then repeats recovery. Mixed batches include inserts, updates, deletes and a
+unique transaction marker across multiple tables.
+
+The observed controls submitted, acknowledged and recovered 32 batches. Across eight killed bursts,
+70 batches were submitted, 62 acknowledged and 70 recovered. Every observed acknowledgement survived;
+each recovered unacknowledged batch was complete. These counts are one bounded run, not fixed timing
+expectations. Seeds fix receipt thresholds and jitter; OS interruption points remain nondeterministic.
+
+This is NS1 evidence for the log and raw row/index engines. Process termination preserves the OS page
+cache and is not power loss. The simulated fault suites above supply complementary power-cut evidence.
+The tests do not guarantee that every kill landed inside a commit, prove soak volume, or cover the new
+typed-schema/checkpoint formats still in review. Branch histories remain pending.
+
 ## Still missing
 
 Catalog-backed index definitions; completed typed-table integration; checkpoint-based recovery with
