@@ -177,6 +177,19 @@ fn verify(store: &Store, rows: u64, generation: u64) -> Result<(), String> {
             return Err(format!("row {n} differs"));
         }
     }
+    // Audit the same bounded range used by the timer; an unbounded count alone would miss an
+    // incorrect exclusive upper bound or a no-op bounded scan becoming deceptively faster.
+    let end = rows.min(16);
+    let bounded = store
+        .scan_at(snap, TABLE, key(0)..key(end))
+        .map_err(|e| e.to_string())?;
+    if bounded.len() as u64 != end
+        || bounded.iter().enumerate().any(|(n, (pk, row))| {
+            *pk != (n as u64).to_be_bytes().as_slice() || *row != &value(n as u64, generation)
+        })
+    {
+        return Err("bounded range rows differ".into());
+    }
     for bucket in 0..BUCKETS {
         let found = store
             .lookup_at(snap, INDEX, &bucket.to_le_bytes())
