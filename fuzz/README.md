@@ -20,6 +20,15 @@ run through the bounded line framer. Seeds in `seeds/plugin_jsonl/` cover each m
 version, an unknown field, a duplicate key, a float, a lone surrogate, CRLF, invalid UTF-8 and a truncated
 stream. The target is not yet in the nightly, weekly or 24-hour matrices.
 
+## Sync frame target
+
+`sync_frame` feeds arbitrary bytes to the sync protocol decoder (`lattice_api::sync`). A frame that
+decodes must re-encode to exactly the bytes it came from, and is incomplete one byte short. The input is
+also decoded as a stream and with a small negotiated payload limit. Seeds in `seeds/sync_frame/` cover
+every message type, a two-frame stream, a trailing byte, an unknown type, an over-long length, a
+truncated frame, a zero version and an undefined error code. The target is not yet in the nightly,
+weekly or 24-hour matrices.
+
 ## Row codec targets
 
 - `row_ops` decodes versioned row-write batches, then requires canonical byte-exact re-encoding and an equal second decode.

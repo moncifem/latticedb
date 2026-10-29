@@ -15,3 +15,5 @@ pub mod cancel;
 pub mod scram;
 
 pub mod auth;
+
+pub mod sync;
