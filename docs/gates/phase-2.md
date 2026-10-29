@@ -338,3 +338,19 @@ empty/pre-first/future snapshots, retention floors, recovery and reapplied vacuu
 Local focused verification passed five strict-HLC tests (including the planted defect witness), four
 existing vacuum regressions and the 38-bit registry uniqueness check. Touched engine/core Clippy passed.
 This is bounded API evidence, not full SQL conformance or soak-volume evidence.
+
+## SQL binder and planner decision (P2-09, P2-10)
+
+`lattice-sql` now binds single-table `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `AS OF`),
+`INSERT`, `UPDATE` and `DELETE` with `RETURNING` into a typed logical plan, against an abstract
+catalog view. Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries and DDL are refused with `0A000`.
+Nothing executes SQL against storage yet, and the listener handler is still `SELECT 1`.
+
+The binder tests (table of goldens, error-code table, the five sqllogictest scripts as bind inputs, a
+property test that binding never panics and leaves no untyped expression) were run locally for
+`lattice-sql` only, at default proptest case counts. Mutation, Miri and larger case counts were left to CI.
+
+[ADR 0025](../adr/0025-sql-planner-recommendation.md) recommends an in-house planner and is
+**proposed**: it needs the owner's decision, and ADR 0013 stays proposed. P2-10 is not complete and
+the subset document stays draft. Binary size and memory bounds were not measured.
+
