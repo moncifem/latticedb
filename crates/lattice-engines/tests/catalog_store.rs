@@ -1,5 +1,6 @@
 //! The catalog against the simulated disk: persistence, versions, sharing one log with the row store,
 //! and atomic visibility of a catalog change under power cuts.
+#![cfg(feature = "row")]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

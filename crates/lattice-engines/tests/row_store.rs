@@ -1,5 +1,6 @@
 //! The row store against the simulated disk: snapshot isolation, first-committer-wins, recovery and
 //! the atomic visibility of a change set across the log and the rows (I2, I3).
+#![cfg(feature = "row")]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

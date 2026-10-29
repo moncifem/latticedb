@@ -1,6 +1,7 @@
 //! A seeded workload for the row store, checked against a model that keeps the whole row map at
 //! every commit. It looks for the failures the row planted bugs cause: a lost update, a change set
 //! that is only partly visible (I3), and rows that come back or vanish after a restart (I2).
+#![cfg(feature = "row")]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
