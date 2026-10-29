@@ -23,4 +23,5 @@
 | [0022](0022-wal-capability-admission.md) | ADR 0022: Required engine capabilities at WAL admission | accepted |
 | [0023](0023-change-feed-event-format.md) | ADR 0023: Change feed event and cursor encoding | proposed |
 | [0024](0024-sync-protocol-framing.md) | ADR 0024: Sync protocol framing and messages | proposed |
+| [0025](0025-sql-planner-recommendation.md) | ADR 0025: Recommendation for the SQL planner | proposed |
 | [0026](0026-principal-propagation.md) | ADR 0026: Carry the authenticated principal from the credential store to the query handler | proposed |
