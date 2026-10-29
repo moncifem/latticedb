@@ -496,6 +496,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lattice-exec"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "lattice-abi",
+ "lattice-core",
+ "lattice-engines",
+ "lattice-lsl",
+ "lattice-sql",
+ "proptest",
+]
+
+[[package]]
 name = "lattice-identity"
 version = "0.1.0-alpha.0"
 dependencies = [

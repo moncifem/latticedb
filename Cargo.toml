@@ -9,6 +9,7 @@ members = [
     "crates/lattice-sql",
     "crates/lattice-core",
     "crates/lattice-engines",
+    "crates/lattice-exec",
     "crates/lattice-identity",
     "crates/lattice-service",
     "crates/lattice-packs",
