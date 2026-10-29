@@ -15,7 +15,8 @@ The goal is to connect what the team knows, what it is building and what actuall
 > **Pre-alpha.** The storage kernel and early row engine work today. A development TCP listener
 > answers `SELECT 1`; storage-backed SQL execution and the connected team workspace are still ahead.
 > The Phase 1 gate remains open; Phase 2 development
-> is proceeding under a [documented waiver](docs/gates/phase-1-review.md). Use test data only.
+> is proceeding under a [documented waiver](docs/gates/phase-1-review.md), and Phase 3 building blocks have
+> started on the same terms ([status](docs/gates/phase-3.md)). See the [roadmap](docs/roadmap.md). Use test data only.
 
 ## Why build another database?
 
@@ -39,7 +40,9 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS, with a `SELECT 1` placeholder handler |
 | SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
 | Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
+| Sync building blocks | Early Phase 3 pieces, none connected to a server yet: a typed change-feed event model with a stable cursor, a sync protocol frame codec, a tree CRDT with moves (with a TLA+ model), an agent plugin contract with a conformance suite, and a client state machine that resumes without gaps |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
+| Contributor automation | A risk gate and overlap labels on pull requests, a serial merger, strict up-to-date checks and a proposal-only main guard; see the [agent workflow guide](docs/agent-workflow.md) |
 | Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
 
 The [accepted WAL capability guard](docs/rfc/0008-wal-capability-admission.md) has completed bounded
