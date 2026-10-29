@@ -18,19 +18,31 @@ mod lex;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-/// Repository root (the parent of the xtask crate).
-pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
+/// Finds the calling checkout at runtime, even when Cargo shares one binary across worktrees.
+/// Missing checkout markers are an error: never fall back to the binary's build directory.
+pub fn repo_root() -> Result<PathBuf, String> {
+    let start =
+        std::env::current_dir().map_err(|e| format!("cannot read current directory: {e}"))?;
+    find_repo_root(&start)
+}
+
+fn find_repo_root(start: &Path) -> Result<PathBuf, String> {
+    start
+        .ancestors()
+        .find(|path| {
+            path.join("Cargo.toml").is_file()
+                && path.join("layers.toml").is_file()
+                && path.join("xtask/Cargo.toml").is_file()
+        })
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .ok_or_else(|| "run xtask from inside a Lattice checkout (Cargo.toml, layers.toml and xtask/Cargo.toml required)".to_string())
 }
 
 fn run(program: &str, args: &[&str]) -> Result<(), String> {
     println!("+ {program} {}", args.join(" "));
     let status = Command::new(program)
         .args(args)
-        .current_dir(repo_root())
+        .current_dir(repo_root()?)
         .status()
         .map_err(|e| format!("failed to start {program}: {e}"))?;
     if status.success() {
@@ -72,7 +84,7 @@ fn docs() -> Result<(), String> {
             "spec.html",
             "reference.html",
         ] {
-            if !repo_root().join("docs/site").join(page).exists() {
+            if !repo_root()?.join("docs/site").join(page).exists() {
                 return Err(format!("docs build did not produce {page}"));
             }
         }
@@ -194,7 +206,7 @@ fn scorecard(args: &[&str]) -> Result<(), String> {
         ],
     )?;
     let mut pending = Vec::new();
-    collect_pending(&repo_root().join("crates"), &mut pending);
+    collect_pending(&repo_root()?.join("crates"), &mut pending);
     pending.sort();
     println!("pending specs ({}):", pending.len());
     for p in &pending {

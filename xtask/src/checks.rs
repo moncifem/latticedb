@@ -142,7 +142,7 @@ pub fn layer_violations(layers: &Layers, metadata: &serde_json::Value) -> Vec<St
 }
 
 pub fn check_layers() -> Result<(), String> {
-    let root = repo_root();
+    let root = repo_root()?;
     let layers = parse_layers(&read(&root.join("layers.toml"))?)?;
     let out = Command::new("cargo")
         .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -199,7 +199,7 @@ pub fn unsafe_count(src: &str) -> usize {
 /// Every crate except `lattice-sys` must forbid unsafe code (manifest) and contain no `unsafe`
 /// token in any Rust file (src, tests, benches, examples, build scripts).
 pub fn check_unsafe() -> Result<(), String> {
-    let root = repo_root();
+    let root = repo_root()?;
     let layers = parse_layers(&read(&root.join("layers.toml"))?)?;
     let mut bad = Vec::new();
     for name in layers.crates.keys() {
@@ -247,7 +247,7 @@ pub fn manifest_mentions_banned(manifest: &str) -> bool {
 }
 
 pub fn check_allow() -> Result<(), String> {
-    let root = repo_root();
+    let root = repo_root()?;
     let v: toml::Value = toml::from_str(&read(&root.join("tools/allow-banned.toml"))?)
         .map_err(|e| format!("allow-banned.toml: {e}"))?;
     let allowed = string_list(v.get("crates"));
@@ -292,7 +292,7 @@ pub fn check_allow() -> Result<(), String> {
 /// Every `*.golden` file under formats/corpus (recursively) needs a `*.golden.toml` with string
 /// `format` and positive integer `version`.
 pub fn check_format_corpus() -> Result<(), String> {
-    let dir = repo_root().join("formats/corpus");
+    let dir = repo_root()?.join("formats/corpus");
     if !dir.is_dir() {
         return Err(format!(
             "{} is missing (keep a .gitkeep in it)",
@@ -376,7 +376,7 @@ pub fn thresholds_problems(name: &str, text: &str) -> Vec<String> {
 }
 
 pub fn check_config_formats() -> Result<(), String> {
-    let root = repo_root();
+    let root = repo_root()?;
     let mut bad = Vec::new();
     let mut n = 0;
     let mut files = Vec::new();
@@ -427,7 +427,7 @@ pub fn relative_links(md: &str) -> Vec<String> {
 }
 
 pub fn check_links() -> Result<(), String> {
-    let root = repo_root();
+    let root = repo_root()?;
     let mut files = Vec::new();
     files_with_ext(&root, "md", &mut files)?;
     let mut bad = Vec::new();
@@ -514,7 +514,7 @@ pub fn quarantine_problems(text: &str, today_days: i64) -> Vec<String> {
 }
 
 pub fn check_quarantine() -> Result<(), String> {
-    let path = repo_root().join("tools/quarantine.toml");
+    let path = repo_root()?.join("tools/quarantine.toml");
     let text = if path.exists() {
         read(&path)?
     } else {
@@ -598,7 +598,7 @@ pub fn trailer_requirements(log: &str) -> Vec<String> {
 }
 
 pub fn traceability() -> Result<(), String> {
-    let root = repo_root();
+    let root = repo_root()?;
     let mut paths = Vec::new();
     files_with_ext(&root.join("crates"), "rs", &mut paths)?;
     let mut files = Vec::new();

@@ -168,7 +168,7 @@ fn same_manifest(left: &[Value], right: &[Value]) -> bool {
 /// into a new directory. The report always requires a maintainer review and never claims a phase pass.
 pub fn collect(args: &[&str]) -> Result<(), String> {
     let opt = options(args)?;
-    let root = repo_root();
+    let root = repo_root()?;
     let prefix = format!("{:02}-", opt.phase);
     let mut specs = Vec::new();
     for entry in fs::read_dir(root.join("docs/spec")).map_err(|e| e.to_string())? {

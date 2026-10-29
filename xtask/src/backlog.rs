@@ -53,7 +53,7 @@ fn phase_of(id: &str) -> &str {
 
 pub fn all_requirements() -> Result<Vec<Requirement>, String> {
     let mut files = Vec::new();
-    files_with_ext(&repo_root().join("docs/spec"), "md", &mut files)?;
+    files_with_ext(&repo_root()?.join("docs/spec"), "md", &mut files)?;
     files.sort();
     let mut out = Vec::new();
     for f in files {
@@ -73,7 +73,7 @@ pub fn render_item(r: &Requirement) -> String {
 }
 
 pub fn seed() -> Result<(), String> {
-    let out = repo_root().join("backlog");
+    let out = repo_root()?.join("backlog");
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let reqs = all_requirements()?;
     let mut created = 0;
@@ -171,7 +171,7 @@ pub fn item_problems(stem: &str, text: &str, valid: &[String]) -> Vec<String> {
 }
 
 fn backlog_files() -> Result<Vec<PathBuf>, String> {
-    let dir = repo_root().join("backlog");
+    let dir = repo_root()?.join("backlog");
     let entries = fs::read_dir(&dir).map_err(|e| format!("cannot list {}: {e}", dir.display()))?;
     let mut v: Vec<PathBuf> = entries
         .flatten()
@@ -299,7 +299,7 @@ pub fn render_adr_index(entries: &[(String, String, String)]) -> String {
 
 fn adr_entries() -> Result<Vec<(String, String, String)>, String> {
     let mut out = Vec::new();
-    for p in md_files(&repo_root().join("docs/adr"))? {
+    for p in md_files(&repo_root()?.join("docs/adr"))? {
         let name = p
             .file_name()
             .and_then(|n| n.to_str())
@@ -326,7 +326,7 @@ fn adr_entries() -> Result<Vec<(String, String, String)>, String> {
 }
 
 pub fn adr_lint() -> Result<(), String> {
-    let dir = repo_root().join("docs/adr");
+    let dir = repo_root()?.join("docs/adr");
     let mut bad = Vec::new();
     let files = md_files(&dir)?;
     for p in &files {
@@ -347,7 +347,7 @@ pub fn adr_lint() -> Result<(), String> {
 
 pub fn adr_index() -> Result<(), String> {
     let out = render_adr_index(&adr_entries()?);
-    fs::write(repo_root().join("docs/adr/README.md"), out).map_err(|e| e.to_string())?;
+    fs::write(repo_root()?.join("docs/adr/README.md"), out).map_err(|e| e.to_string())?;
     println!("adr index written");
     Ok(())
 }
@@ -372,7 +372,7 @@ pub fn rfc_problems(name: &str, text: &str) -> Vec<String> {
 }
 
 pub fn rfc_lint() -> Result<(), String> {
-    let dir = repo_root().join("docs/rfc");
+    let dir = repo_root()?.join("docs/rfc");
     let mut bad = Vec::new();
     let files: Vec<PathBuf> = md_files(&dir)?
         .into_iter()

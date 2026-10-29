@@ -44,7 +44,7 @@ pub fn commit_problems(message: &str, scopes: &[String]) -> Vec<String> {
 }
 
 fn allowed_scopes() -> Result<Vec<String>, String> {
-    let layers = parse_layers(&read(&repo_root().join("layers.toml"))?)?;
+    let layers = parse_layers(&read(&repo_root()?.join("layers.toml"))?)?;
     // Both `lattice-core` and the shorter `core` are accepted as a scope.
     let mut v: Vec<String> = layers.crates.keys().cloned().collect();
     v.extend(
@@ -92,7 +92,7 @@ pub fn untracked_todos(src: &str) -> Vec<usize> {
 }
 
 pub fn lint_conventions() -> Result<(), String> {
-    let root = repo_root();
+    let root = repo_root()?;
     let layers = parse_layers(&read(&root.join("layers.toml"))?)?;
     let mut bad = Vec::new();
     for name in layers.crates.keys() {
