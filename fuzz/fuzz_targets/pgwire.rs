@@ -1,11 +1,15 @@
 #![no_main]
-use lattice_api::pgwire::{Backend, decode_frontend, decode_startup};
+use lattice_api::pgwire::{Backend, Frontend, decode_frontend, decode_startup};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // Neither decoder may panic, and a decoded message never claims more bytes than it was given.
     if let Ok(Some((_, used))) = decode_frontend(data) {
         assert!(used <= data.len());
+    }
+    // A decoded Bind never has more parameters than bytes could hold.
+    if let Ok(Some((Frontend::Bind { params, .. }, used))) = decode_frontend(data) {
+        assert!(params.len() <= used);
     }
     if let Ok(Some((_, used))) = decode_startup(data) {
         assert!(used <= data.len());

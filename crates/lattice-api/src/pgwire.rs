@@ -6,10 +6,10 @@
 //! bytes left over after the fields are errors, and incomplete input is reported as such so a caller
 //! can read more. Nothing in here panics on any input.
 //!
-//! Scope of this first slice: the startup phase (protocol 3.0, SSL and GSS encryption requests,
-//! cancel requests), the simple query flow (`Query`, `Terminate`, `PasswordMessage`) and the server
-//! messages needed to answer it. The extended query messages (`Parse`, `Bind`, `Execute`, ...) are
-//! refused with [`ProtoError::UnknownTag`] until they are implemented.
+//! Scope: the startup phase (protocol 3.0, SSL and GSS encryption requests, cancel requests), the
+//! simple query flow (`Query`, `Terminate`, `PasswordMessage`), the extended query flow (`Parse`,
+//! `Bind`, `Describe`, `Execute`, `Close`, `Sync`, `Flush`) and the server messages that answer them.
+//! `CopyData`, `FunctionCall` and the rest are refused with [`ProtoError::UnknownTag`].
 
 use std::fmt;
 
@@ -41,6 +41,9 @@ pub enum ProtoError {
     Trailing,
     /// A value does not fit the wire format (a count above 32767, a field above 2 GiB).
     TooLarge,
+    /// A field holds a value the protocol does not allow (a negative count, a format code other than 0
+    /// or 1, a describe or close target other than `S` or `P`).
+    InvalidField(&'static str),
 }
 
 impl fmt::Display for ProtoError {
@@ -54,6 +57,7 @@ impl fmt::Display for ProtoError {
             ProtoError::Truncated => write!(f, "message is truncated"),
             ProtoError::Trailing => write!(f, "unexpected bytes after the last field"),
             ProtoError::TooLarge => write!(f, "value does not fit the wire format"),
+            ProtoError::InvalidField(what) => write!(f, "invalid {what}"),
         }
     }
 }
@@ -87,6 +91,52 @@ pub enum Frontend {
     Terminate,
     /// `p`: a password (or other authentication response) as bytes.
     Password(Vec<u8>),
+    /// `P`: prepare a statement under a name (empty is the unnamed statement).
+    Parse {
+        /// Statement name.
+        name: String,
+        /// Query text.
+        query: String,
+        /// Parameter type object ids; 0 leaves the type to the server.
+        param_types: Vec<i32>,
+    },
+    /// `B`: bind parameter values to a prepared statement, making a portal.
+    Bind {
+        /// Portal name (empty is the unnamed portal).
+        portal: String,
+        /// Statement name.
+        statement: String,
+        /// Format code per parameter: none (all text), one (for all) or one each; 0 text, 1 binary.
+        param_formats: Vec<i16>,
+        /// Parameter values; `None` is SQL NULL.
+        params: Vec<Option<Vec<u8>>>,
+        /// Format code per result column, with the same none, one or one-each rule.
+        result_formats: Vec<i16>,
+    },
+    /// `D`: describe a statement or a portal.
+    Describe(Target),
+    /// `C`: close a statement or a portal.
+    Close(Target),
+    /// `E`: run a portal, returning at most `max_rows` rows (0 means all).
+    Execute {
+        /// Portal name.
+        portal: String,
+        /// Row limit; 0 is unlimited.
+        max_rows: i32,
+    },
+    /// `S`: end an extended query cycle; the server answers `ReadyForQuery`.
+    Sync,
+    /// `H`: ask the server to send what it has pending.
+    Flush,
+}
+
+/// What `Describe` and `Close` name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// A prepared statement (`S`).
+    Statement(String),
+    /// A portal (`P`).
+    Portal(String),
 }
 
 /// The state the server reports in `ReadyForQuery`.
@@ -150,6 +200,18 @@ pub enum Backend {
     CommandComplete(String),
     /// `I`: the query string was empty.
     EmptyQueryResponse,
+    /// `1`: `Parse` succeeded.
+    ParseComplete,
+    /// `2`: `Bind` succeeded.
+    BindComplete,
+    /// `3`: `Close` succeeded.
+    CloseComplete,
+    /// `n`: the described statement or portal returns no rows.
+    NoData,
+    /// `t`: the parameter types of a described statement.
+    ParameterDescription(Vec<i32>),
+    /// `s`: `Execute` stopped at its row limit; run the portal again for more.
+    PortalSuspended,
     /// `E`: an error, with a severity, a five character SQLSTATE and a message.
     ErrorResponse {
         /// `ERROR`, `FATAL` or `PANIC`.
@@ -177,6 +239,37 @@ impl<'a> Reader<'a> {
         let s = self.bytes.get(self.at..end).ok_or(ProtoError::Truncated)?;
         self.at = end;
         Ok(s)
+    }
+
+    fn u8(&mut self) -> Result<u8, ProtoError> {
+        self.take(1)?.first().copied().ok_or(ProtoError::Truncated)
+    }
+
+    fn i16(&mut self) -> Result<i16, ProtoError> {
+        let b: [u8; 2] = self
+            .take(2)?
+            .try_into()
+            .map_err(|_| ProtoError::Truncated)?;
+        Ok(i16::from_be_bytes(b))
+    }
+
+    /// A non-negative `i16` count.
+    fn count(&mut self, what: &'static str) -> Result<usize, ProtoError> {
+        usize::try_from(self.i16()?).map_err(|_| ProtoError::InvalidField(what))
+    }
+
+    /// `n` format codes, each 0 (text) or 1 (binary).
+    fn formats(&mut self, what: &'static str) -> Result<Vec<i16>, ProtoError> {
+        let n = self.count(what)?;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let code = self.i16()?;
+            if code != 0 && code != 1 {
+                return Err(ProtoError::InvalidField(what));
+            }
+            out.push(code);
+        }
+        Ok(out)
     }
 
     fn i32(&mut self) -> Result<i32, ProtoError> {
@@ -284,6 +377,73 @@ pub fn decode_frontend(buf: &[u8]) -> Result<Option<(Frontend, usize)>, ProtoErr
         b'Q' => Frontend::Query(r.cstr()?),
         b'X' => Frontend::Terminate,
         b'p' => return Ok(Some((Frontend::Password(body.to_vec()), used))),
+        b'P' => {
+            let name = r.cstr()?;
+            let query = r.cstr()?;
+            let n = r.count("parameter count")?;
+            let mut param_types = Vec::new();
+            for _ in 0..n {
+                param_types.push(r.i32()?);
+            }
+            Frontend::Parse {
+                name,
+                query,
+                param_types,
+            }
+        }
+        b'B' => {
+            let portal = r.cstr()?;
+            let statement = r.cstr()?;
+            let param_formats = r.formats("parameter format")?;
+            let n = r.count("parameter count")?;
+            // The protocol allows no codes (all text), one for all, or exactly one each.
+            if !matches!(param_formats.len(), 0 | 1) && param_formats.len() != n {
+                return Err(ProtoError::InvalidField("parameter format count"));
+            }
+            let mut params = Vec::new();
+            for _ in 0..n {
+                let len = r.i32()?;
+                if len == -1 {
+                    params.push(None);
+                } else {
+                    let len = usize::try_from(len)
+                        .map_err(|_| ProtoError::InvalidField("parameter length"))?;
+                    params.push(Some(r.take(len)?.to_vec()));
+                }
+            }
+            let result_formats = r.formats("result format")?;
+            Frontend::Bind {
+                portal,
+                statement,
+                param_formats,
+                params,
+                result_formats,
+            }
+        }
+        b'D' | b'C' => {
+            let kind = r.u8()?;
+            let name = r.cstr()?;
+            let target = match kind {
+                b'S' => Target::Statement(name),
+                b'P' => Target::Portal(name),
+                _ => return Err(ProtoError::InvalidField("describe or close target")),
+            };
+            if tag == b'D' {
+                Frontend::Describe(target)
+            } else {
+                Frontend::Close(target)
+            }
+        }
+        b'E' => {
+            let portal = r.cstr()?;
+            let max_rows = r.i32()?;
+            if max_rows < 0 {
+                return Err(ProtoError::InvalidField("row limit"));
+            }
+            Frontend::Execute { portal, max_rows }
+        }
+        b'S' => Frontend::Sync,
+        b'H' => Frontend::Flush,
         other => return Err(ProtoError::UnknownTag(other)),
     };
     if !r.finished() {
@@ -329,6 +489,12 @@ impl Backend {
             Backend::DataRow(_) => b'D',
             Backend::CommandComplete(_) => b'C',
             Backend::EmptyQueryResponse => b'I',
+            Backend::ParseComplete => b'1',
+            Backend::BindComplete => b'2',
+            Backend::CloseComplete => b'3',
+            Backend::NoData => b'n',
+            Backend::ParameterDescription(_) => b't',
+            Backend::PortalSuspended => b's',
             Backend::ErrorResponse { .. } => b'E',
         };
         out.push(tag);
@@ -375,7 +541,18 @@ impl Backend {
                 }
             }
             Backend::CommandComplete(tag) => put_cstr(out, tag)?,
-            Backend::EmptyQueryResponse => {}
+            Backend::EmptyQueryResponse
+            | Backend::ParseComplete
+            | Backend::BindComplete
+            | Backend::CloseComplete
+            | Backend::NoData
+            | Backend::PortalSuspended => {}
+            Backend::ParameterDescription(oids) => {
+                put_i16(out, oids.len())?;
+                for oid in oids {
+                    out.extend_from_slice(&oid.to_be_bytes());
+                }
+            }
             Backend::ErrorResponse {
                 severity,
                 code,
@@ -485,11 +662,133 @@ mod tests {
         );
     }
 
+    fn framed(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        out.extend(((body.len() + 4) as i32).to_be_bytes());
+        out.extend(body);
+        out
+    }
+
     #[test]
-    fn the_extended_query_flow_is_refused_by_name_until_it_exists() {
-        // A Parse message with an empty body.
-        let bytes = [b'P', 0, 0, 0, 4];
-        assert_eq!(decode_frontend(&bytes), Err(ProtoError::UnknownTag(b'P')));
+    fn messages_outside_the_supported_set_are_refused_by_name() {
+        // CopyData is not implemented.
+        assert_eq!(
+            decode_frontend(&[b'd', 0, 0, 0, 4]),
+            Err(ProtoError::UnknownTag(b'd'))
+        );
+    }
+
+    #[test]
+    fn extended_query_messages_decode_from_documented_bytes() {
+        let parse = framed(b'P', b"s1\0SELECT $1\0\0\x01\0\0\0\x17");
+        assert_eq!(
+            decode_frontend(&parse).unwrap().unwrap().0,
+            Frontend::Parse {
+                name: "s1".into(),
+                query: "SELECT $1".into(),
+                param_types: vec![23]
+            }
+        );
+        // Bind: portal "", statement "s1", one text format, two params (a value and NULL), one binary result.
+        let bind = framed(
+            b'B',
+            b"\0s1\0\0\x01\0\0\0\x02\0\0\0\x02hi\xff\xff\xff\xff\0\x01\0\x01",
+        );
+        assert_eq!(
+            decode_frontend(&bind).unwrap().unwrap().0,
+            Frontend::Bind {
+                portal: String::new(),
+                statement: "s1".into(),
+                param_formats: vec![0],
+                params: vec![Some(b"hi".to_vec()), None],
+                result_formats: vec![1]
+            }
+        );
+        assert_eq!(
+            decode_frontend(&framed(b'D', b"Ss1\0")).unwrap().unwrap().0,
+            Frontend::Describe(Target::Statement("s1".into()))
+        );
+        assert_eq!(
+            decode_frontend(&framed(b'C', b"P\0")).unwrap().unwrap().0,
+            Frontend::Close(Target::Portal(String::new()))
+        );
+        assert_eq!(
+            decode_frontend(&framed(b'E', b"\0\0\0\0\x05"))
+                .unwrap()
+                .unwrap()
+                .0,
+            Frontend::Execute {
+                portal: String::new(),
+                max_rows: 5
+            }
+        );
+        assert_eq!(
+            decode_frontend(&[b'S', 0, 0, 0, 4]).unwrap().unwrap(),
+            (Frontend::Sync, 5)
+        );
+        assert_eq!(
+            decode_frontend(&[b'H', 0, 0, 0, 4]).unwrap().unwrap(),
+            (Frontend::Flush, 5)
+        );
+    }
+
+    #[test]
+    fn extended_query_messages_reject_values_the_protocol_forbids() {
+        let bad = |tag, body: &[u8]| decode_frontend(&framed(tag, body));
+        // Negative parameter count in Parse.
+        assert!(matches!(
+            bad(b'P', b"\0\0\xff\xff"),
+            Err(ProtoError::InvalidField(_))
+        ));
+        // Format code 2.
+        assert!(matches!(
+            bad(b'B', b"\0\0\0\x01\0\x02\0\0\0\0"),
+            Err(ProtoError::InvalidField(_))
+        ));
+        // Two format codes for three parameters.
+        assert!(matches!(
+            bad(b'B', b"\0\0\0\x02\0\0\0\0\0\x03"),
+            Err(ProtoError::InvalidField(_))
+        ));
+        // Parameter length -2.
+        assert!(matches!(
+            bad(b'B', b"\0\0\0\0\0\x01\xff\xff\xff\xfe\0\0"),
+            Err(ProtoError::InvalidField(_))
+        ));
+        // Parameter longer than the message.
+        assert_eq!(
+            bad(b'B', b"\0\0\0\0\0\x01\0\0\0\x09ab\0\0"),
+            Err(ProtoError::Truncated)
+        );
+        // Describe target other than S or P, and a negative row limit.
+        assert!(matches!(
+            bad(b'D', b"X\0"),
+            Err(ProtoError::InvalidField(_))
+        ));
+        assert!(matches!(
+            bad(b'E', b"\0\xff\xff\xff\xff"),
+            Err(ProtoError::InvalidField(_))
+        ));
+        // Bytes after Sync's empty body.
+        assert_eq!(bad(b'S', b"x"), Err(ProtoError::Trailing));
+    }
+
+    #[test]
+    fn extended_query_replies_encode_to_documented_bytes() {
+        let enc = |m: Backend| {
+            let mut out = Vec::new();
+            m.encode(&mut out).unwrap();
+            out
+        };
+        assert_eq!(enc(Backend::ParseComplete), [b'1', 0, 0, 0, 4]);
+        assert_eq!(enc(Backend::BindComplete), [b'2', 0, 0, 0, 4]);
+        assert_eq!(enc(Backend::CloseComplete), [b'3', 0, 0, 0, 4]);
+        assert_eq!(enc(Backend::NoData), [b'n', 0, 0, 0, 4]);
+        assert_eq!(enc(Backend::PortalSuspended), [b's', 0, 0, 0, 4]);
+        assert_eq!(
+            enc(Backend::ParameterDescription(vec![23, 25])),
+            [b't', 0, 0, 0, 14, 0, 2, 0, 0, 0, 23, 0, 0, 0, 25]
+        );
     }
 
     #[test]
