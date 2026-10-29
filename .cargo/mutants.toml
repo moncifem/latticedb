@@ -40,6 +40,15 @@ exclude_re = [
     # one-character run never enters the sign-splitting loop whose guard is `run.len() > 1`.
     "lexer\\.rs:423:25: replace > with >= in Lexer<'_>::operator",
     "lexer\\.rs:434:22: replace > with >= in Lexer<'_>::operator",
+    # SQL parser: `bump` at the end of input. Moving the position one past the last token changes
+    # nothing observable, because `peek` returns the end-of-input token for any position at or past
+    # the end.
+    "parser\\.rs:\\d+:21: replace < with <= in Parser::bump",
+    # SQL parser: `grow` re-checks the tree depth that `nested` and the operator loop already bound.
+    # Disabling the check altogether leaves every nesting test passing (each shape is stopped earlier),
+    # so moving its boundary by one cannot be observed; it stays as a second guard for the recursive
+    # printer and drop.
+    "parser\\.rs:\\d+:14: replace > with (==|>=) in Parser::grow",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies

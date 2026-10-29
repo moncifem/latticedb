@@ -204,3 +204,42 @@ fn a_postfix_cast_spans_its_operand_and_its_type() {
     };
     assert_eq!(expr.span.slice(sql), Some("a::int"));
 }
+
+#[test]
+fn a_subquery_adds_its_own_depth_to_the_expression_inside_it() {
+    // The deepest expression inside a subquery counts toward the subquery's depth, and the subquery
+    // adds two more (the query and the node that holds it): 61 additions is the last that fits.
+    let nested = |n: usize| format!("SELECT (SELECT 1{})", " + 1".repeat(n));
+    assert!(parse_statement(&nested(60)).is_ok());
+    assert_eq!(
+        parse_statement(&nested(61)).unwrap_err().kind(),
+        ErrorKind::TooLarge
+    );
+    let in_list = |n: usize| format!("SELECT a FROM t WHERE a IN (SELECT 1{})", " + 1".repeat(n));
+    assert!(parse_statement(&in_list(60)).is_ok());
+    assert_eq!(
+        parse_statement(&in_list(61)).unwrap_err().kind(),
+        ErrorKind::TooLarge
+    );
+}
+
+#[test]
+fn values_and_with_inside_parentheses_are_refused_as_queries() {
+    for (sql, message) in [
+        (
+            "SELECT a FROM t WHERE a IN (VALUES (1))",
+            "VALUES as a query",
+        ),
+        (
+            "SELECT a FROM t WHERE a IN (WITH x AS (SELECT 1) SELECT 1)",
+            "WITH (common table expressions)",
+        ),
+        ("SELECT (VALUES (1))", "VALUES as a query"),
+        (
+            "SELECT (WITH x AS (SELECT 1) SELECT 1)",
+            "WITH (common table expressions)",
+        ),
+    ] {
+        unsupported(sql, message);
+    }
+}
