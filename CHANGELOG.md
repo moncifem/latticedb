@@ -18,6 +18,7 @@ between minor versions; format changes are called out explicitly.
   reconnect on the kernel under five fault profiles, judged by a script oracle, with wrapper mutants
   and planted kernel bugs proving each assertion can fail. Test only; no exit criterion is claimed.
 
+- `lattice_core::crdt_text`: operation based sequence CRDT for text (stable element ids, tombstones, parked out-of-order operations, canonical bounded encoding) with tombstone compaction that keeps declared revert points. ADR 0010 gains Phase 3 data; the Phase 1 decision is provisionally kept and E3-6 is not claimed.
 - `RowStore::try_snapshot_as_of_hlc`: strict full-HLC predecessor resolution returns
   `SnapshotTooOld` for expired history while the existing helper retains its floor clamp.
   This is a storage API; SQL timestamp execution and SQLSTATE mapping remain pending.
