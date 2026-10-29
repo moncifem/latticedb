@@ -1,3 +1,8 @@
+import argparse
+import json
+import subprocess
+from unittest.mock import patch
+
 import os
 import sys
 import unittest
@@ -116,6 +121,56 @@ class PastPrs(unittest.TestCase):
                 self.assertEqual(areas, expected)
                 self.assertEqual(g.required_label_ok([], areas), not expected)
                 self.assertTrue(g.required_label_ok(["reviewed"], areas))
+
+
+class ApiBoundaries(unittest.TestCase):
+    # Raw paginated GitHub PR-files response shape, including both directions across risk paths.
+    FILES = [[
+        {"status": "renamed", "filename": "docs/former-wal.md",
+         "previous_filename": "formats/wal-v1.md"},
+        {"status": "renamed", "filename": ".github/workflows/new.yml",
+         "previous_filename": "tools/old.yml"},
+        {"status": "modified", "filename": "README.md"},
+    ], [{"status": "renamed", "filename": "docs/former-core.rs",
+         "previous_filename": "crates/lattice-core/src/log.rs"}]]
+
+    def test_renames_in_and_out_keep_both_risk_and_claim_paths(self):
+        with patch.object(g, "_gh", return_value=json.dumps(self.FILES)) as gh:
+            paths = g.pr_files("owner/repo", 7)
+        self.assertIn("--slurp", gh.call_args.args[0])
+        self.assertEqual(g.classify_risk(paths), {"format", "kernel", "workflows"})
+        self.assertFalse(g.required_label_ok([], g.classify_risk(paths)))
+        self.assertEqual(g.overlap(paths, ["formats/wal-v1.md", "tools/old.yml"]),
+                         ["formats/wal-v1.md", "tools/old.yml"])
+        self.assertIn(".github/workflows/new.yml", paths)
+
+    def test_path_with_newline_is_not_split_into_fake_paths(self):
+        with patch.object(g, "_gh", return_value=json.dumps([[{"filename": "docs/a\nformats/b"}]])):
+            self.assertEqual(g.pr_files("owner/repo", 7), ["docs/a\nformats/b"])
+
+    def test_comment_lookup_requires_the_workflow_bot(self):
+        comments = [[
+            {"id": 1, "body": g.COMMENT_MARKER, "user": {"login": "contributor", "type": "User"}},
+            {"id": 2, "body": g.COMMENT_MARKER, "user": {"login": "other[bot]", "type": "Bot"}},
+            {"id": 3, "body": g.COMMENT_MARKER, "user": {"login": "github-actions[bot]", "type": "Bot"}},
+        ]]
+        with patch.object(g, "_gh", side_effect=[json.dumps(comments), ""]) as gh:
+            g._upsert_comment("owner/repo", 7, "body", create=True)
+        self.assertIn("repos/owner/repo/issues/comments/3", gh.call_args_list[1].args[0])
+
+    def test_no_overlap_does_not_delete_a_missing_label(self):
+        with patch.object(g, "pr_files", return_value=[]), patch.object(g, "_gh", side_effect=["", "[[]]"]) as gh, patch.object(g, "_upsert_comment"):
+            self.assertEqual(g.cmd_claims(argparse.Namespace(repo="owner/repo", pr=7, dry_run=False)), 0)
+        self.assertFalse(any("DELETE" in call.args[0] for call in gh.call_args_list))
+
+    def test_label_delete_api_errors_are_not_hidden(self):
+        for status in [403, 404, 429, 500]:
+            with self.subTest(status=status):
+                failure = subprocess.CalledProcessError(1, ["gh"], stderr=f"HTTP {status}")
+                with patch.object(g, "pr_files", return_value=[]), patch.object(g, "_gh", side_effect=["", '[[{"name":"overlap"}]]', failure]), patch.object(g, "_upsert_comment") as comment:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        g.cmd_claims(argparse.Namespace(repo="owner/repo", pr=7, dry_run=False))
+                comment.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import sys
 REVIEWED_LABEL = "reviewed"
 OVERLAP_LABEL = "overlap"
 COMMENT_MARKER = "<!-- pr-governance-claims -->"
+COMMENT_AUTHOR = "github-actions[bot]"
 
 # Files that never count as a claim, because many PRs legitimately touch them.
 EXEMPT_GLOBS = (
@@ -149,10 +150,17 @@ def _gh(args, stdin=None):
 
 
 def pr_files(repo, number):
-    out = _gh(
-        ["api", "--paginate", f"repos/{repo}/pulls/{number}/files", "--jq", ".[].filename"]
-    )
-    return [line for line in out.splitlines() if line]
+    # --slurp preserves each paginated API array; JSON parsing also preserves unusual path names.
+    pages = json.loads(_gh(
+        ["api", "--paginate", "--slurp", f"repos/{repo}/pulls/{number}/files"]
+    ))
+    paths = set()
+    for page in pages:
+        for item in page:
+            paths.add(item["filename"])
+            if item.get("previous_filename"):
+                paths.add(item["previous_filename"])
+    return sorted(paths)
 
 
 def cmd_risk(args):
@@ -173,11 +181,13 @@ def _read_lines(path):
 
 
 def _upsert_comment(repo, number, body, create):
-    out = _gh(
-        ["api", "--paginate", f"repos/{repo}/issues/{number}/comments",
-         "--jq", f'.[] | select(.body | startswith("{COMMENT_MARKER}")) | .id']
-    )
-    ids = [line for line in out.splitlines() if line]
+    pages = json.loads(_gh(
+        ["api", "--paginate", "--slurp", f"repos/{repo}/issues/{number}/comments"]
+    ))
+    ids = [str(comment["id"]) for page in pages for comment in page
+           if comment.get("user", {}).get("login") == COMMENT_AUTHOR
+           and comment["user"].get("type") == "Bot"
+           and (comment.get("body") or "").startswith(COMMENT_MARKER)]
     if ids:
         _gh(["api", "-X", "PATCH", f"repos/{repo}/issues/comments/{ids[0]}", "-F", "body=@-"], body)
     elif create:
@@ -204,10 +214,10 @@ def cmd_claims(args):
         _gh(["api", "-X", "POST", f"repos/{repo}/issues/{number}/labels", "-f", f"labels[]={OVERLAP_LABEL}"])
         _upsert_comment(repo, number, render_comment(by_pr), create=True)
     else:
-        try:
+        # A missing label needs no DELETE. Other API errors must stay failures, not clean results.
+        pages = json.loads(_gh(["api", "--paginate", "--slurp", f"repos/{repo}/issues/{number}/labels"]))
+        if any(label["name"] == OVERLAP_LABEL for page in pages for label in page):
             _gh(["api", "-X", "DELETE", f"repos/{repo}/issues/{number}/labels/{OVERLAP_LABEL}"])
-        except subprocess.CalledProcessError:
-            pass  # label was not set
         _upsert_comment(repo, number, render_no_overlap(), create=False)
     print(f"overlapping pull requests: {sorted(by_pr) or 'none'}")
     return 0

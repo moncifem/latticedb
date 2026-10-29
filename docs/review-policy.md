@@ -66,7 +66,13 @@ two touch the same file it adds the label `overlap` and keeps one comment (found
 updated in place) listing the other pull requests and files. The label is removed when the overlap
 ends. These files never count: `CHANGELOG.md`, `docs/gates/**`, `fuzz/README.md`, `fuzz/Cargo.toml`.
 
-The label is a prompt to agree who merges first, not a block.
+Renames claim both their previous and new paths and classify risk at either location. The status
+comment is updated only when authored by the workflow bot; matching markers in human comments are
+ignored. API failures remain failures rather than successful cleanup.
+
+The label is a prompt to agree who merges first, not a block. Status refreshes on the listed events
+for this pull request; closing another overlapping pull request does not immediately refresh this
+one. The next run reconciles its label and comment.
 
 ## Setup note (repository owner)
 
