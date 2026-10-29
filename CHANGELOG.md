@@ -9,6 +9,11 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- `RowStore::events_since` and `events_since_as` (WP36, #238): the change feed emitted from committed row
+  changes in commit order, resumable from a cursor, filtered by the actor's read policy, identical after
+  reopen, and refused with `CursorTooOld` at or below the vacuum floor. Read-only accessors
+  `RowStore::history_from` and `Table::history_from`. No exit criterion is claimed.
+
 - `lattice-testkit` fencing race tests (WP46, #248): takeover during append and during watch
   reconnect on the kernel under five fault profiles, judged by a script oracle, with wrapper mutants
   and planted kernel bugs proving each assertion can fail. Test only; no exit criterion is claimed.

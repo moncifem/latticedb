@@ -59,6 +59,21 @@ struct Version<V> {
     value: Option<V>,
 }
 
+/// One retained version of one key, as returned by [`Table::history_from`].
+#[derive(Debug, Clone, Copy)]
+pub struct HistoryEntry<'a, K, V> {
+    /// Commit LSN of the change set that wrote the version.
+    pub lsn: u64,
+    /// That change set.
+    pub cs: ChangeSetId,
+    /// The key.
+    pub key: &'a K,
+    /// The value written; `None` is a deletion.
+    pub value: Option<&'a V>,
+    /// The value of the previous version of the key; `None` if there is none or it was a deletion.
+    pub previous: Option<&'a V>,
+}
+
 /// A keyed table with every retained version of every row.
 #[derive(Debug, Clone)]
 pub struct Table<K: Ord, V> {
@@ -236,6 +251,29 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
                     .map(|v| (k, v))
             })
             .collect())
+    }
+
+    /// Every retained version written at or after `from_lsn`, ordered by `(lsn, key)`, each with the
+    /// value of the version before it for the same key. Read-only; the change feed uses it.
+    pub fn history_from(&self, from_lsn: u64) -> Vec<HistoryEntry<'_, K, V>> {
+        let mut out = Vec::new();
+        for (key, versions) in &self.rows {
+            let start = versions.partition_point(|v| v.lsn < from_lsn);
+            for (i, v) in versions.iter().enumerate().skip(start) {
+                out.push(HistoryEntry {
+                    lsn: v.lsn,
+                    cs: v.cs,
+                    key,
+                    value: v.value.as_ref(),
+                    previous: i
+                        .checked_sub(1)
+                        .and_then(|j| versions.get(j))
+                        .and_then(|p| p.value.as_ref()),
+                });
+            }
+        }
+        out.sort_by(|a, b| a.lsn.cmp(&b.lsn).then_with(|| a.key.cmp(b.key)));
+        out
     }
 
     /// The LSN of the newest write to `key`, if any.

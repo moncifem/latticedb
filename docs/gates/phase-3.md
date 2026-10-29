@@ -55,3 +55,11 @@ acknowledged write and an acyclic tree. Seven planted defects in harness wrapper
 lost local write, lost remote operation, missing duplicate detection, skipped cycle check, for the three
 families) were each detected within the same 200 seeds. The 100,000-seed volume test is `#[ignore]` and was not
 run locally. Not wired into the nightly shards, ledger or scorecard yet.
+Verification evidence, not an exit criterion: `lattice-engines::feed_emit` (WP36, issue #238) emits the change feed
+from the row store's retained committed versions. One local run of `cargo test -p lattice-engines --lib feed_emit`
+(6 tests, default settings): the feed from every cursor of 12 seeded 14-commit histories equals an independently
+computed model (filtered by a value-based read policy in a second test); 8 kill-and-reopen histories re-emitted
+identical events and resumed with no gap and no duplicate; three planted emitter defects (skipped event, reordered
+entity events, inclusive resume) were each rejected by the oracle in more than 100 cases. A cursor at or below
+the vacuum floor returns `CursorTooOld`. Author and turn are not recorded by the row store, so events carry author 0
+and no turn. The full `cargo xtask ci` gate and the rest of the engines suite were not run locally.
