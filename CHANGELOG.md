@@ -9,6 +9,16 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- A PostgreSQL wire protocol v3 message codec: strict, bounded decoding of the startup phase and simple
+  queries, and encoding of the server messages that answer them. It does no I/O, has no session state and
+  never panics on any input; a fuzz target runs in the nightly and weekly fuzz matrices.
+- `AS OF` on the row store: a snapshot at a change set id or at a timestamp, rebuilt on recovery.
+- A sharded weekly mutation campaign over the core, LSL, evalkit, simulator, seams, CLI and bench crates
+  (70 shards of about 24 mutants). Its first full run found 230 survivors; the real ones were closed with
+  targeted tests, and measurement programs and the opt-in io_uring experiment are excluded with their reasons
+  in `.cargo/mutants.toml`.
+- `lattice ledger check` reports a trend over the last seven simulation runs and warns when the unverified
+  share is rising.
 - Validated mutation and eval scorecard observations, with explicit tested/planned coverage, mutation
   denominator exclusions, exact eval gate fields and retained weekly producer provenance. Legacy eval
   reports without complete thresholds remain unverified.
@@ -38,6 +48,12 @@ between minor versions; format changes are called out explicitly.
 
 ### Changed
 
+- **Breaking (core API):** `Kernel::open` and `Log::open` no longer return every record. Recovery now holds
+  the kernel's derived state and one segment at a time. Use `read_from` to read records, or
+  `open_streaming` to fold state during recovery, as the row store and the ledger do.
+- Pull request gate: the whole gate runs on Ubuntu, ARM runs the portable tests without the two slowest
+  simulation tests, and macOS runs after a merge instead of before it (its runners queue for minutes).
+  Superseded runs of one pull request are cancelled.
 - Optimize test builds of workspace crates so the deterministic simulator runs faster in every
   platform gate, retaining debug assertions, overflow checks, test cases and seed budgets.
 

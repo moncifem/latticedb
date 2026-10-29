@@ -34,7 +34,8 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Built | What it does |
 |---|---|
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
-| Row engine | Snapshot reads, write conflicts, a versioned catalog and secondary indexes rebuilt from the log |
+| Row engine | Snapshot reads, `AS OF` a change set or a timestamp, write conflicts, a versioned catalog and secondary indexes rebuilt from the log |
+| Wire protocol | A fuzzed PostgreSQL v3 message codec (startup and simple query). There is no server loop or SQL yet |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
 | Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
 
