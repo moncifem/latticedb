@@ -1,8 +1,11 @@
 # RFC 0004: Online schema changes with shadow generations
 
 Status: draft
-Comment period ends: 2026-11-05 (at least seven full days after this RFC's PR opens)
+Comment period ends: 2026-10-29 (seven-day merge wait explicitly waived by the owner)
 Decision ADR: proposed ADR 0018, not accepted
+
+The owner approved merging this design proposal on 2026-10-29 and waived the waiting period.
+The design discussion and implementation prerequisites remain open; ADR 0018 is still proposed.
 
 ## Motivation
 

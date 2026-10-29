@@ -1,18 +1,17 @@
 # RFC 0006: PostgreSQL SCRAM-SHA-256 authentication primitives
 
-Status: draft
-Comment period ends: 2026-11-05
-Decision ADR: proposed ADR 0020
+Status: accepted
+Comment period ends: 2026-10-29 (seven-day merge wait explicitly waived by the owner)
+Decision ADR: accepted ADR 0020
 
 ## Motivation
 
 P2-11 requires a PostgreSQL authentication hook. The existing session and development TCP listener
 use trust authentication. This proposal adds a pure SCRAM-SHA-256 server exchange and the standard
 PostgreSQL SASL messages without silently changing that trust-only session or claiming deployment
-security. The draft needs independent review and at least seven full days of comment time after its
-PR opens; the calendar date above does not shorten that interval. PR 204 opened at
-2026-10-29 12:57:08 UTC, so the earliest acceptance time is **2026-11-05 12:57:08 UTC**, after review.
-Explicit acceptance remains required.
+security. After independent review and the libpq empty-name regression fix, the owner explicitly
+waived the seven-day merge wait and approved PR 204 on 2026-10-29. Acceptance covers these primitives
+and standard message layouts only; authentication deployment, TLS and phase gates remain separate.
 
 ## Proposal
 
@@ -74,7 +73,7 @@ RFC 5802's SHA-1 transcript is not presented as a SHA-256 known-answer vector. A
 stdlib known-answer fixture covers libpq's empty user-name transcript; negative cases retain rejection
 of empty nonce, binding, proof and extension values.
 
-Independent authentication/codec review, hosted checks and comment-period acceptance remain required.
+Independent authentication/codec review is complete; hosted required checks remain mandatory for the final merge head.
 No external driver authentication, TLS, account lookup, timing audit, simulator planted-bug witness
 or phase-gate acceptance is established by these unit/property tests. The Phase 1 gate remains open;
 this proposal proceeds under the existing Phase 2 start waiver.

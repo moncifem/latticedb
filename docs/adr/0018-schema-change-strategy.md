@@ -21,7 +21,8 @@ pending checkpoint proposals are not accepted or selected by this decision.
 
 ## Decision
 
-Propose the protocol in RFC 0004, subject to its full comment period and independent review:
+Propose the protocol in RFC 0004, subject to independent design review and its implementation
+prerequisites. The owner waived the merge waiting period on 2026-10-29; this ADR remains proposed:
 
 - Prepare a hidden target generation with canonical checked schema/lens descriptions. Log the
   source snapshot, target ids, migration pin and dual-write rule in one atomic writer step.

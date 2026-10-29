@@ -1,18 +1,20 @@
 # ADR 0020: PostgreSQL SCRAM-SHA-256 primitives with explicit authentication phases
 
-Status: proposed
+Status: accepted
 
 ## Context
 
 P2-11 requires PostgreSQL-compatible authentication. The existing session/TCP development listener
 uses trust, and tag `p` carries multiple authentication layouts depending on connection state.
-[Draft RFC 0006](../rfc/0006-pgwire-scram-sha256.md) proposes a pure, bounded SCRAM-SHA-256 exchange
-and standard SASL message support. It remains subject to independent review, the full comment period
-and explicit acceptance. This ADR does not approve a format or production authentication deployment.
+[RFC 0006](../rfc/0006-pgwire-scram-sha256.md) defines a pure, bounded SCRAM-SHA-256 exchange
+and standard SASL message support. Independent review found a libpq empty-name interoperability gap,
+which now has an independently derived regression fixture. On 2026-10-29 the owner explicitly waived
+the seven-day merge wait and approved the reviewed extension. This decision does not approve
+production authentication deployment or sign a phase gate.
 
 ## Decision
 
-Propose maintained SHA-256/HMAC/PBKDF2/Base64 primitives and fixed-size constant-time proof comparison,
+Use maintained SHA-256/HMAC/PBKDF2/Base64 primitives and fixed-size constant-time proof comparison,
 with explicit verifier/password-preparation and RNG boundaries. Preserve ordinary opaque Password
 decoding; require callers to select the SASL decoding phase rather than guessing from payload bytes.
 Support the standard PostgreSQL AuthenticationSASL, SASLContinue and SASLFinal messages. Keep session
