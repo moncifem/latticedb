@@ -8,6 +8,9 @@
 //! row change sets through the same apply, so a restart reproduces exactly the acknowledged state.
 
 use crate::index::{IndexDef, Indexes};
+use crate::limits::{
+    AllowAll, PolicyEvaluator, RowRef, RowWriteRef, authorize_read, authorize_write,
+};
 use crate::mvcc::{MvccError, Snapshot, Table, Tx};
 use crate::rowops::{self, RowKey, RowOpsError};
 use lattice_abi::{Classify, ErrorClass, Hlc};
@@ -19,8 +22,38 @@ use lattice_seams::{Clock, Io, Rng};
 use std::fmt;
 use std::ops::{Bound, RangeBounds};
 
-/// A transaction on the store.
-pub type RowTx = Tx<RowKey, Vec<u8>>;
+/// A transaction whose policy is bound at creation and cannot be replaced at commit.
+///
+/// `P` may own actor context or borrow an evaluator. Default transactions explicitly use Phase 2's
+/// [`AllowAll`]. Proposed writes are buffered privately until the store checks the entire final
+/// transition set before appending anything to the WAL.
+#[derive(Clone)]
+pub struct RowTx<P = AllowAll> {
+    inner: Tx<RowKey, Vec<u8>>,
+    policy: P,
+}
+
+impl<P> RowTx<P> {
+    /// The immutable transaction snapshot.
+    pub fn snapshot(&self) -> Snapshot {
+        self.inner.snapshot()
+    }
+
+    /// Buffers a proposed write. The policy is checked at read and commit, not bypassed by staging.
+    pub fn put(&mut self, key: RowKey, value: Vec<u8>) {
+        self.inner.put(key, value);
+    }
+
+    /// Buffers a proposed deletion; commit checks both its old value and absence afterward.
+    pub fn delete(&mut self, key: RowKey) {
+        self.inner.delete(key);
+    }
+
+    /// Whether the transaction has staged no writes.
+    pub fn is_read_only(&self) -> bool {
+        self.inner.is_read_only()
+    }
+}
 
 /// Borrowed rows returned by a snapshot scan, in primary-key order.
 pub type ScanRows<'a> = Vec<(&'a [u8], &'a Vec<u8>)>;
@@ -51,6 +84,8 @@ pub enum RowError {
     Corrupt(String),
     /// The index definitions cannot identify their entries unambiguously.
     InvalidIndexes(String),
+    /// A row transition was denied; no part of the transaction was appended or applied.
+    PermissionDenied,
     /// The writes do not fit the payload format.
     Encode(RowOpsError),
 }
@@ -73,6 +108,7 @@ impl fmt::Display for RowError {
             RowError::Corrupt(why) => write!(f, "row data corrupt: {why}"),
             RowError::InvalidIndexes(why) => write!(f, "invalid index definitions: {why}"),
             RowError::Encode(e) => write!(f, "cannot encode writes: {e:?}"),
+            RowError::PermissionDenied => f.write_str("row write denied"),
         }
     }
 }
@@ -84,7 +120,9 @@ impl Classify for RowError {
             RowError::Rejected(e) | RowError::InDoubt(e) => e.class(),
             RowError::SnapshotTooOld { .. } => ErrorClass::Rejected,
             RowError::Corrupt(_) => ErrorClass::Fatal,
-            RowError::Encode(_) | RowError::InvalidIndexes(_) => ErrorClass::Rejected,
+            RowError::Encode(_) | RowError::InvalidIndexes(_) | RowError::PermissionDenied => {
+                ErrorClass::Rejected
+            }
         }
     }
 }
@@ -95,6 +133,16 @@ fn mvcc_error(error: MvccError) -> RowError {
         MvccError::SnapshotTooOld { floor } => RowError::SnapshotTooOld { floor },
         MvccError::OutOfOrder { .. } => RowError::Stale,
     }
+}
+
+fn may_read(
+    policy: &(impl PolicyEvaluator + ?Sized),
+    table: u32,
+    key: &[u8],
+    value: &[u8],
+) -> bool {
+    bugs::active(Bug::RowPolicyReadSkipped)
+        || authorize_read(policy, RowRef { table, key, value }).is_ok()
 }
 
 /// What one [`RowStore::vacuum`] removed.
@@ -201,9 +249,19 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         }
     }
 
-    /// Starts a transaction on the newest snapshot.
+    /// Starts a transaction on the newest snapshot with Phase 2's explicit allow-all policy.
+    /// Request handlers with actor context must use [`Self::begin_with_policy`] instead.
     pub fn begin(&self) -> RowTx {
-        Tx::begin(&self.table)
+        self.begin_with_policy(AllowAll)
+    }
+
+    /// Binds an actor policy to a transaction. It may own context or borrow an immutable evaluator;
+    /// the store never installs mutable global principal state.
+    pub fn begin_with_policy<P: PolicyEvaluator>(&self, policy: P) -> RowTx<P> {
+        RowTx {
+            inner: Tx::begin(&self.table),
+            policy,
+        }
     }
 
     /// The newest snapshot: everything committed so far.
@@ -211,36 +269,46 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.table.snapshot()
     }
 
-    /// Reads a row inside a transaction: its own writes first, then its snapshot. An expired
-    /// transaction fails even if the requested value is buffered in its own writes.
-    pub fn get<'a>(
+    /// Reads a row inside a transaction: its own writes first, then its snapshot. Its bound actor
+    /// policy applies to both; denied rows are returned as absent. An expired transaction fails
+    /// even if the requested value is buffered in its own writes.
+    pub fn get<'a, P: PolicyEvaluator>(
         &'a self,
-        tx: &'a RowTx,
+        tx: &'a RowTx<P>,
         table: u32,
         key: &[u8],
     ) -> Result<Option<&'a Vec<u8>>, RowError> {
-        tx.get(&self.table, &(table, key.to_vec()))
-            .map_err(mvcc_error)
+        let value = tx
+            .inner
+            .get(&self.table, &(table, key.to_vec()))
+            .map_err(mvcc_error)?;
+        Ok(value.filter(|value| may_read(&tx.policy, table, key, value)))
     }
 
-    /// Reads a row as of a snapshot, refusing snapshots below the vacuum floor.
+    /// Reads a row as of a snapshot with the statement's explicit actor policy. Denied rows are
+    /// returned as absent; snapshots below the vacuum floor fail before authorization.
     pub fn get_at(
         &self,
         snap: Snapshot,
         table: u32,
         key: &[u8],
+        policy: &(impl PolicyEvaluator + ?Sized),
     ) -> Result<Option<&Vec<u8>>, RowError> {
-        self.table
+        let value = self
+            .table
             .get(snap, &(table, key.to_vec()))
-            .map_err(mvcc_error)
+            .map_err(mvcc_error)?;
+        Ok(value.filter(|value| may_read(policy, table, key, value)))
     }
 
-    /// Every live row of `table` with a key in `range` as of `snap`, in key order.
+    /// Authorized live rows of `table` in `range` as of `snap`, in primary-key order. Hidden rows
+    /// never enter the returned batch; subsequent filters, joins and aggregates must use this view.
     pub fn scan_at<B: RangeBounds<Vec<u8>>>(
         &self,
         snap: Snapshot,
         table: u32,
         range: B,
+        policy: &(impl PolicyEvaluator + ?Sized),
     ) -> Result<ScanRows<'_>, RowError> {
         self.check_snapshot(snap)?;
         let lo = match range.start_bound() {
@@ -264,19 +332,41 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
             .range(snap, (lo, hi))
             .map_err(mvcc_error)?
             .into_iter()
+            .filter(|((_, k), v)| may_read(policy, table, k, v))
             .map(|((_, k), v)| (k.as_slice(), v))
             .collect())
     }
 
-    /// Primary keys whose extracted index key equals `key` at `snap`, in primary-key order.
+    /// Primary keys whose index key equals `key` at `snap` and whose visible row is authorized.
+    /// A candidate referencing an absent row is corruption. Authorization does not repair stale
+    /// index predicates; the unfiltered scrubber remains the independent consistency oracle.
     pub fn lookup_at(
         &self,
         snap: Snapshot,
         index: u32,
         key: &[u8],
+        policy: &(impl PolicyEvaluator + ?Sized),
     ) -> Result<Vec<Vec<u8>>, RowError> {
         self.check_snapshot(snap)?;
-        self.indexes.lookup(snap, index, key).map_err(mvcc_error)
+        let Some(table) = self.indexes.table_for(index) else {
+            return Ok(Vec::new());
+        };
+        let candidates = self.indexes.lookup(snap, index, key).map_err(mvcc_error)?;
+        let mut allowed = Vec::new();
+        for primary in candidates {
+            let value = self
+                .table
+                .get(snap, &(table, primary.clone()))
+                .map_err(mvcc_error)?;
+            let value =
+                value.ok_or_else(|| RowError::Corrupt("index references an absent row".into()))?;
+            // The index scrubber, not authorization, checks whether the extracted key is correct.
+            // Rechecking that predicate here would conceal stale-entry defects from callers.
+            if may_read(policy, table, &primary, value) {
+                allowed.push(primary);
+            }
+        }
+        Ok(allowed)
     }
 
     /// Rebuilds expected index entries from the rows at `snap` and reports any difference (I9).
@@ -424,8 +514,10 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     }
 
     /// Commits a transaction as one change set and returns its commit LSN (the snapshot LSN for a
-    /// transaction that wrote nothing).
-    pub fn commit(&mut self, tx: RowTx) -> Result<u64, RowError> {
+    /// transaction that wrote nothing). Stale/floor/conflict checks precede authorization; every
+    /// final transition is then checked under the bound actor policy before allocating an id or
+    /// appending anything. One denied transition rejects the entire batch.
+    pub fn commit<P: PolicyEvaluator>(&mut self, tx: RowTx<P>) -> Result<u64, RowError> {
         if self.stale {
             return Err(RowError::Stale);
         }
@@ -434,13 +526,33 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
             return Ok(tx.snapshot().as_of);
         }
         if !bugs::active(Bug::RowConflictCheckSkipped) {
-            tx.check(&self.table).map_err(|e| match e {
+            tx.inner.check(&self.table).map_err(|e| match e {
                 MvccError::Conflict { newer_lsn } => RowError::Conflict { newer_lsn },
                 MvccError::SnapshotTooOld { floor } => RowError::SnapshotTooOld { floor },
                 MvccError::OutOfOrder { .. } => RowError::Stale,
             })?;
         }
-        let writes = tx.into_writes();
+        let snapshot = tx.snapshot();
+        let RowTx { inner, policy } = tx;
+        let writes = inner.into_writes();
+        if !bugs::active(Bug::RowPolicyWriteSkipped) {
+            for ((table, key), after) in &writes {
+                let before = self
+                    .table
+                    .get(snapshot, &(*table, key.clone()))
+                    .map_err(mvcc_error)?;
+                authorize_write(
+                    &policy,
+                    RowWriteRef {
+                        table: *table,
+                        key,
+                        before: before.map(Vec::as_slice),
+                        after: after.as_deref(),
+                    },
+                )
+                .map_err(|_| RowError::PermissionDenied)?;
+            }
+        }
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {
@@ -569,7 +681,7 @@ mod vacuum_tests {
             Snapshot { as_of: 4 }
         );
         assert_eq!(
-            store.get_at(Snapshot { as_of: 3 }, 1, b"a"),
+            store.get_at(Snapshot { as_of: 3 }, 1, b"a", &AllowAll),
             Ok(Some(&vec![3]))
         );
         store.check_indexes_at(Snapshot { as_of: 3 }).unwrap();
@@ -593,15 +705,15 @@ mod vacuum_tests {
         store.commit(committed).unwrap();
         store.vacuum(1);
         let expired = Err(RowError::SnapshotTooOld { floor: 1 });
-        assert_eq!(store.get_at(old, 1, b"a"), expired);
-        assert_eq!(store.get_at(old, 1, b"missing"), expired);
+        assert_eq!(store.get_at(old, 1, b"a", &AllowAll), expired);
+        assert_eq!(store.get_at(old, 1, b"missing", &AllowAll), expired);
         assert_eq!(store.get(&own_write, 1, b"staged"), expired);
         assert_eq!(
-            store.scan_at(old, 1, ..),
+            store.scan_at(old, 1, .., &AllowAll),
             Err(RowError::SnapshotTooOld { floor: 1 })
         );
         assert_eq!(
-            store.lookup_at(old, 9, &[3]),
+            store.lookup_at(old, 9, &[3], &AllowAll),
             Err(RowError::SnapshotTooOld { floor: 1 })
         );
         assert_eq!(
@@ -643,7 +755,7 @@ mod vacuum_tests {
             .unwrap();
         assert_eq!(stats.horizon, 2);
         assert_eq!(
-            store.get_at(Snapshot { as_of: 2 }, 1, b"a"),
+            store.get_at(Snapshot { as_of: 2 }, 1, b"a", &AllowAll),
             Ok(Some(&vec![2]))
         );
         assert_eq!(store.vacuum_if_needed(None, 0, usize::MAX), None);
@@ -675,7 +787,7 @@ mod vacuum_tests {
             .map(|as_of| {
                 let snap = Snapshot { as_of };
                 live.check_indexes_at(snap).unwrap();
-                live.scan_at(snap, 1, ..)
+                live.scan_at(snap, 1, .., &AllowAll)
                     .unwrap()
                     .into_iter()
                     .map(|(k, v)| (k.to_vec(), v.clone()))
@@ -694,7 +806,7 @@ mod vacuum_tests {
             let snap = Snapshot { as_of };
             replayed.check_indexes_at(snap).unwrap();
             let got: Vec<_> = replayed
-                .scan_at(snap, 1, ..)
+                .scan_at(snap, 1, .., &AllowAll)
                 .unwrap()
                 .into_iter()
                 .map(|(k, v)| (k.to_vec(), v.clone()))
@@ -706,3 +818,8 @@ mod vacuum_tests {
         }
     }
 }
+
+// Keep these public-API policy workloads in the library test target so Miri and ASan run them too.
+#[cfg(test)]
+#[path = "store_policy_tests.rs"]
+mod policy_tests;

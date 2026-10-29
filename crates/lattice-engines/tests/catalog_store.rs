@@ -121,7 +121,8 @@ fn the_catalog_and_the_row_store_share_one_log_without_reading_each_others_chang
     )
     .unwrap();
     assert_eq!(
-        rows.get_at(rows.snapshot(), 1, b"k").unwrap(),
+        rows.get_at(rows.snapshot(), 1, b"k", &lattice_engines::limits::AllowAll)
+            .unwrap(),
         Some(&b"v".to_vec())
     );
     drop(rows); // one writer at a time holds the log

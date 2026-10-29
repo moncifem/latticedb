@@ -319,7 +319,7 @@ fn compare(store: &Store, snap: Snapshot, expected: &Rows) -> Result<(), String>
             .map(|((_, k), v)| (k.clone(), v.clone()))
             .collect();
         let got: Vec<_> = store
-            .scan_at(snap, table, ..)
+            .scan_at(snap, table, .., &lattice_engines::limits::AllowAll)
             .unwrap()
             .into_iter()
             .map(|(k, v)| (k.to_vec(), v.clone()))
@@ -331,7 +331,11 @@ fn compare(store: &Store, snap: Snapshot, expected: &Rows) -> Result<(), String>
             ));
         }
         for (key, value) in &want {
-            if store.get_at(snap, table, key).unwrap() != Some(value) {
+            if store
+                .get_at(snap, table, key, &lattice_engines::limits::AllowAll)
+                .unwrap()
+                != Some(value)
+            {
                 return Err("point read differs from range scan".into());
             }
         }
@@ -343,7 +347,11 @@ fn compare(store: &Store, snap: Snapshot, expected: &Rows) -> Result<(), String>
                     .filter(|((t, _), v)| *t == table && v.first() == Some(&value))
                     .map(|((_, k), _)| k.clone())
                     .collect();
-                if store.lookup_at(snap, table, &[value]).unwrap() != want {
+                if store
+                    .lookup_at(snap, table, &[value], &lattice_engines::limits::AllowAll)
+                    .unwrap()
+                    != want
+                {
                     return Err(format!(
                         "I9: index {table} value {value} differs at {}",
                         snap.as_of

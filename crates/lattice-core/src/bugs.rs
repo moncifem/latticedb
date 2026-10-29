@@ -72,6 +72,10 @@ pub enum Bug {
     RowIndexPrefixLookup,
     /// Vacuum also drops the newest version at the horizon, so a snapshot there reads nothing.
     VacuumDropsVisibleVersion,
+    /// Query row reads skip the actor policy (authorization).
+    RowPolicyReadSkipped,
+    /// A row transaction appends without authorizing all final transitions.
+    RowPolicyWriteSkipped,
 }
 
 impl Bug {
@@ -100,6 +104,9 @@ impl Bug {
 
     /// Vacuum defects, detected by the vacuum workload in the row simulation.
     pub const VACUUM: [Bug; 1] = [Bug::VacuumDropsVisibleVersion];
+
+    /// Authorization defects, detected by the independent public row-policy witness suite.
+    pub const POLICY: [Bug; 2] = [Bug::RowPolicyReadSkipped, Bug::RowPolicyWriteSkipped];
 
     /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [
@@ -133,10 +140,10 @@ mod imp {
     use std::cell::Cell;
 
     thread_local! {
-        static MASK: Cell<u32> = const { Cell::new(0) };
+        static MASK: Cell<u64> = const { Cell::new(0) };
     }
 
-    fn bit(b: Bug) -> u32 {
+    fn bit(b: Bug) -> u64 {
         1 << (b as u32)
     }
 
@@ -176,7 +183,11 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn all_bugs() -> impl Iterator<Item = Bug> {
-        Bug::ALL.into_iter().chain(Bug::STORAGE).chain(Bug::VACUUM)
+        Bug::ALL
+            .into_iter()
+            .chain(Bug::STORAGE)
+            .chain(Bug::VACUUM)
+            .chain(Bug::POLICY)
     }
 
     #[test]
@@ -185,10 +196,11 @@ mod tests {
             .into_iter()
             .chain(Bug::STORAGE)
             .chain(Bug::VACUUM)
+            .chain(Bug::POLICY)
             .collect();
-        assert_eq!(all.len(), 32);
+        assert_eq!(all.len(), 34);
         for bug in all {
-            assert!((bug as u32) < u32::BITS, "guard mask exhausted: {bug:?}");
+            assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();
             enable(bug);
             assert!(active(bug));

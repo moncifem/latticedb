@@ -1,8 +1,9 @@
 //! Deterministic policy and statement-limit primitives (P2-17/P2-18).
 //!
-//! These are not yet wired into the row store. A scan must authorize each visible row before it
-//! enters a filter, aggregate, join or result; index lookups and point reads need the same check.
-//! Writes must authorize the old and proposed value before staging the mutation. An evaluator can
+//! The row store consults these hooks before exposing each visible row through point reads, scans
+//! and index lookups. A transaction binds its own evaluator, and all final old-to-new transitions
+//! are authorized before its change set reaches the WAL. Staging a proposed mutation is not a
+//! commit and does not bypass the policy on reads of transaction-local values. An evaluator can
 //! carry the authenticated principal; this module neither authenticates nor persists policy.
 //! Default trait methods deny access. Phase 2's allow-all integration must select [`AllowAll`]
 //! explicitly; an omitted policy must never accidentally become an authorization bypass.
@@ -57,6 +58,17 @@ pub trait PolicyEvaluator {
     /// Whether the complete old-to-new transition is authorized.
     fn allows_write(&self, _row: RowWriteRef<'_>) -> bool {
         false
+    }
+}
+
+/// References retain the evaluator's identity when a transaction borrows its actor policy.
+impl<P: PolicyEvaluator + ?Sized> PolicyEvaluator for &P {
+    fn allows_read(&self, row: RowRef<'_>) -> bool {
+        (**self).allows_read(row)
+    }
+
+    fn allows_write(&self, row: RowWriteRef<'_>) -> bool {
+        (**self).allows_write(row)
     }
 }
 

@@ -290,7 +290,7 @@ fn compare_rows(store: &Store, snap: Snapshot, expected: &Rows) {
             .map(|((_, k), v)| (k.clone(), v.clone()))
             .collect::<BTreeMap<_, _>>();
         let got = store
-            .scan_at(snap, table, ..)
+            .scan_at(snap, table, .., &lattice_engines::limits::AllowAll)
             .unwrap()
             .into_iter()
             .map(|(k, v)| (k.to_vec(), v.clone()))
@@ -298,7 +298,9 @@ fn compare_rows(store: &Store, snap: Snapshot, expected: &Rows) {
         assert_eq!(got, model, "table={table}, snapshot={snap:?}");
         for key in 0..4u8 {
             assert_eq!(
-                store.get_at(snap, table, &[key]).unwrap(),
+                store
+                    .get_at(snap, table, &[key], &lattice_engines::limits::AllowAll)
+                    .unwrap(),
                 expected.get(&(table, vec![key]))
             );
         }
@@ -310,7 +312,9 @@ fn compare_rows(store: &Store, snap: Snapshot, expected: &Rows) {
                     .map(|(k, _)| k.clone())
                     .collect::<Vec<_>>();
                 assert_eq!(
-                    store.lookup_at(snap, table, &[value]).unwrap(),
+                    store
+                        .lookup_at(snap, table, &[value], &lattice_engines::limits::AllowAll)
+                        .unwrap(),
                     pks,
                     "index={table} probe={value} snapshot={snap:?}"
                 );

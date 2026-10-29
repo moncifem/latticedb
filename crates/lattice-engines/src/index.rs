@@ -65,6 +65,14 @@ impl Indexes {
         }
     }
 
+    /// The table whose visible row must be authorized before returning an index candidate.
+    pub(crate) fn table_for(&self, index: u32) -> Option<u32> {
+        self.defs
+            .iter()
+            .find(|definition| definition.id == index)
+            .map(|definition| definition.table)
+    }
+
     /// The index entries a set of row writes changes, given the rows as they are before the writes.
     pub fn changes_for(
         &self,

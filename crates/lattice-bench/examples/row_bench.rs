@@ -164,13 +164,15 @@ fn prepare(path: &Path, rows: u64, versions: u64) -> Result<Store, String> {
 }
 fn verify(store: &Store, rows: u64, generation: u64) -> Result<(), String> {
     let snap = store.snapshot();
-    let scanned = store.scan_at(snap, TABLE, ..).map_err(|e| e.to_string())?;
+    let scanned = store
+        .scan_at(snap, TABLE, .., &lattice_engines::limits::AllowAll)
+        .map_err(|e| e.to_string())?;
     if scanned.len() as u64 != rows {
         return Err("live row count differs".into());
     }
     for n in 0..rows {
         if store
-            .get_at(snap, TABLE, &key(n))
+            .get_at(snap, TABLE, &key(n), &lattice_engines::limits::AllowAll)
             .map_err(|e| e.to_string())?
             != Some(&value(n, generation))
         {
@@ -181,7 +183,12 @@ fn verify(store: &Store, rows: u64, generation: u64) -> Result<(), String> {
     // incorrect exclusive upper bound or a no-op bounded scan becoming deceptively faster.
     let end = rows.min(16);
     let bounded = store
-        .scan_at(snap, TABLE, key(0)..key(end))
+        .scan_at(
+            snap,
+            TABLE,
+            key(0)..key(end),
+            &lattice_engines::limits::AllowAll,
+        )
         .map_err(|e| e.to_string())?;
     if bounded.len() as u64 != end
         || bounded.iter().enumerate().any(|(n, (pk, row))| {
@@ -192,7 +199,12 @@ fn verify(store: &Store, rows: u64, generation: u64) -> Result<(), String> {
     }
     for bucket in 0..BUCKETS {
         let found = store
-            .lookup_at(snap, INDEX, &bucket.to_le_bytes())
+            .lookup_at(
+                snap,
+                INDEX,
+                &bucket.to_le_bytes(),
+                &lattice_engines::limits::AllowAll,
+            )
             .map_err(|e| e.to_string())?;
         let expected: Vec<_> = (0..rows)
             .filter(|n| (n + generation) % BUCKETS == bucket)
@@ -240,7 +252,11 @@ fn measure(options: &Options) -> Result<(Results, Value), String> {
             let key = keys
                 .get((n % options.rows) as usize)
                 .ok_or("missing prepared key")?;
-            black_box(store.get_at(snap, TABLE, key).map_err(|e| e.to_string())?);
+            black_box(
+                store
+                    .get_at(snap, TABLE, key, &lattice_engines::limits::AllowAll)
+                    .map_err(|e| e.to_string())?,
+            );
         }
         add(&mut samples, "row_point_read", nanos(start), options.reads);
         let lo = key(0);
@@ -249,7 +265,12 @@ fn measure(options: &Options) -> Result<(Results, Value), String> {
         for _ in 0..options.reads {
             black_box(
                 store
-                    .scan_at(snap, TABLE, lo.clone()..hi.clone())
+                    .scan_at(
+                        snap,
+                        TABLE,
+                        lo.clone()..hi.clone(),
+                        &lattice_engines::limits::AllowAll,
+                    )
                     .map_err(|e| e.to_string())?,
             );
         }
@@ -267,7 +288,7 @@ fn measure(options: &Options) -> Result<(Results, Value), String> {
                 .ok_or("missing prepared bucket")?;
             black_box(
                 store
-                    .lookup_at(snap, INDEX, bucket)
+                    .lookup_at(snap, INDEX, bucket, &lattice_engines::limits::AllowAll)
                     .map_err(|e| e.to_string())?,
             );
         }
@@ -329,7 +350,12 @@ fn measure(options: &Options) -> Result<(Results, Value), String> {
         }
         verify(&store, options.rows, 15)?;
         if !matches!(
-            store.get_at(Snapshot { as_of: 0 }, TABLE, &key(0)),
+            store.get_at(
+                Snapshot { as_of: 0 },
+                TABLE,
+                &key(0),
+                &lattice_engines::limits::AllowAll
+            ),
             Err(RowError::SnapshotTooOld { .. })
         ) {
             return Err("vacuum did not refuse an expired read".into());
