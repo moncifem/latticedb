@@ -30,3 +30,9 @@ temporal = []
 
 [lints]
 workspace = true
+
+# The same deterministic oracle is imported by the host-only nightly runner example.
+[[test]]
+name = "row_faults"
+path = "tests/row_faults.rs"
+required-features = ["row"]

@@ -2,7 +2,6 @@
 //! against submitted transaction envelopes, rather than trusting derived rows to verify themselves.
 //! In-doubt commits may exist or not; acknowledged commits must exist and rejected commits must not.
 //! Any run touched by destructive bit rot is reported as incomplete, never counted as a clean pass.
-#![cfg(feature = "row")]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -11,6 +10,7 @@
 )]
 
 use lattice_core::Config;
+#[cfg(test)]
 use lattice_core::bugs::{self, Bug};
 use lattice_core::changeset::ChangeSet;
 use lattice_core::record::{Decoded, RecordType, SEGMENT_HEADER_LEN, decode_record};
@@ -20,14 +20,18 @@ use lattice_engines::rowops::{self, RowKey, RowWrite};
 use lattice_engines::store::{RowError, RowStore};
 use lattice_seams::{Io, IoError};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo, TraceHash};
-use lattice_testkit::scenario::{SharedClock, SharedIo, profiles};
+#[cfg(test)]
+use lattice_testkit::scenario::profiles;
+use lattice_testkit::scenario::{SharedClock, SharedIo};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 const MARKERS: u32 = 100;
 const TABLES: u32 = 3;
+#[cfg(test)]
 const STEPS: u64 = 72;
+#[cfg(test)]
 const SEEDS: u64 = 48;
 type Rows = BTreeMap<RowKey, Vec<u8>>;
 type Writes = BTreeMap<RowKey, Option<Vec<u8>>>;
@@ -598,12 +602,19 @@ fn run(seed: u64, profile: FaultProfile, steps: u64) -> Outcome {
 
 // Captured by the test runner unless --nocapture is requested for an evidence report.
 #[allow(clippy::print_stderr)]
-fn verify_profile(name: &str, profile: FaultProfile, range: std::ops::Range<u64>, steps: u64) {
+pub(crate) fn verify_profile(
+    name: &str,
+    profile: FaultProfile,
+    range: std::ops::Range<u64>,
+    steps: u64,
+) -> BTreeMap<&'static str, u64> {
     assert!(
         range.start < range.end,
         "an empty seed selection is not evidence"
     );
     let seeds = range.end - range.start;
+    let mut observed = 0;
+    let mut full_step_verified = 0;
     let mut acked = 0;
     let mut incomplete = 0;
     let mut cut_short = 0;
@@ -615,6 +626,8 @@ fn verify_profile(name: &str, profile: FaultProfile, range: std::ops::Range<u64>
     for seed in range.clone() {
         let out = run(seed, profile, steps);
         assert!(out.problem.is_none(), "profile={name} seed={seed}: {out:?}");
+        observed += 1;
+        full_step_verified += u64::from(!out.incomplete && !out.cut_short);
         incomplete += u64::from(out.incomplete);
         cut_short += u64::from(out.cut_short);
         acked += out.acked;
@@ -627,6 +640,10 @@ fn verify_profile(name: &str, profile: FaultProfile, range: std::ops::Range<u64>
         faults.fsync_errors += out.faults.fsync_errors;
         faults.no_space += out.faults.no_space;
     }
+    assert_eq!(
+        observed, seeds,
+        "the selected seed range was not fully observed"
+    );
     assert!(
         acked >= seeds,
         "profile {name} produced too little acknowledged work: {acked}"
@@ -669,8 +686,25 @@ fn verify_profile(name: &str, profile: FaultProfile, range: std::ops::Range<u64>
         range.end,
         seeds - incomplete
     );
+    BTreeMap::from([
+        ("observed", observed),
+        ("verified", observed - incomplete),
+        ("full_step_verified", full_step_verified),
+        ("rot_censored", incomplete),
+        ("cut_short", cut_short),
+        ("acknowledgements", acked),
+        ("power_cuts", cuts),
+        ("recoveries", recoveries),
+        ("snapshots", snapshots),
+        ("conflicts", conflicts),
+        ("append_errors", faults.append_errors),
+        ("partial_appends", faults.partial_appends),
+        ("fsync_errors", faults.fsync_errors),
+        ("no_space", faults.no_space),
+    ])
 }
 
+#[cfg(test)]
 fn verify_profiles(seeds: u64, steps: u64) {
     for (name, profile) in profiles() {
         verify_profile(name, profile, 0..seeds, steps);
@@ -734,6 +768,7 @@ fn row_fault_profiles_at_gate_volume() {
 /// One rotation whose commit and subsequent recovery can be cut at any mutating operation.
 /// Baseline operation counts come from the real protocol; the sweep does not assume that the
 /// implementation always has exactly five commit operations or a particular recovery sequence.
+#[cfg(test)]
 fn rotation_case(
     seed: u64,
     commit_cut: Option<u64>,
@@ -858,12 +893,16 @@ fn inv_i9_row_and_index_history_survive_every_cut_point() {
     }
 }
 
-// Keep the full ignored gate above for manual runs. Nightly selects exactly one named test below;
+// Keep the full ignored gate and its bounded named shards for manual runs;
 // no ambient environment is read by deterministic engine tests.
+#[cfg(test)]
 const GATE_SEEDS: u64 = 10_000;
+#[cfg(test)]
 const GATE_SHARDS: u64 = 4;
+#[cfg(test)]
 const GATE_STEPS: u64 = 150;
 
+#[cfg(test)]
 fn gate_seed_range(shard: u64) -> Option<std::ops::Range<u64>> {
     if shard >= GATE_SHARDS {
         return None;
@@ -872,6 +911,7 @@ fn gate_seed_range(shard: u64) -> Option<std::ops::Range<u64>> {
     Some(shard * per_shard..(shard + 1) * per_shard)
 }
 
+#[cfg(test)]
 fn verify_gate_shard(name: &str, shard: u64) {
     let (_, profile) = profiles()
         .into_iter()
@@ -936,6 +976,7 @@ fn gate_shard_ranges_partition_the_original_budget_exactly() {
     );
 }
 
+#[cfg(test)]
 mod gate_shards {
     use super::*;
     macro_rules! shard_cases {

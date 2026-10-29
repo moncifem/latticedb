@@ -436,6 +436,7 @@ dependencies = [
  "lattice-lsl",
  "lattice-seams",
  "lattice-sim",
+ "lattice-testkit",
  "serde_json",
  "tokio",
 ]
