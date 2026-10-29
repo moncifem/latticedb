@@ -18,3 +18,6 @@ pub mod typed;
 
 /// Layer marker used by the layer check. Do not remove.
 pub const LAYER: u8 = 4;
+
+/// Row policy and statement-limit primitives; store integration is separate.
+pub mod limits;
