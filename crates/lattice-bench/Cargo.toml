@@ -32,3 +32,8 @@ required-features = ["runtime-spike"]
 
 [lints]
 workspace = true
+
+[[example]]
+name = "row_bench"
+path = "examples/row_bench.rs"
+test = true
