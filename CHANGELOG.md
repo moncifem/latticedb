@@ -194,6 +194,12 @@ between minor versions; format changes are called out explicitly.
   the listener after about ten seconds and the binary then exits instead of hanging on stdin. The read timeout is documented
   as the idle timeout and `--help` states that stdin EOF stops the server.
 
+- Evidence checks fail closed: the SQL reference check fails on an empty script set, needs a `select 1`
+  preflight and tells a connection failure from a query error; nightly failure reporting now covers
+  the scorecard job and cancelled or lost-runner jobs; the SQL reference PostgreSQL image and the planner
+  experiment's `psycopg` install are pinned (digest, hashes) and fuzz corpus cache keys are scoped to
+  the branch. Same-repository and review-state checks are documented as owner procedure for the merger.
+
 ## [0.1.0-alpha.0]
 
 Not published. This is the version under development; the first published build will be

@@ -227,7 +227,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
         env: { POSTGRES_PASSWORD: ci }
         ports: ["5432:5432"]
         options: >-
@@ -246,8 +246,13 @@ jobs:
   report-failure:
     # A failed scheduled night opens one issue, or adds a comment to the one still open, naming the
     # failed jobs and the seed lines their logs print. Manual runs are not reported.
+    # Every other job is listed in needs, including scorecard, so a job added later but left out of
+    # the list is a review finding. A job that failed, timed out or was cancelled counts: a runner
+    # that is lost mid-job reports as cancelled and would otherwise leave no issue. This workflow has
+    # no concurrency group, so nothing cancels a job on purpose; a run an owner cancels by hand also
+    # stops this job, and so opens nothing.
     if: always() && github.event_name == 'schedule'
-    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, row-faults, cancel-loom]
+    needs: [sim, determinism-and-planted-bugs, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, scorecard, row-faults, cancel-loom]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -261,7 +266,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           failed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .name')
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") | .name')
           if [ -z "$failed" ]; then echo "no failed jobs"; exit 0; fi
           seeds=$(gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>/dev/null \
             | grep -iE 'seed|scenario|invariant|panicked' | cut -c1-300 | head -20 || true)

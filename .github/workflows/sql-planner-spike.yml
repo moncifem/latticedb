@@ -64,7 +64,7 @@ jobs:
           git status --porcelain > planner-evidence/status-before.txt
           docker inspect --format '{{.Image}}' '${{ job.services.postgres.id }}' > planner-evidence/postgres-image.txt
       - name: install pinned PostgreSQL client
-        run: python3 -m pip install 'psycopg[binary]==3.3.6'
+        run: python3 -m pip install --require-hashes --no-deps -r tools/requirements-sql-planner.txt
       - name: structural rules for production graph
         run: |
           cargo xtask check-layers
