@@ -30,8 +30,16 @@ At least one table or index operation is required. Ordinary row-only transaction
 LROW v1. Total compound payload is bounded by the existing WAL payload limit; the surrounding
 ChangeSet adds its own overhead and the kernel may reject a payload that exceeds the record limit.
 Counts, names, versions, expression tags, lengths, overflow and trailing bytes are checked strictly.
-Names are nonempty and at most 255 UTF-8 bytes. Active definitions are bounded to 4096. Used index ids,
+Names are nonempty and at most 255 UTF-8 bytes. The nested LCAT header's table-operation count is
+checked against 4096 before decoding its operation values. This restriction belongs to LCIX nesting;
+standalone legacy LCAT decoding is unchanged. Active definitions are bounded to 4096. Used index ids,
 catalog versions and historical rows remain retained derived state and can grow.
+
+Nested LROW mutations do not inherit the 4096 metadata-operation limit. They retain the existing
+byte-bounded row decoder, whose in-memory vectors, allocation capacity and decoded values can exceed
+the encoded byte size. The record-byte ceiling alone therefore does not establish a peak allocator
+bound. A separate row-count/admission-budget policy and measured allocation amplification remain
+acceptance risks; this draft does not silently impose a new row count or claim those risks resolved.
 
 The initial expressions are tag 0 `WholeValue` (all physical value bytes) and tag 1 `Slice` followed
 by u32 offset and length. A slice with an overflowing end is invalid. A value shorter than the end
@@ -64,6 +72,8 @@ Index maintenance preserves old entry versions. Lookup and consistency checks at
 snapshot use the definitions visible then. Vacuum still determines the row/index floor; this proposal
 does not prune catalog history or kernel deduplication ids. The index checker computes expected entries
 from the authoritative catalog at the requested LSN, not from the index registry being checked.
+Before comparing entries it also checks current and historical effective definitions against the
+catalog, so an empty table cannot hide a missing registry that would omit later write maintenance.
 
 ## Invariants and recovery
 

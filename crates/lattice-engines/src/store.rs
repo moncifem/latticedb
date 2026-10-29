@@ -8,7 +8,7 @@
 //! row change sets through the same apply, so a restart reproduces exactly the acknowledged state.
 
 use crate::catalog::{self, Catalog, CatalogError, CatalogOp, CompoundChange, IndexOp};
-use crate::index::{IndexDef, Indexes};
+use crate::index::{IndexDef, Indexes, ManagedIndexes};
 use crate::limits::{
     AllowAll, PolicyEvaluator, RowRef, RowWriteRef, authorize_read, authorize_write,
 };
@@ -536,11 +536,18 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     /// Rebuilds expected index entries from the rows at `snap` and reports any difference (I9).
     pub fn check_indexes_at(&self, snap: Snapshot) -> Result<(), String> {
         self.check_snapshot(snap).map_err(|e| e.to_string())?;
+        let empty = ManagedIndexes::new();
+        if self.indexes.managed_current().unwrap_or(&empty) != &self.catalog.indexes() {
+            return Err("managed index definitions differ from the current catalog".into());
+        }
+        let definitions = self.catalog.indexes_as_of(snap.as_of);
+        if self.indexes.managed_at(snap).unwrap_or(&empty) != &definitions {
+            return Err("managed index definitions differ from the historical catalog".into());
+        }
         let live = self
             .indexes
             .live_entries(snap)
             .map_err(|e| format!("{e:?}"))?;
-        let definitions = self.catalog.indexes_as_of(snap.as_of);
         let expected = self
             .indexes
             .expected_entries_catalog(&self.table, snap, Some(&definitions))

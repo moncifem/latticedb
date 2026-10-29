@@ -27,6 +27,8 @@ an owner decision about enforced capability checks or coordinated upgrade; no mi
 in-place downgrade support is claimed. A pre-upgrade backup is required for rollback.
 
 Synchronous builds can block and require temporary entry memory. Used ids and catalog/index history
-grow; no total-memory bound or phase exit is established. Online backfill and schema migration remain
+grow; the nested row decoder also retains allocation amplification beyond its encoded byte length.
+No new row-count limit, peak-allocation bound or phase exit is established. A row admission-budget
+policy and its measurement remain unresolved. Online backfill and schema migration remain
 RFC 0004 work. Future checkpoint composition must preserve the complete definition timeline under
 an independently reviewed engine tag.

@@ -164,10 +164,10 @@ impl Indexes {
         self.changes_for_catalog(rows, writes, self.managed_current())
     }
 
-    fn managed_current(&self) -> Option<&ManagedIndexes> {
+    pub(crate) fn managed_current(&self) -> Option<&ManagedIndexes> {
         self.managed_versions.last().map(|(_, defs)| defs)
     }
-    fn managed_at(&self, snap: Snapshot) -> Option<&ManagedIndexes> {
+    pub(crate) fn managed_at(&self, snap: Snapshot) -> Option<&ManagedIndexes> {
         let end = self
             .managed_versions
             .partition_point(|(lsn, _)| *lsn <= snap.as_of);

@@ -977,3 +977,113 @@ fn byte_window_extraction_has_exact_independent_offset_length_and_short_value_re
     );
     store.check_indexes().unwrap();
 }
+
+#[test]
+fn nested_catalog_count_is_bounded_before_decoding_or_allocating_its_operations() {
+    // Only the nested LCAT header is present: the oversized count must win over child truncation.
+    let mut nested = b"LCAT\x01".to_vec();
+    nested.extend_from_slice(&4097u32.to_le_bytes());
+    let mut envelope = b"LCIX\x01".to_vec();
+    envelope.extend_from_slice(&9u32.to_le_bytes());
+    envelope.extend_from_slice(&nested);
+    assert_eq!(
+        catalog::decode_compound(&envelope),
+        Err(CatalogError::TooLarge)
+    );
+    // Legacy decoding keeps its existing contract; the new bound belongs only to LCIX nesting.
+    assert_eq!(catalog::decode(&nested), Err(CatalogError::Truncated));
+    for count in [4096u32, 4097] {
+        let mut nested = b"LCAT\x01".to_vec();
+        nested.extend_from_slice(&count.to_le_bytes());
+        for id in 0..count {
+            nested.push(3);
+            nested.extend_from_slice(&id.to_le_bytes());
+        }
+        let mut envelope = b"LCIX\x01".to_vec();
+        envelope.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        envelope.extend_from_slice(&nested);
+        envelope.extend_from_slice(&0u32.to_le_bytes());
+        envelope.extend_from_slice(&0u32.to_le_bytes());
+        if count == 4096 {
+            let decoded = catalog::decode_compound(&envelope).unwrap();
+            assert_eq!(decoded.tables.len(), 4096);
+            assert_eq!(catalog::encode_compound(&decoded).unwrap(), envelope);
+        } else {
+            assert_eq!(
+                catalog::decode_compound(&envelope),
+                Err(CatalogError::TooLarge)
+            );
+        }
+    }
+}
+
+#[test]
+fn row_count_does_not_inherit_the_index_operation_limit() {
+    let change = CompoundChange {
+        tables: vec![table(7)],
+        indexes: Vec::new(),
+        rows: (0u32..4097)
+            .map(|id| ((7, id.to_le_bytes().to_vec()), None))
+            .collect(),
+    };
+    let encoded = catalog::encode_compound(&change).unwrap();
+    assert_eq!(catalog::decode_compound(&encoded), Ok(change));
+}
+
+#[test]
+fn empty_index_recovery_omission_is_detected_before_a_later_write_can_bypass_maintenance() {
+    let (disk, clock) = fresh();
+    let mut store = open(&disk, &clock);
+    let at = store
+        .commit_catalog(
+            vec![table(7)],
+            vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))],
+        )
+        .unwrap();
+    assert!(rows(&store).is_empty());
+    store.check_indexes_at(Snapshot { as_of: 0 }).unwrap();
+    store.check_indexes().unwrap();
+    drop(store);
+    disk.crash();
+    {
+        let correct = open(&disk, &clock);
+        assert!(correct.catalog().indexes().contains_key(&9));
+        assert!(
+            correct
+                .lookup_at(
+                    correct.snapshot(),
+                    9,
+                    b"x",
+                    &lattice_engines::limits::AllowAll
+                )
+                .unwrap()
+                .is_empty()
+        );
+        correct.check_indexes_at(Snapshot { as_of: at }).unwrap();
+        correct.check_indexes().unwrap();
+    }
+    bugs::enable(Bug::ManagedIndexesNotRecovered);
+    let _guard = BugGuard;
+    let mut broken = open(&disk, &clock);
+    assert!(broken.catalog().indexes().contains_key(&9));
+    assert!(rows(&broken).is_empty());
+    let error = broken
+        .check_indexes()
+        .expect_err("an empty entry map must not conceal a missing live definition");
+    assert!(error.contains("definitions"));
+    let mut tx = broken.begin();
+    tx.put((7, b"a".to_vec()), b"x".to_vec());
+    broken.commit(tx).unwrap();
+    assert_ne!(
+        broken
+            .lookup_at(
+                broken.snapshot(),
+                9,
+                b"x",
+                &lattice_engines::limits::AllowAll
+            )
+            .unwrap(),
+        vec![b"a".to_vec()]
+    );
+    assert!(broken.check_indexes().is_err());
+}

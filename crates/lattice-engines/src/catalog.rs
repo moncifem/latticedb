@@ -204,7 +204,7 @@ pub fn decode(payload: &[u8]) -> Result<Vec<CatalogOp>, CatalogError> {
 
 /// Independent draft envelope magic; it does not reinterpret reserved LCAT version 2.
 pub const INDEX_MAGIC: [u8; 4] = *b"LCIX";
-/// Maximum index operations in one compound change.
+/// Maximum table or index operations in one compound change.
 pub const MAX_INDEX_OPS: usize = 4096;
 
 /// A definition change. Index ids are never reused; a recreated name receives a fresh id.
@@ -323,11 +323,22 @@ pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
     let tables = if table_len == 0 {
         Vec::new()
     } else {
-        decode(r.take(table_len)?)?
+        let nested = r.take(table_len)?;
+        // Check the declared operation count before the legacy decoder can expand it into values.
+        // Keep that decoder's standalone format and error behavior unchanged.
+        let mut header = Reader { rest: nested };
+        if header.take(4)? != MAGIC.as_slice() {
+            return Err(CatalogError::Truncated);
+        }
+        match header.u8()? {
+            VERSION => {}
+            version => return Err(CatalogError::UnsupportedVersion(version)),
+        }
+        if header.u32()? as usize > MAX_INDEX_OPS {
+            return Err(CatalogError::TooLarge);
+        }
+        decode(nested)?
     };
-    if tables.len() > MAX_INDEX_OPS {
-        return Err(CatalogError::TooLarge);
-    }
     let count = r.u32()? as usize;
     if count > MAX_INDEX_OPS {
         return Err(CatalogError::TooLarge);
