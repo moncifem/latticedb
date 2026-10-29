@@ -52,6 +52,9 @@ exclude_re = [
     # so moving its boundary by one cannot be observed; it stays as a second guard for the recursive
     # printer and drop.
     "parser\\.rs:\\d+:14: replace > with (==|>=) in Parser::grow",
+    # Typed rows: an overflow name equal to the previous one is already refused as a clash, because the
+    # previous name is in the map by then, so the order check never sees equal names.
+    "typed\\.rs:\\d+:54: replace > with >= in decode_row",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
