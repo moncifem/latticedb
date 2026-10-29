@@ -22,9 +22,19 @@ stdout resembles valid JSON. Empty, malformed or unknown data is never positive 
 The tool refuses drafts, closed/unmerged PRs, conflicts, non-main bases and observed failed checks.
 Only `CLEAN` with every context configured in `tools/branch-protection.json` explicitly successful
 may proceed. The original six contexts cannot be omitted from that file: both Ubuntu gates,
-`secret-scan`, `typos`, `commit-messages` and `msrv`. Each must occur exactly once; CheckRun records
-require `COMPLETED`/`SUCCESS`, while legacy StatusContext records require `SUCCESS`. Missing, duplicate,
+`secret-scan`, `typos`, `commit-messages` and `msrv`. After resolving reliably ordered retry history, each must have one unambiguous current record; CheckRun records
+require `COMPLETED`/`SUCCESS`, while legacy StatusContext records require `SUCCESS`. Missing, ambiguous,
 pending, skipped or otherwise unverified required contexts wait and eventually fail closed.
+
+GitHub can return cancelled/failed prior runs alongside a later successful run on the same head,
+including a reviewed-risk-label rerun. Duplicate CheckRuns are ordered only within one named workflow
+with same-repository GitHub Actions job URLs and valid start/completion chronology. The latest unique
+start wins, even if an older invocation finishes later. Ties, missing timestamps, unrelated producer
+identities and mixed record types are unknown. Latest pending checks wait and latest failures refuse;
+an older pass never substitutes for them. Duplicate legacy StatusContexts remain unknown because
+the default API projection lacks writer identity; timestamps alone cannot safely deduplicate writers.
+The raw PR #288 check-history fixture retains the actual cancelled/failed/successful governance runs
+and its pending x86 gate, without fabricating a successful whole-PR snapshot.
 
 Before merging it reads the full snapshot again and revalidates the same head and gates. The merge
 uses `gh pr merge --rebase --match-head-commit VERIFIED_SHA`: the server refuses a push after the last

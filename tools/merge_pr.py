@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Merge reviewed PRs serially, fail closed on incomplete or stale GitHub evidence."""
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
@@ -50,7 +51,67 @@ def required_contexts():
     return set(contexts)
 
 
-def assess(snapshot, required):
+def check_time(value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z', value):
+        raise Unknown('missing or malformed check chronology')
+    try:
+        result = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as error:
+        raise Unknown('invalid check timestamp') from error
+    if result.year < 1970:
+        raise Unknown('unset check timestamp')
+    return result
+
+
+def latest_checks(checks, repo=None):
+    """Order same-workflow Actions retries; never infer chronology for unrelated status writers."""
+    grouped = {}
+    for row in checks:
+        if not isinstance(row, dict):
+            raise Unknown('malformed check')
+        kind = row.get('__typename')
+        name = row.get('name') if kind == 'CheckRun' else row.get('context')
+        if kind not in ('CheckRun', 'StatusContext') or not isinstance(name, str) or not name:
+            raise Unknown('missing check identity')
+        grouped.setdefault(name, []).append(row)
+    selected = []
+    for rows in grouped.values():
+        if len(rows) == 1:
+            selected.append(rows[0])
+            continue
+        # gh's StatusContext projection supplies no writer identity; createdAt alone cannot prove
+        # that two legacy writers belong to the same check. Mixed record types are ambiguous too.
+        if any(row['__typename'] != 'CheckRun' for row in rows):
+            raise Unknown('ambiguous duplicate legacy/mixed check contexts')
+        workflows = {row.get('workflowName') for row in rows if isinstance(row.get('workflowName'), str)}
+        if len(workflows) != 1 or not next(iter(workflows), ''):
+            raise Unknown('duplicate context has different or missing workflows')
+        starts = []
+        projects = set()
+        for row in rows:
+            if row.get('workflowName') not in workflows:
+                raise Unknown('missing duplicate-check workflow identity')
+            url = row.get('detailsUrl')
+            match = re.fullmatch(r'https://github\.com/([^/]+/[^/]+)/actions/runs/[0-9]+/job/[0-9]+',
+                                 url if isinstance(url, str) else '')
+            if not match or (repo is not None and match.group(1) != repo):
+                raise Unknown('duplicate context has unverifiable Actions provenance')
+            projects.add(match.group(1))
+            started = check_time(row.get('startedAt'))
+            if row.get('status') == 'COMPLETED':
+                if check_time(row.get('completedAt')) < started:
+                    raise Unknown('check completed before it started')
+            elif row.get('status') not in ('QUEUED', 'IN_PROGRESS', 'WAITING', 'PENDING', 'REQUESTED'):
+                raise Unknown('unknown check lifecycle')
+            starts.append(started)
+        if len(projects) != 1 or len(set(starts)) != len(starts):
+            raise Unknown('ambiguous check chronology or producer')
+        # Start time identifies the newer invocation even if an older run finishes after it.
+        selected.append(rows[starts.index(max(starts))])
+    return selected
+
+
+def assess(snapshot, required, repo=None):
     if not isinstance(snapshot, dict) or snapshot.get('state') not in ('OPEN', 'MERGED', 'CLOSED'):
         raise Unknown('unknown PR state')
     if snapshot['state'] == 'MERGED':
@@ -72,7 +133,8 @@ def assess(snapshot, required):
     if not isinstance(checks, list):
         raise Unknown('missing check rollup')
     observed = {}
-    for row in checks:
+    pending = False
+    for row in latest_checks(checks, repo):
         if not isinstance(row, dict):
             raise Unknown('malformed check')
         if row.get('__typename') == 'CheckRun':
@@ -82,11 +144,13 @@ def assess(snapshot, required):
             if conclusion in FAILED:
                 raise Refused('a check failed on the observed head')
             success = status == 'COMPLETED' and conclusion == 'SUCCESS'
+            pending = pending or status != 'COMPLETED'
         elif row.get('__typename') == 'StatusContext':
             name = row.get('context')
             if row.get('state') in FAILED:
                 raise Refused('a commit status failed on the observed head')
             success = row.get('state') == 'SUCCESS'
+            pending = pending or row.get('state') not in ('SUCCESS', 'FAILURE', 'ERROR')
         else:
             raise Unknown('unknown check record type')
         if not isinstance(name, str) or not name:
@@ -98,7 +162,7 @@ def assess(snapshot, required):
     if state == 'BEHIND':
         return 'BEHIND'
     # Each configured context must appear exactly once with an explicit successful terminal state.
-    if state != 'CLEAN' or any(observed.get(name) != [True] for name in required):
+    if state != 'CLEAN' or pending or any(observed.get(name) != [True] for name in required):
         return 'WAIT'
     return 'CLEAN'
 
@@ -145,7 +209,7 @@ def merge_one(pr, repo, args, required):
     for _ in range(args.tries):
         try:
             first = snapshot(pr, repo)
-            state = assess(first, required)
+            state = assess(first, required, repo)
             if state == 'MERGED':
                 print(f'PR {pr}: already merged')
                 return True
@@ -170,7 +234,7 @@ def merge_one(pr, repo, args, required):
                 if children(repo, first['headRefName']):
                     raise Refused('open stacked children; retarget them explicitly before merging parent')
                 second = snapshot(pr, repo)
-                if assess(second, required) != 'CLEAN' or second['headRefOid'] != first['headRefOid'] \
+                if assess(second, required, repo) != 'CLEAN' or second['headRefOid'] != first['headRefOid'] \
                         or second['headRefName'] != first['headRefName']:
                     raise Unknown('head or evidence changed during validation')
                 if not protected_action(repo, required, args.dry_run):

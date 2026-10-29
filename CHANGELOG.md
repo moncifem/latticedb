@@ -153,6 +153,9 @@ between minor versions; format changes are called out explicitly.
 
 ### Fixed
 
+- Serial merger resolves unambiguous same-workflow check retries instead of treating superseded
+  cancelled/failed runs as current; ambiguous history and the latest pending/failure still block.
+
 - Keep CLI test process launches separate from in-process ledger writes, preventing inherited WAL
   locks from making parallel macOS tests fail intermittently.
 - Restore the catalog test lint gate and retain a separate CI run for each push to `main`, while
