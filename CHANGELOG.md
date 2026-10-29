@@ -183,7 +183,8 @@ between minor versions; format changes are called out explicitly.
 - `lattice_core::workflow` (WP47, #249, P3-09): a pure, server-arbitrated workflow state machine.
   Transitions are accepted, rejected with a stable reason code, or recorded in a deterministic `Conflict`
   entity (sorted proposals, resolution options, canonical bounded encoding) that `resolve` closes; requests
-  are idempotent by id. Pure library; no log, sync or SQL wiring yet, and no exit criterion is claimed.
+  are idempotent by `(actor, id)`, versioned against ABA, resolution is permissioned and history is
+  bounded; draft encoding in `formats/workflow-v1.md`. Pure library; no log, sync or SQL wiring yet, and no exit criterion is claimed.
 
 ### Changed
 

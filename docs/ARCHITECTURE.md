@@ -1511,20 +1511,28 @@ sequenceDiagram
 ### 15.4a Workflow arbitration rules
 
 Workflow state is the one place where offline merge is not a CRDT merge. `lattice_core::workflow` is
-a pure state machine: a request carries the state the client saw (`from`), the wanted state (`to`),
-the actor and an HLC, and the arbiter answers `Accepted`, `Rejected(code)` or `Conflict(entity)`.
+a pure state machine: a request carries the state the client saw (`from`), the entity version it saw
+it at (`from_version`), the wanted state (`to`), the actor and an HLC, and the arbiter answers
+`Accepted`, `Rejected(code)` or `Conflict(entity)`.
 
-- A request id is single use; a duplicate returns the stored answer and changes nothing.
+- Requests are keyed by `(actor, id)`; a duplicate returns the stored answer and changes nothing.
+  The caller must bind `Request.actor` to the authenticated principal. Rejections are not stored.
 - Unknown states, transitions the workflow does not allow, and guard failures are rejected with a
   stable code (`not_allowed`, `guard_denied`, ...).
-- `from` equal to the current state: accepted.
-- `from` stale: another transition was accepted since the client looked, so the request becomes a
-  `Conflict` listing every competing proposal (sorted by HLC and request id), the options
-  (`Revert` or one `Choose` per target) and a canonical bounded encoding. The entity returns to the
-  base state until `resolve` closes the conflict, so both arrival orders give the same state and
-  the same conflict. Stale requests for a state already reached, or made before a resolution, are
+- `from_version` equal to the entity version: accepted. The version counts accepted transitions and
+  resolutions, so a `todo -> doing -> todo` round trip is still seen as stale.
+- `from_version` stale: another transition was accepted since the client looked, so the request
+  becomes a `Conflict` listing every competing proposal (sorted by HLC and request id), the options
+  (`Revert` or one `Choose` per target) and a canonical bounded encoding (`formats/workflow-v1.md`,
+  draft). The entity returns to the base state until `resolve` closes the conflict. Stale requests for
+  a state already reached, made before a resolution, or naming a state a conflict folded away are
   rejected with a code.
+- `resolve` needs a configured resolver, and `Choose(s)` needs `base -> s` to be allowed under the
+  resolver's guard.
+- Proposals from the same base converge to the same conflict and state in any arrival order (up to 16
+  proposals). Chained requests and overflow past 16 depend on arrival order; the loser is rejected with a code.
 - No proposal is dropped silently: each one is accepted, rejected with a code, or in a conflict.
+  History per entity is bounded (4096 entries); when full, new transitions get `history_full`.
 
 ### 15.5 Purge with crypto-shredding that cascades to derived data
 

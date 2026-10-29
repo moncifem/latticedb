@@ -2,35 +2,57 @@
 //!
 //! Workflow state is not merged like a CRDT: two replicas that change the state of one entity while
 //! apart cannot both be right, and merging would silently pick one. Instead the server arbitrates.
-//! Every state change arrives as a [`Request`] that names the state the client saw (`from`), and a
-//! pure function ([`decide`]) answers with exactly one of [`Decision::Accepted`],
-//! [`Decision::Rejected`] (with a stable [`RejectReason`] code) or [`Decision::Conflict`] (a
-//! [`ConflictEntity`] that lists every competing proposal and the ways to resolve it).
+//! Every state change arrives as a [`Request`] that names the state the client saw (`from`) and the
+//! entity version it saw it at (`from_version`), and a pure function ([`decide`]) answers with
+//! exactly one of [`Decision::Accepted`], [`Decision::Rejected`] (with a stable [`RejectReason`]
+//! code) or [`Decision::Conflict`] (a [`ConflictEntity`] that lists every competing proposal and the
+//! ways to resolve it).
 //!
 //! # Rules
 //!
-//! 1. A request id is single use. Re-sending a request returns the stored decision and changes
-//!    nothing; re-using an id for different content is rejected.
+//! 1. A request is keyed by `(actor, id)`. Re-sending an accepted or conflicting request returns the
+//!    stored answer and changes nothing; re-using the key for different content is rejected.
+//!    Rejections are not stored (so they cannot be used to fill the history); a re-sent rejected
+//!    request is simply decided again against the current state. **`Request.actor` must be bound to
+//!    the authenticated principal by the caller**: this module trusts it, and keying by actor only
+//!    stops one principal from burning another's ids if that holds.
 //! 2. Names must be known to the [`WorkflowDef`], the transition must be allowed and its [`Guard`]
 //!    must admit the actor, otherwise the request is rejected.
-//! 3. If the entity has an open conflict, a request based on the conflict's base state joins the
+//! 3. The entity version counts every accepted transition and every resolution, so it is exact:
+//!    a request is current only if `from_version` equals the version, which settles the
+//!    `todo -> doing -> todo` case where the state alone cannot tell stale from fresh. The state at
+//!    `from_version` must equal `from`, else the request is rejected.
+//! 4. A request that observed a state later folded into a conflict is rejected
+//!    ([`RejectReason::StateSuperseded`]).
+//! 5. If the entity has an open conflict, a request based on the conflict's base state joins the
 //!    conflict as another proposal (up to [`MAX_PROPOSALS`]); anything else is rejected until the
 //!    conflict is resolved.
-//! 4. A request whose `from` equals the current state is accepted.
-//! 5. A request whose `from` is stale is accepted only if no other transition was accepted since the
-//!    client saw that state. Since the current state differs, one was; so a stale request is
-//!    a conflict, unless it asks for the state the entity is already in
-//!    ([`RejectReason::AlreadyInTarget`]), or a conflict resolution happened since
-//!    ([`RejectReason::StaleAfterResolution`]), or the client named a state the entity never had
-//!    ([`RejectReason::StateNeverObserved`]).
-//! 6. A new conflict holds the transitions accepted since the base state (they are marked
-//!    superseded) together with the stale request. The entity returns to the base state and stays
-//!    there until [`History::resolve`] closes the conflict. Because the conflict content is a sorted
-//!    set of proposals, two replicas arriving in either order yield the same conflict and state.
+//! 6. A current request is accepted. A stale one means another transition was accepted since the
+//!    client looked, so it becomes a conflict, unless it asks for the state the entity is already in
+//!    ([`RejectReason::AlreadyInTarget`]) or a resolution happened since
+//!    ([`RejectReason::StaleAfterResolution`]).
+//! 7. A new conflict holds the transitions accepted since the observed version (marked superseded)
+//!    together with the stale request. The entity returns to the base state and stays there until
+//!    [`History::resolve`] closes the conflict.
+//! 8. [`History::resolve`] needs the resolver to be listed in the definition
+//!    ([`WorkflowDef::set_resolvers`]; nobody by default), and a `Choose(s)` also needs `base -> s`
+//!    to be an allowed transition whose guard admits the resolver.
+//! 9. History per entity is bounded ([`MAX_ENTRIES`], [`MAX_DECIDED`]). When full, new transitions
+//!    are rejected with [`RejectReason::HistoryFull`]; one slot is kept so an open conflict can
+//!    always be resolved. Nothing is pruned, so idempotency never silently lapses.
 //!
-//! No proposal is ever dropped without a trace: each is accepted, rejected with a code, or recorded
-//! in a conflict. The state machine reads no clock and does no I/O, and uses ordered collections
-//! only, so replaying the same ordered requests always gives the same result.
+//! # What converges
+//!
+//! Proposals made from the same base state converge: the conflict is a sorted set, so the same
+//! conflict and base state result from any arrival order, for two proposals or for many, up to
+//! [`MAX_PROPOSALS`]. Beyond the cap the earliest arrivals win and later ones are rejected with
+//! `too_many_proposals`, so that case depends on arrival order. A chain (a request made after
+//! another accepted one, then a stale request from the older state) is also order dependent: the
+//! chained request is rejected with a code when the stale one arrives first. In every case each
+//! proposal is accepted, rejected with a code, or recorded in a conflict; none is dropped silently.
+//!
+//! The state machine reads no clock and does no I/O, and uses ordered collections only, so
+//! replaying the same ordered requests always gives the same result.
 
 use lattice_abi::Hlc;
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,6 +63,10 @@ pub const MAX_NAME_LEN: usize = 64;
 pub const MAX_STATES: usize = 256;
 /// Most proposals one conflict may hold.
 pub const MAX_PROPOSALS: usize = 16;
+/// Most history entries (accepted transitions and resolutions) one entity may hold.
+pub const MAX_ENTRIES: usize = 4096;
+/// Most stored decisions (accepted requests and conflict proposals) one entity may hold.
+pub const MAX_DECIDED: usize = 16384;
 
 const VERSION: u8 = 1;
 
@@ -77,6 +103,7 @@ pub struct WorkflowDef {
     initial: String,
     states: BTreeSet<String>,
     transitions: BTreeMap<(String, String), Guard>,
+    resolvers: BTreeSet<u64>,
 }
 
 impl WorkflowDef {
@@ -98,6 +125,7 @@ impl WorkflowDef {
             initial: initial.to_string(),
             states: set,
             transitions: BTreeMap::new(),
+            resolvers: BTreeSet::new(),
         })
     }
 
@@ -113,6 +141,11 @@ impl WorkflowDef {
         Ok(())
     }
 
+    /// Sets who may resolve conflicts. Nobody may until this is called.
+    pub fn set_resolvers(&mut self, actors: impl IntoIterator<Item = u64>) {
+        self.resolvers = actors.into_iter().collect();
+    }
+
     /// The state every entity starts in.
     pub fn initial(&self) -> &str {
         &self.initial
@@ -122,15 +155,17 @@ impl WorkflowDef {
 /// A client's request to change the state of one entity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
-    /// Unique per request; makes duplicates idempotent.
+    /// Unique per `(actor, id)`; makes duplicates idempotent.
     pub id: u64,
     /// The entity whose state changes.
     pub entity: u128,
     /// The state the client saw when it made the request.
     pub from: String,
+    /// The entity version the client saw `from` at (see [`History::version`]).
+    pub from_version: u64,
     /// The state the client wants.
     pub to: String,
-    /// Who asks.
+    /// Who asks. The caller must bind this to the authenticated principal.
     pub actor: u64,
     /// When the client made the request.
     pub hlc: Hlc,
@@ -221,14 +256,43 @@ impl ConflictEntity {
         }
     }
 
-    /// Canonical bytes: the same conflict always encodes to the same bytes.
-    pub fn encode(&self) -> Result<Vec<u8>, ConflictCodecError> {
+    /// Checks everything `decode` demands: ordinal at least 1, a valid base, 2 to
+    /// [`MAX_PROPOSALS`] strictly sorted proposals with valid names, options equal to the ones
+    /// derived from the proposals, and a resolution choice that is one of the options.
+    pub fn validate(&self) -> Result<(), ConflictCodecError> {
         if self.ordinal == 0 || !valid_name(&self.base) {
             return Err(ConflictCodecError::Invalid("base or ordinal"));
         }
-        if self.proposals.len() > MAX_PROPOSALS || self.options.len() > MAX_PROPOSALS + 1 {
-            return Err(ConflictCodecError::Invalid("too many proposals"));
+        if !(2..=MAX_PROPOSALS).contains(&self.proposals.len()) {
+            return Err(ConflictCodecError::Invalid("proposal count"));
         }
+        if self
+            .proposals
+            .iter()
+            .any(|p| !valid_name(&p.from) || !valid_name(&p.to))
+        {
+            return Err(ConflictCodecError::Invalid("name"));
+        }
+        if self.proposals.windows(2).any(|w| match w {
+            [a, b] => a >= b,
+            _ => false,
+        }) {
+            return Err(ConflictCodecError::Invalid("proposal order"));
+        }
+        if self.options != options_for(&self.proposals) {
+            return Err(ConflictCodecError::Invalid("options"));
+        }
+        if let Some(r) = &self.resolution
+            && !self.options.contains(&r.choice)
+        {
+            return Err(ConflictCodecError::Invalid("resolution choice"));
+        }
+        Ok(())
+    }
+
+    /// Canonical bytes: the same conflict always encodes to the same bytes.
+    pub fn encode(&self) -> Result<Vec<u8>, ConflictCodecError> {
+        self.validate()?;
         let mut o = vec![VERSION];
         o.extend_from_slice(&self.entity.to_be_bytes());
         o.extend_from_slice(&self.ordinal.to_le_bytes());
@@ -318,14 +382,16 @@ impl ConflictEntity {
             _ => return Err(ConflictCodecError::Invalid("resolution flag")),
         };
         r.finish()?;
-        Ok(Self {
+        let c = Self {
             entity,
             ordinal,
             base,
             proposals,
             options,
             resolution,
-        })
+        };
+        c.validate()?;
+        Ok(c)
     }
 }
 
@@ -446,18 +512,22 @@ pub enum RejectReason {
     NotAllowed,
     /// The transition's guard does not admit the actor.
     GuardDenied,
-    /// The request id was already used for different content.
+    /// The `(actor, id)` key was already used for different content.
     RequestIdReused,
     /// The entity has an open conflict and the request is not based on its base state.
     EntityConflicted,
     /// The open conflict (or a new one) would exceed [`MAX_PROPOSALS`].
     TooManyProposals,
-    /// The client named a state the entity has never been in.
+    /// `from_version` is in the future, or the state at that version is not `from`.
     StateNeverObserved,
+    /// The client observed a state that a conflict later folded away.
+    StateSuperseded,
     /// The request is stale and a conflict resolution happened since.
     StaleAfterResolution,
     /// The request is stale and the entity is already in the requested state.
     AlreadyInTarget,
+    /// The entity's history reached [`MAX_ENTRIES`] or [`MAX_DECIDED`].
+    HistoryFull,
 }
 
 impl RejectReason {
@@ -473,8 +543,10 @@ impl RejectReason {
             Self::EntityConflicted => "entity_conflicted",
             Self::TooManyProposals => "too_many_proposals",
             Self::StateNeverObserved => "state_never_observed",
+            Self::StateSuperseded => "state_superseded",
             Self::StaleAfterResolution => "stale_after_resolution",
             Self::AlreadyInTarget => "already_in_target",
+            Self::HistoryFull => "history_full",
         }
     }
 }
@@ -505,6 +577,15 @@ pub enum ResolveError {
     /// The conflict was already closed with a different choice.
     #[error("conflict already resolved differently")]
     AlreadyResolved,
+    /// The actor is not a resolver, or the guard of the chosen transition does not admit them.
+    #[error("actor may not resolve this conflict that way")]
+    NotPermitted,
+    /// The workflow has no transition from the base state to the chosen state.
+    #[error("the chosen transition is not allowed from the base state")]
+    TransitionNotAllowed,
+    /// The history is full.
+    #[error("history is full")]
+    HistoryFull,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -516,15 +597,22 @@ struct Entry {
     superseded: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stored {
+    Accepted,
+    Conflict(u32),
+}
+
 /// Everything the arbiter knows about one entity. Cloneable and comparable so tests can check that
-/// replays and duplicates leave it unchanged.
+/// replays and duplicates leave it unchanged. Memory is bounded by [`MAX_ENTRIES`] and
+/// [`MAX_DECIDED`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct History {
     entity: u128,
     initial: String,
     state: String,
     entries: Vec<Entry>,
-    decided: BTreeMap<u64, (Request, Decision)>,
+    decided: BTreeMap<(u64, u64), (Request, Stored)>,
     open: Option<ConflictEntity>,
     closed: Vec<ConflictEntity>,
 }
@@ -535,12 +623,13 @@ enum Effect {
     NewConflict {
         conflict: ConflictEntity,
         from_index: usize,
+        by: Request,
     },
-    Join(ConflictEntity),
+    Join(ConflictEntity, Request),
 }
 
 impl History {
-    /// A new entity in the workflow's initial state.
+    /// A new entity in the workflow's initial state, at version 0.
     pub fn new(entity: u128, def: &WorkflowDef) -> Self {
         Self {
             entity,
@@ -558,6 +647,21 @@ impl History {
         &self.state
     }
 
+    /// The entity version: the number of accepted transitions and resolutions so far. Clients put
+    /// the version they saw in [`Request::from_version`].
+    pub fn version(&self) -> u64 {
+        u64::try_from(self.entries.len()).unwrap_or(u64::MAX)
+    }
+
+    /// The state the entity had at `version` (0 is the initial state), if that version exists.
+    pub fn state_at(&self, version: u64) -> Option<&str> {
+        if version == 0 {
+            return Some(&self.initial);
+        }
+        let i = usize::try_from(version - 1).ok()?;
+        self.entries.get(i).map(|e| e.state_after.as_str())
+    }
+
     /// The unresolved conflict, if any.
     pub fn open_conflict(&self) -> Option<&ConflictEntity> {
         self.open.as_ref()
@@ -568,70 +672,87 @@ impl History {
         &self.closed
     }
 
-    /// The stored decision for a request id, if it was decided.
-    pub fn decision_for(&self, request_id: u64) -> Option<&Decision> {
-        self.decided.get(&request_id).map(|(_, d)| d)
-    }
-
-    /// Ids of requests that were accepted and not later folded into a conflict, in order.
-    pub fn applied_requests(&self) -> Vec<u64> {
+    /// `(actor, id)` of requests that were accepted and not later folded into a conflict, in order.
+    pub fn applied_requests(&self) -> Vec<(u64, u64)> {
         self.entries
             .iter()
             .filter(|e| !e.superseded)
-            .filter_map(|e| e.request.as_ref().map(|r| r.id))
+            .filter_map(|e| e.request.as_ref().map(|r| (r.actor, r.id)))
             .collect()
     }
 
-    /// Ids of accepted requests that a conflict later superseded.
-    pub fn superseded_requests(&self) -> Vec<u64> {
+    /// `(actor, id)` of accepted requests that a conflict later superseded.
+    pub fn superseded_requests(&self) -> Vec<(u64, u64)> {
         self.entries
             .iter()
             .filter(|e| e.superseded)
-            .filter_map(|e| e.request.as_ref().map(|r| r.id))
+            .filter_map(|e| e.request.as_ref().map(|r| (r.actor, r.id)))
             .collect()
+    }
+
+    /// Number of stored decisions, for bound checks.
+    pub fn decided_len(&self) -> usize {
+        self.decided.len()
+    }
+
+    /// Number of history entries, for bound checks.
+    pub fn entries_len(&self) -> usize {
+        self.entries.len()
     }
 
     /// Decides the request and records the outcome.
     pub fn submit(&mut self, def: &WorkflowDef, req: &Request) -> Decision {
         let (decision, effect) = plan(def, self, req);
+        let key = (req.actor, req.id);
         match effect {
             Effect::None => {}
             Effect::Accept(r) => {
                 self.state.clone_from(&r.to);
                 self.entries.push(Entry {
                     state_after: r.to.clone(),
-                    request: Some(r),
+                    request: Some(r.clone()),
                     superseded: false,
                 });
+                self.decided.insert(key, (r, Stored::Accepted));
             }
             Effect::NewConflict {
                 conflict,
                 from_index,
+                by,
             } => {
                 for e in self.entries.iter_mut().skip(from_index) {
                     e.superseded = true;
                 }
                 self.state.clone_from(&conflict.base);
+                self.decided
+                    .insert(key, (by, Stored::Conflict(conflict.ordinal)));
                 self.open = Some(conflict);
             }
-            Effect::Join(conflict) => self.open = Some(conflict),
-        }
-        if !matches!(decision, Decision::Rejected(RejectReason::RequestIdReused))
-            && !self.decided.contains_key(&req.id)
-        {
-            self.decided.insert(req.id, (req.clone(), decision.clone()));
+            Effect::Join(conflict, by) => {
+                self.decided
+                    .insert(key, (by, Stored::Conflict(conflict.ordinal)));
+                self.open = Some(conflict);
+            }
         }
         decision
     }
 
-    /// Closes the open conflict `ordinal` with `choice`, decided by `actor`. Closing it again with
-    /// the same choice returns the closed conflict unchanged.
+    /// Closes the open conflict `ordinal` with `choice`, decided by `actor`.
+    ///
+    /// The actor must be one of the definition's resolvers. `Choose(s)` also needs `base -> s` to be
+    /// an allowed transition whose guard admits the actor, so resolving cannot reach a state the
+    /// workflow would not let the actor reach. `Revert` returns to the base state. Closing a
+    /// conflict again with the same choice returns the closed conflict unchanged.
     pub fn resolve(
         &mut self,
+        def: &WorkflowDef,
         ordinal: u32,
         choice: ConflictOption,
         actor: u64,
     ) -> Result<ConflictEntity, ResolveError> {
+        if !def.resolvers.contains(&actor) {
+            return Err(ResolveError::NotPermitted);
+        }
         let Some(open) = self.open.as_ref().filter(|c| c.ordinal == ordinal) else {
             return match self.closed.iter().find(|c| c.ordinal == ordinal) {
                 Some(c) if c.resolution.as_ref().is_some_and(|r| r.choice == choice) => {
@@ -646,8 +767,19 @@ impl History {
         }
         let state = match &choice {
             ConflictOption::Revert => open.base.clone(),
-            ConflictOption::Choose(s) => s.clone(),
+            ConflictOption::Choose(s) => {
+                match def.transitions.get(&(open.base.clone(), s.clone())) {
+                    None => return Err(ResolveError::TransitionNotAllowed),
+                    Some(Guard::Actors(a)) if !a.contains(&actor) => {
+                        return Err(ResolveError::NotPermitted);
+                    }
+                    Some(_) => s.clone(),
+                }
+            }
         };
+        if self.entries.len() >= MAX_ENTRIES {
+            return Err(ResolveError::HistoryFull);
+        }
         let mut done = open.clone();
         done.resolution = Some(Resolution { choice, actor });
         self.open = None;
@@ -669,11 +801,24 @@ pub fn decide(def: &WorkflowDef, history: &History, req: &Request) -> Decision {
 
 fn plan(def: &WorkflowDef, h: &History, req: &Request) -> (Decision, Effect) {
     let reject = |r| (Decision::Rejected(r), Effect::None);
-    if let Some((orig, decision)) = h.decided.get(&req.id) {
-        return if orig == req {
-            (decision.clone(), Effect::None)
-        } else {
-            reject(RejectReason::RequestIdReused)
+    if let Some((orig, stored)) = h.decided.get(&(req.actor, req.id)) {
+        if orig != req {
+            return reject(RejectReason::RequestIdReused);
+        }
+        let found = match stored {
+            Stored::Accepted => Some(Decision::Accepted {
+                state: orig.to.clone(),
+            }),
+            Stored::Conflict(n) => h
+                .open
+                .iter()
+                .chain(h.closed.iter())
+                .find(|c| c.ordinal == *n)
+                .map(|c| Decision::Conflict(c.clone())),
+        };
+        return match found {
+            Some(d) => (d, Effect::None),
+            None => reject(RejectReason::StateNeverObserved),
         };
     }
     if req.entity != h.entity {
@@ -692,6 +837,18 @@ fn plan(def: &WorkflowDef, h: &History, req: &Request) -> (Decision, Effect) {
         }
         Some(_) => {}
     }
+    if h.state_at(req.from_version) != Some(req.from.as_str()) {
+        return reject(RejectReason::StateNeverObserved);
+    }
+    let start = usize::try_from(req.from_version).unwrap_or(usize::MAX);
+    if let Some(prev) = start.checked_sub(1).and_then(|i| h.entries.get(i))
+        && prev.superseded
+    {
+        return reject(RejectReason::StateSuperseded);
+    }
+    if h.decided.len() >= MAX_DECIDED {
+        return reject(RejectReason::HistoryFull);
+    }
     if let Some(c) = &h.open {
         if req.from != c.base {
             return reject(RejectReason::EntityConflicted);
@@ -702,9 +859,16 @@ fn plan(def: &WorkflowDef, h: &History, req: &Request) -> (Decision, Effect) {
         let mut set: BTreeSet<Proposal> = c.proposals.iter().cloned().collect();
         set.insert(Proposal::of(req));
         let joined = ConflictEntity::build(c.entity, c.ordinal, &c.base, set);
-        return (Decision::Conflict(joined.clone()), Effect::Join(joined));
+        return (
+            Decision::Conflict(joined.clone()),
+            Effect::Join(joined, req.clone()),
+        );
     }
-    if req.from == h.state {
+    if start == h.entries.len() {
+        // One slot stays free so a later conflict can always be resolved.
+        if h.entries.len() + 2 > MAX_ENTRIES {
+            return reject(RejectReason::HistoryFull);
+        }
         return (
             Decision::Accepted {
                 state: req.to.clone(),
@@ -712,18 +876,16 @@ fn plan(def: &WorkflowDef, h: &History, req: &Request) -> (Decision, Effect) {
             Effect::Accept(req.clone()),
         );
     }
-    // Stale: find where the client's state was reached; everything after it is "since".
-    let start = match h.entries.iter().rposition(|e| e.state_after == req.from) {
-        Some(i) => i + 1,
-        None if req.from == h.initial => 0,
-        None => return reject(RejectReason::StateNeverObserved),
-    };
+    // Stale: everything after the observed version is "since".
     let since = h.entries.get(start..).unwrap_or_default();
     if since.iter().any(|e| e.request.is_none()) {
         return reject(RejectReason::StaleAfterResolution);
     }
     if req.to == h.state {
         return reject(RejectReason::AlreadyInTarget);
+    }
+    if h.entries.len() + 1 > MAX_ENTRIES {
+        return reject(RejectReason::HistoryFull);
     }
     let mut set: BTreeSet<Proposal> = since
         .iter()
@@ -732,7 +894,7 @@ fn plan(def: &WorkflowDef, h: &History, req: &Request) -> (Decision, Effect) {
         .collect();
     set.insert(Proposal::of(req));
     if set.len() < 2 {
-        return reject(RejectReason::StateNeverObserved);
+        return reject(RejectReason::StaleAfterResolution);
     }
     if set.len() > MAX_PROPOSALS {
         return reject(RejectReason::TooManyProposals);
@@ -746,6 +908,7 @@ fn plan(def: &WorkflowDef, h: &History, req: &Request) -> (Decision, Effect) {
         Effect::NewConflict {
             conflict,
             from_index: start,
+            by: req.clone(),
         },
     )
 }
@@ -763,6 +926,7 @@ mod tests {
 
     const E: u128 = 7;
     const STATES: [&str; 4] = ["todo", "doing", "blocked", "done"];
+    const RESOLVER: u64 = 5;
 
     fn def() -> WorkflowDef {
         let mut d = WorkflowDef::new("todo", STATES).unwrap();
@@ -773,14 +937,17 @@ mod tests {
         d.allow("doing", "todo", Guard::Open).unwrap();
         d.allow("doing", "done", Guard::Actors([1, 2].into()))
             .unwrap();
+        d.set_resolvers([RESOLVER, 6]);
         d
     }
 
-    fn req(id: u64, from: &str, to: &str, actor: u64, wall: u64) -> Request {
+    /// A request: id, state seen, version seen, wanted state, actor, wall clock.
+    fn req(id: u64, from: &str, ver: u64, to: &str, actor: u64, wall: u64) -> Request {
         Request {
             id,
             entity: E,
             from: from.into(),
+            from_version: ver,
             to: to.into(),
             actor,
             hlc: Hlc {
@@ -791,44 +958,77 @@ mod tests {
         }
     }
 
+    fn rejected(d: Decision) -> &'static str {
+        match d {
+            Decision::Rejected(c) => c.code(),
+            other => panic!("expected rejection, got {other:?}"),
+        }
+    }
+
+    /// The two-replica scenario: both started from `todo` at version 0.
+    fn offline_pair() -> (Request, Request) {
+        (
+            req(1, "todo", 0, "doing", 1, 100),
+            req(2, "todo", 0, "blocked", 2, 90),
+        )
+    }
+
     #[test]
     fn fresh_transition_is_accepted() {
         let d = def();
         let mut h = History::new(E, &d);
-        let r = h.submit(&d, &req(1, "todo", "doing", 1, 10));
+        let r = h.submit(&d, &req(1, "todo", 0, "doing", 1, 10));
         assert_eq!(
             r,
             Decision::Accepted {
                 state: "doing".into()
             }
         );
-        assert_eq!(h.state(), "doing");
+        assert_eq!((h.state(), h.version()), ("doing", 1));
+        assert_eq!(h.state_at(0), Some("todo"));
+        assert_eq!(h.state_at(2), None);
     }
 
     #[test]
     fn invalid_transitions_carry_stable_codes() {
         let d = def();
         let mut h = History::new(E, &d);
-        let code = |h: &mut History, r: Request| match h.submit(&d, &r) {
-            Decision::Rejected(c) => c.code(),
-            other => panic!("expected rejection, got {other:?}"),
-        };
-        assert_eq!(code(&mut h, req(1, "blocked", "done", 1, 1)), "not_allowed");
-        assert_eq!(code(&mut h, req(2, "todo", "nope", 1, 1)), "unknown_state");
-        assert_eq!(code(&mut h, req(3, "", "doing", 1, 1)), "invalid_name");
-        let mut other = req(4, "todo", "doing", 1, 1);
+        assert_eq!(
+            rejected(h.submit(&d, &req(1, "blocked", 0, "done", 1, 1))),
+            "not_allowed"
+        );
+        assert_eq!(
+            rejected(h.submit(&d, &req(2, "todo", 0, "nope", 1, 1))),
+            "unknown_state"
+        );
+        assert_eq!(
+            rejected(h.submit(&d, &req(3, "", 0, "doing", 1, 1))),
+            "invalid_name"
+        );
+        let mut other = req(4, "todo", 0, "doing", 1, 1);
         other.entity = 8;
-        assert_eq!(code(&mut h, other), "wrong_entity");
-        h.submit(&d, &req(5, "todo", "doing", 1, 2));
-        assert_eq!(code(&mut h, req(6, "doing", "done", 9, 3)), "guard_denied");
+        assert_eq!(rejected(h.submit(&d, &other)), "wrong_entity");
+        // wrong version for the state named, and a version from the future
+        assert_eq!(
+            rejected(h.submit(&d, &req(7, "doing", 0, "todo", 1, 1))),
+            "state_never_observed"
+        );
+        assert_eq!(
+            rejected(h.submit(&d, &req(8, "todo", 3, "doing", 1, 1))),
+            "state_never_observed"
+        );
+        h.submit(&d, &req(5, "todo", 0, "doing", 1, 2));
+        assert_eq!(
+            rejected(h.submit(&d, &req(6, "doing", 1, "done", 9, 3))),
+            "guard_denied"
+        );
         assert_eq!(h.state(), "doing");
     }
 
     #[test]
     fn two_replicas_offline_conflict_identically_in_both_orders() {
         let d = def();
-        let a = req(1, "todo", "doing", 1, 100);
-        let b = req(2, "todo", "blocked", 2, 90);
+        let (a, b) = offline_pair();
         let run = |first: &Request, second: &Request| {
             let mut h = History::new(E, &d);
             let d1 = h.submit(&d, first);
@@ -856,8 +1056,7 @@ mod tests {
                 ConflictOption::Choose("doing".into()),
             ]
         );
-        assert_eq!(h1.state(), "todo");
-        assert_eq!(h2.state(), "todo");
+        assert_eq!((h1.state(), h2.state()), ("todo", "todo"));
         assert_eq!(h1.open_conflict(), h2.open_conflict());
         assert_eq!(h1.superseded_requests().len(), 1);
     }
@@ -866,37 +1065,40 @@ mod tests {
     fn resolution_closes_conflict_and_unblocks_entity() {
         let d = def();
         let mut h = History::new(E, &d);
-        h.submit(&d, &req(1, "todo", "doing", 1, 100));
-        h.submit(&d, &req(2, "todo", "blocked", 2, 90));
-        // while open, an unrelated-base request is rejected
-        let r = h.submit(&d, &req(3, "doing", "done", 1, 110));
-        assert_eq!(r, Decision::Rejected(RejectReason::EntityConflicted));
+        let (a, b) = offline_pair();
+        h.submit(&d, &a);
+        h.submit(&d, &b);
+        // while open, a request based on another state is rejected
         assert_eq!(
-            h.resolve(1, ConflictOption::Choose("done".into()), 5),
+            rejected(h.submit(&d, &req(3, "blocked", 1, "doing", 1, 110))),
+            "state_never_observed"
+        );
+        assert_eq!(
+            h.resolve(&d, 1, ConflictOption::Choose("done".into()), RESOLVER),
             Err(ResolveError::NotAnOption)
         );
         assert_eq!(
-            h.resolve(9, ConflictOption::Revert, 5),
+            h.resolve(&d, 9, ConflictOption::Revert, RESOLVER),
             Err(ResolveError::NoSuchConflict)
         );
         let closed = h
-            .resolve(1, ConflictOption::Choose("blocked".into()), 5)
+            .resolve(&d, 1, ConflictOption::Choose("blocked".into()), RESOLVER)
             .unwrap();
-        assert_eq!(closed.resolution.as_ref().unwrap().actor, 5);
+        assert_eq!(closed.resolution.as_ref().unwrap().actor, RESOLVER);
         assert_eq!(h.state(), "blocked");
         assert!(h.open_conflict().is_none());
         // idempotent close, but not a different one
         assert_eq!(
-            h.resolve(1, ConflictOption::Choose("blocked".into()), 6)
+            h.resolve(&d, 1, ConflictOption::Choose("blocked".into()), 6)
                 .unwrap(),
             closed
         );
         assert_eq!(
-            h.resolve(1, ConflictOption::Revert, 6),
+            h.resolve(&d, 1, ConflictOption::Revert, 6),
             Err(ResolveError::AlreadyResolved)
         );
-        // normal work resumes
-        let r = h.submit(&d, &req(4, "blocked", "doing", 1, 120));
+        // normal work resumes at the new version
+        let r = h.submit(&d, &req(4, "blocked", h.version(), "doing", 1, 120));
         assert_eq!(
             r,
             Decision::Accepted {
@@ -904,21 +1106,158 @@ mod tests {
             }
         );
         // a request made before the conflict, arriving after the resolution
-        let r = h.submit(&d, &req(5, "todo", "done", 3, 95));
-        assert_eq!(r, Decision::Rejected(RejectReason::StaleAfterResolution));
+        let late = req(5, "todo", 0, "done", 3, 95);
+        assert_eq!(rejected(h.submit(&d, &late)), "stale_after_resolution");
+    }
+
+    #[test]
+    fn resolution_cannot_bypass_permissions_or_guards() {
+        let mut d = def();
+        // todo -> done is guarded to actor 1 only
+        d.allow("todo", "done", Guard::Actors([1].into())).unwrap();
+        let mut h = History::new(E, &d);
+        h.submit(&d, &req(1, "todo", 0, "done", 1, 10));
+        let Decision::Conflict(c) = h.submit(&d, &req(2, "todo", 0, "doing", 2, 11)) else {
+            panic!("expected conflict");
+        };
+        // anyone who is not a resolver, including a proposer, is refused
+        for who in [1, 2, 99] {
+            assert_eq!(
+                h.resolve(&d, c.ordinal, ConflictOption::Revert, who),
+                Err(ResolveError::NotPermitted)
+            );
+        }
+        // a resolver the guard does not admit cannot reach the guarded state
+        let done = ConflictOption::Choose("done".into());
+        assert_eq!(
+            h.resolve(&d, c.ordinal, done.clone(), RESOLVER),
+            Err(ResolveError::NotPermitted)
+        );
+        assert!(h.open_conflict().is_some());
+        // a definition that no longer allows the transition refuses it
+        let mut stricter = def();
+        stricter
+            .transitions
+            .remove(&("todo".into(), "doing".into()));
+        assert_eq!(
+            h.resolve(
+                &stricter,
+                c.ordinal,
+                ConflictOption::Choose("doing".into()),
+                RESOLVER
+            ),
+            Err(ResolveError::TransitionNotAllowed)
+        );
+        // a resolver the guard admits may choose it
+        let mut d2 = d.clone();
+        d2.set_resolvers([RESOLVER, 1]);
+        assert!(h.resolve(&d2, c.ordinal, done, 1).is_ok());
+        assert_eq!(h.state(), "done");
+        // nobody can resolve when no resolvers are configured
+        let mut none = d.clone();
+        none.set_resolvers([]);
+        let mut h2 = History::new(E, &none);
+        h2.submit(&none, &req(1, "todo", 0, "doing", 1, 10));
+        h2.submit(&none, &req(2, "todo", 0, "blocked", 2, 11));
+        assert_eq!(
+            h2.resolve(&none, 1, ConflictOption::Revert, 1),
+            Err(ResolveError::NotPermitted)
+        );
+    }
+
+    #[test]
+    fn aba_return_to_same_state_is_still_stale() {
+        let d = def();
+        let mut h = History::new(E, &d);
+        h.submit(&d, &req(1, "todo", 0, "doing", 1, 10));
+        h.submit(&d, &req(2, "doing", 1, "todo", 1, 11));
+        assert_eq!((h.state(), h.version()), ("todo", 2));
+        // seen "todo" at version 0, before both changes: not fresh although the state matches
+        let Decision::Conflict(c) = h.submit(&d, &req(3, "todo", 0, "blocked", 2, 12)) else {
+            panic!("a request from before the round trip must conflict");
+        };
+        assert_eq!(c.proposals.len(), 3);
+        let mut h2 = History::new(E, &d);
+        h2.submit(&d, &req(1, "todo", 0, "doing", 1, 10));
+        h2.submit(&d, &req(2, "doing", 1, "todo", 1, 11));
+        // seen "todo" at version 2: fresh
+        let r = h2.submit(&d, &req(3, "todo", 2, "blocked", 2, 12));
+        assert!(matches!(r, Decision::Accepted { .. }));
+    }
+
+    #[test]
+    fn state_folded_into_a_conflict_is_reported_as_superseded() {
+        let d = def();
+        let mut h = History::new(E, &d);
+        let (a, b) = offline_pair();
+        h.submit(&d, &a);
+        h.submit(&d, &b);
+        // a client that saw "doing" (the superseded state) at version 1
+        assert_eq!(
+            rejected(h.submit(&d, &req(3, "doing", 1, "done", 1, 120))),
+            "state_superseded"
+        );
+    }
+
+    #[test]
+    fn three_proposals_converge_in_every_arrival_order() {
+        let d = def();
+        let ps = [
+            req(1, "todo", 0, "doing", 1, 100),
+            req(2, "todo", 0, "blocked", 2, 90),
+            req(3, "todo", 0, "done", 3, 95),
+        ];
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let mut outcomes = Vec::new();
+        for o in orders {
+            let mut h = History::new(E, &d);
+            for i in o {
+                h.submit(&d, &ps[i]);
+            }
+            outcomes.push((h.state().to_string(), h.open_conflict().cloned()));
+        }
+        assert!(outcomes.windows(2).all(|w| w[0] == w[1]));
+        assert_eq!(outcomes[0].1.as_ref().unwrap().proposals.len(), 3);
+    }
+
+    #[test]
+    fn chained_requests_are_order_dependent_but_never_silent() {
+        let d = def();
+        let a = req(1, "todo", 0, "doing", 1, 100);
+        let a2 = req(2, "doing", 1, "done", 1, 101);
+        let b = req(3, "todo", 0, "blocked", 2, 90);
+        let mut h1 = History::new(E, &d);
+        for r in [&a, &a2, &b] {
+            h1.submit(&d, r);
+        }
+        let mut h2 = History::new(E, &d);
+        h2.submit(&d, &b);
+        h2.submit(&d, &a);
+        let last = h2.submit(&d, &a2);
+        assert!(matches!(last, Decision::Rejected(_)));
+        assert_eq!(h1.open_conflict().unwrap().proposals.len(), 3);
+        assert_eq!(h2.open_conflict().unwrap().proposals.len(), 2);
+        assert_ne!(h1.open_conflict(), h2.open_conflict());
     }
 
     #[test]
     fn third_proposal_joins_open_conflict() {
         let d = def();
         let mut h = History::new(E, &d);
-        h.submit(&d, &req(1, "todo", "doing", 1, 100));
-        h.submit(&d, &req(2, "todo", "blocked", 2, 90));
-        let Decision::Conflict(c) = h.submit(&d, &req(3, "todo", "done", 3, 95)) else {
+        let (a, b) = offline_pair();
+        h.submit(&d, &a);
+        h.submit(&d, &b);
+        let Decision::Conflict(c) = h.submit(&d, &req(3, "todo", 0, "done", 3, 95)) else {
             panic!("expected conflict");
         };
-        assert_eq!(c.proposals.len(), 3);
-        assert_eq!(c.ordinal, 1);
+        assert_eq!((c.proposals.len(), c.ordinal), (3, 1));
         assert_eq!(h.open_conflict(), Some(&c));
     }
 
@@ -926,39 +1265,89 @@ mod tests {
     fn stale_request_for_state_already_reached_is_rejected_not_lost() {
         let d = def();
         let mut h = History::new(E, &d);
-        h.submit(&d, &req(1, "todo", "doing", 1, 10));
-        let r = h.submit(&d, &req(2, "todo", "doing", 2, 11));
-        assert_eq!(r, Decision::Rejected(RejectReason::AlreadyInTarget));
-        let r = h.submit(&d, &req(3, "blocked", "doing", 2, 11));
-        assert_eq!(r, Decision::Rejected(RejectReason::StateNeverObserved));
+        h.submit(&d, &req(1, "todo", 0, "doing", 1, 10));
+        assert_eq!(
+            rejected(h.submit(&d, &req(2, "todo", 0, "doing", 2, 11))),
+            "already_in_target"
+        );
     }
 
     #[test]
-    fn duplicates_are_idempotent_and_id_reuse_is_rejected() {
+    fn duplicates_are_idempotent_and_keyed_by_actor_and_id() {
         let d = def();
         let mut h = History::new(E, &d);
-        let a = req(1, "todo", "doing", 1, 100);
+        let a = req(1, "todo", 0, "doing", 1, 100);
         let first = h.submit(&d, &a);
         let snapshot = h.clone();
         assert_eq!(h.submit(&d, &a), first);
         assert_eq!(h, snapshot);
-        let clash = req(1, "todo", "blocked", 1, 100);
-        assert_eq!(
-            h.submit(&d, &clash),
-            Decision::Rejected(RejectReason::RequestIdReused)
-        );
+        let clash = req(1, "todo", 0, "blocked", 1, 100);
+        assert_eq!(rejected(h.submit(&d, &clash)), "request_id_reused");
         assert_eq!(h, snapshot);
         assert_eq!(decide(&d, &h, &a), first);
+        // another actor using the same id neither collides with it nor burns it
+        let mut h2 = History::new(E, &d);
+        let other = req(1, "todo", 0, "blocked", 2, 100);
+        assert!(matches!(h2.submit(&d, &other), Decision::Accepted { .. }));
+        let mine = req(1, "todo", 1, "doing", 1, 101);
+        assert_ne!(rejected_or_ok(h2.submit(&d, &mine)), "request_id_reused");
+    }
+
+    fn rejected_or_ok(d: Decision) -> &'static str {
+        match d {
+            Decision::Rejected(c) => c.code(),
+            Decision::Accepted { .. } => "accepted",
+            Decision::Conflict(_) => "conflict",
+        }
     }
 
     #[test]
-    fn decide_does_not_change_history() {
+    fn rejections_are_not_stored() {
         let d = def();
         let mut h = History::new(E, &d);
-        h.submit(&d, &req(1, "todo", "doing", 1, 100));
-        let snapshot = h.clone();
-        let _ = decide(&d, &h, &req(2, "todo", "blocked", 2, 90));
-        assert_eq!(h, snapshot);
+        for id in 0..100 {
+            assert!(matches!(
+                h.submit(&d, &req(id, "blocked", 0, "done", 1, 1)),
+                Decision::Rejected(_)
+            ));
+        }
+        assert_eq!((h.decided_len(), h.entries_len()), (0, 0));
+    }
+
+    #[test]
+    fn history_is_bounded_and_a_conflict_can_still_be_resolved() {
+        let d = def();
+        let mut h = History::new(E, &d);
+        let mut id = 0;
+        loop {
+            id += 1;
+            let (from, to) = if h.state() == "todo" {
+                ("todo", "doing")
+            } else {
+                ("doing", "todo")
+            };
+            let r = req(id, from, h.version(), to, 1, id);
+            match h.submit(&d, &r) {
+                Decision::Accepted { .. } => {}
+                other => {
+                    assert_eq!(other, Decision::Rejected(RejectReason::HistoryFull));
+                    break;
+                }
+            }
+        }
+        assert_eq!(h.entries_len(), MAX_ENTRIES - 1);
+        assert_eq!(h.decided_len(), MAX_ENTRIES - 1);
+        // a repeat of an old accepted request still gets its stored answer
+        let again = req(1, "todo", 0, "doing", 1, 1);
+        assert!(matches!(h.submit(&d, &again), Decision::Accepted { .. }));
+        // a late stale proposal still conflicts, and the conflict can be closed
+        let v = h.version() - 1;
+        let from = h.state_at(v).unwrap().to_string();
+        let stale = req(id + 1, &from, v, "blocked", 2, 5);
+        assert!(matches!(h.submit(&d, &stale), Decision::Conflict(_)));
+        assert!(h.resolve(&d, 1, ConflictOption::Revert, RESOLVER).is_ok());
+        assert_eq!(h.entries_len(), MAX_ENTRIES);
+        assert!(h.decided_len() <= MAX_DECIDED);
     }
 
     #[test]
@@ -974,17 +1363,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn conflict_codec_roundtrips_and_is_strict() {
+    fn sample_conflict() -> ConflictEntity {
         let d = def();
         let mut h = History::new(E, &d);
-        h.submit(&d, &req(1, "todo", "doing", 1, 100));
-        let Decision::Conflict(c) = h.submit(&d, &req(2, "todo", "blocked", 2, 90)) else {
+        let (a, b) = offline_pair();
+        h.submit(&d, &a);
+        let Decision::Conflict(c) = h.submit(&d, &b) else {
             panic!("expected conflict");
         };
+        c
+    }
+
+    #[test]
+    fn conflict_codec_roundtrips_and_is_strict() {
+        let c = sample_conflict();
         let bytes = c.encode().unwrap();
         assert_eq!(ConflictEntity::decode(&bytes).unwrap(), c);
-        let closed = h.resolve(1, ConflictOption::Revert, 3).unwrap();
+        let mut closed = c.clone();
+        closed.resolution = Some(Resolution {
+            choice: ConflictOption::Revert,
+            actor: 3,
+        });
         assert_eq!(
             ConflictEntity::decode(&closed.encode().unwrap()).unwrap(),
             closed
@@ -1006,10 +1405,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn encode_refuses_what_decode_would_refuse() {
+        let c = sample_conflict();
+        let mut one = c.clone();
+        one.proposals.truncate(1);
+        one.options = options_for(&one.proposals);
+        let mut unsorted = c.clone();
+        unsorted.proposals.reverse();
+        let mut dup = c.clone();
+        dup.proposals[1] = dup.proposals[0].clone();
+        let mut options = c.clone();
+        options.options.pop();
+        let mut choice = c.clone();
+        choice.resolution = Some(Resolution {
+            choice: ConflictOption::Choose("done".into()),
+            actor: 1,
+        });
+        let mut ordinal = c.clone();
+        ordinal.ordinal = 0;
+        let mut name = c.clone();
+        name.base = "x".repeat(MAX_NAME_LEN + 1);
+        let mut many = c;
+        many.proposals = (0..=MAX_PROPOSALS as u64)
+            .map(|i| Proposal {
+                hlc: Hlc {
+                    wall_ms: i,
+                    counter: 0,
+                    node: 0,
+                },
+                request_id: i,
+                from: "todo".into(),
+                to: "doing".into(),
+                actor: 1,
+            })
+            .collect();
+        many.options = options_for(&many.proposals);
+        for bad in [one, unsorted, dup, options, choice, ordinal, name, many] {
+            assert!(bad.encode().is_err(), "{bad:?}");
+        }
+    }
+
+    /// Worked example from `formats/workflow-v1.md`, built by hand outside the encoder.
+    const GOLDEN: &str = "0100000000000000000000000000000007010000000400746f646f02005a0000000000000000000000020000000200000000000000\
+0400746f646f0700626c6f636b656402000000000000006400000000000000000000000100000001000000000000000400746f646f0500646f696e67\
+0100000000000000030000010700626c6f636b6564010500646f696e6700";
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn worked_example_matches_the_format_document() {
+        let bytes = unhex(GOLDEN);
+        assert_eq!(bytes.len(), 143);
+        let c = ConflictEntity::decode(&bytes).unwrap();
+        assert_eq!(c, sample_conflict());
+        assert_eq!(c.encode().unwrap(), bytes);
+    }
+
     #[derive(Debug, Clone)]
     enum Op {
         Submit {
             id: u64,
+            ver: u64,
+            honest: bool,
             from: usize,
             to: usize,
             actor: u64,
@@ -1023,10 +1486,11 @@ mod tests {
 
     fn op() -> impl Strategy<Value = Op> {
         prop_oneof![
-            4 => (0u64..12, 0usize..4, 0usize..4, 1u64..4, 0u64..50).prop_map(
-                |(id, from, to, actor, wall)| Op::Submit { id, from, to, actor, wall }
-            ),
-            1 => (0usize..6, 1u64..4).prop_map(|(pick, actor)| Op::Resolve { pick, actor }),
+            4 => (0u64..12, 0u64..8, any::<bool>(), 0usize..4, 0usize..4, 1u64..4, 0u64..50)
+                .prop_map(|(id, ver, honest, from, to, actor, wall)| Op::Submit {
+                    id, ver, honest, from, to, actor, wall
+                }),
+            1 => (0usize..6, 1u64..8).prop_map(|(pick, actor)| Op::Resolve { pick, actor }),
         ]
     }
 
@@ -1037,12 +1501,19 @@ mod tests {
             match o {
                 Op::Submit {
                     id,
+                    ver,
+                    honest,
                     from,
                     to,
                     actor,
                     wall,
                 } => {
-                    let r = req(*id, STATES[*from], STATES[*to], *actor, *wall);
+                    let ver = ver % (h.version() + 2);
+                    let from = match (honest, h.state_at(ver)) {
+                        (true, Some(s)) => s.to_string(),
+                        _ => STATES[*from].to_string(),
+                    };
+                    let r = req(*id, &from, ver, STATES[*to], *actor, *wall);
                     let first = h.submit(d, &r);
                     if double {
                         let before = h.clone();
@@ -1054,7 +1525,11 @@ mod tests {
                 Op::Resolve { pick, actor } => {
                     if let Some(c) = h.open_conflict().cloned() {
                         let choice = c.options[pick % c.options.len()].clone();
-                        h.resolve(c.ordinal, choice, *actor).unwrap();
+                        // permission and guard failures are fine; they must not change anything
+                        let before = h.clone();
+                        if h.resolve(d, c.ordinal, choice, *actor).is_err() {
+                            assert_eq!(h, before);
+                        }
                     }
                     out.push(None);
                 }
@@ -1073,7 +1548,6 @@ mod tests {
             let (h2, o2) = run(&d, &ops, false);
             prop_assert_eq!(&h1, &h2);
             prop_assert_eq!(&o1, &o2);
-            // resubmitting every request right away changes nothing
             let (h3, o3) = run(&d, &ops, true);
             prop_assert_eq!(&h1, &h3);
             prop_assert_eq!(&o1, &o3);
@@ -1085,23 +1559,27 @@ mod tests {
             let (h, out) = run(&d, &ops, false);
             let all_conflicts: Vec<&ConflictEntity> =
                 h.closed_conflicts().iter().chain(h.open_conflict()).collect();
-            let listed = |id: u64| all_conflicts.iter().any(|c| c.proposals.iter().any(|p| p.request_id == id));
+            let listed = |actor: u64, id: u64| {
+                all_conflicts
+                    .iter()
+                    .any(|c| c.proposals.iter().any(|p| p.request_id == id && p.actor == actor))
+            };
             let applied = h.applied_requests();
             for (o, dec) in ops.iter().zip(&out) {
-                if let (Op::Submit { id, .. }, Some(dec)) = (o, dec) {
+                if let (Op::Submit { id, actor, .. }, Some(dec)) = (o, dec) {
                     match dec {
                         Decision::Rejected(r) => prop_assert!(!r.code().is_empty()),
-                        Decision::Conflict(_) => prop_assert!(listed(*id)),
+                        Decision::Conflict(_) => prop_assert!(listed(*actor, *id)),
                         Decision::Accepted { .. } => {
-                            prop_assert!(applied.contains(id) || listed(*id));
+                            prop_assert!(applied.contains(&(*actor, *id)) || listed(*actor, *id));
                         }
                     }
                 }
             }
-            for id in h.superseded_requests() {
-                prop_assert!(listed(id), "superseded request {} not in any conflict", id);
+            for (actor, id) in h.superseded_requests() {
+                prop_assert!(listed(actor, id), "superseded request {} not in any conflict", id);
             }
-            // every conflict round-trips through the canonical encoding
+            prop_assert!(h.entries_len() <= MAX_ENTRIES && h.decided_len() <= MAX_DECIDED);
             for c in all_conflicts {
                 prop_assert_eq!(&ConflictEntity::decode(&c.encode().unwrap()).unwrap(), c);
             }
@@ -1112,8 +1590,8 @@ mod tests {
             to_a in 1usize..4, to_b in 1usize..4, wa in 0u64..20, wb in 0u64..20
         ) {
             let d = def();
-            let a = req(1, "todo", STATES[to_a], 1, wa);
-            let b = req(2, "todo", STATES[to_b], 2, wb);
+            let a = req(1, "todo", 0, STATES[to_a], 1, wa);
+            let b = req(2, "todo", 0, STATES[to_b], 2, wb);
             let mut h1 = History::new(E, &d);
             h1.submit(&d, &a);
             h1.submit(&d, &b);
@@ -1133,13 +1611,7 @@ mod tests {
 
         #[test]
         fn decoder_survives_mutated_valid_bytes(pos in 0usize..200, byte in any::<u8>()) {
-            let d = def();
-            let mut h = History::new(E, &d);
-            h.submit(&d, &req(1, "todo", "doing", 1, 100));
-            let Decision::Conflict(c) = h.submit(&d, &req(2, "todo", "blocked", 2, 90)) else {
-                panic!("expected conflict");
-            };
-            let mut bytes = c.encode().unwrap();
+            let mut bytes = sample_conflict().encode().unwrap();
             let n = bytes.len();
             bytes[pos % n] = byte;
             if let Ok(c2) = ConflictEntity::decode(&bytes) {
