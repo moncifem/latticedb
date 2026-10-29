@@ -1,0 +1,42 @@
+# The first scripts of the declared SQL subset. They define what the engine must answer; an engine
+# is wired in when the SQL layer exists.
+
+statement ok
+CREATE TABLE notes (id INT PRIMARY KEY, title TEXT, score INT)
+
+statement ok
+INSERT INTO notes VALUES (1, 'alpha', 10), (2, 'beta', 20), (3, 'gamma', 20)
+
+query ITI rowsort
+SELECT id, title, score FROM notes WHERE score >= 20
+----
+2
+beta
+20
+3
+gamma
+20
+
+query I nosort
+SELECT count(*) FROM notes
+----
+3
+
+query T nosort
+SELECT title FROM notes ORDER BY id DESC LIMIT 1
+----
+gamma
+
+statement error 42P01
+SELECT * FROM missing_table
+
+statement error 23505
+INSERT INTO notes VALUES (1, 'dup', 0)
+
+statement ok
+DELETE FROM notes WHERE id = 3
+
+query I nosort
+SELECT count(*) FROM notes
+----
+2
