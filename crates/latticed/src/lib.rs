@@ -1,11 +1,16 @@
 //! Host TCP adapter for the sans-I/O PostgreSQL session.
 //!
-//! This is a bounded, trust-authenticated development listener with a `SELECT 1` handler. It does
-//! not open a database, authenticate users or serve TLS. Cancel requests signal a cooperative
+//! This is a bounded listener with local development trust or configured SCRAM over mandatory TLS.
+//! The default `SELECT 1` handler does not open a database. Cancel requests signal a cooperative
 //! handler; they cannot preempt blocking I/O or undo a committed operation.
 #![forbid(unsafe_code)]
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod transport;
+pub use transport::TlsConfig;
+use transport::Transport;
+
+use lattice_api::auth::Accounts;
 use lattice_api::cancel::{CancelKey, CancelRegistry, CancellationToken};
 use lattice_api::pgwire::{self, Backend, Column, Frontend, ProtoError, Startup};
 use lattice_api::session::{Outcome, QueryError, QueryHandler, QueryOutput, Session};
@@ -16,6 +21,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+/// Authentication is explicit: local development trust or SCRAM over mandatory TLS.
+#[derive(Debug, Clone)]
+pub enum Authentication {
+    /// Plaintext trust is restricted to loopback; it is not a deployment authentication mode.
+    DevelopmentTrust,
+    /// No plaintext SQL startup or downgrade to trust is accepted.
+    ScramTls {
+        /// Bounded credentials provisioned before binding; no network password derivation.
+        accounts: Arc<Accounts>,
+        /// Configured server certificate and matching private key.
+        tls: TlsConfig,
+    },
+}
 
 /// Configuration for the development TCP listener.
 #[derive(Debug, Clone)]
@@ -29,6 +48,10 @@ pub struct ServerConfig {
     pub read_timeout: Duration,
     /// Socket write timeout for replies.
     pub write_timeout: Duration,
+    /// One absolute budget from accept through startup, TLS and SCRAM; not reset per message.
+    pub startup_timeout: Duration,
+    /// Default is explicitly local development trust; remote binds require SCRAM/TLS.
+    pub authentication: Authentication,
 }
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -37,6 +60,8 @@ impl Default for ServerConfig {
             max_connections: 32,
             read_timeout: Duration::from_secs(30),
             write_timeout: Duration::from_secs(5),
+            startup_timeout: Duration::from_secs(10),
+            authentication: Authentication::DevelopmentTrust,
         }
     }
 }
@@ -91,11 +116,15 @@ impl ServerHandle {
             || config.max_connections > 1024
             || config.read_timeout.is_zero()
             || config.write_timeout.is_zero()
+            || config.startup_timeout.is_zero()
+            || Instant::now().checked_add(config.startup_timeout).is_none()
+            || (matches!(config.authentication, Authentication::DevelopmentTrust)
+                && !config.address.ip().is_loopback())
             || Instant::now().checked_add(config.read_timeout).is_none()
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "nonzero timeouts and 1..=1024 connections required",
+                "nonzero bounded timeouts, 1..=1024 connections, and loopback for development trust required",
             ));
         }
         let registry = Arc::new(Mutex::new(RegistryState::new(config.max_connections)?));
@@ -158,6 +187,7 @@ where
     F: Fn() -> H + Send + Sync + 'static,
 {
     let mut workers: Vec<Worker> = Vec::new();
+    let handshakes = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let result = (|| {
         while !stopping.load(Ordering::Acquire) {
             let mut index = 0;
@@ -190,7 +220,11 @@ where
                     }
                     socket.set_nodelay(true)?;
                     let controller = socket.try_clone()?;
-                    let timeout = config.read_timeout;
+                    let connection_config = config.clone();
+                    let handshake_limit = handshakes.clone();
+                    let deadline = Instant::now()
+                        .checked_add(config.startup_timeout)
+                        .ok_or_else(|| io::Error::other("startup deadline overflow"))?;
                     let connection_registry = registry.clone();
                     let connection_factory = factory.clone();
                     let worker =
@@ -199,10 +233,15 @@ where
                             .spawn(move || {
                                 // Disconnects, malformed input and timeouts end this connection, not the listener.
                                 let _ = connection(
-                                    socket,
-                                    timeout,
+                                    Transport::new(
+                                        socket,
+                                        deadline,
+                                        connection_config.write_timeout,
+                                    ),
+                                    connection_config,
                                     connection_registry,
                                     connection_factory,
+                                    handshake_limit,
                                 );
                             })?;
                     workers.push(Worker {
@@ -236,19 +275,19 @@ where
 }
 
 fn read_before(
-    socket: &mut TcpStream,
+    socket: &mut Transport,
     mut target: &mut [u8],
     deadline: Instant,
 ) -> io::Result<bool> {
     let mut empty = true;
     while !target.is_empty() {
-        let remaining = deadline
+        let _remaining = deadline
             .checked_duration_since(Instant::now())
             .filter(|duration| !duration.is_zero())
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::TimedOut, "frame read deadline exceeded")
             })?;
-        socket.set_read_timeout(Some(remaining))?;
+        socket.set_deadline(deadline);
         match socket.read(target) {
             Ok(0) if empty => return Ok(false),
             Ok(0) => {
@@ -281,9 +320,18 @@ impl From<io::Error> for FrameError {
 }
 
 fn frame(
-    socket: &mut TcpStream,
+    socket: &mut Transport,
     startup: bool,
     timeout: Duration,
+) -> Result<Option<Vec<u8>>, FrameError> {
+    frame_bounded(socket, startup, timeout, pgwire::MAX_MESSAGE_LEN)
+}
+
+fn frame_bounded(
+    socket: &mut Transport,
+    startup: bool,
+    timeout: Duration,
+    maximum: usize,
 ) -> Result<Option<Vec<u8>>, FrameError> {
     let deadline = Instant::now()
         .checked_add(timeout)
@@ -302,7 +350,7 @@ fn frame(
     }
     let length = i32::from_be_bytes(raw_length);
     let minimum = if startup { 8 } else { 4 };
-    if length < minimum || i64::from(length) > pgwire::MAX_MESSAGE_LEN as i64 {
+    if length < minimum || i64::from(length) > maximum as i64 {
         return Err(FrameError::Protocol(ProtoError::BadLength(i64::from(
             length,
         ))));
@@ -391,16 +439,32 @@ fn fatal(code: &str, message: impl Into<String>) -> Outcome {
     }
 }
 
+fn admit_handshake(starts: &mut std::collections::VecDeque<Instant>, now: Instant) -> bool {
+    while starts
+        .front()
+        .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1))
+    {
+        starts.pop_front();
+    }
+    if starts.len() == 64 {
+        return false;
+    }
+    starts.push_back(now);
+    true
+}
+
 fn connection<H, F>(
-    mut socket: TcpStream,
-    timeout: Duration,
+    mut socket: Transport,
+    config: ServerConfig,
     registry: Registry,
     factory: Arc<F>,
+    handshakes: Arc<Mutex<std::collections::VecDeque<Instant>>>,
 ) -> io::Result<()>
 where
     H: QueryHandler + 'static,
     F: Fn() -> H + Send + Sync + 'static,
 {
+    let timeout = config.read_timeout;
     // Classify startup before SQL admission: CancelRequest uses its own short-lived connection and
     // must remain routable while all registered SQL sessions are busy.
     loop {
@@ -429,13 +493,46 @@ where
                 lock_registry(&registry)?
                     .entries
                     .cancel(CancelKey { pid, secret }, 0);
-                let _ = socket.shutdown(Shutdown::Both);
+                let _ = socket.shutdown();
                 return Ok(());
             }
-            Startup::SslRequest | Startup::GssEncRequest => {
-                socket.write_all(&[pgwire::ENCRYPTION_DECLINED])?
+            Startup::SslRequest => {
+                if socket.is_tls() {
+                    return Err(io::Error::other("repeated SSLRequest"));
+                }
+                match &config.authentication {
+                    Authentication::DevelopmentTrust => {
+                        socket.write_all(&[pgwire::ENCRYPTION_DECLINED])?
+                    }
+                    Authentication::ScramTls { tls, .. } => {
+                        // Bound expensive TLS starts globally: burst 64, at most 64 in any second.
+                        {
+                            let mut starts = handshakes
+                                .lock()
+                                .map_err(|_| io::Error::other("TLS admission unavailable"))?;
+                            if !admit_handshake(&mut starts, Instant::now()) {
+                                return Err(io::Error::other("TLS handshake rate exceeded"));
+                            }
+                        }
+                        socket.write_all(b"S")?;
+                        socket.flush()?;
+                        socket = socket.upgrade(tls)?;
+                    }
+                }
+            }
+            Startup::GssEncRequest => {
+                if socket.is_tls() {
+                    return Err(io::Error::other("GSS request after TLS"));
+                }
+                socket.write_all(&[pgwire::ENCRYPTION_DECLINED])?;
             }
             Startup::Params(params) => {
+                if matches!(config.authentication, Authentication::ScramTls { .. })
+                    && !socket.is_tls()
+                {
+                    send(&mut socket, fatal("28000", "TLS required"))?;
+                    return Ok(());
+                }
                 let registration = match Registration::new(registry) {
                     Ok(registration) => registration,
                     Err(_) => {
@@ -446,17 +543,52 @@ where
                         return Ok(());
                     }
                 };
-                let mut session =
-                    Session::new(factory(), registration.key.pid, registration.key.secret);
+                let mut session = match &config.authentication {
+                    Authentication::DevelopmentTrust => {
+                        Session::new(factory(), registration.key.pid, registration.key.secret)
+                    }
+                    Authentication::ScramTls { accounts, .. } => {
+                        let users: Vec<_> =
+                            params.iter().filter(|(key, _)| key == "user").collect();
+                        let exchange = if users.len() == 1 {
+                            accounts.exchange(
+                                users.first().map(|(_, name)| name.as_str()).unwrap_or(""),
+                                &mut OsRng,
+                            )
+                        } else {
+                            Err(lattice_api::scram::ScramError::Malformed)
+                        };
+                        let (exchange, known) = match exchange {
+                            Ok(exchange) => exchange,
+                            Err(_) => {
+                                send(
+                                    &mut socket,
+                                    fatal("28P01", "password authentication failed"),
+                                )?;
+                                return Ok(());
+                            }
+                        };
+                        Session::with_scram(
+                            factory(),
+                            registration.key.pid,
+                            registration.key.secret,
+                            exchange,
+                            known,
+                        )
+                    }
+                };
                 let outcome = session.on_startup(Startup::Params(params));
                 let close = outcome.close;
                 send(&mut socket, outcome)?;
+                if session.sasl_phase().is_none() {
+                    socket.authenticated();
+                }
                 if !close {
                     serve(&mut socket, timeout, &registration, &mut session)?;
                 }
                 drop(session);
                 drop(registration);
-                let _ = socket.shutdown(Shutdown::Both);
+                let _ = socket.shutdown();
                 return Ok(());
             }
         }
@@ -464,13 +596,22 @@ where
 }
 
 fn serve<H: QueryHandler>(
-    socket: &mut TcpStream,
+    socket: &mut Transport,
     timeout: Duration,
     registration: &Registration,
     session: &mut Session<H>,
 ) -> io::Result<()> {
     while !session.is_closed() {
-        let input = match frame(socket, false, timeout) {
+        let input = match frame_bounded(
+            socket,
+            false,
+            timeout,
+            if session.sasl_phase().is_some() {
+                pgwire::MAX_SASL_BODY_LEN + 4
+            } else {
+                pgwire::MAX_MESSAGE_LEN
+            },
+        ) {
             Ok(Some(input)) => input,
             Ok(None) => break,
             Err(FrameError::Io(error)) => return Err(error),
@@ -479,12 +620,17 @@ fn serve<H: QueryHandler>(
                 break;
             }
         };
-        let outcome = match pgwire::decode_frontend(&input) {
+        let decoded = match session.sasl_phase() {
+            Some(phase) => pgwire::decode_frontend_sasl(&input, phase),
+            None => pgwire::decode_frontend(&input),
+        };
+        let outcome = match decoded {
             Ok(Some((message, _))) => {
-                let token = if matches!(
-                    &message,
-                    Frontend::Query(_) | Frontend::Parse { .. } | Frontend::Execute { .. }
-                ) {
+                let token = if session.sasl_phase().is_none()
+                    && matches!(
+                        &message,
+                        Frontend::Query(_) | Frontend::Parse { .. } | Frontend::Execute { .. }
+                    ) {
                     registration.begin_query()?
                 } else {
                     CancellationToken::default()
@@ -496,6 +642,9 @@ fn serve<H: QueryHandler>(
         };
         let close = outcome.close;
         send(socket, outcome)?;
+        if session.sasl_phase().is_none() && !close {
+            socket.authenticated();
+        }
         if close {
             break;
         }
@@ -503,7 +652,7 @@ fn serve<H: QueryHandler>(
     Ok(())
 }
 
-fn send(socket: &mut TcpStream, outcome: Outcome) -> io::Result<()> {
+fn send(socket: &mut Transport, outcome: Outcome) -> io::Result<()> {
     if let Some(byte) = outcome.encryption_reply {
         socket.write_all(&[byte])?;
     }
@@ -512,6 +661,7 @@ fn send(socket: &mut TcpStream, outcome: Outcome) -> io::Result<()> {
         message.encode(&mut bytes).map_err(io::Error::other)?;
         socket.write_all(&bytes)?;
     }
+    socket.flush()?;
     Ok(())
 }
 
@@ -644,5 +794,19 @@ mod tests {
             let state = registry.lock().unwrap();
             assert!(state.closing);
         }
+    }
+    #[test]
+    fn tls_start_window_bounds_bursts_and_expires_without_sleeping() {
+        let now = Instant::now();
+        let mut starts = std::collections::VecDeque::new();
+        for _ in 0..64 {
+            assert!(admit_handshake(&mut starts, now));
+        }
+        assert!(!admit_handshake(
+            &mut starts,
+            now + Duration::from_millis(999)
+        ));
+        assert!(admit_handshake(&mut starts, now + Duration::from_secs(1)));
+        assert_eq!(starts.len(), 1);
     }
 }

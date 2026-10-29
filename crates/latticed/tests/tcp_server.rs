@@ -19,6 +19,7 @@ fn server(max_connections: usize, read_timeout: Duration) -> ServerHandle {
         max_connections,
         read_timeout,
         write_timeout: Duration::from_secs(2),
+        ..ServerConfig::default()
     })
     .unwrap()
 }
@@ -305,6 +306,7 @@ fn cancellable_server(max_connections: usize) -> (ServerHandle, std::sync::mpsc:
             max_connections,
             read_timeout: Duration::from_secs(30),
             write_timeout: Duration::from_secs(2),
+            ..ServerConfig::default()
         },
         move || Cooperative {
             started: started.clone(),

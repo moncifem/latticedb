@@ -20,9 +20,19 @@ lattice-api = { path = "../lattice-api" }
 
 lattice-intel = { path = "../lattice-intel", optional = true }
 
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+
 [features]
 default = []
 intel = ["dep:lattice-intel"]
+
+[dev-dependencies]
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
+base64 = "=0.22.1"
+hmac = "=0.13.0"
+sha2 = "=0.11.1"
+pbkdf2 = { version = "=0.13.0", features = ["hmac"] }
 
 [lints]
 workspace = true

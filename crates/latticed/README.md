@@ -2,12 +2,12 @@
 
 `latticed` now adapts the sans-I/O PostgreSQL session to TCP. The placeholder handler answers
 `SELECT 1`; other SQL returns `0A000`. Simple and extended query framing are handled by the existing
-session. This listener uses trust authentication and plaintext; it does not open a database or
-implement TLS, real authentication or the driver matrix. CancelRequest is routed to a cooperative
-query token; it does not forcibly interrupt blocking handlers or I/O.
+session. The default is explicit development trust on loopback. Configured SCRAM mode requires
+TLS and refuses plaintext startup or trust fallback. It does not open a database or establish the
+five-driver matrix. CancelRequest routes a cooperative token and cannot preempt blocking I/O.
 
 ```sh
-cargo run -p latticed -- --listen 127.0.0.1:5432 --max-connections 32
+cargo run -p latticed -- --auth development-trust --listen 127.0.0.1:5432 --max-connections 32
 ```
 
 The default address is `127.0.0.1:5432`. Read and write timeouts default to 30 seconds and 5 seconds;
@@ -54,3 +54,32 @@ Shutdown atomically closes admission and new query-token allocation while signal
 tokens, closes sockets and then joins workers; cooperative handlers
 can exit promptly. Registry poison causes normal operations to fail closed, while shutdown and
 unregister recover the lock only to cancel/clean up safely.
+
+## Configured SCRAM over TLS (proposed integration)
+
+```sh
+cargo run -p latticed -- --auth scram-tls --listen 127.0.0.1:5432 \
+  --tls-cert /secure/server-chain.pem --tls-key /secure/server-key.pem \
+  --scram-verifiers /secure/accounts.txt --startup-timeout-ms 10000
+```
+
+Provision those files externally. The credential file has one `username<TAB>verifier` per line:
+`SCRAM-SHA-256$4096:base64-salt$base64-stored-key:base64-server-key`. Only the uniform 4096-iteration,
+16-byte-salt profile is accepted; keys are 32 bytes, names at most 63 UTF-8 bytes without controls,
+and files at most 256 KiB/1024 accounts. There is no plaintext password flag, embedded account,
+password derivation on the network path or credential-file persistence API. Protect file permissions
+and prepare passwords during external provisioning; SASLprep is outside this listener.
+
+Clients must use certificate verification, including the intended server name (for example libpq
+`sslmode=verify-full` with a trusted CA). Standard SSLRequest upgrades to TLS 1.2/1.3; SCRAM never
+runs over plaintext. Trust refuses non-loopback binds. Certificate/key validation happens before bind.
+No mutual TLS, direct TLS startup, SCRAM-PLUS, channel binding or certificate rotation is implemented.
+
+A single deadline covers TCP accept, startup negotiation, TLS and proof; default 10 seconds.
+The existing transport/SQL bounds remain, with at most 64 TLS starts per rolling second per listener.
+Unknown accounts get keyed per-name synthetic credentials and the same terminal `28P01` proof failure;
+no measured timing-resistance or comprehensive account-enumeration defense is claimed. BackendKeyData,
+successful startup and queries are gated on proof. Tests generate certificates/keys in memory and
+independently calculate client proofs. The proposal is [RFC 0007](../../docs/rfc/0007-pgwire-scram-tls-integration.md)
+with [proposed ADR 0021](../../docs/adr/0021-pgwire-scram-tls-integration.md); security review and normal
+comment period are pending. No production readiness, driver matrix or phase gate is established.
