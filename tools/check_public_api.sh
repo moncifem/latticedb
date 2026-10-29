@@ -33,6 +33,12 @@ for arg in "$@"; do
   esac
 done
 [ ${#selected[@]} -gt 0 ] || selected=("${CRATES[@]}")
+for crate in "${selected[@]}"; do
+  case " ${CRATES[*]} " in
+    *" $crate "*) ;;
+    *) echo "error: $crate is not a covered crate; covered: ${CRATES[*]} (edit CRATES in this script to add one)" >&2; exit 2 ;;
+  esac
+done
 
 if ! command -v cargo-public-api >/dev/null 2>&1; then
   echo "cargo-public-api is not installed: cargo install cargo-public-api --version $CPA_VERSION --locked" >&2

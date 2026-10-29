@@ -339,6 +339,88 @@ pub fn lattice_api::session::QueryHandler::describe_cancellable(&mut self, &str,
 pub fn lattice_api::session::QueryHandler::execute(&mut self, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub fn lattice_api::session::QueryHandler::execute_cancellable(&mut self, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub type lattice_api::session::Row = alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>
+pub mod lattice_api::subscribe
+pub enum lattice_api::subscribe::CloseReason
+pub lattice_api::subscribe::CloseReason::ClientError
+pub lattice_api::subscribe::CloseReason::ProtocolViolation(&'static str)
+pub lattice_api::subscribe::CloseReason::Refused
+pub lattice_api::subscribe::CloseReason::Timeout
+impl core::clone::Clone for lattice_api::subscribe::CloseReason
+pub fn lattice_api::subscribe::CloseReason::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::subscribe::CloseReason
+impl core::cmp::PartialEq for lattice_api::subscribe::CloseReason
+pub fn lattice_api::subscribe::CloseReason::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::subscribe::CloseReason
+pub fn lattice_api::subscribe::CloseReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::subscribe::CloseReason
+impl core::marker::StructuralPartialEq for lattice_api::subscribe::CloseReason
+pub enum lattice_api::subscribe::Output
+pub lattice_api::subscribe::Output::Close(lattice_api::subscribe::CloseReason)
+pub lattice_api::subscribe::Output::Send(lattice_api::sync::Message)
+impl core::clone::Clone for lattice_api::subscribe::Output
+pub fn lattice_api::subscribe::Output::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::subscribe::Output
+impl core::cmp::PartialEq for lattice_api::subscribe::Output
+pub fn lattice_api::subscribe::Output::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::subscribe::Output
+pub fn lattice_api::subscribe::Output::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::subscribe::Output
+pub enum lattice_api::subscribe::SourceError
+pub lattice_api::subscribe::SourceError::BadCursor
+pub lattice_api::subscribe::SourceError::TooOld
+pub lattice_api::subscribe::SourceError::Unavailable
+pub lattice_api::subscribe::SourceError::UnknownScope
+impl core::clone::Clone for lattice_api::subscribe::SourceError
+pub fn lattice_api::subscribe::SourceError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::subscribe::SourceError
+impl core::cmp::PartialEq for lattice_api::subscribe::SourceError
+pub fn lattice_api::subscribe::SourceError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::subscribe::SourceError
+pub fn lattice_api::subscribe::SourceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::subscribe::SourceError
+impl core::marker::StructuralPartialEq for lattice_api::subscribe::SourceError
+pub struct lattice_api::subscribe::ConfigError(pub &'static str)
+impl core::clone::Clone for lattice_api::subscribe::ConfigError
+pub fn lattice_api::subscribe::ConfigError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::subscribe::ConfigError
+impl core::cmp::PartialEq for lattice_api::subscribe::ConfigError
+pub fn lattice_api::subscribe::ConfigError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::subscribe::ConfigError
+pub fn lattice_api::subscribe::ConfigError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::subscribe::ConfigError
+impl core::marker::StructuralPartialEq for lattice_api::subscribe::ConfigError
+pub struct lattice_api::subscribe::HostConfig
+pub lattice_api::subscribe::HostConfig::batch_events: usize
+pub lattice_api::subscribe::HostConfig::max_frames_per_pump: usize
+pub lattice_api::subscribe::HostConfig::max_payload: u32
+pub lattice_api::subscribe::HostConfig::max_subscriptions: usize
+pub lattice_api::subscribe::HostConfig::ping_interval: u64
+pub lattice_api::subscribe::HostConfig::ping_timeout: u64
+pub lattice_api::subscribe::HostConfig::server: alloc::string::String
+impl lattice_api::subscribe::HostConfig
+pub fn lattice_api::subscribe::HostConfig::new(&str) -> Self
+impl core::clone::Clone for lattice_api::subscribe::HostConfig
+pub fn lattice_api::subscribe::HostConfig::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::subscribe::HostConfig
+impl core::cmp::PartialEq for lattice_api::subscribe::HostConfig
+pub fn lattice_api::subscribe::HostConfig::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::subscribe::HostConfig
+pub fn lattice_api::subscribe::HostConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::subscribe::HostConfig
+pub struct lattice_api::subscribe::SubscriptionHost
+impl lattice_api::subscribe::SubscriptionHost
+pub fn lattice_api::subscribe::SubscriptionHost::confirmed(&self, u32) -> core::option::Option<&[u8]>
+pub fn lattice_api::subscribe::SubscriptionHost::handle<S: lattice_api::subscribe::EventSource>(&mut self, lattice_api::sync::Message, u64, &S) -> alloc::vec::Vec<lattice_api::subscribe::Output>
+pub fn lattice_api::subscribe::SubscriptionHost::is_closed(&self) -> bool
+pub fn lattice_api::subscribe::SubscriptionHost::new(lattice_api::subscribe::HostConfig, u64) -> core::result::Result<Self, lattice_api::subscribe::ConfigError>
+pub fn lattice_api::subscribe::SubscriptionHost::poll<S: lattice_api::subscribe::EventSource>(&mut self, u64, &S) -> alloc::vec::Vec<lattice_api::subscribe::Output>
+pub fn lattice_api::subscribe::SubscriptionHost::sent(&self, u32) -> core::option::Option<&[u8]>
+pub fn lattice_api::subscribe::SubscriptionHost::subscriptions(&self) -> alloc::vec::Vec<u32>
+pub fn lattice_api::subscribe::SubscriptionHost::version(&self) -> core::option::Option<u16>
+impl core::fmt::Debug for lattice_api::subscribe::SubscriptionHost
+pub fn lattice_api::subscribe::SubscriptionHost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait lattice_api::subscribe::EventSource
+pub fn lattice_api::subscribe::EventSource::read_after(&self, &str, &[u8], usize) -> core::result::Result<alloc::vec::Vec<lattice_api::sync::Event>, lattice_api::subscribe::SourceError>
 pub mod lattice_api::sync
 pub enum lattice_api::sync::ErrorCode
 pub lattice_api::sync::ErrorCode::Internal
