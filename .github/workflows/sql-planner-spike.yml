@@ -38,6 +38,8 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: 1.99.1 }
       - name: restore only the functional retry dependency cache
@@ -48,7 +50,7 @@ jobs:
           workspaces: experiments/sql-planner -> functional-target
           shared-key: sql-planner-functional
           cache-on-failure: true
-      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
         with: { tool: cargo-deny@0.20.2 }
       - name: record runner and source context
         run: |
@@ -62,7 +64,9 @@ jobs:
           python3 -c 'import json,os; print(json.dumps({k:os.environ[k] for k in ("GITHUB_REPOSITORY","GITHUB_RUN_ID","GITHUB_RUN_ATTEMPT","GITHUB_SHA","GITHUB_WORKFLOW_REF")}))' > planner-evidence/run.json
           git rev-parse HEAD > planner-evidence/revision.txt
           git status --porcelain > planner-evidence/status-before.txt
-          docker inspect --format '{{.Image}}' '${{ job.services.postgres.id }}' > planner-evidence/postgres-image.txt
+          docker inspect --format '{{.Image}}' '${JOB_SERVICES_POSTGRES_ID}' > planner-evidence/postgres-image.txt
+        env:
+          JOB_SERVICES_POSTGRES_ID: ${{ job.services.postgres.id }}
       - name: install pinned PostgreSQL client
         run: python3 -m pip install --require-hashes --no-deps -r tools/requirements-sql-planner.txt
       - name: structural rules for production graph
