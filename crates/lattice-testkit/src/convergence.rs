@@ -71,14 +71,14 @@ pub struct NetModel {
     /// Chance a delivered message is delivered twice, parts per million.
     pub dup_ppm: u32,
     /// Ticks before a dropped message is sent again.
-    pub rto: u64,
+    pub retransmit_after: u64,
 }
 
 impl NetModel {
     /// Maps a profile name and seed to network behaviour. The name sets the base severity, the
     /// seed adds a small deterministic jitter. An unknown name gets the harshest base.
     pub fn for_profile(profile: &str, seed: u64) -> Self {
-        let (delay, drop, dup, rto) = match profile {
+        let (delay, drop, dup, retransmit_after) = match profile {
             "clean" => (2, 0, 0, 3),
             "crash-heavy" => (20, 0, 150_000, 5),
             "disk-faulty" => (6, 200_000, 50_000, 8),
@@ -97,7 +97,7 @@ impl NetModel {
             delay_max: delay + r.below(4),
             drop_ppm: jitter(&mut r, drop),
             dup_ppm: jitter(&mut r, dup),
-            rto,
+            retransmit_after,
         }
     }
 }
@@ -534,7 +534,7 @@ pub fn run_family<R: Replica>(seed: u64, profile: &'static str, n: usize) -> Run
                 while tries < MAX_RETRANSMITS && rng.chance_ppm(net.drop_ppm) {
                     run.dropped += 1;
                     tries += 1;
-                    t += net.rto;
+                    t += net.retransmit_after;
                 }
                 let at1 = t + 1 + rng.below(net.delay_max + 1);
                 queue.insert((at1, seq), (j, msg.clone()));
