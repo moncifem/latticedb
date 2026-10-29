@@ -226,6 +226,7 @@ def decide(
     duplicate=False,
     bot=False,
     manual=False,
+    incident=False,
 ):
     if conclusion != "failure":
         return Decision(NONE, "run is not a completed failure")
@@ -246,10 +247,10 @@ def decide(
             ISSUE_ONLY,
             "no verified single change from an observed green main predecessor",
         )
-    if is_revert or duplicate or bot or manual:
+    if is_revert or duplicate or bot or manual or incident:
         return Decision(
             ISSUE_ONLY,
-            "revert/bot/duplicate/format-or-control change requires manual review",
+            "revert/bot/duplicate/active incident/format-or-control change requires manual review",
         )
     return Decision(
         REVERT_PR,
@@ -317,6 +318,8 @@ class Guard:
                 or baseline.get("run_attempt") != self.baseline["run_attempt"]
             ):
                 raise StaleRun("green predecessor proof changed")
+            if not self.predecessor():
+                raise StaleRun("workflow history or newer success changed admission")
         if self.published_candidate is not None:
             candidate = git(
                 "ls-remote", "--exit-code", "origin", f"refs/heads/{self.branch}"
@@ -357,6 +360,13 @@ class Guard:
             return False
         if any(
             r.get("id") != self.run_id and r.get("created_at") == self.run["created_at"]
+            for r in runs
+        ):
+            return False
+        if any(
+            verified_run(r, self.workflow, r.get("id"))
+            and r.get("created_at", "") > self.run["created_at"]
+            and r.get("conclusion") == "success"
             for r in runs
         ):
             return False
@@ -414,6 +424,33 @@ class Guard:
                 self.failure_paths[name] = paths
         return result
 
+    def active_incident(self):
+        # Only this repository's full-SHA candidate namespace or exact tracking
+        # markers count; similarly named foreign PRs are not our incidents.
+        for pr in pages(f"{self.prefix}/pulls?state=open&base=main"):
+            head = pr.get("head") or {}
+            ref = head.get("ref", "")
+            if (
+                pr.get("state") == "open"
+                and (pr.get("base") or {}).get("ref") == "main"
+                and (head.get("repo") or {}).get("full_name") == REPOSITORY
+                and re.fullmatch(r"revert/[0-9a-f]{40}", ref)
+                and any(label.get("name") == LABEL for label in pr.get("labels", []))
+            ):
+                return True
+        for issue in pages(f"{self.prefix}/issues?state=open&labels={LABEL}"):
+            title = issue.get("title", "")
+            match = re.fullmatch(r"main is red: ([0-9a-f]{40})", title)
+            if (
+                issue.get("state") == "open"
+                and not issue.get("pull_request")
+                and match
+                and match[1] != self.head
+                and f"<!-- main-guard:{match[1]} -->" in (issue.get("body") or "")
+            ):
+                return True
+        return False
+
     def decision(self):
         failures = self.failures()
         preliminary = decide(self.run.get("conclusion"), failures)
@@ -445,6 +482,7 @@ class Guard:
             culprit_known=self.predecessor(),
             is_revert=is_revert_subject(subject),
             duplicate=self.duplicate(),
+            incident=self.active_incident(),
             bot=bot,
             manual=not identity_known
             or not relevant_source
@@ -499,11 +537,26 @@ class Guard:
     def publish(self, decision, failures):
         if decision.action != REVERT_PR:
             self.baseline = None
-        self.tracking_issue(decision, failures)
+        issue = self.tracking_issue(decision, failures)
         if decision.action != REVERT_PR:
             return
-        if self.duplicate():
+        if self.duplicate() or self.active_incident():
             return
+        try:
+            self.publish_candidate(decision)
+        except StaleRun:
+            raise
+        except EvidenceError:
+            # Never copy command stderr, credentials, or commit text into a report.
+            self.mutation(
+                f"{self.prefix}/issues/{issue}/comments",
+                fields={
+                    "body": "Candidate publication failed; inspect the workflow diagnostics and existing candidate ref before retrying. No automatic cleanup or main write was attempted."
+                },
+            )
+            raise
+
+    def publish_candidate(self, decision):
         self.assert_current()
         # A private worktree avoids sweeping another checkout's staged or untracked work.
         with tempfile.TemporaryDirectory(prefix="main-guard-") as directory:

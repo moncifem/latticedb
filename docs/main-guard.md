@@ -42,7 +42,7 @@ issue #279 is complete, and is not a reason to enable the production variable.
 - Require an observed previous push run of this same workflow which is terminal green at the exact
   sole Git parent of the failed head. Recheck that green run's SHA/attempt/conclusion before writes.
   Unknown history, an already-red predecessor, ambiguous timestamps, a missing history page, merge
-  commit or a multi-commit observed delta is issue-only. There is no HEAD fallback or crate-name
+  commit, a newer successful main run or a multi-commit observed delta is issue-only. There is no HEAD fallback or crate-name
   heuristic. This establishes a single observed change from a known green state, not a causal proof
   against every flake or environmental change.
 - Code evidence must identify a changed source file. Exact verified GitHub bot logins, revert
@@ -57,7 +57,10 @@ live protection settings. The coordinator must maintain and verify that policy w
 
 The tracking issue is recorded first using an exact full-SHA title and body marker. An unrelated issue
 with a similar prefix is not reused. Repeated observations use a run/attempt marker to avoid duplicate
-comments; a closed tracker is not automatically reopened. Workflow publisher runs are serialized.
+comments; a closed tracker is not automatically reopened. Another open exact tracking incident or
+owned full-SHA candidate labelled `main-red` suppresses automatic proposal publication. Workflow publisher runs are serialized.
+A candidate publication error adds a controlled diagnostic comment to the tracker when the current
+main/run fence still holds; raw command errors and credentials are never copied.
 API issue creation is not an atomic uniqueness operation across separate concurrent CLI processes.
 
 A candidate is built in a disposable private Git worktree at the verified failing head, with hooks
@@ -94,7 +97,8 @@ leases and a fake GitHub executable. The fixture asserts the expanded origin is 
 before running the tool, so no live GitHub ref/issue/PR can be changed. It checks the candidate tree
 is the actual green predecessor, remote main is unchanged, identity is sanitized, and exercises
 stale-main races, candidate-ref races, unknown/infra/optional evidence, namespace/provenance, bot and
-closed-PR deduplication, pagination and dry-run without remote mutations. This is a meaningful local
+closed-PR deduplication, active incidents, newer successful runs, controlled publication-failure
+reporting, pagination and dry-run without remote mutations. This is a meaningful local
 fixture rehearsal, not execution of the privileged workflow or a real GitHub PR creation rehearsal.
 The workflow runs these tests with read permissions on PRs; its publisher is skipped for PR events.
 

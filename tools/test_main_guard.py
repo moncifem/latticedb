@@ -553,6 +553,51 @@ class Rehearsal(unittest.TestCase):
         self.assertTrue(self.state["writes"][0]["path"].endswith("/issues"))
         self.assertEqual(len(self.state["issues"]), 2)
 
+    def test_newer_success_prevents_delayed_revert(self):
+        newer = {
+            **self.state["runs"][0],
+            "id": 300,
+            "created_at": "2099-01-01T00:00:00Z",
+            "conclusion": "success",
+        }
+        self.state["runs"].insert(0, newer)
+        result = self.guard("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.state["prs"]), 0)
+        self.assertEqual(len(self.state["writes"]), 1)
+
+    def test_other_active_owned_incidents_only_report(self):
+        other = "a" * 40
+        self.state["issues"] = [
+            {
+                "number": 9,
+                "state": "open",
+                "title": "main is red: " + other,
+                "body": "<!-- main-guard:" + other + " -->",
+            }
+        ]
+        result = self.guard("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.state["prs"]), 0)
+        self.assertEqual(len(self.state["writes"]), 1)
+
+    def test_active_owned_candidate_only_reports(self):
+        self.state["prs"] = [
+            {
+                "state": "open",
+                "head": {
+                    "ref": "revert/" + "a" * 40,
+                    "repo": {"full_name": g.REPOSITORY},
+                },
+                "base": {"ref": "main"},
+                "labels": [{"name": "main-red"}],
+            }
+        ]
+        result = self.guard("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.state["prs"]), 1)
+        self.assertEqual(len(self.state["writes"]), 1)
+
     def test_racing_candidate_ref_is_protected_by_actual_git_create_lease(self):
         self.state["race_branch"] = True
         result = self.guard("--apply")
@@ -560,6 +605,15 @@ class Rehearsal(unittest.TestCase):
         self.assertEqual(self.remote("refs/heads/revert/" + self.bad), self.good)
         self.assertEqual(self.remote("refs/heads/main"), self.bad)
         self.assertEqual(len(self.state["prs"]), 0)
+        comments = [
+            w["fields"]["body"]
+            for w in self.state["writes"]
+            if w["path"].endswith("/comments")
+        ]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("Candidate publication failed", comments[0])
+        self.assertNotIn("fixture-token", comments[0])
+        self.assertNotIn("secret-not-for-output", comments[0])
 
 
 if __name__ == "__main__":
