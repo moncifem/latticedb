@@ -174,3 +174,23 @@ unchanged WAL/RNG witnesses and both planted policy bypasses. Independent review
 defect. Evaluator identity remains bound, but interior-mutable authorization state is controlled by
 the trusted host and is not snapshotted. This is not authenticated PostgreSQL session isolation,
 SQL grants, executor deadline/memory enforcement or completion of P2-17/P2-18.
+
+## Observed row nightly and native smoke (2026-10-29)
+
+[Manual nightly 40881355427](https://github.com/moncifem/latticedb/actions/runs/40881355427)
+completed at source `743b0fb52a495a3f875490268d604ed543be9e64` with 57 successful jobs and
+one skipped job. Its 20 exact named row-fault shards covered four disjoint 2,500-seed intervals
+per profile, at 150 configured steps: five profiles × 10,000 = 50,000 observed runs.
+47,679 were verified; 2,321 in the bit-rot `everything` profile were incomplete and are not claimed
+as complete-history verification. The 146 cut-short terminal histories are included in the
+verified total. See the [profile table and reproducible provenance audit](../evidence/row-nightly-40881355427.md)
+and [compact source/artifact digest record](../evidence/row-nightly-40881355427.json).
+
+A separate native macOS ARM64 nightly archive at the same source passed the recorded startup,
+`SELECT 1`, unsupported-SQL `0A000`, and stdin shutdown smoke. Its archive checksum and GitHub
+build attestation source were verified. Linux archives were not executed in this smoke.
+
+This evidence predates PRs [204](https://github.com/moncifem/latticedb/pull/204) and
+[215](https://github.com/moncifem/latticedb/pull/215). It establishes neither coverage of those
+changes nor seven consecutive scheduled nights, million-seed nightly volume, a completed Phase 2
+soak requirement, or either phase's gate sign-off.
