@@ -1,6 +1,5 @@
 //! NS1 with real OS processes/files: kill a writer, recover acknowledged complete row batches.
 //! Process termination preserves the OS page cache. This is not a power-loss or soak test.
-#![cfg(feature = "row")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use lattice_core::changeset::ChangeSet;

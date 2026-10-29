@@ -246,6 +246,7 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-core",
+ "lattice-engines",
  "lattice-lsl",
  "lattice-seams",
  "lattice-sim",

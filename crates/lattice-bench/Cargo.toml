@@ -15,6 +15,9 @@ lattice-lsl = { path = "../lattice-lsl" }
 lattice-core = { path = "../lattice-core" }
 serde_json.workspace = true
 
+[dev-dependencies]
+lattice-engines = { path = "../lattice-engines", default-features = false, features = ["row"] }
+
 [features]
 default = []
 runtime-spike = ["dep:tokio", "lattice-seams/uring"]

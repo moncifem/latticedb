@@ -75,4 +75,4 @@ allow = []
 
 [crate.lattice-bench]
 layer = 8
-allow = ["lattice-abi", "lattice-seams", "lattice-sim", "lattice-lsl", "lattice-core"]
+allow = ["lattice-abi", "lattice-seams", "lattice-sim", "lattice-lsl", "lattice-core", "lattice-engines"]

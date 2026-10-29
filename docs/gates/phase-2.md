@@ -86,7 +86,7 @@ contract; the new deterministic suite explicitly covers all ten through public s
 
 ## NS1 with real log and row processes (E2-7)
 
-`cargo test -p lattice-engines --test row_process_kill -- --nocapture` runs two completed-burst
+`cargo test -p lattice-bench --test row_process_kill -- --nocapture` runs two completed-burst
 controls and eight seeded kill schedules against real files and child processes. Children publish
 submission messages before commit and acknowledgement receipts only after commit returns and stdout
 is flushed. The controller confirms each writer is still alive, kills it, drains complete protocol
