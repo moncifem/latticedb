@@ -180,6 +180,13 @@ between minor versions; format changes are called out explicitly.
   with stable error codes; fuzz target `mcp_message` (not yet in a scheduled matrix). No transport,
   resources, prompts or authentication; see `docs/mcp-v0.md`.
 
+- `lattice-testkit` sqllogictest corpus grows from 5 to 21 scripts (WP29, #121): NULL logic, integer
+  overflow and division errors, string order, `ORDER BY` NULL placement and ties, `LIMIT`/`OFFSET`
+  edges, empty aggregates, joins, `RETURNING`, constraints, DDL, types, subqueries, one-session
+  transactions, prepared-statement refusals and a script of every `0A000` and `42601` refusal.
+  `tools/slt_reference.py` skips records marked `# differs-from-postgres` and compares single NULL
+  results correctly. Test only; no Phase 2 exit criterion is claimed.
+
 ### Changed
 
 - **Breaking (core API):** `Kernel::open` and `Log::open` no longer return every record. Recovery now holds

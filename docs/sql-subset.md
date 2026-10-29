@@ -108,12 +108,36 @@ Codes never change meaning once released; new situations get new codes.
 
 ## Conformance
 
-- `sqllogictest` files cover the tables above and assert the `0A000` rejections. The first scripts
-  (basics, joins, aggregates, data changes, transactions) live in
+- `sqllogictest` files cover the tables above and assert the `0A000` rejections. The scripts live in
   `crates/lattice-testkit/tests/slt/` until the SQL crate exists; they are read by the testkit's
-  runner (`lattice_testkit::slt`), and every night `tools/slt_reference.py` checks their expected
-  values against PostgreSQL 17 (except the `0A000` records and the single-session transaction
-  script). No Lattice engine runs them yet.
+  runner (`lattice_testkit::slt`), every statement of them is parsed by the SQL crate's tests, and
+  every night `tools/slt_reference.py` checks their expected values against PostgreSQL 17 (except
+  the `0A000` records, the records marked `# differs-from-postgres` and the single-session
+  transaction scripts). No Lattice engine runs them yet. Coverage, in 21 scripts and 669 records:
+
+  | Area | Scripts |
+  |---|---|
+  | Basics, `INSERT`/`UPDATE`/`DELETE`, constraints | `basics`, `changes`, `constraints`, `returning` |
+  | NULL and three-valued logic, `COALESCE`, `NULLIF` | `nulls_logic`, `nulls_functions` |
+  | Integer overflow (`22003`), division by zero (`22012`), casts (`22P02`) | `arithmetic_errors` |
+  | Text order, `LIKE`, string functions, `varchar(n)` | `strings` |
+  | `ORDER BY` with `NULLS FIRST/LAST` and ties, `LIMIT`/`OFFSET` edges | `order_nulls`, `limit_offset`, `aggregates` |
+  | Aggregates, `GROUP BY`, `HAVING` on empty and all-NULL input | `empty_aggregates`, `aggregates` |
+  | Joins on tiny tables, `ON` against `WHERE` | `joins`, `joins_small` |
+  | Uncorrelated subqueries, `NOT IN` with NULL | `subqueries` |
+  | `CREATE`/`ALTER`/`DROP`, indexes | `ddl_statements` |
+  | Types: boolean, numeric, date, uuid, jsonb | `types_and_casts` |
+  | Transactions in one session | `transactions`, `transactions_visibility` |
+  | Prepared statements (SQL-level forms refused) | `prepared_forms` |
+  | Every refusal class, plus syntax errors (`42601`) | `unsupported` |
+
+  125 records expect `0A000` and 18 expect `42601`; the parser tests check that each is refused with
+  exactly that class. A record that Lattice answers differently from PostgreSQL on purpose carries
+  the comment `# differs-from-postgres` (byte-order string comparison, where PostgreSQL follows the
+  database collation) or expects `0A000` (PostgreSQL accepts the syntax); the reference check skips
+  both. Not covered by scripts: write-write conflicts (`40001`, two sessions), correlated subqueries
+  (refused when the query is bound, not when it is parsed) and `AS OF` reads (no PostgreSQL
+  counterpart).
 - A generator produces random queries from this grammar and runs them against Lattice and PostgreSQL;
   any difference in results is a failure (P2-13, E2-3).
 - This file is **frozen** for the phase at the Phase 2 gate (E2-8). Until then each change updates the
