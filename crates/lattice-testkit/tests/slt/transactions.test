@@ -1,0 +1,58 @@
+# Transactions: one change set per commit, rollback, and the effective isolation level.
+
+statement ok
+CREATE TABLE acct (id INT PRIMARY KEY, bal INT NOT NULL)
+
+statement ok
+INSERT INTO acct VALUES (1, 100), (2, 50)
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE acct SET bal = bal - 30 WHERE id = 1
+
+statement ok
+UPDATE acct SET bal = bal + 30 WHERE id = 2
+
+statement ok
+COMMIT
+
+query II nosort
+SELECT id, bal FROM acct ORDER BY id
+----
+1
+70
+2
+80
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM acct
+
+statement ok
+ROLLBACK
+
+query I nosort
+SELECT count(*) FROM acct
+----
+2
+
+statement ok
+BEGIN
+
+statement ok
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE
+
+query T nosort
+SHOW transaction_isolation
+----
+repeatable read
+
+statement ok
+ROLLBACK
+
+statement error 0A000
+SAVEPOINT s1

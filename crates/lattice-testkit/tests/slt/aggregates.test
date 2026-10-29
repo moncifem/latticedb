@@ -1,0 +1,91 @@
+# GROUP BY, HAVING, aggregates, DISTINCT, ORDER BY, LIMIT and OFFSET.
+
+statement ok
+CREATE TABLE sales (id INT PRIMARY KEY, region TEXT NOT NULL, amount INT, rep TEXT)
+
+statement ok
+INSERT INTO sales VALUES (1, 'north', 10, 'a'), (2, 'north', 30, 'b'), (3, 'south', 20, 'a'), (4, 'south', NULL, 'a'), (5, 'east', 5, 'c')
+
+query TIIII rowsort
+SELECT region, count(*), count(amount), sum(amount), max(amount) FROM sales GROUP BY region
+----
+east
+1
+1
+5
+5
+north
+2
+2
+40
+30
+south
+2
+1
+20
+20
+
+query TI rowsort
+SELECT region, sum(amount) FROM sales GROUP BY region HAVING sum(amount) > 10
+----
+north
+40
+south
+20
+
+query I nosort
+SELECT count(DISTINCT rep) FROM sales
+----
+3
+
+query T valuesort
+SELECT DISTINCT rep FROM sales
+----
+a
+b
+c
+
+query I nosort
+SELECT min(amount) FROM sales
+----
+5
+
+query IT nosort
+SELECT id, region FROM sales ORDER BY amount DESC NULLS LAST, id LIMIT 2
+----
+2
+north
+3
+south
+
+query I nosort
+SELECT id FROM sales ORDER BY id LIMIT 2 OFFSET 3
+----
+4
+5
+
+query I nosort
+SELECT id FROM sales WHERE amount BETWEEN 10 AND 20 ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM sales WHERE region IN ('east', 'south') AND amount IS NOT NULL ORDER BY id
+----
+3
+5
+
+query I nosort
+SELECT id FROM sales WHERE rep LIKE 'a%' OR NOT (amount > 5) ORDER BY id
+----
+1
+3
+4
+5
+
+statement error 0A000
+SELECT region, sum(amount) OVER (PARTITION BY region) FROM sales
+
+statement error 0A000
+WITH x AS (SELECT 1) SELECT * FROM x

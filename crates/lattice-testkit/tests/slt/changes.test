@@ -1,0 +1,60 @@
+# INSERT, UPDATE, DELETE with RETURNING, constraints and errors.
+
+statement ok
+CREATE TABLE items (id INT PRIMARY KEY, label TEXT NOT NULL, qty INT DEFAULT 0, sku TEXT UNIQUE)
+
+query I nosort
+INSERT INTO items (id, label, sku) VALUES (1, 'bolt', 'B1') RETURNING qty
+----
+0
+
+statement ok
+INSERT INTO items VALUES (2, 'nut', 5, 'N1')
+
+statement ok
+INSERT INTO items SELECT id + 10, label, qty, NULL FROM items
+
+query IT rowsort
+UPDATE items SET qty = qty + 1 WHERE id < 10 RETURNING id, label
+----
+1
+bolt
+2
+nut
+
+query I rowsort
+DELETE FROM items WHERE sku IS NULL RETURNING id
+----
+11
+12
+
+query ITI nosort
+SELECT id, label, qty FROM items ORDER BY id
+----
+1
+bolt
+1
+2
+nut
+6
+
+statement error 23505
+INSERT INTO items VALUES (1, 'dup', 0, 'X')
+
+statement error 23505
+INSERT INTO items VALUES (3, 'clash', 0, 'N1')
+
+statement error 23502
+INSERT INTO items (id, qty) VALUES (4, 1)
+
+statement error 42P01
+UPDATE nowhere SET a = 1
+
+statement error 42703
+SELECT missing FROM items
+
+statement error 0A000
+INSERT INTO items VALUES (1, 'x', 0, 'Y') ON CONFLICT DO NOTHING
+
+statement error 42601
+SELEC id FROM items

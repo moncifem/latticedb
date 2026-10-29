@@ -4,7 +4,13 @@
 
 use lattice_testkit::slt::{Record, parse};
 
-const SCRIPTS: [(&str, &str); 1] = [("basics.test", include_str!("slt/basics.test"))];
+const SCRIPTS: [(&str, &str); 5] = [
+    ("basics.test", include_str!("slt/basics.test")),
+    ("joins.test", include_str!("slt/joins.test")),
+    ("aggregates.test", include_str!("slt/aggregates.test")),
+    ("changes.test", include_str!("slt/changes.test")),
+    ("transactions.test", include_str!("slt/transactions.test")),
+];
 
 #[test]
 fn every_subset_script_parses_and_has_records() {

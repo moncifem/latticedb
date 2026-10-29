@@ -1,0 +1,56 @@
+# JOIN (INNER, LEFT, CROSS) with ON, as declared in docs/sql-subset.md.
+
+statement ok
+CREATE TABLE teams (id INT PRIMARY KEY, name TEXT NOT NULL)
+
+statement ok
+CREATE TABLE members (id INT PRIMARY KEY, team_id INT, name TEXT NOT NULL)
+
+statement ok
+INSERT INTO teams VALUES (1, 'core'), (2, 'web'), (3, 'empty')
+
+statement ok
+INSERT INTO members VALUES (10, 1, 'ada'), (11, 1, 'grace'), (12, 2, 'linus'), (13, NULL, 'solo')
+
+query TT rowsort
+SELECT t.name, m.name FROM teams t INNER JOIN members m ON m.team_id = t.id
+----
+core
+ada
+core
+grace
+web
+linus
+
+query TT rowsort
+SELECT t.name, m.name FROM teams t LEFT JOIN members m ON m.team_id = t.id
+----
+core
+ada
+core
+grace
+empty
+NULL
+web
+linus
+
+query I nosort
+SELECT count(*) FROM teams CROSS JOIN members
+----
+12
+
+query T rowsort
+SELECT name FROM members WHERE team_id IS NULL
+----
+solo
+
+query T rowsort
+SELECT m.name FROM members m LEFT JOIN teams t ON m.team_id = t.id WHERE t.id IS NULL
+----
+solo
+
+statement error 0A000
+SELECT * FROM teams t RIGHT JOIN members m ON m.team_id = t.id
+
+statement error 0A000
+SELECT * FROM teams NATURAL JOIN members
