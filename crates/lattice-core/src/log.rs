@@ -589,4 +589,90 @@ mod tests {
         assert_eq!(log.read_from(1, 6).unwrap().len(), 6);
         assert_eq!(log.read_from(1, 100).unwrap().len(), 6);
     }
+
+    #[test]
+    fn append_accepts_the_payload_limit_and_oversized_refusal_does_not_consume_an_lsn() {
+        let mut log = log_with(0, u64::MAX);
+        // Share one allocation across both boundary cases; this test checks admission, not timing.
+        let payload = vec![0x5A; MAX_PAYLOAD + 1];
+        assert_eq!(log.append(1, &payload[..MAX_PAYLOAD]), Ok(1));
+        assert_eq!(
+            log.append(1, &payload),
+            Err(LogError::TooLarge(MAX_PAYLOAD + 1))
+        );
+        assert_eq!(log.append(1, b"after refusal"), Ok(2));
+        assert_eq!(
+            log.durable_lsn(),
+            0,
+            "appending must not acknowledge unsynced data"
+        );
+    }
+
+    #[test]
+    fn recovery_refuses_crc_valid_out_of_order_lsns_without_truncating_later_records() {
+        let mut io = lattice_sim::SimIo::new(1, lattice_sim::FaultProfile::clean());
+        let mut data = segment_header();
+        // Every frame has a valid CRC. The failure is the 1,3,4 sequence, not damaged framing.
+        for lsn in [1, 3, 4] {
+            data.extend_from_slice(&encode_record(lsn, 1, b"intact"));
+        }
+        let path = "wal/00000000000000000001.seg";
+        io.create_dir_all("wal").unwrap();
+        io.append(path, &data).unwrap();
+        io.sync(path).unwrap();
+        io.sync_dir("wal").unwrap();
+        let result = recover(&mut io, "wal", &mut |_| {});
+        assert!(
+            matches!(result, Err(LogError::Corrupt(ref why)) if why.contains("valid records follow"))
+        );
+        assert_eq!(
+            io.read(path).unwrap(),
+            data,
+            "refusal must preserve every byte"
+        );
+    }
+
+    #[test]
+    fn recovery_damage_scan_starts_strictly_after_the_supplied_offset() {
+        let mut data = segment_header();
+        let damage = data.len();
+        data.push(0xFF);
+        let record = data.len();
+        data.extend_from_slice(&encode_record(2, 1, b"x"));
+        assert!(valid_record_after(&data, damage, 1));
+        assert!(
+            !valid_record_after(&data, record, 1),
+            "a frame at the supplied offset is not a later record"
+        );
+    }
+
+    #[test]
+    fn recovery_damage_scan_requires_an_lsn_strictly_newer_than_the_prefix() {
+        let mut data = segment_header();
+        let damage = data.len();
+        data.push(0xFF);
+        data.extend_from_slice(&encode_record(2, 1, b"x"));
+        assert!(valid_record_after(&data, damage, 1));
+        assert!(
+            !valid_record_after(&data, damage, 2),
+            "a repeated prefix LSN must not count as continuation"
+        );
+        assert!(!valid_record_after(&data, damage, 3));
+    }
+
+    #[test]
+    fn recovery_damage_scan_includes_its_conservative_plausibility_boundary() {
+        let mut data = segment_header();
+        let damage = data.len();
+        data.push(0xFF);
+        data.extend_from_slice(&encode_record(3, 1, b""));
+        // Sixteen segment-header bytes, one damaged byte and a seventeen-byte frame total 34.
+        // The conservative window admits three LSNs ahead (two possible frames plus one allowance).
+        assert_eq!(data.len(), 34);
+        assert!(valid_record_after(&data, damage, 0));
+        let mut beyond = segment_header();
+        beyond.push(0xFF);
+        beyond.extend_from_slice(&encode_record(4, 1, b""));
+        assert!(!valid_record_after(&beyond, damage, 0));
+    }
 }

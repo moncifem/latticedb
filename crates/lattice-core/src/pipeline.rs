@@ -129,16 +129,33 @@ mod tests {
     #[test]
     fn change_sets_commit_in_submission_order_in_bounded_batches() {
         let mut p = pipeline(10, 3);
+        assert_eq!(p.queued(), 0);
         let mut tickets = Vec::new();
         for i in 0..7u8 {
             let id = p.kernel_mut().new_id();
             tickets.push(p.submit(ChangeSet::new(id, vec![i])).unwrap());
         }
+        assert_eq!(
+            tickets,
+            [
+                Ticket(0),
+                Ticket(1),
+                Ticket(2),
+                Ticket(3),
+                Ticket(4),
+                Ticket(5),
+                Ticket(6)
+            ]
+        );
+        assert_eq!(p.queued(), 7);
         let mut seen = Vec::new();
         let mut lsns = Vec::new();
-        while p.queued() > 0 {
+        // Expectations come from seven submissions and a batch size of three, not from the queue
+        // accessor under test. A broken drain/accessor must fail promptly rather than hang forever.
+        for (batch_len, remaining) in [(3, 4), (3, 1), (1, 0)] {
             let out = p.drain();
-            assert!(out.len() <= 3);
+            assert_eq!(out.len(), batch_len);
+            assert_eq!(p.queued(), remaining);
             for (t, r) in out {
                 seen.push(t);
                 match r {
@@ -148,7 +165,10 @@ mod tests {
             }
         }
         assert_eq!(seen, tickets);
-        assert!(lsns.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(lsns, [1, 2, 3, 4, 5, 6, 7]);
+        assert!(p.drain().is_empty());
+        assert_eq!(p.queued(), 0);
+        assert_eq!(p.kernel().durable_lsn(), 7);
     }
 
     #[test]
