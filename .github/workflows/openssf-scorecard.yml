@@ -1,0 +1,53 @@
+name: openssf-scorecard
+# OpenSSF Scorecard: scores the repository's supply-chain practices (pinned actions, token
+# permissions, branch protection, dependency updates, security policy and more) once a week and on
+# every push to main. Not a pull request check and not a required check. Policy: docs/policies/openssf-scorecard.md.
+# Constraints for a publishing run (the action refuses a workflow that breaks them): no top-level
+# env or defaults, no workflow-level write permissions, only the action's allowed steps in the job.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: openssf-scorecard
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    # Not on forks: the action does not support them and they have no id-token for publishing.
+    if: github.repository == 'moncifem/latticedb'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Upload to the code scanning tab.
+      security-events: write
+      # Publish the result to the public Scorecard API (needed for the badge).
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run analysis
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - name: Keep the SARIF file
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 14
+      - name: Upload to the code scanning tab
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: results.sarif
+          category: openssf-scorecard
