@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [changeset_decode, id_parse, log_open, lsl_parse, wal_record]
+        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, wal_record]
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:

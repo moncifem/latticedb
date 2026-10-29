@@ -14,6 +14,7 @@ lattice-lsl = { path = "../crates/lattice-lsl" }
 lattice-abi = { path = "../crates/lattice-abi" }
 lattice-seams = { path = "../crates/lattice-seams" }
 lattice-sim = { path = "../crates/lattice-sim" }
+lattice-api = { path = "../crates/lattice-api" }
 
 # Not part of the main workspace: fuzzing needs nightly.
 [workspace]
@@ -56,6 +57,13 @@ bench = false
 [[bin]]
 name = "log_open"
 path = "fuzz_targets/log_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pgwire"
+path = "fuzz_targets/pgwire.rs"
 test = false
 doc = false
 bench = false

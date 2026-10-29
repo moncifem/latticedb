@@ -17,5 +17,8 @@ lattice-service = { path = "../lattice-service" }
 lattice-packs = { path = "../lattice-packs" }
 lattice-lsl = { path = "../lattice-lsl" }
 
+[dev-dependencies]
+proptest = "1.12.0"
+
 [lints]
 workspace = true
