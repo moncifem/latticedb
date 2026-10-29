@@ -22,6 +22,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
+      - name: Validate controller evidence checks before building
+        run: python3 -m unittest discover -s control/tools -p 'test_foundation_comparison.py' -v
       - name: Build original binaries and collect alternating same-host samples
         env:
           CARGO_BUILD_JOBS: '2'

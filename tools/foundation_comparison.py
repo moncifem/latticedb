@@ -116,6 +116,7 @@ def summarize(receipts):
         result['workloads'] = {name: {
             'baseline_ns': distribution([by_key[p, 'baseline'][name] for p in range(PAIRS)]),
             'candidate_ns': distribution([by_key[p, 'candidate'][name] for p in range(PAIRS)]),
+            'paired_ratios': [by_key[p, 'candidate'][name] / by_key[p, 'baseline'][name] for p in range(PAIRS)],
             'paired_candidate_over_baseline': distribution([
                 by_key[p, 'candidate'][name] / by_key[p, 'baseline'][name] for p in range(PAIRS)])
         } for name in sorted(WORKLOADS)}
