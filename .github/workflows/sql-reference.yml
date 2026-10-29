@@ -36,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: check the sqllogictest scripts against PostgreSQL 17
+        shell: bash
         run: python3 tools/slt_reference.py crates/lattice-testkit/tests/slt/*.test 2>&1 | tee sql-reference-report.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
