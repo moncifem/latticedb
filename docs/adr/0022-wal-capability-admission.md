@@ -43,3 +43,12 @@ with source hashes, warm-cache timings, process peak RSS and bounded prefix/read
 results must be reviewed before acceptance; buffer maxima and process RSS are not complete recovery
 allocation bounds. LCIX engine activation is still disabled pending acceptance and the unwaived
 review holds.
+
+
+Completed [hosted run 40908208450](https://github.com/moncifem/latticedb/actions/runs/40908208450)
+measured actual merge source `fb11b8f657643e250adb2da0d78f4f14ded555cd`, not a later rebase.
+The [evidence record](../evidence/wal-admission-40908208450.md) preserves finite compatibility scope,
+90 warm-cache samples, 32-byte prefix controls and whole-process RSS limits. At 256 tiny legacy
+segments median admission/open cost rose 1.937 ms / 69.1%; the larger case rose 2.190 ms / 4.75%.
+Filesystem calls and synchronization are included. Independent review and this measured cost inform
+owner acceptance; neither supplies acceptance or a review-period waiver. Status remains proposed.

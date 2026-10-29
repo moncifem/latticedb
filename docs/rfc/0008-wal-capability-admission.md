@@ -172,8 +172,8 @@ explicitly by the hosted compatibility workflow. That workflow also builds the f
 with its original lockfile, retains executable/source/harness hashes and exact before/after byte
 manifests. The exact-head hosted proof at `a132a36bbe9a1d0472f1bb0bc989c8e8bc7c7ff7`
 passed in [run 40906145857](https://github.com/moncifem/latticedb/actions/runs/40906145857).
-This bounded proof does not imply a large fault campaign or format acceptance. Recovery measurements
-remain pending until their separately retained hosted artifact completes.
+This bounded proof does not imply a large fault campaign or format acceptance. The subsequent hosted measurement also passed; its exact tested merge source, observations and
+limits are recorded below.
 
 ## Independent review corrections and expanded hosted matrix
 
@@ -242,3 +242,23 @@ plus names, parsed headers and container metadata; full recovery also holds actu
 buffers. Peak RSS includes the whole process. Neither the prefix maximum nor RSS is a complete
 allocation bound or a checkpoint-memory result. Owner acceptance still requires reviewing the
 measured results and these limits, independent review, and the unwaived review period.
+
+
+## Completed hosted observations
+
+[Run 40908208450](https://github.com/moncifem/latticedb/actions/runs/40908208450) passed for PR head
+`f9f0307b42766a01261670bc51a23b1dd88b5581` at actual merge source
+`fb11b8f657643e250adb2da0d78f4f14ded555cd`. The frozen reader checked 4,648 histories / 9,296
+raw-recovered snapshots. Six measurement cases retained 90 timed samples and 18 warmups. For 256
+tiny legacy segments median open increased 1.937 ms / 69.1%; at 256 larger segments the increase was
+2.190 ms / 4.75%. This is warmed-cache instrumented admission/open with filesystem calls and
+synchronization, not pure CPU decoding or an isolated prefix-syscall measurement. Every new-reader
+prefix request/return/capacity was at most 32 bytes; process peak RSS does not bound total allocation.
+See the [full observations and limits](../evidence/wal-admission-40908208450.md) and
+[compact provenance/sample record](../evidence/wal-admission-40908208450.json).
+
+Independent review resolved the identified changing-view/short-prefix/version-dispatch blockers
+and validated the completed measurement design. This remains proposed: the owner must explicitly
+accept RFC 0008 / ADR 0022 and either wait for its full review period or explicitly waive that
+specific wait after fresh checks. Rebase validation does not change the historical measured source,
+waive PR 209's independent hold, or activate LCIX.

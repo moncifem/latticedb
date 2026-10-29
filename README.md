@@ -42,6 +42,10 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
 | Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
 
+A [draft WAL capability guard](https://github.com/moncifem/latticedb/pull/222) has completed bounded
+old-reader/crash checks and [hosted admission measurements](docs/evidence/wal-admission-40908208450.md).
+Format acceptance and its review-period decision remain pending; managed-index activation is separate.
+
 ```mermaid
 flowchart TB
   subgraph ahead["Not built yet"]

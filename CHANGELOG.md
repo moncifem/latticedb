@@ -9,6 +9,12 @@ between minor versions; format changes are called out explicitly.
 
 ### Added
 
+- Proposed explicit WAL engine-capability admission: preflight the complete segment-header chain,
+  require durable guards before protected appends, preserve legacy WAL bytes and expose per-record
+  recovery context. `Io::read_prefix` is a required bounded seam API. Hosted frozen-reader/cut checks
+  and warmed-cache open/RSS measurements passed at the recorded source; RFC 0008 / ADR 0022 remain
+  proposed pending owner acceptance and review-period decision. Managed-index activation is separate.
+
 - A typed change feed model (`lattice_core::feed`): one `ChangeEvent` per entity change of a committed
   change set, and a `Cursor` of `(lsn, index)` whose order is commit order and does not depend on
   restarts. Strict bounded decoding that accepts only canonical bytes, specified with worked byte examples

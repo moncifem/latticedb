@@ -214,3 +214,35 @@ this integration's seven-day wait, separately from the earlier primitives waiver
 PR 209 holds remain unchanged. External-driver conformance,
 binary result formats, storage-backed SQL execution and authenticated row-policy actor binding remain
 open; this integration does not complete P2-11/P2-12 or sign either phase gate.
+
+
+## Guarded WAL admission evidence (2026-10-29)
+
+PR [222](https://github.com/moncifem/latticedb/pull/222) implements proposed RFC 0008 / ADR 0022:
+explicit engine capabilities, complete header-chain preflight, durable guard installation before
+protected append, cumulative requirements through rollover and actual segment context on replay.
+Default/raw readers advertise zero support; the separate managed-index PR 209 must explicitly
+integrate the guard before activation. Legacy v1 record/segment bytes remain unchanged. Required
+bounded `Io::read_prefix` is a deliberate source API break for these unpublished seam adapters.
+
+[Hosted run 40908208450](https://github.com/moncifem/latticedb/actions/runs/40908208450) succeeded for
+PR head `f9f0307b42766a01261670bc51a23b1dd88b5581`, actually built/executed at merge source
+`fb11b8f657643e250adb2da0d78f4f14ded555cd`. The frozen `743b0fb` reader checked 4,648 bounded fault
+histories as 9,296 raw/recovered snapshots plus two static controls. Guarded and already-recovered
+snapshots were unchanged; 267 raw unguarded torn tails were permissibly repaired. This is finite
+compatibility evidence, not arbitrary-workload or large-soak coverage.
+
+The separate release-build measurement retained 90 samples and 18 warmups across 1/32/256 segments
+and 64/65,536-byte values. At 256 tiny legacy segments, median open increased by 1.937 ms / 69.1%;
+at 256 larger segments, by 2.190 ms / 4.75%. These are warmed-cache Log admission/open observations,
+including filesystem metadata, locks and synchronization, not pure CPU decoding. Every new-reader
+prefix request/return/Vec-capacity maximum was 32 bytes, with one full-file read per segment. Median
+process RSS at 256 larger segments was 2,352 KiB frozen versus 2,488 KiB new. Buffer counters and
+process RSS do not establish a whole-memory bound or a checkpoint/RowStore rebuild result. See the
+[method, full tables and limits](../evidence/wal-admission-40908208450.md) and
+[compact observations/provenance](../evidence/wal-admission-40908208450.json).
+
+Later rebases require their own fresh checks; these historical results do not relabel the tested
+source. RFC 0008/ADR 0022 owner acceptance and the seven-full-day wait decision remain pending.
+Nothing here waives PR 209's separate hold, activates LCIX on main, accepts a checkpoint format,
+assigns a release, establishes a performance threshold, or signs either phase gate.

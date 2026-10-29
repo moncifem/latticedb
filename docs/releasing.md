@@ -230,3 +230,14 @@ campaign or phase-gate evidence follows from adding the matrix rows. Codec bytes
 under RFC 0010 / proposed ADR 0024. The owner authorized experimental publication after final green
 CI while keeping the format proposed; encoding acceptance, freeze and runtime activation remain
 separate decisions.
+
+### Proposed WAL admission evidence
+
+The `wal-admission` pull-request workflow retains separate `evidence-wal-admission` and
+`evidence-wal-admission-measurement` artifacts. It compiles the actual immutable old source with its
+original lockfile and reviewed host harness; verifies source cleanliness and binary/input hashes;
+and records raw/recovered cut manifests. The separate release-build measurement records warmed-cache
+Log admission/open times, GNU time process RSS and bounded prefix controls. The
+[completed source-specific record](evidence/wal-admission-40908208450.md) distinguishes PR head from
+the actual tested merge source. Historical proof survives later rebases; inspect fresh-head checks
+separately. These jobs do not authorize a storage format, waive a review period or activate LCIX.
