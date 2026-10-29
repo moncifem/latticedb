@@ -96,3 +96,15 @@ Benchmark programs for E3-4 (WP53, issue #255, first slice), list only, no measu
 sequence CRDT insert, set and register merge, change-feed cursor and event codec, sync frame codec and
 fan-out to 1, 100 and 10,000 subscriber queues with slow subscribers. Tree and text compaction, the
 backpressure module, reconnect storms and the CI baseline wiring are not covered yet. E3-4 stays open.
+Verification evidence for WP51 (issue #253), first slice, not an exit criterion: `clients/typescript` is a hand-written
+TypeScript port of the sync frame codec, the change feed cursor and event codec and the client state machine, with no
+runtime dependencies. `conformance/vectors.json` is rendered by a Rust test in `lattice-api` (it fails if the checked-in
+file differs) from hand-assembled bytes: 37 valid frames, 60 invalid frames, 7 incomplete inputs, 27 encoder refusals and
+12 negotiation cases for the sync protocol, and 7 cursors, 4 invalid cursors, 8 events, 23 invalid events and 5 encoder
+refusals for the change feed. One local run (Node 24, the CI job pins Node 22) of the TypeScript tests: 67 tests passed,
+including every vector decoded and re-encoded byte for byte with the same error kind as Rust, and seeded randomised tests
+(encode/decode identity, canonical form of mutated input, client exactly-once against a model server). Checking the
+tests against deliberate defects in the compiled client (a byte order mark dropped from text, a loosened text length
+bound, a skipped LSN 0 check) made the conformance tests fail each time. The workflow `clients-typescript.yml` has not run
+on CI yet. The Go and Python clients, a generator and the agent plugin contract in TypeScript are not done, and no client
+talks to a server, because none exists.
