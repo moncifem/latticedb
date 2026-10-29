@@ -33,6 +33,10 @@ allow = ["lattice-abi", "lattice-seams", "lattice-lsl"]
 layer = 4
 allow = ["lattice-abi", "lattice-seams", "lattice-core", "lattice-lsl"]
 
+[crate.lattice-exec]
+layer = 5
+allow = ["lattice-abi", "lattice-core", "lattice-engines", "lattice-lsl", "lattice-sql"]
+
 [crate.lattice-identity]
 layer = 4
 allow = ["lattice-abi", "lattice-seams", "lattice-core"]

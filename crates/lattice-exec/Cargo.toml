@@ -1,0 +1,21 @@
+[package]
+name = "lattice-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Lattice SQL executor: runs bound single-table plans against the row store."
+
+[dependencies]
+lattice-abi = { path = "../lattice-abi" }
+lattice-core = { path = "../lattice-core" }
+lattice-engines = { path = "../lattice-engines" }
+lattice-lsl = { path = "../lattice-lsl" }
+lattice-sql = { path = "../lattice-sql" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1.12.0"
