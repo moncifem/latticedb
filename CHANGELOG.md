@@ -25,6 +25,9 @@ between minor versions; format changes are called out explicitly.
   `reviewed` label when formats, the kernel, auth, layers, workflows, branch protection or RFC/ADR
   files change, and a `claims` job that labels and comments when open pull requests touch the same
   files. Policy in `docs/review-policy.md`. Both checks are advisory until the owner requires them.
+- `main-guard` workflow and `tools/main_guard.py`: when a push to main fails a required check, open a
+  `revert/<short-sha>` pull request labelled `main-red` and a tracking issue; never pushes to main and
+  ignores cancelled runs, infrastructure errors and macOS-only failures. Procedure in `docs/main-guard.md`.
 
 - Managed physical-byte index definitions and create/drop/recreate history persisted in atomic LCIX
   catalog/row changes. Default managed opens rebuild without callbacks; explicit callback mode remains
