@@ -1,0 +1,61 @@
+name: sql-planner-spike
+# Standalone ADR0013 evidence experiment. Never part of a default PR or scheduled laptop build.
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+    services:
+      postgres:
+        image: postgres:18.1-bookworm@sha256:cc9f4143a8d2fa8cf3749d0cb4d26ecf2d53a77a2ac807e9ebd67ae22426221a
+        env:
+          POSTGRES_PASSWORD: experiment
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2
+        with: { tool: cargo-deny }
+      - name: record runner and source context
+        run: |
+          mkdir -p planner-evidence
+          uname -a > planner-evidence/uname.txt
+          lscpu > planner-evidence/cpu.txt
+          free -b > planner-evidence/memory.txt
+          df -T "$RUNNER_TEMP" > planner-evidence/filesystem.txt
+          rustc -Vv > planner-evidence/rustc.txt
+          git rev-parse HEAD > planner-evidence/revision.txt
+          git status --porcelain > planner-evidence/status-before.txt
+          docker inspect --format '{{.Image}}' '${{ job.services.postgres.id }}' > planner-evidence/postgres-image.txt
+      - name: install pinned PostgreSQL client
+        run: python3 -m pip install 'psycopg[binary]==3.3.6'
+      - name: structural rules for production graph
+        run: |
+          cargo xtask check-layers
+          cargo xtask check-allow
+          cargo xtask check-unsafe
+          cargo metadata --locked --format-version 1 --no-deps > planner-evidence/production-metadata.json
+      - name: coordinator timeout regression
+        run: python3 -m unittest discover -s experiments/sql-planner -p test_measure.py
+      - name: clean builds and all three candidate measurements
+        run: |
+          python3 experiments/sql-planner/measure.py \
+            --output "$PWD/planner-evidence" \
+            --target-root "$RUNNER_TEMP/sql-planner-clean" \
+            --dsn 'postgresql://postgres:experiment@127.0.0.1:5432/postgres'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sql-planner-spike
+          path: planner-evidence/
+          if-no-files-found: error

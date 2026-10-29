@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+[package]
+name = "lattice-sql-bridge-build-baseline"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+[dependencies]
+lattice-core = { path = "../../../crates/lattice-core" }
+lattice-engines = { path = "../../../crates/lattice-engines", default-features = false, features = ["row"] }
+lattice-seams = { path = "../../../crates/lattice-seams" }
+lattice-sim = { path = "../../../crates/lattice-sim" }
+[lints.rust]
+unsafe_code = "forbid"
