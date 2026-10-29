@@ -44,6 +44,8 @@ jobs:
       - name: relax rust-version for the proof build
         run: |
           rustc --version
-          sed -i 's/^rust-version = .*/# rust-version relaxed for the Kani build/' Cargo.toml
+          test "$(grep -c '^rust-version = ' Cargo.toml)" = 1
+          sed -i 's/^rust-version = .*/rust-version = "1.80"/' Cargo.toml
+          test "$(grep -c '^rust-version = "1.80"$' Cargo.toml)" = 1
       - name: prove ${{ matrix.package }}
         run: cargo kani -p ${{ matrix.package }} --harness-timeout 20m
