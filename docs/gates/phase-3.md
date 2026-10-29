@@ -63,3 +63,17 @@ identical events and resumed with no gap and no duplicate; three planted emitter
 entity events, inclusive resume) were each rejected by the oracle in more than 100 cases. A cursor at or below
 the vacuum floor returns `CursorTooOld`. Author and turn are not recorded by the row store, so events carry author 0
 and no turn. The full `cargo xtask ci` gate and the rest of the engines suite were not run locally.
+Verification evidence, not an exit criterion: `lattice-api::backpressure` (WP38, issue #240) is a pure module
+with bounded per-subscriber queues (event count and byte budget), an in-flight window, overflow with a resume
+cursor (the last acknowledged event) and an O(N) fan-out hub that copies each payload once and shares it. One
+local run of `cargo test -p lattice-api --lib backpressure -- --nocapture` (14 tests, 0 failures) with limits of
+64 events, 2,048 bytes and 32 in flight, one stalled subscriber and 300 published events: at 10,000 subscribers
+there were 3,000,000 offers, 300 payload copies (one per event), 9,999 reference-count increments per publish,
+0 blocking waits (every publish returned a result), a peak of 63 events in any queue and a peak of 963,485
+bytes for all queues (about 96 bytes per subscriber, declared bound 5,216 bytes each). A queue struct is
+112 bytes and an event entry is 24 bytes. The stalled subscriber was overflowed at the event derived from the
+payload sizes, with resume cursor 0, at 1, 100 and 10,000 subscribers, and all others received every event in
+order. A planted unbounded queue is caught by the bound check at 1 and 100 subscribers. A property test of random
+publish, drain and acknowledge sequences kept queue length and bytes within limits, order and a monotonic cursor.
+Offers per second are not measured (the crate bans `Instant`); the counts above are the evidence. Not wired into a
+server, not part of the nightly shards.

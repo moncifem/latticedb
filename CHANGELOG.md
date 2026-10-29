@@ -13,7 +13,10 @@ between minor versions; format changes are called out explicitly.
   changes in commit order, resumable from a cursor, filtered by the actor's read policy, identical after
   reopen, and refused with `CursorTooOld` at or below the vacuum floor. Read-only accessors
   `RowStore::history_from` and `Table::history_from`. No exit criterion is claimed.
-
+- `lattice-api::backpressure` (WP38, #240): bounded per-subscriber outbound queues (event count and
+  byte budget) that mark a slow subscriber overflowed with a resume cursor instead of blocking the
+  producer, and an O(N) fan-out hub sharing one payload buffer. Pure module, not wired into a
+  server yet; no exit criterion is claimed.
 - `lattice-testkit` fencing race tests (WP46, #248): takeover during append and during watch
   reconnect on the kernel under five fault profiles, judged by a script oracle, with wrapper mutants
   and planted kernel bugs proving each assertion can fail. Test only; no exit criterion is claimed.
