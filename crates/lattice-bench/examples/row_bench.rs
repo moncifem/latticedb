@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn tiny_workload_produces_all_cases_and_audited_recovery_sizes() {
         let options = Options::parse(
-            ["--rows", "4", "--reads", "8", "--samples", "1"]
+            ["--rows", "17", "--reads", "8", "--samples", "1"]
                 .into_iter()
                 .map(str::to_owned),
         )
@@ -496,6 +496,6 @@ mod tests {
                 .windows(2)
                 .all(|w| w[0]["wal_bytes"].as_u64().unwrap() < w[1]["wal_bytes"].as_u64().unwrap())
         );
-        assert_eq!(raw["vacuum_samples"][0]["row_versions_removed"], 60);
+        assert_eq!(raw["vacuum_samples"][0]["row_versions_removed"], 255);
     }
 }
