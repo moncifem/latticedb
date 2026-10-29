@@ -1,19 +1,19 @@
 # RFC 0008: WAL admission for required engine capabilities
 
-Status: draft
-Comment period ends: at least seven full days after this RFC's PR opens
-Decision ADR: proposed ADR 0022
+Status: accepted
+Comment period ends: waived by the project owner on 2026-10-29
+Decision ADR: ADR 0022
 
 ## Motivation and authority
 
 On 2026-10-29 the owner required enforced old-reader refusal before activation of the managed-index
-LCIX proposal in RFC 0005 / PR 209. Operational-only coordinated upgrade was rejected. That decision
-selects a requirement, not the candidate encoding below. This RFC accepts no storage/checkpoint
-format, reserves no assigned release, and waives neither its own review period nor PR 209's hold.
-Implementation, independent format review, compatibility evidence and an explicit acceptance decision
-remain required. The separate draft implementation now provides these core/log APIs and independent fixtures;
-no engine is switched to LCIX activation. Hosted compatibility/crash evidence and independent code
-review remain pending. Implementation presence does not accept this encoding.
+LCIX proposal in RFC 0005 / PR 209. Operational-only coordinated upgrade was rejected. After
+implementation, independent review, completed compatibility proof and disclosure of the warmed-cache
+costs and memory-evidence limits, the owner explicitly accepted RFC 0008 / ADR 0022 and waived this
+specific seven-full-day wait on 2026-10-29. Merge of PR 222 remains conditional on exact-head green CI.
+The [narrow decision record](../evidence/wal-admission-owner-decision-2026-10-29.md) preserves the
+owner's response and scope. It does not waive PR 209's hold, activate LCIX, accept a checkpoint
+format, assign a release or sign a phase gate.
 
 Existing v1 readers preserve unknown record types and RowStore skips unknown engine payloads. Thus
 an unknown record, LCIX marker, directory sidecar, or the ignored v1 header reserved word cannot stop
@@ -21,12 +21,12 @@ a shipped reader. A directory containing compound row changes can silently appea
 
 ## Proposal
 
-### Candidate header and capability assignment
+### Header and capability assignment
 
-Candidate values below are proposed for review only, not accepted assignments. Leave all existing
+The owner accepted the header values and capability assignment below. Leave all existing
 `LATLOG01` v1 headers and records byte-unchanged. Introduce a distinct guarded header, before records:
 
-| Offset | Bytes | Candidate field |
+| Offset | Bytes | Field |
 |---:|---:|---|
 | 0 | 8 | ASCII `LATCAP02` |
 | 8 | 4 | Little-endian u32 header version `2` |
@@ -36,8 +36,8 @@ Candidate values below are proposed for review only, not accepted assignments. L
 | 24 | 4 | Reserved zero u32 |
 | 28 | 4 | CRC32C of the preceding 28 header bytes |
 
-Candidate mask bit 0 (`1`) means managed compound catalog/index/row replay. No other bits are
-assigned by this proposal. A guarded header must require at least one defined capability. Reject
+Mask bit 0 (`1`) means managed compound catalog/index/row replay. No other bits are
+assigned by this RFC. A guarded header must require at least one defined capability. Reject
 unknown versions, unexpected lengths, nonzero reserved fields, header CRC mismatch, zero mask and
 unknown required bits. Record framing and ChangeSet bytes remain v1; the first record begins after
 32 bytes for a guarded segment and after 16 for legacy v1. Unknown header lengths are rejected rather
@@ -99,12 +99,12 @@ records may recover, but only from an intact guarded segment. Missing segments o
 headers must refuse; they cannot be treated as permission to reset capability history.
 
 Backup verification and restore-based rollback remain required. There is no in-place downgrade or
-converter. This proposal does not compose, accept or select any dormant checkpoint engine format.
+converter. This RFC does not compose, accept or select any dormant checkpoint engine format.
 A future checkpoint reader must preserve admission and cannot erase the required-capability history.
 
 ## Independent compatibility fixtures and executable tests
 
-Implementation must add independently framed global corpus fixtures with version/draft metadata:
+Implementation must add independently framed global corpus fixtures with version/acceptance metadata:
 legacy v1 unchanged, guarded bit-0 header, guarded header plus complete LCIX ChangeSet, unknown version,
 unknown capability, dropped capability, wrong header length, reserved fields, bad CRC, and all truncated
 header prefixes. Expected bytes/CRCs come from a separate implementation, not the tested encoder.
@@ -143,16 +143,18 @@ reader's refusal result, byte manifest before/after the refusal attempt, and a s
 No outcome may adopt LCIX from unguarded storage or lose an acknowledged prefix. Controls must prove
 each failure site was reached; a crash sweep with zero observed upgrade operations is not evidence.
 
-Acceptance additionally needs independent review of header dispatch, capability propagation, every
-repair path, raw tools and checkpoint interactions; exact-head required checks; unchanged v1 corpus;
-measured header-preflight recovery overhead and allocation bounds; and a recorded owner format
-acceptance after the review period. Merely merging a design document or selecting the guard approach
+Acceptance required independent review of header dispatch, capability propagation, every repair
+path, raw tools and checkpoint interactions; exact-head checks; unchanged v1 corpus; measured
+header-preflight overhead, bounded prefix-allocation controls and disclosed recovery-memory limits;
+and a recorded owner format decision. Independent review and completed evidence are recorded below.
+The owner accepted this scope and explicitly waived this RFC's review wait; final-head CI remains
+required before merge. Merely merging a design document or selecting the guard approach
 cannot activate LCIX. PR 209 stays draft until this guard is implemented and accepted and its own
 unwaived hold and review requirements are satisfied.
 
-## Draft implementation scope and seam contract
+## Implementation scope and seam contract
 
-The draft adds `Io::read_prefix(path, max)` as a required, deliberately breaking seam API for these
+The implementation adds `Io::read_prefix(path, max)` as a required, deliberately breaking seam API for these
 unpublished crates. It must bound physical reads and returned-buffer allocation by `max`, include
 visible pending/truncated bytes just as `read` does, and report missing paths even at zero length.
 There is no whole-file fallback. StdIo and SimIo implement bounded reads; transparent adapters
@@ -172,8 +174,9 @@ explicitly by the hosted compatibility workflow. That workflow also builds the f
 with its original lockfile, retains executable/source/harness hashes and exact before/after byte
 manifests. The exact-head hosted proof at `a132a36bbe9a1d0472f1bb0bc989c8e8bc7c7ff7`
 passed in [run 40906145857](https://github.com/moncifem/latticedb/actions/runs/40906145857).
-This bounded proof does not imply a large fault campaign or format acceptance. The subsequent hosted measurement also passed; its exact tested merge source, observations and
-limits are recorded below.
+This bounded proof does not imply a large fault campaign; owner acceptance is a separate recorded
+decision. The subsequent hosted measurement also passed; its exact tested merge source, observations
+and limits are recorded below.
 
 ## Independent review corrections and expanded hosted matrix
 
@@ -202,10 +205,9 @@ and byte-hash manifests. Refused guarded directories and already-recovered legac
 remain byte-unchanged. Raw unguarded torn creations may undergo the old reader's documented repair;
 that allowed mutation is recorded explicitly and cannot contain an acknowledged LCIX record.
 The original hosted attempt failed while compiling the old harness because the historical RowError
-did not implement Error; explicit error conversion corrects that harness failure. Expanded hosted
-proof remains pending until its exact-head run completes successfully.
+did not implement Error; explicit error conversion corrects that harness failure. The subsequent expanded hosted proof completed successfully at the source recorded below.
 
-The independent generator emits 42 proposal vectors; together with the unchanged pre-existing WAL
+The independent generator emits 42 admission vectors; together with the unchanged pre-existing WAL
 vector, the global corpus has 43 files. Matrix ChangeSet ids and HLC wall fields are independently
 framed in their specified byte orders, increasing together across each real kernel history. A
 normal test pins the literal fields and every recovered matrix history also passes the kernel
@@ -217,7 +219,7 @@ bytes against the immutable revision, and records their hashes plus verbose rust
 ## Bounded hosted preflight measurement
 
 The separate `recovery-measurement` job compiles the same reviewed host template against the actual
-frozen `743b0fb52a495a3f875490268d604ed543be9e64` Log and the proposed Log, both in release mode
+frozen `743b0fb52a495a3f875490268d604ed543be9e64` Log and the new Log, both in release mode
 with their original lockfiles. Source preparation supplies only the actual API call and, in the new
 harness, the required bounded-prefix seam method. It does not copy a decoder or modify tracked frozen
 source. It compares both readers on identical independently framed legacy files; a third case uses
@@ -240,8 +242,8 @@ contract and existing adapter tests cover exact `min(limit, length)` reads; thes
 prove a bound for arbitrary third-party adapters. Preflight retains one small prefix per segment,
 plus names, parsed headers and container metadata; full recovery also holds actual segment/record
 buffers. Peak RSS includes the whole process. Neither the prefix maximum nor RSS is a complete
-allocation bound or a checkpoint-memory result. Owner acceptance still requires reviewing the
-measured results and these limits, independent review, and the unwaived review period.
+allocation bound or a checkpoint-memory result. Owner acceptance explicitly followed disclosure of
+these measured results and limits, independent review and a waiver of this RFC's specific wait.
 
 
 ## Completed hosted observations
@@ -258,7 +260,7 @@ See the [full observations and limits](../evidence/wal-admission-40908208450.md)
 [compact provenance/sample record](../evidence/wal-admission-40908208450.json).
 
 Independent review resolved the identified changing-view/short-prefix/version-dispatch blockers
-and validated the completed measurement design. This remains proposed: the owner must explicitly
-accept RFC 0008 / ADR 0022 and either wait for its full review period or explicitly waive that
-specific wait after fresh checks. Rebase validation does not change the historical measured source,
-waive PR 209's independent hold, or activate LCIX.
+and validated the completed measurement design. The owner explicitly accepted RFC 0008 / ADR 0022
+and waived this specific wait on 2026-10-29, conditional on final-head green CI before merge. See the
+[narrow decision record](../evidence/wal-admission-owner-decision-2026-10-29.md). Rebase validation
+does not change the historical measured source, waive PR 209's independent hold, or activate LCIX.

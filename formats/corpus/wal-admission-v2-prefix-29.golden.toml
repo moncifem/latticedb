@@ -1,4 +1,4 @@
 format = "wal-admission"
 version = 2
-status = "draft"
-description = "Independent Python framing/CRC32C; RFC 0008 proposed, not accepted"
+status = "accepted"
+description = "Independent Python framing/CRC32C; RFC 0008 accepted; illustrative nested LCIX remains draft RFC 0005"

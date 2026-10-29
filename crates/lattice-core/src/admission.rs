@@ -1,16 +1,16 @@
-//! Draft guarded segment headers and explicit engine admission (RFC 0008).
+//! Guarded segment headers and explicit engine admission (RFC 0008).
 //! Legacy WAL v1 bytes and record framing are unchanged.
 
 use crate::crc::crc32c;
 use crate::record::{HeaderCheck, SEGMENT_HEADER_LEN, check_header};
 
-/// Proposed guarded segment magic, deliberately rejected by legacy readers.
+/// Guarded segment magic, deliberately rejected by legacy readers.
 pub const GUARDED_MAGIC: &[u8; 8] = b"LATCAP02";
-/// Proposed guarded segment header length.
+/// Guarded segment header length.
 pub const GUARDED_HEADER_LEN: usize = 32;
 /// Required capability for managed compound catalog/index/row payloads.
 pub const MANAGED_COMPOUND: u64 = 1;
-/// All required capabilities understood by this draft format.
+/// All required capabilities understood by this format.
 pub const KNOWN_CAPABILITIES: u64 = MANAGED_COMPOUND;
 
 /// Segment provenance supplied to a recovery consumer, separate from record bytes.
@@ -38,7 +38,7 @@ pub enum HeaderError {
     Invalid(String),
 }
 
-/// Encodes the proposed guarded header. Zero or unknown requirements are invalid.
+/// Encodes the guarded header. Zero or unknown requirements are invalid.
 pub fn guarded_header(required: u64) -> Result<Vec<u8>, HeaderError> {
     if required == 0 || required & !KNOWN_CAPABILITIES != 0 {
         return Err(HeaderError::Invalid("invalid required capabilities".into()));

@@ -1,13 +1,14 @@
 # Format: guarded WAL admission v2
 
-Status: draft, [RFC 0008](../docs/rfc/0008-wal-capability-admission.md) and proposed
-[ADR 0022](../docs/adr/0022-wal-capability-admission.md). Neither encoding nor LCIX activation is accepted.
+Status: accepted, [RFC 0008](../docs/rfc/0008-wal-capability-admission.md) and
+[ADR 0022](../docs/adr/0022-wal-capability-admission.md). The owner accepted this WAL admission format
+and waived its wait on 2026-10-29. LCIX format acceptance/hold and engine activation remain separate.
 
 ## Layout
 
-The candidate header is 32 bytes: ASCII `LATCAP02` (8), little-endian u32 version 2, u16 length 32,
+The header is 32 bytes: ASCII `LATCAP02` (8), little-endian u32 version 2, u16 length 32,
 u16 reserved zero, u64 required capabilities, u32 reserved zero, then u32 CRC32C of the preceding
-28 bytes. Candidate bit 0 is managed compound replay; zero/unknown bits refuse. Records keep the
+28 bytes. Bit 0 is managed compound replay; zero/unknown bits refuse. Records keep the
 unchanged v1 encoding and start at offset 32. Existing v1 headers/records remain byte-unchanged.
 
 ## Versioning and compatibility
@@ -36,4 +37,6 @@ fixture contains only the same LROW mutations. Decoder tests pin fields, exact b
 and truncated-prefix refusal. The hosted job builds a frozen real old RowStore against its original
 lockfile, checks the literal legacy row and guarded refusal, then checks every exported raw/recovered
 fault-matrix snapshot with before/after filename and byte-hash manifests. Guarded refusal and
-recovered legacy opens must not mutate bytes; permitted raw legacy-tail repair is recorded. Hosted evidence is pending until its exact-head job succeeds.
+recovered legacy opens must not mutate bytes; permitted raw legacy-tail repair is recorded. Completed source-specific hosted evidence and limits are recorded in
+[the compatibility/measurement report](../docs/evidence/wal-admission-40908208450.md). The accepted
+WAL fixture metadata does not accept its nested illustrative LCIX payload; RFC 0005 remains draft.

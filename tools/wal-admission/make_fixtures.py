@@ -64,5 +64,5 @@ if __name__ == '__main__':
     for filename, data in vectors().items():
         (root / filename).write_bytes(data)
         (root / (filename + '.toml')).write_text(
-            'format = "wal-admission"\nversion = '+('1' if 'v1-' in filename else '2')+'\nstatus = "draft"\n'
-            'description = "Independent Python framing/CRC32C; RFC 0008 proposed, not accepted"\n')
+            'format = "wal-admission"\nversion = '+('1' if 'v1-' in filename else '2')+'\nstatus = "accepted"\n'
+            'description = "Independent Python framing/CRC32C; RFC 0008 accepted; illustrative nested LCIX remains draft RFC 0005"\n')

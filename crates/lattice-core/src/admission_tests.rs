@@ -1,4 +1,4 @@
-//! Independent byte, admission and durability witnesses for the proposed WAL guard.
+//! Independent byte, admission and durability witnesses for the WAL guard.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

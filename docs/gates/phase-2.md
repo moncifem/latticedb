@@ -218,7 +218,7 @@ open; this integration does not complete P2-11/P2-12 or sign either phase gate.
 
 ## Guarded WAL admission evidence (2026-10-29)
 
-PR [222](https://github.com/moncifem/latticedb/pull/222) implements proposed RFC 0008 / ADR 0022:
+PR [222](https://github.com/moncifem/latticedb/pull/222) implements accepted RFC 0008 / ADR 0022:
 explicit engine capabilities, complete header-chain preflight, durable guard installation before
 protected append, cumulative requirements through rollover and actual segment context on replay.
 Default/raw readers advertise zero support; the separate managed-index PR 209 must explicitly
@@ -243,6 +243,9 @@ process RSS do not establish a whole-memory bound or a checkpoint/RowStore rebui
 [compact observations/provenance](../evidence/wal-admission-40908208450.json).
 
 Later rebases require their own fresh checks; these historical results do not relabel the tested
-source. RFC 0008/ADR 0022 owner acceptance and the seven-full-day wait decision remain pending.
-Nothing here waives PR 209's separate hold, activates LCIX on main, accepts a checkpoint format,
-assigns a release, establishes a performance threshold, or signs either phase gate.
+source. On 2026-10-29 the owner explicitly accepted RFC 0008 / ADR 0022 and waived this guard's
+seven-full-day wait after the measured-cost disclosure, conditional on final-head green CI before
+merge. The [narrow decision record](../evidence/wal-admission-owner-decision-2026-10-29.md) preserves
+that scope. This does not waive PR 209's separate hold, accept its managed-index format, activate
+LCIX on main, accept a checkpoint format, assign a release, establish a performance threshold,
+or sign either phase gate.
