@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"lattice_read","arguments":{"scope":"a","table":"t","limit":10.0}}}

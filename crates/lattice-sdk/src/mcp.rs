@@ -5,25 +5,28 @@
 //!
 //! This module targets the Model Context Protocol specification revision **2026-07-28**
 //! (<https://modelcontextprotocol.io/specification/2026-07-28>), read on 2026-10-29. That revision
-//! is stateless: it has no handshake and every request carries `_meta` with
-//! `io.modelcontextprotocol/protocolVersion`. For interoperability with handshake-based clients the
-//! module also answers the legacy (**2025-11-25**) `initialize` request and swallows
-//! `notifications/initialized`, as the revision's dual-era server rules allow. The supported subset
+//! is stateless: it has no handshake and every request must carry `_meta` with
+//! `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities`; a
+//! request without them is refused with `-32602`, and another version with `-32022`. As the
+//! revision's dual-era server rules allow, a connection that opens with the legacy (**2025-11-25**)
+//! `initialize` request is served with legacy semantics (`_meta` optional) for its lifetime; a
+//! missing `_meta` never selects that mode. `notifications/initialized` is swallowed. The supported subset
 //! and everything that is not implemented (transports, resources, prompts, authentication, tasks,
 //! pagination, subscription streams) are listed in `docs/mcp-v0.md`.
 //!
 //! # Shape
 //!
 //! [`Server::handle`] takes the bytes of one JSON-RPC message and the authenticated [`Caller`] and
-//! returns the bytes of the response, or `None` for a notification. It performs no I/O, keeps no
-//! per-connection state and never panics. Messages are bounded ([`MAX_MESSAGE_BYTES`],
+//! returns the bytes of the response, or `None` for a notification. It performs no I/O, keeps one
+//! piece of per-connection state (the [`Mode`], set only by `initialize`) and never panics. Messages are bounded ([`MAX_MESSAGE_BYTES`],
 //! [`MAX_DEPTH`], [`MAX_ITEMS`], [`MAX_NODES`]); JSON-RPC batches are refused with `-32600`
 //! (the revision defines no batching); duplicate object keys are refused, so a message has exactly
 //! one reading.
 //!
 //! A `tools/call` is processed in a fixed order, and the [`ToolBackend`] is reached only at the end:
 //! known tool, tool granted to the caller, arguments valid against the tool's schema, target scope
-//! covered by a grant. Every refusal is a JSON-RPC error with a stable code and a fixed message that
+//! covered by a grant. A backend's output is bounded by the type ([`ToolOutput`]), so the server
+//! never fails a call after the backend has acted. Every refusal is a JSON-RPC error with a stable code and a fixed message that
 //! contains no caller-supplied text and no data from the store.
 //!
 //! The JSON reader here is deliberately separate from the strict line grammar in
@@ -44,8 +47,9 @@ pub const MAX_DEPTH: usize = 12;
 pub const MAX_ITEMS: usize = 64;
 /// Most JSON values in one message.
 pub const MAX_NODES: usize = 4096;
-/// Longest accepted `value` argument of `lattice_write`, in bytes.
-pub const MAX_VALUE_BYTES: usize = 64 * 1024;
+/// Longest accepted `value` argument of `lattice_write`, in characters (as JSON Schema counts
+/// `maxLength`; the message bound limits the bytes).
+pub const MAX_VALUE_CHARS: usize = 64 * 1024;
 /// Largest tool output the server will return, in bytes.
 pub const MAX_OUTPUT_BYTES: usize = 1 << 20;
 /// Longest scope string, in bytes.
@@ -587,7 +591,10 @@ pub enum Tool {
 
 #[derive(Debug, Clone, Copy)]
 enum Fmt {
-    Any,
+    /// No control characters at all.
+    Key,
+    /// No control characters except tab, line feed and carriage return.
+    Text,
     Scope,
     Ident,
 }
@@ -633,7 +640,7 @@ const KEY_REQ: Prop = Prop {
     ty: Ty::Str {
         min: 1,
         max: 256,
-        fmt: Fmt::Any,
+        fmt: Fmt::Key,
     },
     required: true,
     desc: "Row key.",
@@ -643,7 +650,7 @@ const KEY_OPT: Prop = Prop {
     ty: Ty::Str {
         min: 1,
         max: 256,
-        fmt: Fmt::Any,
+        fmt: Fmt::Key,
     },
     required: false,
     desc: "Row key; omit to read a page of rows.",
@@ -658,8 +665,8 @@ const VALUE: Prop = Prop {
     name: "value",
     ty: Ty::Str {
         min: 0,
-        max: MAX_VALUE_BYTES,
-        fmt: Fmt::Any,
+        max: MAX_VALUE_CHARS,
+        fmt: Fmt::Text,
     },
     required: true,
     desc: "Row value as text.",
@@ -847,11 +854,16 @@ enum Val<'a> {
 fn check_prop<'a>(p: &Prop, v: &'a Json) -> Result<Val<'a>, RpcError> {
     match (p.ty, v) {
         (Ty::Str { min, max, fmt }, Json::Str(s)) => {
-            if s.len() < min || s.len() > max {
+            // JSON Schema counts characters, not bytes, for minLength and maxLength.
+            let chars = s.chars().take(max + 1).count();
+            if chars < min || chars > max {
                 return Err(RpcError::field("argument out of range", p.name));
             }
             let ok = match fmt {
-                Fmt::Any => true,
+                Fmt::Key => !s.chars().any(char::is_control),
+                Fmt::Text => !s
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r')),
                 Fmt::Scope => is_valid_scope(s),
                 Fmt::Ident => is_ident(s),
             };
@@ -861,9 +873,15 @@ fn check_prop<'a>(p: &Prop, v: &'a Json) -> Result<Val<'a>, RpcError> {
                 Err(RpcError::field("argument has invalid format", p.name))
             }
         }
-        (Ty::Int { min, max }, Json::Int(n)) => {
-            if (min..=max).contains(n) {
-                Ok(Val::Int(*n))
+        (Ty::Int { min, max }, Json::Int(_) | Json::Float(_)) => {
+            // JSON Schema 2020-12: a number with a zero fractional part (10.0) is an integer.
+            let n = match v {
+                Json::Int(n) => *n,
+                Json::Float(f) if f.fract() == 0.0 && f.abs() <= MAX_SAFE_INT as f64 => *f as i64,
+                _ => return Err(RpcError::field("argument has wrong type", p.name)),
+            };
+            if (min..=max).contains(&n) {
+                Ok(Val::Int(n))
             } else {
                 Err(RpcError::field("argument out of range", p.name))
             }
@@ -1025,8 +1043,45 @@ impl Caller {
 /// What a backend returns for a successful call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
-    /// Result text (JSON by convention), at most [`MAX_OUTPUT_BYTES`].
-    pub text: String,
+    text: String,
+}
+
+/// The text given to [`ToolOutput::new`] exceeds [`MAX_OUTPUT_BYTES`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputTooLarge;
+
+/// What [`ToolOutput::or_notice`] returns instead of an oversized text.
+pub const OUTPUT_OMITTED: &str = "output omitted: too large";
+
+impl ToolOutput {
+    /// Wrap result text (JSON by convention). The bound is enforced here, in the backend's hands,
+    /// so an output cannot be rejected after the backend has already acted.
+    ///
+    /// # Errors
+    /// [`OutputTooLarge`] when `text` is longer than [`MAX_OUTPUT_BYTES`].
+    pub fn new(text: String) -> Result<Self, OutputTooLarge> {
+        if text.len() > MAX_OUTPUT_BYTES {
+            Err(OutputTooLarge)
+        } else {
+            Ok(Self { text })
+        }
+    }
+
+    /// Like [`ToolOutput::new`], but an oversized text becomes the fixed [`OUTPUT_OMITTED`] notice.
+    /// A backend that has already committed a write returns this, so the client sees success and
+    /// does not retry an applied write.
+    #[must_use]
+    pub fn or_notice(text: String) -> Self {
+        Self::new(text).unwrap_or_else(|_| Self {
+            text: OUTPUT_OMITTED.to_owned(),
+        })
+    }
+
+    /// The result text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
 }
 
 /// Why a backend could not complete a call.
@@ -1043,6 +1098,11 @@ pub enum BackendError {
 
 /// The store behind the tools. It is reached only with a validated call that the caller's grants
 /// allow; it still owns row-level policy and receives the caller identity for it.
+///
+/// The server never turns a successful return into an error, so an applied write is never reported
+/// as failed. A backend must therefore bound its output *before* it commits (or use
+/// [`ToolOutput::or_notice`] after), because [`ToolOutput`] cannot hold more than
+/// [`MAX_OUTPUT_BYTES`].
 pub trait ToolBackend {
     /// Execute `call` for `caller`.
     ///
@@ -1051,14 +1111,39 @@ pub trait ToolBackend {
     fn call(&mut self, caller: &Caller, call: &ToolCall) -> Result<ToolOutput, BackendError>;
 }
 
-/// The MCP server state machine: a backend and nothing else.
+/// Which era a connection speaks. The only per-connection state of the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Revision 2026-07-28: every request carries its own `_meta`. The initial mode.
+    Stateless,
+    /// The connection opened with a successful `initialize` (2025-11-25 semantics): `_meta` is
+    /// optional. Set only by `initialize`, never by a missing `_meta`, and kept for the life of the
+    /// [`Server`] (one server per connection).
+    Legacy,
+}
+
+impl Mode {
+    fn accepts(self, version: &str) -> bool {
+        version == PROTOCOL_VERSION || (self == Mode::Legacy && version == LEGACY_PROTOCOL_VERSION)
+    }
+
+    fn supported_json(self) -> String {
+        match self {
+            Mode::Stateless => format!("[\"{PROTOCOL_VERSION}\"]"),
+            Mode::Legacy => format!("[\"{PROTOCOL_VERSION}\",\"{LEGACY_PROTOCOL_VERSION}\"]"),
+        }
+    }
+}
+
+/// The MCP server state machine for one connection: a backend and the connection [`Mode`].
 #[derive(Debug)]
 pub struct Server<B> {
     backend: B,
+    mode: Mode,
 }
 
-fn supported_versions_data(requested: Option<&str>) -> String {
-    let mut d = format!("{{\"supported\":[\"{PROTOCOL_VERSION}\",\"{LEGACY_PROTOCOL_VERSION}\"]");
+fn supported_versions_data(mode: Mode, requested: Option<&str>) -> String {
+    let mut d = format!("{{\"supported\":{}", mode.supported_json());
     // Echo only a short, plain version-looking string; never arbitrary caller text.
     if let Some(r) = requested
         && r.len() <= 32
@@ -1079,7 +1164,16 @@ impl<B: ToolBackend> Server<B> {
     /// A server over `backend`.
     #[must_use]
     pub fn new(backend: B) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            mode: Mode::Stateless,
+        }
+    }
+
+    /// The connection mode.
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 
     /// The backend, for inspection.
@@ -1108,20 +1202,29 @@ impl<B: ToolBackend> Server<B> {
     }
 
     fn dispatch(&mut self, caller: &Caller, r: &Request) -> Result<String, RpcError> {
-        if r.method != "initialize" {
-            check_meta_version(r.params.as_ref())?;
+        let known = matches!(
+            r.method.as_str(),
+            "ping" | "server/discover" | "tools/list" | "tools/call"
+        );
+        if r.method == "initialize" {
+            let out = Self::initialize(r.params.as_ref())?;
+            self.mode = Mode::Legacy;
+            return Ok(out);
         }
+        if !known {
+            return Err(RpcError::new(code::METHOD_NOT_FOUND, "method not found"));
+        }
+        check_meta(self.mode, r.params.as_ref())?;
         match r.method.as_str() {
-            "initialize" => Self::initialize(r.params.as_ref()),
             "ping" => Ok(format!("{COMPLETE}}}")),
             "server/discover" => Ok(format!(
-                "{COMPLETE},\"supportedVersions\":[\"{PROTOCOL_VERSION}\",\"{LEGACY_PROTOCOL_VERSION}\"],\
+                "{COMPLETE},\"supportedVersions\":{},\
                  \"capabilities\":{{\"tools\":{{}}}},\
-                 \"_meta\":{{\"io.modelcontextprotocol/serverInfo\":{SERVER_INFO}}}}}"
+                 \"_meta\":{{\"io.modelcontextprotocol/serverInfo\":{SERVER_INFO}}}}}",
+                self.mode.supported_json()
             )),
             "tools/list" => Ok(Self::list(caller)),
-            "tools/call" => self.call(caller, r.params.as_ref()),
-            _ => Err(RpcError::new(code::METHOD_NOT_FOUND, "method not found")),
+            _ => self.call(caller, r.params.as_ref()),
         }
     }
 
@@ -1193,9 +1296,6 @@ impl<B: ToolBackend> Server<B> {
             }
         }
         let (text, is_error) = match self.backend.call(caller, &call) {
-            Ok(o) if o.text.len() > MAX_OUTPUT_BYTES => {
-                return Err(RpcError::new(code::INTERNAL_ERROR, "result too large"));
-            }
             Ok(o) => (o.text, false),
             Err(BackendError::PolicyDenied) => {
                 return Err(RpcError::new(code::SCOPE_DENIED, "scope denied"));
@@ -1215,24 +1315,55 @@ impl<B: ToolBackend> Server<B> {
     }
 }
 
-/// Reject a request whose `_meta` names a protocol version this module does not implement.
-fn check_meta_version(params: Option<&Json>) -> Result<(), RpcError> {
-    let Some(v) = params
-        .and_then(|p| p.get("_meta"))
-        .and_then(|m| m.get("io.modelcontextprotocol/protocolVersion"))
-    else {
-        return Ok(());
-    };
-    match v {
-        Json::Str(s) if s == PROTOCOL_VERSION || s == LEGACY_PROTOCOL_VERSION => Ok(()),
-        other => Err(RpcError {
-            code: code::UNSUPPORTED_PROTOCOL_VERSION,
-            message: "unsupported protocol version",
-            data: Some(supported_versions_data(match other {
-                Json::Str(s) => Some(s.as_str()),
-                _ => None,
-            })),
-        }),
+const META_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+const META_CAPS: &str = "io.modelcontextprotocol/clientCapabilities";
+
+/// Check the per-request `_meta` of the revision (2026-07-28).
+///
+/// `Stateless` (a connection that has not sent `initialize`): `_meta` must be an object holding the
+/// protocol version (exactly [`PROTOCOL_VERSION`]) and `clientCapabilities` (an object); a missing
+/// or mistyped member is `-32602`, another version is `-32022`. A missing `_meta` never selects
+/// legacy behaviour. `Legacy` (the connection opened with `initialize`): `_meta` is optional, but if
+/// present it must be an object and any version in it must be one of the two revisions.
+fn check_meta(mode: Mode, params: Option<&Json>) -> Result<(), RpcError> {
+    let meta = params.and_then(|p| p.get("_meta"));
+    match (meta, mode) {
+        (None, Mode::Legacy) => return Ok(()),
+        (None, Mode::Stateless) => {
+            return Err(RpcError::field("missing required _meta", "_meta"));
+        }
+        (Some(Json::Obj(_)), _) => {}
+        (Some(_), _) => return Err(RpcError::field("_meta must be an object", "_meta")),
+    }
+    let version = meta.and_then(|m| m.get(META_VERSION));
+    let caps = meta.and_then(|m| m.get(META_CAPS));
+    match (version, mode) {
+        (None, Mode::Legacy) => {}
+        (None, Mode::Stateless) => {
+            return Err(RpcError::field(
+                "missing required _meta field",
+                META_VERSION,
+            ));
+        }
+        (Some(Json::Str(s)), _) if mode.accepts(s) => {}
+        (Some(other), _) => {
+            return Err(RpcError {
+                code: code::UNSUPPORTED_PROTOCOL_VERSION,
+                message: "unsupported protocol version",
+                data: Some(supported_versions_data(
+                    mode,
+                    match other {
+                        Json::Str(s) => Some(s.as_str()),
+                        _ => None,
+                    },
+                )),
+            });
+        }
+    }
+    match (caps, mode) {
+        (Some(Json::Obj(_)), _) | (None, Mode::Legacy) => Ok(()),
+        (None, Mode::Stateless) => Err(RpcError::field("missing required _meta field", META_CAPS)),
+        (Some(_), _) => Err(RpcError::field("_meta field has wrong type", META_CAPS)),
     }
 }
 
@@ -1246,15 +1377,36 @@ mod tests {
     struct Mock {
         calls: Vec<(String, ToolCall)>,
         reply: Option<Result<ToolOutput, BackendError>>,
+        applied: u32,
+        oversize: bool,
     }
 
     impl ToolBackend for Mock {
         fn call(&mut self, caller: &Caller, call: &ToolCall) -> Result<ToolOutput, BackendError> {
             self.calls.push((caller.id.clone(), call.clone()));
-            self.reply.clone().unwrap_or(Ok(ToolOutput {
-                text: "{\"ok\":true}".to_owned(),
-            }))
+            if matches!(call, ToolCall::Write { .. }) {
+                // The write is committed here, before the output is built.
+                self.applied += 1;
+            }
+            if self.oversize {
+                return Ok(ToolOutput::or_notice("x".repeat(MAX_OUTPUT_BYTES + 1)));
+            }
+            self.reply
+                .clone()
+                .unwrap_or_else(|| Ok(ToolOutput::or_notice("{\"ok\":true}".to_owned())))
         }
+    }
+
+    const INIT: &str = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}"#;
+    const META: &str = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}"#;
+
+    /// A server on a connection that opened with `initialize` (dual-era, legacy semantics).
+    fn legacy(mock: Mock) -> Server<Mock> {
+        let mut s = Server::new(mock);
+        let out = s.handle(&caller(&[]), INIT.as_bytes());
+        assert!(out.is_some_and(|o| o.contains("\"result\"")));
+        assert_eq!(s.mode(), Mode::Legacy);
+        s
     }
 
     fn caller(grants: &[(Tool, &str)]) -> Caller {
@@ -1276,7 +1428,7 @@ mod tests {
     }
 
     fn run(c: &Caller, msg: &str) -> (Option<String>, Server<Mock>) {
-        let mut s = Server::new(Mock::default());
+        let mut s = legacy(Mock::default());
         let out = s.handle(c, msg.as_bytes());
         (out, s)
     }
@@ -1442,7 +1594,7 @@ mod tests {
             })
         );
         // A version conflict is a tool execution error, not a protocol error.
-        let mut s = Server::new(Mock {
+        let mut s = legacy(Mock {
             reply: Some(Err(BackendError::Conflict)),
             ..Mock::default()
         });
@@ -1571,7 +1723,7 @@ mod tests {
         let c = all("a");
         let huge = format!(
             "{{\"scope\":\"a\",\"table\":\"t\",\"key\":\"k\",\"value\":\"{}\"}}",
-            "x".repeat(MAX_VALUE_BYTES + 1)
+            "x".repeat(MAX_VALUE_CHARS + 1)
         );
         let cases: Vec<(&str, String, &str, Option<&str>)> = vec![
             (
@@ -1600,7 +1752,7 @@ mod tests {
             ),
             (
                 "lattice_read",
-                r#"{"scope":"a","table":"t","limit":1.0}"#.into(),
+                r#"{"scope":"a","table":"t","limit":1.5}"#.into(),
                 "argument has wrong type",
                 Some("limit"),
             ),
@@ -1838,7 +1990,7 @@ mod tests {
                 r#""code":50001,"message":"backend unavailable""#,
             ),
         ] {
-            let mut s = Server::new(Mock {
+            let mut s = legacy(Mock {
                 reply: Some(Err(reply)),
                 ..Mock::default()
             });
@@ -1848,17 +2000,327 @@ mod tests {
             );
             assert!(out.expect("response").contains(want));
         }
-        let mut s = Server::new(Mock {
-            reply: Some(Ok(ToolOutput {
-                text: "x".repeat(MAX_OUTPUT_BYTES + 1),
-            })),
+    }
+
+    #[test]
+    fn oversize_output_never_turns_an_applied_write_into_an_error() {
+        assert_eq!(
+            ToolOutput::new("x".repeat(MAX_OUTPUT_BYTES + 1)),
+            Err(OutputTooLarge)
+        );
+        assert!(ToolOutput::new("x".repeat(MAX_OUTPUT_BYTES)).is_ok());
+        let mut s = legacy(Mock {
+            oversize: true,
             ..Mock::default()
         });
         let out = s.handle(
             &all("a"),
-            call_msg("lattice_read", r#"{"scope":"a","table":"t"}"#).as_bytes(),
+            call_msg(
+                "lattice_write",
+                r#"{"scope":"a","table":"t","key":"k","value":"v"}"#,
+            )
+            .as_bytes(),
         );
-        assert!(out.expect("response").contains("-32603"));
+        assert_eq!(
+            out.as_deref(),
+            Some(
+                r#"{"jsonrpc":"2.0","id":7,"result":{"resultType":"complete","content":[{"type":"text","text":"output omitted: too large"}],"isError":false}}"#
+            )
+        );
+        // Applied exactly once, and reported as success: a client has nothing to retry.
+        assert_eq!(s.backend().applied, 1);
+        assert_eq!(s.backend().calls.len(), 1);
+    }
+
+    #[test]
+    fn control_characters_are_refused_in_key_and_value() {
+        let c = all("a");
+        for (args, field) in [
+            (
+                r#"{"scope":"a","table":"t","key":"k\u0000x","value":"v"}"#,
+                "key",
+            ),
+            (
+                r#"{"scope":"a","table":"t","key":"k\n","value":"v"}"#,
+                "key",
+            ),
+            (
+                r#"{"scope":"a","table":"t","key":"k\u007f","value":"v"}"#,
+                "key",
+            ),
+            (
+                r#"{"scope":"a","table":"t","key":"k","value":"v\u0000"}"#,
+                "value",
+            ),
+            (
+                r#"{"scope":"a","table":"t","key":"k","value":"v\u001b[0m"}"#,
+                "value",
+            ),
+        ] {
+            let (out, s) = run(&c, &call_msg("lattice_write", args));
+            let out = out.expect("response");
+            assert!(out.contains("argument has invalid format"), "{args}: {out}");
+            assert!(out.contains(&format!("\"field\":\"{field}\"")), "{args}");
+            assert!(s.backend().calls.is_empty());
+        }
+        // Tab, newline and carriage return stay legal in a value.
+        let (out, s) = run(
+            &c,
+            &call_msg(
+                "lattice_write",
+                r#"{"scope":"a","table":"t","key":"k","value":"a\tb\nc\r\n"}"#,
+            ),
+        );
+        assert!(out.expect("response").contains("\"result\""));
+        assert_eq!(s.backend().applied, 1);
+    }
+
+    #[test]
+    fn lengths_count_characters_and_integers_accept_ten_point_zero() {
+        let c = all("a");
+        // 65536 two-byte characters are within maxLength 65536 even though they are 128 KiB.
+        let ok = format!(
+            r#"{{"scope":"a","table":"t","key":"k","value":"{}"}}"#,
+            "\u{e9}".repeat(MAX_VALUE_CHARS)
+        );
+        let (out, s) = run(&c, &call_msg("lattice_write", &ok));
+        assert!(out.expect("response").contains("\"result\""));
+        assert_eq!(s.backend().applied, 1);
+        let (out, _) = run(
+            &c,
+            &call_msg("lattice_read", r#"{"scope":"a","table":"t","limit":10.0}"#),
+        );
+        assert!(out.expect("response").contains("\"result\""));
+        let (out, s) = run(
+            &c,
+            &call_msg("lattice_read", r#"{"scope":"a","table":"t","limit":1e1}"#),
+        );
+        assert!(out.expect("response").contains("\"result\""));
+        assert!(matches!(
+            s.backend().calls.first().map(|c| &c.1),
+            Some(ToolCall::Read { limit: 10, .. })
+        ));
+    }
+
+    // ---- per-request _meta and connection mode ------------------------------------------
+
+    fn modern(method: &str, extra: &str) -> String {
+        format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{{{META}{extra}}}}}"#)
+    }
+
+    #[test]
+    fn stateless_requests_must_carry_meta() {
+        let c = all("a");
+        let call = |meta: &str| {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{{meta}"name":"lattice_read","arguments":{{"scope":"a","table":"t"}}}}}}"#
+            )
+        };
+        let v = r#""io.modelcontextprotocol/protocolVersion":"2026-07-28""#;
+        let k = r#""io.modelcontextprotocol/clientCapabilities":{}"#;
+        let cases: Vec<(String, i64, &str)> = vec![
+            // no _meta at all, for every method that needs it
+            (
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#.into(),
+                -32602,
+                "missing required _meta",
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#.into(),
+                -32602,
+                "missing required _meta",
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.into(),
+                -32602,
+                "missing required _meta",
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"method":"server/discover"}"#.into(),
+                -32602,
+                "missing required _meta",
+            ),
+            (call(""), -32602, "missing required _meta"),
+            // _meta present but not an object
+            (call(r#""_meta":"x","#), -32602, "_meta must be an object"),
+            (call(r#""_meta":null,"#), -32602, "_meta must be an object"),
+            (call(r#""_meta":[],"#), -32602, "_meta must be an object"),
+            // a required member missing or mistyped
+            (
+                call(&format!(r#""_meta":{{{k}}},"#)),
+                -32602,
+                "missing required _meta field",
+            ),
+            (
+                call(&format!(r#""_meta":{{{v}}},"#)),
+                -32602,
+                "missing required _meta field",
+            ),
+            (
+                call(&format!(
+                    r#""_meta":{{{v},"io.modelcontextprotocol/clientCapabilities":[]}},"#
+                )),
+                -32602,
+                "_meta field has wrong type",
+            ),
+            // version problems are -32022, never -32602
+            (
+                call(&format!(
+                    r#""_meta":{{"io.modelcontextprotocol/protocolVersion":"1900-01-01",{k}}},"#
+                )),
+                -32022,
+                "unsupported protocol version",
+            ),
+            (
+                call(&format!(
+                    r#""_meta":{{"io.modelcontextprotocol/protocolVersion":7,{k}}},"#
+                )),
+                -32022,
+                "unsupported protocol version",
+            ),
+            // the legacy version is not a modern version
+            (
+                call(&format!(
+                    r#""_meta":{{"io.modelcontextprotocol/protocolVersion":"2025-11-25",{k}}},"#
+                )),
+                -32022,
+                "unsupported protocol version",
+            ),
+        ];
+        for (msg, want, text) in cases {
+            let (out, s) = run_stateless(&c, &msg);
+            let v = parse_json(out.expect("response").as_bytes()).expect("json");
+            let e = v.get("error").expect("error");
+            assert_eq!(e.get("code"), Some(&Json::Int(want)), "{msg}");
+            assert_eq!(e.get("message"), Some(&Json::Str(text.into())), "{msg}");
+            assert!(s.backend().calls.is_empty());
+            assert_eq!(
+                s.mode(),
+                Mode::Stateless,
+                "a missing _meta must not select legacy"
+            );
+        }
+        // The -32022 data lists the modern revision and echoes the requested one.
+        let (out, _) = run_stateless(
+            &c,
+            &call(&format!(
+                r#""_meta":{{"io.modelcontextprotocol/protocolVersion":"1900-01-01",{k}}},"#
+            )),
+        );
+        assert!(
+            out.expect("response")
+                .contains(r#""data":{"supported":["2026-07-28"],"requested":"1900-01-01"}"#)
+        );
+    }
+
+    fn run_stateless(c: &Caller, msg: &str) -> (Option<String>, Server<Mock>) {
+        let mut s = Server::new(Mock::default());
+        let out = s.handle(c, msg.as_bytes());
+        (out, s)
+    }
+
+    #[test]
+    fn stateless_requests_with_meta_are_served() {
+        let c = all("a");
+        let (out, s) = run_stateless(&c, &modern("ping", ""));
+        assert_eq!(
+            out.as_deref(),
+            Some(r#"{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete"}}"#)
+        );
+        assert_eq!(s.mode(), Mode::Stateless);
+        let (out, _) = run_stateless(&c, &modern("server/discover", ""));
+        assert_eq!(
+            out.as_deref(),
+            Some(
+                r#"{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"lattice","version":"0"}}}}"#
+            )
+        );
+        let (out, _) = run_stateless(&c, &modern("tools/list", ""));
+        assert!(out.expect("response").contains("lattice_read"));
+        let (out, s) = run_stateless(
+            &c,
+            &modern(
+                "tools/call",
+                r#","name":"lattice_read","arguments":{"scope":"a","table":"t"}"#,
+            ),
+        );
+        assert!(out.expect("response").contains("\"isError\":false"));
+        assert_eq!(s.backend().calls.len(), 1);
+        // Extra client metadata (clientInfo, progressToken) is accepted.
+        let msg = r#"{"jsonrpc":"2.0","id":2,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"c","version":"1"},"progressToken":"p"}}}"#;
+        assert!(
+            run_stateless(&c, msg)
+                .0
+                .expect("response")
+                .contains("\"result\"")
+        );
+        // Unknown methods are -32601 whether or not _meta is present.
+        let (out, _) = run_stateless(&c, r#"{"jsonrpc":"2.0","id":3,"method":"nope"}"#);
+        assert!(out.expect("response").contains("-32601"));
+    }
+
+    #[test]
+    fn dual_era_connection_is_set_only_by_initialize() {
+        let c = all("a");
+        let mut s = Server::new(Mock::default());
+        assert_eq!(s.mode(), Mode::Stateless);
+        // Before initialize, a request without _meta is refused ...
+        let out = s.handle(&c, br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#);
+        assert!(out.expect("response").contains("-32602"));
+        assert_eq!(s.mode(), Mode::Stateless);
+        // ... a failed initialize does not switch mode ...
+        let out = s.handle(
+            &c,
+            br#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}"#,
+        );
+        assert!(out.expect("response").contains("-32602"));
+        assert_eq!(s.mode(), Mode::Stateless);
+        // ... a notification does not either ...
+        assert_eq!(
+            s.handle(
+                &c,
+                br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+            ),
+            None
+        );
+        assert_eq!(s.mode(), Mode::Stateless);
+        // ... a successful initialize does.
+        let out = s.handle(&c, INIT.as_bytes());
+        assert!(
+            out.expect("response")
+                .contains("\"protocolVersion\":\"2025-11-25\"")
+        );
+        assert_eq!(s.mode(), Mode::Legacy);
+        // Now _meta is optional ...
+        let out = s.handle(&c, br#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#);
+        assert_eq!(
+            out.as_deref(),
+            Some(r#"{"jsonrpc":"2.0","id":3,"result":{"resultType":"complete"}}"#)
+        );
+        // ... modern requests are still served, and the legacy version may be named.
+        assert!(
+            s.handle(&c, modern("ping", "").as_bytes())
+                .expect("response")
+                .contains("\"result\"")
+        );
+        let legacy_meta = r#"{"jsonrpc":"2.0","id":4,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}}"#;
+        assert!(
+            s.handle(&c, legacy_meta.as_bytes())
+                .expect("response")
+                .contains("\"result\"")
+        );
+        // ... but a present _meta must still be well formed and name a known version.
+        let out = s.handle(
+            &c,
+            br#"{"jsonrpc":"2.0","id":5,"method":"ping","params":{"_meta":3}}"#,
+        );
+        assert!(out.expect("response").contains("-32602"));
+        let bad = r#"{"jsonrpc":"2.0","id":6,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"1900-01-01"}}}"#;
+        let out = s.handle(&c, bad.as_bytes()).expect("response");
+        assert!(out.contains(r#""code":-32022"#));
+        assert!(out.contains(r#""supported":["2026-07-28","2025-11-25"]"#));
+        // Mode is per server (per connection): a fresh server is stateless again.
+        assert_eq!(Server::new(Mock::default()).mode(), Mode::Stateless);
     }
 
     // ---- injection -----------------------------------------------------------------------
@@ -1923,7 +2385,7 @@ mod tests {
     proptest! {
         #[test]
         fn arbitrary_bytes_never_panic_and_answer_is_json(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
-            let mut s = Server::new(Mock::default());
+            let mut s = legacy(Mock::default());
             if let Some(out) = s.handle(&all("a"), &bytes) {
                 prop_assert!(parse_json(out.as_bytes()).is_ok());
             }
@@ -1939,15 +2401,14 @@ mod tests {
             let mut m = base.clone();
             if let Some(b) = m.get_mut(flip) { *b = byte; }
             m.truncate(cut.max(1).min(m.len()));
-            let mut s = Server::new(Mock::default());
+            let mut s = legacy(Mock::default());
             if let Some(out) = s.handle(&all("a"), &m) {
                 prop_assert!(parse_json(out.as_bytes()).is_ok());
             }
         }
 
         #[test]
-        fn valid_requests_round_trip(id in arb_id(), value in any::<String>()) {
-            prop_assume!(value.len() <= MAX_VALUE_BYTES / 8);
+        fn valid_requests_round_trip(id in arb_id(), value in "[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\u{9f}]{0,200}") {
             let mut idj = String::new();
             id.encode(&mut idj);
             let mut vj = String::new();
@@ -1960,7 +2421,7 @@ mod tests {
             prop_assert_eq!(&r.id, &id);
             prop_assert_eq!(r.method.as_str(), "tools/call");
             // The response carries the same id and the backend saw the value byte for byte.
-            let mut s = Server::new(Mock::default());
+            let mut s = legacy(Mock::default());
             let out = s.handle(&all("a"), msg.as_bytes()).expect("response");
             let v = parse_json(out.as_bytes()).expect("json");
             let want_id = match &id { Id::Num(n) => Json::Int(*n), Id::Str(s) => Json::Str(s.clone()) };
@@ -1985,7 +2446,7 @@ mod tests {
                 format!("{{\"scope\":{s},\"table\":{t}}}")
             };
             prop_assume!(scope != "zzz" && !scope.starts_with("zzz/"));
-            let mut s = Server::new(Mock::default());
+            let mut s = legacy(Mock::default());
             let _ = s.handle(&c, call_msg("lattice_read", &args).as_bytes());
             prop_assert!(s.backend().calls.is_empty());
         }

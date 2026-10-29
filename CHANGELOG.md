@@ -175,7 +175,7 @@ between minor versions; format changes are called out explicitly.
   `below_frontier_arrivals()` flag arrivals at or below the frontier; `compact` returns a `Result` and refuses a
   frontier beyond every known id. Not yet wired to sync; computing the frontier is the caller's job (issue 308).
 - `lattice-sdk::mcp` (WP52, #254): sans-I/O MCP server v0 targeting protocol revision 2026-07-28 (legacy
-  `initialize` also answered): bounded JSON-RPC codec, `lattice_read`, `lattice_write` and
+  `initialize` also answered on a connection that opens with it; `_meta` required otherwise): bounded JSON-RPC codec, `lattice_read`, `lattice_write` and
   `lattice_subscribe` over an abstract `ToolBackend`, schema validation and a caller grant and scope layer
   with stable error codes; fuzz target `mcp_message` (not yet in a scheduled matrix). No transport,
   resources, prompts or authentication; see `docs/mcp-v0.md`.

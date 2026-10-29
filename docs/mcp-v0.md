@@ -8,25 +8,39 @@ transport yet, so nothing listens on a socket and no phase exit criterion is cla
 
 The module targets MCP specification revision **2026-07-28**
 (<https://modelcontextprotocol.io/specification/2026-07-28>, read on 2026-10-29). That revision has no
-handshake: every request carries `_meta` with `io.modelcontextprotocol/protocolVersion`. For clients
-that still open with the handshake of **2025-11-25**, the server also answers `initialize` and
-swallows `notifications/initialized` (the revision allows dual-era servers).
+handshake: every request must carry `_meta` with `io.modelcontextprotocol/protocolVersion` and
+`io.modelcontextprotocol/clientCapabilities`. The server is conformant to that: a request without
+them is refused. For clients that still open with the handshake of **2025-11-25**, the server is
+dual-era, as the revision allows: a connection that opens with a successful `initialize` is served
+with legacy semantics. The server keeps one piece of per-connection state, the mode (`Stateless` at
+start, `Legacy` after `initialize`). Only `initialize` sets it; a missing `_meta` never does. Use one
+`Server` per connection.
 
 ## Supported subset
 
 | Method | Behaviour |
 |---|---|
-| `initialize` | Legacy. Requires `protocolVersion`, `capabilities`, `clientInfo`; replies with version `2025-11-25`, the `tools` capability and `serverInfo`. |
+| `initialize` | Legacy. Requires `protocolVersion`, `capabilities`, `clientInfo`; replies with version `2025-11-25`, the `tools` capability and `serverInfo`, and switches the connection to legacy mode. |
 | `notifications/initialized` and any other notification | Accepted, never answered. |
 | `ping` | Empty `complete` result. |
-| `server/discover` | `supportedVersions`, `capabilities.tools`, `serverInfo` in `_meta`. |
+| `server/discover` | `supportedVersions` (`2026-07-28`; plus `2025-11-25` on a legacy connection), `capabilities.tools`, `serverInfo` in `_meta`. |
 | `tools/list` | The tools the caller holds a grant for, in fixed order, each with its `inputSchema`. No pagination. |
 | `tools/call` | Named tool and arguments; result is one text content block with `isError`. |
 | anything else | `-32601` method not found. |
 
-Every result carries `resultType: "complete"`. A request whose `_meta` names another protocol version
-gets `-32022` with `data.supported`. Requests without `_meta` are served as legacy-era requests; the
-module keeps no session, so it does not enforce that `initialize` came first (a transport may).
+Every result carries `resultType: "complete"`.
+
+### Per-request `_meta`
+
+| Connection | `_meta` missing | `_meta` not an object | version or capabilities member missing or mistyped | version not accepted |
+|---|---|---|---|---|
+| Stateless (default) | `-32602` | `-32602` | `-32602` | `-32022` |
+| Legacy (after `initialize`) | accepted | `-32602` | capabilities mistyped: `-32602`; absent: accepted | `-32022` |
+
+This applies to `ping`, `server/discover`, `tools/list` and `tools/call`. A stateless connection
+accepts only `2026-07-28` (`data.supported` is `["2026-07-28"]`); a legacy connection also accepts
+`2025-11-25` (`data.supported` lists both). `data.requested` echoes the requested version only when
+it is a short plain string. Unknown methods are `-32601` regardless of `_meta`.
 
 ### Message rules
 
@@ -35,7 +49,7 @@ module keeps no session, so it does not enforce that `initialize` came first (a 
 - A JSON array (a batch) is refused with `-32600`: the revision defines no batching.
 - A response sent to the server is refused (`-32600`); the server issues no requests of its own.
 - Bounds: 256 KiB per message, nesting depth 12, 64 members per array or object, 4096 values per
-  message, 64 KiB `value`, 1 MiB tool output. Duplicate object keys, lone surrogates, raw control
+  message, 65536-character `value`, 1 MiB tool output. Duplicate object keys, lone surrogates, raw control
   characters, leading zeros and a byte order mark are parse errors (`-32700`).
 - The JSON reader is local to `mcp.rs`. It is separate from the plugin-contract grammar in
   `contract.rs`, which has no negative numbers, no fractions and a depth of six.
@@ -51,10 +65,19 @@ All inputs are objects with `additionalProperties: false`.
 | `lattice_subscribe` | `scope`, `table` | `after` (resume cursor) |
 
 `scope` is a path of `/`-separated segments of `[A-Za-z0-9_-]` (no `.`, no empty segment, at most 128
-bytes); `table` is `[A-Za-z0-9_]` up to 64 bytes. Integers must be JSON integers.
+characters); `table` is `[A-Za-z0-9_]` up to 64 characters. `minLength` and `maxLength` count
+characters, as JSON Schema does (the 256 KiB message bound limits the bytes). `key` may contain no
+control characters; `value` may contain none except tab, line feed and carriage return. Integer
+arguments follow JSON Schema 2020-12: `10`, `10.0` and `1e1` are all the integer 10; `1.5` is a
+wrong type. (JSON-RPC ids stay integer or string only.)
 
 Handlers are the `ToolBackend` trait: `call(&mut self, &Caller, &ToolCall)`. The backend receives only
 validated, typed calls, and still owns row-level policy (`BackendError::PolicyDenied`).
+
+A backend's output is bounded by its type: `ToolOutput::new` refuses text over 1 MiB, and
+`ToolOutput::or_notice` swaps it for a fixed notice. The server never fails a call after the backend
+returns success, so a write that was applied is never reported as an error that a client would retry.
+A write backend must build or bound its output before it commits, or return the notice.
 `lattice_subscribe` returns what the backend returns for the cursor; streaming notifications are not
 implemented.
 
@@ -90,7 +113,9 @@ the model can correct. Application codes sit outside `-32768..-32000`, as the sp
 ## Evidence
 
 Unit and property tests live beside the code (`cargo test -p lattice-sdk mcp`): byte vectors per
-message, a schema table, a grant table, a mock backend that records calls to prove it is never reached
-on denial or invalid input, arbitrary-bytes and valid-request properties, and an injection test.
+message, a schema table, a grant table, a `_meta` table, a dual-era connection test, a mock backend that
+records calls to prove it is never reached on denial or invalid input (and that an oversize write
+output is applied once and reported as success), arbitrary-bytes and valid-request properties, and an
+injection test.
 The fuzz target is `fuzz/fuzz_targets/mcp_message.rs` with seeds in `fuzz/seeds/mcp_message/`; it is
 not yet in a scheduled fuzz matrix.

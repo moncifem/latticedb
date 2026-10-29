@@ -1,6 +1,6 @@
 #![no_main]
 use lattice_sdk::mcp::{
-    Caller, Grant, Json, Server, Tool, ToolBackend, ToolCall, ToolOutput, BackendError, parse_json,
+    BackendError, Caller, Grant, Json, Server, Tool, ToolBackend, ToolCall, ToolOutput, parse_json,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -12,9 +12,11 @@ impl ToolBackend for Checked {
         let s = call.scope();
         assert!(s == "a" || s.starts_with("a/"), "call escaped its grant: {s}");
         assert!(call.tool() != Tool::Write, "write reached the backend without a grant");
-        Ok(ToolOutput { text: String::from("{}") })
+        Ok(ToolOutput::or_notice(String::from("{}")))
     }
 }
+
+const INIT: &[u8] = br#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"f","version":"1"}}}"#;
 
 fuzz_target!(|data: &[u8]| {
     let caller = Caller {
@@ -24,10 +26,15 @@ fuzz_target!(|data: &[u8]| {
             .filter_map(|t| Grant::new(t, "a"))
             .collect(),
     };
-    let mut server = Server::new(Checked);
-    // Whatever the bytes, the answer (if any) is itself well-formed bounded JSON.
-    if let Some(out) = server.handle(&caller, data) {
-        assert!(matches!(parse_json(out.as_bytes()), Ok(Json::Obj(_))));
+    // Once as a stateless (2026-07-28) connection, once as a connection that opened with initialize.
+    let mut stateless = Server::new(Checked);
+    let mut legacy = Server::new(Checked);
+    assert!(legacy.handle(&caller, INIT).is_some());
+    for server in [&mut stateless, &mut legacy] {
+        // Whatever the bytes, the answer (if any) is itself well-formed bounded JSON.
+        if let Some(out) = server.handle(&caller, data) {
+            assert!(matches!(parse_json(out.as_bytes()), Ok(Json::Obj(_))));
+        }
     }
     // The reader alone never panics either.
     let _ = parse_json(data);

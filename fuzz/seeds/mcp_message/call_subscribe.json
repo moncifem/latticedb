@@ -1,1 +1,1 @@
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"lattice_subscribe","arguments":{"scope":"a","table":"t","after":7}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"lattice_subscribe","arguments":{"scope":"a","table":"t","after":7}}}
