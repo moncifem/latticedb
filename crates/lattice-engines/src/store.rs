@@ -10,9 +10,9 @@
 use crate::index::{IndexDef, Indexes};
 use crate::mvcc::{MvccError, Snapshot, Table, Tx};
 use crate::rowops::{self, RowKey, RowOpsError};
-use lattice_abi::{Classify, ErrorClass};
+use lattice_abi::{Classify, ErrorClass, Hlc};
 use lattice_core::bugs::{self, Bug};
-use lattice_core::changeset::ChangeSet;
+use lattice_core::changeset::{ChangeSet, ChangeSetId};
 use lattice_core::record::RecordType;
 use lattice_core::{Config, Kernel, Receipt, TxnError};
 use lattice_seams::{Clock, Io, Rng};
@@ -78,6 +78,10 @@ pub struct RowStore<I: Io, C: Clock, R: Rng> {
     kernel: Kernel<I, C, R>,
     table: Table<RowKey, Vec<u8>>,
     indexes: Indexes,
+    /// Commit LSN of every row change set by id, and its timestamp in log order (the HLC grows with
+    /// the LSN), so `AS OF` can name a point in history by change set or by time.
+    commit_lsn: std::collections::BTreeMap<ChangeSetId, u64>,
+    commit_times: Vec<(Hlc, u64, ChangeSetId)>,
     stale: bool,
 }
 
@@ -103,6 +107,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         }
         let mut table: Table<RowKey, Vec<u8>> = Table::new();
         let mut indexes = Indexes::new(index_defs);
+        let mut commit_lsn = std::collections::BTreeMap::new();
+        let mut commit_times: Vec<(Hlc, u64, ChangeSetId)> = Vec::new();
         let mut failure: Option<RowError> = None;
         let (kernel, _, _) = Kernel::open_streaming(io, clock, rng, config, |r| {
             if failure.is_some() || RecordType::from_u8(r.rtype) != Some(RecordType::ChangeSet) {
@@ -132,6 +138,9 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                         .and_then(|()| indexes.apply(r.lsn, cs.id, changes))
                     {
                         failure = Some(RowError::Corrupt(format!("lsn {}: {e:?}", r.lsn)));
+                    } else {
+                        commit_lsn.insert(cs.id, r.lsn);
+                        commit_times.push((cs.hlc, r.lsn, cs.id));
                     }
                 }
                 Err(e) => {
@@ -149,6 +158,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 kernel,
                 table,
                 indexes,
+                commit_lsn,
+                commit_times,
                 stale: false,
             }),
         }
@@ -234,6 +245,41 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.check_indexes_at(self.snapshot())
     }
 
+    /// `AS OF CHANGESET c`: the snapshot that sees everything up to and including change set `id`, or
+    /// `None` if no row change set with that id was committed.
+    pub fn snapshot_as_of_changeset(&self, id: ChangeSetId) -> Option<Snapshot> {
+        self.commit_lsn.get(&id).map(|lsn| Snapshot { as_of: *lsn })
+    }
+
+    /// `AS OF TIMESTAMP t`: the snapshot at the newest row change set whose timestamp is not after
+    /// `t`; the empty snapshot if `t` is before the first commit.
+    pub fn snapshot_as_of_hlc(&self, t: Hlc) -> Snapshot {
+        let end = self.commit_times.partition_point(|(h, _, _)| *h <= t);
+        let as_of = end
+            .checked_sub(1)
+            .and_then(|i| self.commit_times.get(i))
+            .map_or(0, |(_, lsn, _)| *lsn);
+        Snapshot { as_of }
+    }
+
+    /// The id of the row change set committed at `lsn`, if there is one.
+    pub fn changeset_id_at(&self, lsn: u64) -> Option<ChangeSetId> {
+        let i = self
+            .commit_times
+            .binary_search_by_key(&lsn, |(_, l, _)| *l)
+            .ok()?;
+        self.commit_times.get(i).map(|(_, _, id)| *id)
+    }
+
+    /// The timestamp of the row change set committed at `lsn`, if there is one.
+    pub fn commit_time_at(&self, lsn: u64) -> Option<Hlc> {
+        let i = self
+            .commit_times
+            .binary_search_by_key(&lsn, |(_, l, _)| *l)
+            .ok()?;
+        self.commit_times.get(i).map(|(h, _, _)| *h)
+    }
+
     /// The commit LSN of the newest change set applied.
     pub fn applied_lsn(&self) -> u64 {
         self.table.applied_lsn()
@@ -258,7 +304,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {
-            Ok(Receipt::Recorded { lsn, .. }) => {
+            Ok(Receipt::Recorded { lsn, hlc }) => {
                 let writes: Vec<_> = if bugs::active(Bug::RowPartialApply) {
                     writes.into_iter().take(1).collect()
                 } else {
@@ -269,6 +315,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                     .apply(lsn, id, writes)
                     .and_then(|()| self.indexes.apply(lsn, id, changes))
                     .map_err(|e| RowError::Corrupt(format!("apply after commit: {e:?}")))?;
+                self.commit_lsn.insert(id, lsn);
+                self.commit_times.push((hlc, lsn, id));
                 Ok(lsn)
             }
             Ok(Receipt::Duplicate) => {

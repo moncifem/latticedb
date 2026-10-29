@@ -318,3 +318,66 @@ fn duplicate_index_ids_are_rejected_before_opening_the_log() {
     assert!(!disk.exists("wal"));
     assert!(open(&disk, &Rc::new(SimClock::new(1_000)), 2).is_ok());
 }
+
+#[test]
+fn as_of_changeset_and_as_of_timestamp_name_points_in_history_and_survive_a_restart() {
+    let (disk, clock) = fresh();
+    let mut lsns = Vec::new();
+    {
+        let mut store = open(&disk, &clock, 1).unwrap();
+        for (i, v) in [b"one".as_slice(), b"two", b"three"].iter().enumerate() {
+            clock.advance(10);
+            lsns.push(put(&mut store, 1, b"k", v));
+            assert_eq!(lsns.len(), i + 1);
+        }
+        check_history(&store, &lsns);
+    }
+    // After a restart the same names resolve to the same snapshots.
+    let store = open(&disk, &clock, 2).unwrap();
+    check_history(&store, &lsns);
+}
+
+fn check_history(store: &Store, lsns: &[u64]) {
+    let values: [&[u8]; 3] = [b"one", b"two", b"three"];
+    for (lsn, want) in lsns.iter().zip(values) {
+        // By change set: the snapshot sees that commit and nothing later.
+        let id = store.changeset_id_at(*lsn).unwrap();
+        let snap = store.snapshot_as_of_changeset(id).unwrap();
+        assert_eq!(snap.as_of, *lsn);
+        assert_eq!(store.get_at(snap, 1, b"k"), Some(&want.to_vec()));
+        // By timestamp: exactly at the commit, the commit is visible; a tick before, it is not.
+        let t = store.commit_time_at(*lsn).unwrap();
+        assert_eq!(store.snapshot_as_of_hlc(t).as_of, *lsn);
+        let earlier = lattice_abi::Hlc {
+            counter: t.counter.saturating_sub(1),
+            ..t
+        };
+        let before = store.snapshot_as_of_hlc(if t.counter == 0 {
+            lattice_abi::Hlc {
+                wall_ms: t.wall_ms - 1,
+                counter: u32::MAX,
+                node: t.node,
+            }
+        } else {
+            earlier
+        });
+        assert!(before.as_of < *lsn);
+    }
+    // Before the first commit there is nothing; after the last, everything.
+    assert_eq!(
+        store.snapshot_as_of_hlc(lattice_abi::Hlc::default()).as_of,
+        0
+    );
+    let latest = store.snapshot_as_of_hlc(lattice_abi::Hlc {
+        wall_ms: u64::MAX,
+        counter: u32::MAX,
+        node: u32::MAX,
+    });
+    assert_eq!(latest.as_of, *lsns.last().unwrap());
+    // A change set that was never committed is not a point in history.
+    assert!(
+        store
+            .snapshot_as_of_changeset(lattice_core::ChangeSetId::from_parts(1, 2, 3))
+            .is_none()
+    );
+}
