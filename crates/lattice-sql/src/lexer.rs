@@ -63,6 +63,13 @@ const RESERVED: &[&str] = &[
     "constraint",
     "create",
     "cross",
+    "current_catalog",
+    "current_date",
+    "current_role",
+    "current_schema",
+    "current_time",
+    "current_timestamp",
+    "current_user",
     "default",
     "desc",
     "distinct",
@@ -85,14 +92,18 @@ const RESERVED: &[&str] = &[
     "intersect",
     "into",
     "is",
+    "isnull",
     "join",
     "lateral",
     "leading",
     "left",
     "like",
     "limit",
+    "localtime",
+    "localtimestamp",
     "natural",
     "not",
+    "notnull",
     "null",
     "offset",
     "on",
@@ -106,6 +117,7 @@ const RESERVED: &[&str] = &[
     "returning",
     "right",
     "select",
+    "session_user",
     "set",
     "similar",
     "some",
@@ -146,33 +158,64 @@ struct Lexer<'a> {
     pos: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, ParseError> {
+    match lex_partial(input) {
+        (_, Some(e)) => Err(e),
+        (tokens, None) => Ok(tokens),
+    }
+}
+
+/// Tokens of `input`, plus the first lexical error if there was one. On an error the tokens stop
+/// before it and end with an `Eof` at the error position, so the parser can report an earlier
+/// syntax error first.
+pub(crate) fn lex_partial(input: &str) -> (Vec<Token>, Option<ParseError>) {
+    let mut tokens = Vec::new();
     if input.len() > MAX_INPUT_LEN {
-        return Err(ParseError::too_large(
+        let e = ParseError::too_large(
             format!(
                 "input is {} bytes, the limit is {MAX_INPUT_LEN}",
                 input.len()
             ),
             Span::new(0, 0),
-        ));
+        );
+        return (tokens, Some(e));
     }
     let mut lexer = Lexer { input, pos: 0 };
-    let mut tokens = Vec::new();
     loop {
-        lexer.skip_trivia()?;
-        let start = lexer.pos;
-        let Some(tok) = lexer.next_tok()? else {
+        let before = lexer.pos;
+        let step = lexer.skip_trivia().and_then(|()| {
+            let start = lexer.pos;
+            lexer.next_tok().map(|t| (start, t))
+        });
+        let (start, tok) = match step {
+            Ok(v) => v,
+            Err(e) => {
+                let at = e.span().start.min(input.len()).max(before);
+                tokens.push(Token {
+                    tok: Tok::Eof,
+                    span: Span::new(at, at),
+                });
+                return (tokens, Some(e));
+            }
+        };
+        let Some(tok) = tok else {
             tokens.push(Token {
                 tok: Tok::Eof,
                 span: Span::new(input.len(), input.len()),
             });
-            return Ok(tokens);
+            return (tokens, None);
         };
         if tokens.len() >= MAX_TOKENS {
-            return Err(ParseError::too_large(
+            let e = ParseError::too_large(
                 format!("more than {MAX_TOKENS} tokens"),
                 Span::new(start, lexer.pos),
-            ));
+            );
+            tokens.push(Token {
+                tok: Tok::Eof,
+                span: Span::new(start, start),
+            });
+            return (tokens, Some(e));
         }
         tokens.push(Token {
             tok,
@@ -392,6 +435,12 @@ impl Lexer<'_> {
         self.bump();
         if self.peek_at(0).is_some_and(|b| b.is_ascii_digit()) {
             self.digits();
+            if self.peek().is_some_and(is_ident_continue) {
+                return Err(ParseError::syntax(
+                    "trailing junk after parameter number",
+                    self.span_from(start),
+                ));
+            }
             let text = self.input.get(start + 1..self.pos).unwrap_or("");
             return match text.parse::<u32>() {
                 Ok(n) if (1..=65_535).contains(&n) => Ok(Tok::Param(n)),

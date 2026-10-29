@@ -167,6 +167,7 @@ between minor versions; format changes are called out explicitly.
   locks from making parallel macOS tests fail intermittently.
 - Restore the catalog test lint gate and retain a separate CI run for each push to `main`, while
   superseded pull request runs can still be cancelled.
+- `lattice-sql`: the print-then-parse round trip holds for long NOT and operator chains (call depth is limited separately from tree depth, which rises to 256, so 64+ term AND/OR/`||`/`+` chains parse); ISNULL, NOTNULL and the `current_*`, `session_user` and `localtime*` words are refused as unsupported; `$1abc` and chained comparisons are errors; the earliest error in the source is reported; DROP .. CASCADE, CREATE INDEX CONCURRENTLY, BETWEEN SYMMETRIC and OFFSET .. ROWS are named as unsupported.
 
 ## [0.1.0-alpha.0]
 

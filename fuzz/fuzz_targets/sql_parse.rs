@@ -15,6 +15,11 @@ fuzz_target!(|data: &[u8]| {
                 assert_eq!(parse_statement(&printed).as_ref(), Ok(&stmt));
             }
         }
-        Err(e) => assert!(e.span().start <= text.len()),
+        Err(e) => {
+            // The span lies inside the input and slices it on character boundaries.
+            let span = e.span();
+            assert!(span.start <= span.end && span.end <= text.len());
+            assert!(text.get(span.start..span.end).is_some());
+        }
     }
 });

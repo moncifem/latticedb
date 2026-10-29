@@ -122,7 +122,7 @@ fn operator_precedence() {
     check("SELECT doc -> 'a' ->> 'b'", "SELECT ((doc -> 'a') ->> 'b')");
     check("SELECT doc @> other", "SELECT (doc @> other)");
     check("SELECT (1 + 2) * 3", "SELECT ((1 + 2) * 3)");
-    check("SELECT a < b = c", "SELECT ((a < b) = c)");
+    check("SELECT (a < b) = c", "SELECT ((a < b) = c)");
     check("SELECT a=-1", "SELECT (a = (-1))");
     check("SELECT a - -1", "SELECT (a - (-1))");
 }

@@ -2,11 +2,11 @@
 //!
 //! Every construct is accepted explicitly. A word the parser knows to be PostgreSQL syntax outside
 //! the subset is refused as unsupported and named; anything else is a syntax error. Nesting is
-//! bounded twice: `depth` counts active calls, and `td` tracks the depth of the tree being built so
-//! that long left-leaning chains such as `1 + 1 + 1 + ...` cannot produce a tree too deep to print
-//! or drop.
+//! bounded twice: `depth` counts active calls (limit `MAX_CALL_DEPTH`, twice the tree limit because
+//! the printer parenthesizes every operator), and `td` tracks the depth of the tree being built
+//! (limit `MAX_DEPTH`) so that long left-leaning chains such as `1 + 1 + 1 + ...` cannot produce a
+//! tree too deep to print or drop.
 
-use crate::MAX_DEPTH;
 use crate::ast::{
     AlterAction, AlterTable, AsOf, Assignment, BinaryOp, ColumnDef, CreateIndex, CreateTable,
     DataType, Delete, Expr, ExprKind, Function, FunctionArgs, Ident, Insert, InsertSource,
@@ -14,39 +14,58 @@ use crate::ast::{
     Statement, TableConstraint, TableFactor, TableWithJoins, TrimSide, UnaryOp, Update,
 };
 use crate::error::{ParseError, Span};
-use crate::lexer::{Tok, Token, is_reserved, lex};
+use crate::lexer::{Tok, Token, is_reserved, lex_partial};
+use crate::{MAX_CALL_DEPTH, MAX_DEPTH};
 
 type PResult<T> = Result<T, ParseError>;
 
 /// Parses a script of zero or more statements separated by `;`.
 pub fn parse_statements(input: &str) -> PResult<Vec<Statement>> {
-    let mut p = Parser::new(lex(input)?);
-    let mut out = Vec::new();
-    loop {
-        while p.eat(&Tok::Semi) {}
-        if p.at_eof() {
-            return Ok(out);
+    let (tokens, lex_error) = lex_partial(input);
+    let mut p = Parser::new(tokens);
+    let result = (|| {
+        let mut out = Vec::new();
+        loop {
+            while p.eat(&Tok::Semi) {}
+            if p.at_eof() {
+                return Ok(out);
+            }
+            out.push(p.statement()?);
+            if !p.at_eof() && !p.at(&Tok::Semi) {
+                return Err(p.unexpected("`;` or end of input"));
+            }
         }
-        out.push(p.statement()?);
-        if !p.at_eof() && !p.at(&Tok::Semi) {
-            return Err(p.unexpected("`;` or end of input"));
-        }
+    })();
+    first_error(result, lex_error)
+}
+
+/// Combines a parse result with the lexical error that cut the input short, reporting whichever
+/// comes first in the source.
+fn first_error<T>(result: PResult<T>, lex_error: Option<ParseError>) -> PResult<T> {
+    match (result, lex_error) {
+        (Err(parse), Some(lex)) if parse.span().start < lex.span().start => Err(parse),
+        (_, Some(lex)) => Err(lex),
+        (result, None) => result,
     }
 }
 
 /// Parses exactly one statement, optionally followed by `;`.
 pub fn parse_statement(input: &str) -> PResult<Statement> {
-    let mut p = Parser::new(lex(input)?);
-    while p.eat(&Tok::Semi) {}
-    if p.at_eof() {
-        return Err(ParseError::syntax("empty statement", p.peek().span));
-    }
-    let stmt = p.statement()?;
-    while p.eat(&Tok::Semi) {}
-    if !p.at_eof() {
-        return Err(p.unexpected("end of input (one statement only)"));
-    }
-    Ok(stmt)
+    let (tokens, lex_error) = lex_partial(input);
+    let mut p = Parser::new(tokens);
+    let result = (|| {
+        while p.eat(&Tok::Semi) {}
+        if p.at_eof() {
+            return Err(ParseError::syntax("empty statement", p.peek().span));
+        }
+        let stmt = p.statement()?;
+        while p.eat(&Tok::Semi) {}
+        if !p.at_eof() {
+            return Err(p.unexpected("end of input (one statement only)"));
+        }
+        Ok(stmt)
+    })();
+    first_error(result, lex_error)
 }
 
 /// PostgreSQL statements that the subset does not have.
@@ -307,9 +326,9 @@ impl Parser {
 
     fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
         self.depth += 1;
-        let result = if self.depth > MAX_DEPTH {
+        let result = if self.depth > MAX_CALL_DEPTH {
             Err(ParseError::too_large(
-                format!("nesting is deeper than {MAX_DEPTH}"),
+                format!("nesting is deeper than {MAX_CALL_DEPTH}"),
                 self.peek().span,
             ))
         } else {
@@ -644,6 +663,9 @@ impl Parser {
             } else if offset.is_none() && self.is_kw("offset") {
                 self.bump();
                 offset = Some(self.tracked_expr(&mut depth)?);
+                if self.is_kw("row") || self.is_kw("rows") {
+                    return Err(self.unsupported_here("OFFSET ... ROWS"));
+                }
             } else {
                 break;
             }
@@ -1065,6 +1087,9 @@ impl Parser {
     }
 
     fn create_index(&mut self, unique: bool) -> PResult<Statement> {
+        if self.is_kw("concurrently") {
+            return Err(self.unsupported_here("CREATE INDEX CONCURRENTLY"));
+        }
         let if_not_exists = if self.eat_kw("if") {
             self.expect_kw("not")?;
             self.expect_kw("exists")?;
@@ -1153,18 +1178,16 @@ impl Parser {
             Some("table") => {
                 self.bump();
                 let if_exists = self.if_exists()?;
-                Ok(Statement::DropTable {
-                    name: self.object_name()?,
-                    if_exists,
-                })
+                let name = self.object_name()?;
+                self.reject_drop_behavior()?;
+                Ok(Statement::DropTable { name, if_exists })
             }
             Some("index") => {
                 self.bump();
                 let if_exists = self.if_exists()?;
-                Ok(Statement::DropIndex {
-                    name: self.object_name()?,
-                    if_exists,
-                })
+                let name = self.object_name()?;
+                self.reject_drop_behavior()?;
+                Ok(Statement::DropIndex { name, if_exists })
             }
             Some(other) => Err(ParseError::unsupported(
                 format!("DROP {}", other.to_ascii_uppercase()),
@@ -1172,6 +1195,16 @@ impl Parser {
             )),
             None => Err(self.unexpected("TABLE or INDEX")),
         }
+    }
+
+    fn reject_drop_behavior(&self) -> PResult<()> {
+        if self.is_kw("cascade") {
+            return Err(self.unsupported_here("DROP ... CASCADE"));
+        }
+        if self.is_kw("restrict") {
+            return Err(self.unsupported_here("DROP ... RESTRICT"));
+        }
+        Ok(())
     }
 
     fn unsigned(&mut self, what: &str) -> PResult<u32> {
@@ -1348,6 +1381,8 @@ impl Parser {
                     kind: Pred::Like,
                 },
                 "ilike" => Infix::Unsupported("ILIKE"),
+                "isnull" => Infix::Unsupported("ISNULL (write IS NULL)"),
+                "notnull" => Infix::Unsupported("NOTNULL (write IS NOT NULL)"),
                 "similar" => Infix::Unsupported("SIMILAR TO"),
                 "collate" => Infix::Unsupported("COLLATE"),
                 "at" if self.is_kw_at(1, "time") => Infix::Unsupported("AT TIME ZONE"),
@@ -1377,18 +1412,27 @@ impl Parser {
     fn expr_loop(&mut self, min_bp: u8) -> PResult<Expr> {
         let mut left = self.prefix()?;
         let mut left_depth = self.td;
+        let mut compared = false;
         loop {
             let infix = self.infix();
             let bp = infix.bp();
             if bp == 0 || bp < min_bp {
                 break;
             }
+            let was_cmp = std::mem::replace(&mut compared, false);
             match infix {
                 Infix::None => break,
                 Infix::Unsupported(feature) => {
                     return Err(self.unsupported_here(feature));
                 }
                 Infix::Bin(op, bp) => {
+                    if bp == BP_CMP && was_cmp {
+                        return Err(ParseError::syntax(
+                            "comparison operators cannot be chained; add parentheses",
+                            self.peek().span,
+                        ));
+                    }
+                    compared = bp == BP_CMP;
                     self.bump();
                     let right = self.expr_bp(bp + 1)?;
                     let span = left.span.join(right.span);
@@ -1507,6 +1551,12 @@ impl Parser {
                 )
             }
             Pred::Between => {
+                if self.is_kw("symmetric") {
+                    return Err(self.unsupported_here("BETWEEN SYMMETRIC"));
+                }
+                if self.is_kw("asymmetric") {
+                    return Err(self.unsupported_here("BETWEEN ASYMMETRIC"));
+                }
                 let low = self.expr_bp(BP_OTHER)?;
                 let mut depth = left_depth.max(self.td);
                 self.expect_kw("and")?;
@@ -1653,6 +1703,15 @@ impl Parser {
                     span.join(lit_span),
                 )
             }
+            "current_catalog" | "current_date" | "current_role" | "current_schema"
+            | "current_time" | "current_timestamp" | "current_user" | "localtime"
+            | "localtimestamp" | "session_user" => Err(ParseError::unsupported(
+                format!(
+                    "{} (use now() for the current time)",
+                    word.to_ascii_uppercase()
+                ),
+                span,
+            )),
             w if is_reserved(w) => Err(self.unexpected("an expression")),
             _ if self.peek_n(1).tok == Tok::LParen => self.function_call(word, span),
             _ => self.column_path(),

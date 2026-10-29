@@ -8,7 +8,7 @@
 )]
 
 use lattice_sql::ast::{SelectItem, Statement};
-use lattice_sql::{ErrorKind, MAX_DEPTH, parse_statement};
+use lattice_sql::{ErrorKind, MAX_CALL_DEPTH, MAX_DEPTH, parse_statement};
 
 type Shape = (&'static str, Box<dyn Fn(usize) -> String>);
 
@@ -27,10 +27,6 @@ fn the_nesting_limit_is_exact_for_every_shape() {
     // Each shape is accepted one level below its limit and refused at it. Subqueries count twice
     // (the query and the expression that holds it), so their limit is half.
     let flat: Vec<Shape> = vec![
-        (
-            "parentheses",
-            Box::new(|n| format!("SELECT {}1{}", "(".repeat(n), ")".repeat(n))),
-        ),
         (
             "unary minus",
             Box::new(|n| format!("SELECT {}1", "- ".repeat(n))),
@@ -66,6 +62,11 @@ fn the_nesting_limit_is_exact_for_every_shape() {
         let e = parse_statement(&make(MAX_DEPTH - 1)).unwrap_err();
         assert_eq!(e.kind(), ErrorKind::TooLarge, "{name}: {e}");
     }
+    // Parentheses add no tree level; only the call depth bounds them.
+    let parens = |n: usize| format!("SELECT {}1{}", "(".repeat(n), ")".repeat(n));
+    assert!(parse_statement(&parens(MAX_DEPTH)).is_ok());
+    let e = parse_statement(&parens(MAX_CALL_DEPTH)).unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::TooLarge, "{e}");
     let subqueries: Vec<Shape> = vec![
         (
             "scalar subqueries",
@@ -208,17 +209,17 @@ fn a_postfix_cast_spans_its_operand_and_its_type() {
 #[test]
 fn a_subquery_adds_its_own_depth_to_the_expression_inside_it() {
     // The deepest expression inside a subquery counts toward the subquery's depth, and the subquery
-    // adds two more (the query and the node that holds it): 61 additions is the last that fits.
+    // adds two more (the query and the node that holds it).
     let nested = |n: usize| format!("SELECT (SELECT 1{})", " + 1".repeat(n));
-    assert!(parse_statement(&nested(60)).is_ok());
+    assert!(parse_statement(&nested(MAX_DEPTH - 4)).is_ok());
     assert_eq!(
-        parse_statement(&nested(61)).unwrap_err().kind(),
+        parse_statement(&nested(MAX_DEPTH - 3)).unwrap_err().kind(),
         ErrorKind::TooLarge
     );
     let in_list = |n: usize| format!("SELECT a FROM t WHERE a IN (SELECT 1{})", " + 1".repeat(n));
-    assert!(parse_statement(&in_list(60)).is_ok());
+    assert!(parse_statement(&in_list(MAX_DEPTH - 4)).is_ok());
     assert_eq!(
-        parse_statement(&in_list(61)).unwrap_err().kind(),
+        parse_statement(&in_list(MAX_DEPTH - 3)).unwrap_err().kind(),
         ErrorKind::TooLarge
     );
 }
