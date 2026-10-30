@@ -27,3 +27,4 @@
 | [0026](0026-principal-propagation.md) | ADR 0026: Carry the authenticated principal from the credential store to the query handler | proposed |
 | [0027](0027-sync-transport-websocket-first.md) | ADR 0027: Sync transport: WebSocket first, QUIC only if data justifies it | proposed |
 | [0028](0028-durable-sql-table-definitions.md) | ADR 0028: Durable SQL table definitions in a guarded compound change | accepted |
+| [0030](0030-shared-protocol-crate.md) | ADR 0030: A shared protocol crate for the sync wire types | proposed |
