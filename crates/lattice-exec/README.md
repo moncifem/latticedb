@@ -185,7 +185,7 @@ reasons.
 ## Known differences from PostgreSQL
 
 `numeric` division chooses its scale as PostgreSQL does (about 16 significant digits) but keeps at most 38 fractional digits, and `numeric` values hold at most 38 digits in all; `double precision` prints with Rust's shortest form (with
-an exponent outside 1e-4..1e15); `jsonb` is validated and kept as written, so equality is textual;
+an exponent outside 1e-4..1e15); `jsonb` is validated and written back in PostgreSQL's canonical text (keys ordered by length then bytes, the last of a repeated key, `": "` separators, numbers without an exponent), so equality is textual on that form: documents that differ only in key order, spacing or number spelling of the same digits (`1e3` and `1000`) are equal, but `1.0` and `1` are not;
 timestamps accept `YYYY-MM-DD[ T]HH:MM[:SS[.ffffff]][Z|+hh[:mm]]` with years 1 to 9999; `now()` is the
 database clock at statement start; `AS OF TIMESTAMP` resolves to the newest commit at or before that
 millisecond.
