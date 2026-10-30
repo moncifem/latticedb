@@ -127,3 +127,45 @@ fix rereview are complete; the owner accepted the integration and waived its com
 
 Not done here: channel binding / `SCRAM-SHA-256-PLUS`, the decoy-secret length-only check and the
 `auth.rs` comment fix live in `lattice-api` and are tracked in issue 347.
+
+## SQL from a data directory
+
+```sh
+# loopback development trust: the row policy of the development principal is always explicit
+cargo run -p latticed -- --data-dir ./data --development-policy allow-all
+
+# SCRAM over TLS: one 'account<TAB>allow-all|deny-all' per line; an unlisted account is denied
+cargo run -p latticed -- --auth scram-tls --data-dir /var/lib/lattice --account-policies /secure/policies.txt \
+  --tls-cert ... --tls-key ... --scram-verifiers ... --scram-decoy-secret ...
+```
+
+Without `--data-dir` the `SELECT 1` placeholder is unchanged. With it, `latticed` opens the write-ahead
+log in the directory (created with mode 0700 when missing; one server at a time, a second one is
+refused), replays it, then serves the single-table SQL executor (`lattice-exec`) to every admitted
+connection. Startup fails before binding if the log cannot be recovered or the policy options are
+inconsistent: `--development-policy` is required in trust mode and rejected in SCRAM mode, and
+`--account-policies` is required in SCRAM mode and rejected in trust mode. There is no allow-all
+default for anyone. `deny-all` also refuses `CREATE TABLE` and `DROP TABLE` (`42501`). Only these two
+grants exist until the Phase 4 policy language lands.
+
+**One database thread.** The executor is single-threaded, so one thread owns the database
+(`lattice_api::exec_host`) and each connection forwards its statements to it. Statements therefore run
+one at a time: a slow statement delays the others. `--statement-timeout-max-ms` (default 30000) is
+both the default statement timeout and the ceiling a client's `SET statement_timeout` cannot lift;
+`--statement-memory-bytes` (default 64 MiB) bounds the rows one statement holds. A CancelRequest
+reaches a running statement between rows, and a statement cancelled while queued does not start.
+`--max-connections` and the timeouts above apply as before. A connection that drops mid-transaction
+commits nothing.
+
+**What survives a restart or a crash.** Every committed statement is on disk when the client sees the
+command tag. Recovery replays the log, so committed rows and table names come back. **Column
+definitions do not** (#379): after a restart the recovered tables exist only by name, `SELECT` on one
+answers `42P01`, and `CREATE TABLE` of the same name answers `42P07`. The server prints
+`N recovered table(s) have no column definitions` on stderr at startup. Until the schema is persisted
+(an RFC and an ADR, then a guarded log record), a data directory is useful for tables created in the
+current run only, and a new table name is needed after each restart. The stored row layout is not a
+frozen format.
+
+Not wired yet: the five-driver matrix (libpq, psycopg, pgx, JDBC, node-postgres), binary result
+formats, and a persisted schema. Text parameters of the extended protocol are tested. The tests in `tests/sql_binary.rs` use a plain client that frames
+messages itself, over loopback trust and over verified TLS with SCRAM.

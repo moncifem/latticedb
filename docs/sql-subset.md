@@ -2,8 +2,8 @@
 
 Status: draft (Phase 2, requirement P2-09). This is the **target** SQL subset, declared before
 implementation. A bounded parser and AST, PostgreSQL wire session state machine and development
-listener exist; the listener still uses a `SELECT 1` placeholder. The single-table subset binds and executes in
-`lattice-exec` (not yet reachable from the listener); joins, aggregates, `DISTINCT`, subqueries,
+listener exist; the listener serves the single-table subset from `lattice-exec` when started with
+`--data-dir` (and answers a `SELECT 1` placeholder otherwise); joins, aggregates, `DISTINCT`, subqueries,
 indexes and full Lattice conformance remain pending. The constructs below describe the intended
 contract, not commands available today.
 

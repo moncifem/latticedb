@@ -13,7 +13,7 @@ database clock is the `Clock` seam; there is no ambient state.
 
 Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`, `lattice-lsl`,
 `lattice-seams`, `lattice-sql`. The PostgreSQL `QueryHandler` adapter lives in `lattice-api`
-(`exec_handler`); it is not wired into the listener.
+(`exec_handler`); `latticed --data-dir` serves it through `lattice_api::exec_host`.
 
 ## Contract
 

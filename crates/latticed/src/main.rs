@@ -8,7 +8,11 @@
 )]
 
 use lattice_api::auth::{Accounts, DecoySecret, MAX_CREDENTIAL_BYTES};
-use latticed::{Authentication, ServerConfig, ServerHandle, TlsConfig, require_private_file};
+use lattice_api::exec_host::{Grant, HostLimits, MAX_POLICY_BYTES, PolicyTable};
+use latticed::{
+    Authentication, ServerConfig, ServerHandle, SqlConfig, SqlServer, TlsConfig,
+    require_private_file,
+};
 use std::io::Read;
 use std::io::{self, BufRead};
 use std::process::ExitCode;
@@ -23,6 +27,10 @@ fn run() -> Result<(), String> {
     let mut private_key = None;
     let mut credentials = None;
     let mut decoy_secret = None;
+    let mut data_dir: Option<String> = None;
+    let mut development_policy: Option<String> = None;
+    let mut account_policies: Option<String> = None;
+    let mut limits = HostLimits::default();
     let mut args = std::env::args().skip(1);
     while let Some(option) = args.next() {
         if option == "--version" || option == "-V" {
@@ -31,7 +39,7 @@ fn run() -> Result<(), String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default; SELECT 1 only. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows and table names survive a restart; column definitions do not yet (#379). SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
             );
             return Ok(());
         }
@@ -44,6 +52,26 @@ fn run() -> Result<(), String> {
             "--tls-key" => private_key = Some(value),
             "--scram-verifiers" => credentials = Some(value),
             "--scram-decoy-secret" => decoy_secret = Some(value),
+            "--data-dir" => data_dir = Some(value),
+            "--development-policy" => development_policy = Some(value),
+            "--account-policies" => account_policies = Some(value),
+            "--statement-timeout-max-ms" => {
+                let ms: u64 = value
+                    .parse()
+                    .map_err(|e| format!("invalid statement timeout ceiling: {e}"))?;
+                if ms == 0 {
+                    return Err("invalid statement timeout ceiling: must be positive".into());
+                }
+                limits.max_timeout_ms = Some(ms);
+            }
+            "--statement-memory-bytes" => {
+                limits.memory_bytes = value
+                    .parse()
+                    .map_err(|e| format!("invalid statement memory budget: {e}"))?;
+                if limits.memory_bytes == 0 {
+                    return Err("invalid statement memory budget: must be positive".into());
+                }
+            }
             "--startup-timeout-ms" => {
                 config.startup_timeout =
                     Duration::from_millis(value.parse().map_err(|_| "invalid startup timeout")?)
@@ -89,8 +117,20 @@ fn run() -> Result<(), String> {
             _ => return Err(format!("unknown option {option}")),
         }
     }
+    if data_dir.is_none() && (development_policy.is_some() || account_policies.is_some()) {
+        return Err("--development-policy and --account-policies require --data-dir".into());
+    }
     match auth_mode.as_str() {
         "development-trust" => {
+            if account_policies.is_some() {
+                return Err("--account-policies requires --auth scram-tls".into());
+            }
+            if data_dir.is_some() && development_policy.is_none() {
+                return Err(
+                    "--development-policy required with --data-dir in development-trust mode"
+                        .into(),
+                );
+            }
             if certificates.is_some()
                 || private_key.is_some()
                 || credentials.is_some()
@@ -100,6 +140,12 @@ fn run() -> Result<(), String> {
             }
         }
         "scram-tls" => {
+            if development_policy.is_some() {
+                return Err("--development-policy applies only to development-trust".into());
+            }
+            if data_dir.is_some() && account_policies.is_none() {
+                return Err("--account-policies required with --data-dir in scram-tls mode".into());
+            }
             let decoy_path = decoy_secret
                 .as_deref()
                 .ok_or("--scram-decoy-secret required")?;
@@ -127,9 +173,49 @@ fn run() -> Result<(), String> {
         _ => return Err("--auth must be development-trust or scram-tls".into()),
     }
     let mode = auth_mode;
-    let server = ServerHandle::start(config).map_err(|e| e.to_string())?;
+    let server = match data_dir {
+        None => Running::Placeholder(ServerHandle::start(config).map_err(|e| e.to_string())?),
+        Some(dir) => {
+            // The development grant is only reachable in trust mode; in SCRAM mode it is denied.
+            let development = match development_policy.as_deref() {
+                None => Grant::DenyAll,
+                Some(name) => Grant::parse(name)
+                    .ok_or("--development-policy must be allow-all or deny-all")?,
+            };
+            let mut policies = PolicyTable::new(development);
+            if let Some(path) = account_policies.as_deref() {
+                let bytes = bounded_file(path, MAX_POLICY_BYTES)?;
+                let text =
+                    std::str::from_utf8(&bytes).map_err(|_| "invalid policy file encoding")?;
+                let accounts = PolicyTable::parse_accounts(text)
+                    .map_err(|_| "invalid account policy configuration")?;
+                policies = policies.with_accounts(accounts);
+            }
+            let server = SqlServer::start(
+                config,
+                SqlConfig {
+                    data_dir: dir.into(),
+                    policies,
+                    limits,
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            let unattached = server.unattached_tables().len();
+            if unattached > 0 {
+                eprintln!(
+                    "latticed: {unattached} recovered table(s) have no column definitions (they are not persisted yet, #379); SQL cannot address them"
+                );
+            }
+            Running::Sql(server)
+        }
+    };
+    let detail = if matches!(server, Running::Sql(_)) {
+        "SQL"
+    } else {
+        "SELECT 1 only"
+    };
     println!(
-        "latticed listening on {} ({mode}; SELECT 1 only)",
+        "latticed listening on {} ({mode}; {detail})",
         server.local_addr()
     );
     // An explicit host control channel avoids an unsafe signal handler or a new runtime dependency.
@@ -180,6 +266,34 @@ fn require_regular(path: &str) -> Result<(), String> {
         Err(format!(
             "{path}: configured security path is not a regular file"
         ))
+    }
+}
+
+enum Running {
+    Placeholder(ServerHandle),
+    Sql(SqlServer),
+}
+
+impl Running {
+    fn local_addr(&self) -> std::net::SocketAddr {
+        match self {
+            Running::Placeholder(s) => s.local_addr(),
+            Running::Sql(s) => s.local_addr(),
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        match self {
+            Running::Placeholder(s) => s.is_finished(),
+            Running::Sql(s) => s.is_finished(),
+        }
+    }
+
+    fn shutdown(self) -> io::Result<()> {
+        match self {
+            Running::Placeholder(s) => s.shutdown(),
+            Running::Sql(s) => s.shutdown(),
+        }
     }
 }
 

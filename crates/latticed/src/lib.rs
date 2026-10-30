@@ -32,7 +32,9 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod sql;
 mod transport;
+pub use sql::{SqlConfig, SqlServer};
 pub use transport::TlsConfig;
 use transport::Transport;
 

@@ -406,3 +406,32 @@ negative control), planted-engine-bug, no-panic and sqllogictest tests, `clippy 
 check-layers`. Not run locally: the workspace tests, Miri, sanitizers, mutation testing, larger proptest
 case counts, benchmarks and the simulator workloads; those are left to CI. No Phase 2 exit criterion is
 claimed, and P2-10, P2-13, P2-17 and P2-18 remain open.
+
+## SQL served by `latticed` from a data directory (P2-17, P2-18, issue 345)
+
+`latticed --data-dir DIR` opens a write-ahead log in `DIR`, replays it, and serves the `lattice-exec`
+executor over the existing bounded pgwire listener (loopback trust or SCRAM over TLS). Without
+`--data-dir` the `SELECT 1` placeholder remains. See the [listener guide](../../crates/latticed/README.md).
+
+**What is checked, through the real binary** (`crates/latticed/tests/sql_binary.rs`, a plain pgwire
+client written in the test, no driver): create, insert, update, delete and select; `RETURNING`; two
+connections with snapshot isolation; `23505`, `23502`, `42P01` and `25P02`; a connection dropped
+mid-transaction commits nothing; `42501` for a `deny-all` development policy and, under SCRAM over
+verified TLS, for a `deny-all` account and for an account the policy file does not list (no allow-all
+fallback); a client's `SET statement_timeout` is clamped to `--statement-timeout-max-ms`; a second
+server on the same directory is refused; a committed row is in the log after a clean stop and after
+SIGKILL (the test looks for the row's bytes in the log files, since SQL cannot read it back, see below);
+the extended protocol with text parameters (Parse, Bind, Execute, Sync), including a `22P02` bad parameter; option validation. `lattice-api` has unit tests for the policy file and the database thread.
+
+**What does not survive a restart.** Rows and table names are recovered from the log. Column
+definitions are not (#379), so a recovered table cannot be addressed by SQL: `SELECT` is `42P01` and
+`CREATE TABLE` of the same name is `42P07`. "Create a table, insert, select and see the data survive a
+crash" from issue 345 is therefore **not met**: the data survives, SQL cannot read it back.
+
+**Limits.** One database thread runs statements serially; a statement cannot be interrupted inside the
+engine's scan materialisation or a sort comparison (see the `lattice-exec` README). Row policy has two
+grants, `allow-all` and `deny-all`. Binary result formats are not exercised. No driver conformance is claimed.
+
+**Not run locally, left to CI:** the workspace gate, Miri, sanitizers, mutation testing and fuzzing.
+This touches authentication-adjacent and serving code and needs an independent review before merge.
+No Phase 2 exit criterion is claimed; P2-17 and P2-18 remain open.

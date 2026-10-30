@@ -18,7 +18,8 @@ until the owner enables GitHub Pages** and the wiki stays empty until its first 
 ([owner steps](docs/site-setup.md)). Edit `docs/`, never the wiki.
 
 > **Pre-alpha.** The storage kernel and early row engine work today. A development TCP listener
-> answers `SELECT 1`; storage-backed SQL execution and the connected team workspace are still ahead.
+> runs single-table SQL against a data directory (`--data-dir`); table columns do not survive a
+> restart yet (#379), and the connected team workspace is still ahead.
 > The Phase 1 gate remains open; Phase 2 development
 > is proceeding under a [documented waiver](docs/gates/phase-1-review.md), and Phase 3 building blocks have
 > started on the same terms ([status](docs/gates/phase-3.md)). See the [roadmap](docs/roadmap.md). Use test data only.
@@ -42,7 +43,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 |---|---|
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
 | Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, persisted managed-index definitions/history, callback legacy mode and in-memory version vacuum; reads below the vacuum floor return an error; strict full-HLC resolution rejects expired history alongside the existing clamping helper |
-| Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS, with a `SELECT 1` placeholder handler |
+| Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS. With `--data-dir` it runs the single-table SQL executor against a durable log (explicit row policy per account); without it, a `SELECT 1` placeholder |
 | SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
 | Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
 | Sync building blocks | Early Phase 3 pieces, none connected to a server yet: a typed change-feed event model with a stable cursor, a sync protocol frame codec, a tree CRDT with moves (with a TLA+ model), an agent plugin contract with a conformance suite, a client state machine that resumes without gaps, and experimental TypeScript and Python clients ([`clients/typescript`](clients/typescript), [`clients/python`](clients/python)) whose codecs are checked against vectors written by the Rust side |
@@ -105,8 +106,11 @@ To try the development listener from the current source tree:
 cargo run -p latticed -- --listen 127.0.0.1:5432 --max-connections 32
 ```
 
-Keep stdin open, then enter `shutdown` to stop cleanly; EOF also stops it. This placeholder uses
-plaintext and trust authentication and does not open a database. See the
+Keep stdin open, then enter `shutdown` to stop cleanly; EOF also stops it. Without `--data-dir` this
+placeholder answers `SELECT 1` only, uses plaintext and trust authentication and opens no database.
+To run SQL, add `--data-dir ./data --development-policy allow-all` (the policy is never implied).
+Committed rows and table names are recovered after a restart or a crash; column definitions are not
+yet (#379), so a recovered table cannot be queried. See the
 [listener guide](crates/latticed/README.md) for timeouts, configured TLS/SCRAM authentication and
 externally provisioned verifier files. Published nightly
 archives may predate these source changes.
