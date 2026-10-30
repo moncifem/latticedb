@@ -277,8 +277,9 @@ jobs:
     # Every other job is listed in needs, including scorecard, so a job added later but left out of
     # the list is a review finding. A job that failed, timed out or was cancelled counts: a runner
     # that is lost mid-job reports as cancelled and would otherwise leave no issue. This workflow has
-    # no concurrency group, so nothing cancels a job on purpose; a run an owner cancels by hand also
-    # stops this job, and so opens nothing.
+    # no concurrency group, and the called sql-reference workflow cancels a superseded run only for
+    # pull requests, so nothing cancels a job on purpose; a run an owner cancels by hand also stops
+    # this job, and so opens nothing.
     if: always() && github.event_name == 'schedule'
     needs: [sim, determinism-and-planted-bugs, proptest-sql, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, scorecard, row-faults, cancel-loom]
     runs-on: ubuntu-latest
