@@ -16,7 +16,10 @@ fn frame_decode_never_panics() {
     let result = decode(&raw[..len]);
     // Not vacuous. No complete frame fits in 7 bytes (the smallest, a ping, needs 13), so the
     // success arm below is only a guard; the proof covers the header and refusal paths.
-    kani::cover!(matches!(result, Ok(None)), "an incomplete frame waits for more");
+    kani::cover!(
+        matches!(result, Ok(None)),
+        "an incomplete frame waits for more"
+    );
     kani::cover!(result.is_err(), "a frame is refused");
     if let Ok(Some((_, used))) = result {
         assert!(used >= HEADER_LEN && used <= len);
