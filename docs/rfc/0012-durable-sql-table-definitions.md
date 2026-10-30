@@ -11,6 +11,12 @@ capability bit 3), with the upgrade policy of an explicit "allow format upgrade"
 said that pre-alpha name-only directories are not promised a migration, so the first implementation slice
 may skip `adopt_table`; it stays a later work package.
 
+Three small rules were added after acceptance as tech-lead proposals, flagged to the owner during the
+comment period (ends 2026-11-06): the `varchar` limit maximum of 10,485,760 characters, rejection of a
+unique constraint whose column set equals the primary key's or another unique's, and the statement that
+identifier canonicality is "no byte `A`-`Z`; other UTF-8 kept as written, no Unicode folding" (an earlier
+"ASCII-only" wording was wrong). They are not part of the owner's answer and may be changed.
+
 The seven-day comment period was not waived. It still runs until 2026-11-06. Code that writes the new
 format may be developed and reviewed on branches before then, but merging it waits for the end of the
 period or an explicit owner waiver. The RFC 0008 `.guard` amendment (issue 307) and the catalog caps and
@@ -240,12 +246,16 @@ definition version.
 Structural rules that the engine validates, before append and again on replay, without SQL knowledge (the
 engine does not depend on `lattice-sql` or `lattice-exec`):
 
-- column names nonempty and distinct; "lower case" means ASCII only: no byte `A`-`Z`, and no Unicode
-  folding is performed or implied (other UTF-8 is kept as written). Constraint names are nonempty,
+- column names nonempty and distinct. Identifier canonicality is: no byte `A`-`Z`; other UTF-8 is kept
+  as written; no Unicode folding is performed or implied. Names are therefore not "ASCII-only": a
+  non-ASCII name is valid; Constraint names are nonempty,
   at most 255 bytes, and distinct, including the primary key name; positions in range; no repeated position in one
   key; every primary key column has `NOT NULL`; constraint names distinct;
 - key columns are not numeric (6) or jsonb (13), matching the executor's `key_type_ok`;
-- default tag matches the type tag and is in range; reserved flag bits are zero; the `varchar` limit rule;
+- default tag matches the type tag and is in range; reserved flag bits are zero; the `varchar` limit rule,
+  with a maximum of 10,485,760 characters (PostgreSQL's maximum); a larger value is a decode error;
+- a unique constraint whose column set, compared without regard to order, equals the primary key's column
+  set or another unique constraint's column set is rejected (it would only duplicate a marker table);
 - the table id leaves the marker space clear: `id <= 2^26 - 1` and at most 15 uniques.
 
 The executor re-checks the semantics it owns when it turns a recovered definition into a `TableDef`
@@ -585,6 +595,9 @@ struct layout the disk format.
    definitions are readable metadata like names today, with no per-actor check before Phase 4.
 8. Moot: Option A was accepted, so Option B is not needed as a fallback.
 9. Acceptance of the RFC 0008 `.guard` amendment (issue 307), which this proposal depends on.
+10. OPEN, tech-lead proposals flagged during the comment period: varchar limit maximum 10,485,760;
+    reject a unique equal to the primary key or to another unique (order-insensitive); identifier
+    canonicality as stated under the structural rules.
 
 An independent review of the final diff is required before merge and is the tech lead's call for the
 `reviewed` label. It does not replace the owner's format decision.
