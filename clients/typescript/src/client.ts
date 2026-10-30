@@ -18,6 +18,7 @@ import {
   type ErrorCode,
   type Message,
   type SyncEvent,
+  hasLoneSurrogate,
 } from "./sync.js";
 
 /** Lowest protocol version this client can speak. */
@@ -117,7 +118,7 @@ function validate(cfg: ClientConfig): void {
     throw new ClientError("invalid_config", "version range");
   }
   const nameLen = encoder.encode(cfg.agent).length;
-  if (nameLen === 0 || nameLen > MAX_NAME_LEN || CONTROL.test(cfg.agent)) {
+  if (hasLoneSurrogate(cfg.agent) || nameLen === 0 || nameLen > MAX_NAME_LEN || CONTROL.test(cfg.agent)) {
     throw new ClientError("invalid_config", "agent name");
   }
   if (!Number.isInteger(cfg.ackBatch) || cfg.ackBatch < 1 || cfg.ackBatch > U32_MAX) {
@@ -267,7 +268,7 @@ export class SyncClient {
       throw new ClientError("wrong_phase", this.currentPhase);
     }
     const scopeLen = encoder.encode(scope).length;
-    if (scopeLen === 0 || scopeLen > MAX_SCOPE_LEN || CONTROL.test(scope)) {
+    if (hasLoneSurrogate(scope) || scopeLen === 0 || scopeLen > MAX_SCOPE_LEN || CONTROL.test(scope)) {
       throw new ClientError("invalid_scope");
     }
     if (cursor.length > MAX_CURSOR_LEN) {

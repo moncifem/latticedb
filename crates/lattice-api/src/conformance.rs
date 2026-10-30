@@ -1791,6 +1791,11 @@ fn render() -> String {
 fn vectors_file_matches_rust_encoder() {
     let fresh = render();
     if UPDATE == Some("1") {
+        // Update mode skips the comparison, so it must never be able to turn a CI run green.
+        assert!(
+            option_env!("CI").is_none(),
+            "LATTICE_UPDATE_VECTORS=1 is refused when CI is set; unset one of them"
+        );
         // This crate may not touch the file system (see the module comment), so the new file goes
         // to standard output between markers and tools/update-conformance-vectors.sh saves it.
         println!("\n-----BEGIN LATTICE CONFORMANCE VECTORS-----");

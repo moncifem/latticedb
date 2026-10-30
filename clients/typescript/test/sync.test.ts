@@ -158,3 +158,12 @@ test("a stream of frames decodes one at a time", () => {
   assert.deepStrictEqual(types, ["ping", "pong", "ack"]);
   assert.equal(stream.length, 0);
 });
+
+test("a payload limit that is not a non-negative safe integer is refused", () => {
+  const ping = encode({ type: "ping", nonce: 1n });
+  for (const limit of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY, 2 ** 53]) {
+    const err = thrown(() => decodeWithLimit(ping, limit));
+    assert.ok(err instanceof SyncError && err.kind === "invalid_field" && err.detail === "limit", String(limit));
+  }
+  assert.notEqual(decodeWithLimit(ping, 8), null);
+});

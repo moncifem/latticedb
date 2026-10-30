@@ -279,3 +279,19 @@ test("cursors compare by length first, then by bytes", () => {
   );
   assert.equal(out.filter((a) => a.type === "deliver").length, 3);
 });
+
+test("a scope or agent name with a lone surrogate is refused before any state changes", () => {
+  const c = client(1);
+  ready(c);
+  for (const scope of ["\ud800", "a\udc00b", "ok\ud83d"]) {
+    assert.deepStrictEqual(thrown(() => c.subscribe(scope, new Uint8Array(0))), new ClientError("invalid_scope"));
+  }
+  assert.deepStrictEqual(c.subscriptions(), []);
+  assert.equal(c.phase(), "ready");
+  // The next valid subscription still gets id 1.
+  assert.equal(c.subscribe("ws/\ud83d\ude00", new Uint8Array(0)).sub, 1);
+  assert.deepStrictEqual(
+    thrown(() => new SyncClient({ ...defaultConfig("a"), agent: "a\ud800" })),
+    new ClientError("invalid_config", "agent name"),
+  );
+});

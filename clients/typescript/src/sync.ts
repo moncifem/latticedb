@@ -156,7 +156,8 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 // Unicode category Cc, the same set as Rust's `char::is_control`.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
-function hasLoneSurrogate(s: string): boolean {
+/** True if `s` holds a UTF-16 surrogate without its partner (not representable in UTF-8). */
+export function hasLoneSurrogate(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {
@@ -328,6 +329,9 @@ export function decode(buf: Uint8Array): Decoded | null {
  * refuse.
  */
 export function decodeWithLimit(buf: Uint8Array, limit: number): Decoded | null {
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new SyncError("invalid_field", "limit");
+  }
   if (buf.length === 0) {
     return null;
   }

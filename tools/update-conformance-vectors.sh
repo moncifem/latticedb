@@ -14,7 +14,7 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
 LATTICE_UPDATE_VECTORS=1 cargo test -p lattice-api --lib \
-  conformance::vectors_file_matches_rust_encoder -- --exact --nocapture 2>/dev/null |
+  conformance::vectors_file_matches_rust_encoder -- --exact --nocapture |
   sed -n '/^-----BEGIN LATTICE CONFORMANCE VECTORS-----$/,/^-----END LATTICE CONFORMANCE VECTORS-----$/p' |
   sed '1d;$d' >"$tmp"
 
