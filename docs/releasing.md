@@ -41,6 +41,14 @@ simulator, fuzzing, model checking and heavier suites and report failures; they 
 
 - `lattice-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` and
   `aarch64-apple-darwin`, each holding `lattice`, `latticed`, `LICENSE`, `NOTICE` and `README.md`.
+- The Linux archives are built on the oldest hosted runners (`ubuntu-22.04` and `ubuntu-22.04-arm`, glibc 2.35,
+  both listed in the runner-images README on 2026-10-30), so they load on Debian 12 (glibc 2.36) and Ubuntu 22.04
+  and newer. The `archive_runs_on_debian_12_and_ubuntu_22_04` job unpacks each Linux archive and runs
+  `lattice --version` and `latticed --version` in `debian:12` and `ubuntu:22.04` containers (pinned by digest);
+  publishing waits for it. The exact minimum glibc is the highest `GLIBC_x.y` symbol version the binaries import.
+  The build prints it in the job summary and the release job appends it to the release notes. It has not been
+  measured yet, so no number is recorded here; copy it in after the first run. Older distributions are not
+  supported, and musl is not used (its allocator and TLS cost is unmeasured).
 - `SHA256SUMS` and CycloneDX SBOMs (`latticed.cdx.json`, `lattice-cli.cdx.json`).
 - A build provenance attestation for every archive and for the container image.
 - A multi-architecture image (`linux/amd64`, `linux/arm64`) at `ghcr.io/moncifem/latticedb`.

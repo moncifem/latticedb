@@ -79,6 +79,15 @@ the systemd and launchd snippets in the crate README under those supervisors, Wi
 SIGTERM during recovery (it keeps the default action). The handler is one `signal(2)` declaration and call in
 `lattice-sys`; no dependency was added.
 
+Linux archive glibc baseline (issue #588, part of the Alpha 0.1 definition #567, no exit criterion): `package.yml`
+builds the Linux x86_64 and arm64 archives on `ubuntu-22.04` and `ubuntu-22.04-arm` (both listed in the
+runner-images README on 2026-10-30) instead of the 24.04 runners, records the highest `GLIBC_x.y` symbol version
+the binaries import (job summary and release notes), and gates publishing on the job
+`archive_runs_on_debian_12_and_ubuntu_22_04`, which runs `lattice --version` and `latticed --version` from the
+unpacked archive in digest-pinned `debian:12` and `ubuntu:22.04` containers on both architectures. Not verified:
+no hosted run has happened yet, so the measured minimum glibc is unknown and neither the build nor the smoke job
+is known to pass. The image still copies the same binaries into `ubuntu:24.04`. Musl was not tried.
+
 ## Exit criteria
 
 | # | Criterion | State |
