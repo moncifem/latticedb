@@ -8,7 +8,7 @@
 )]
 
 use lattice_api::auth::{Accounts, DecoySecret, MAX_CREDENTIAL_BYTES};
-use lattice_api::exec_host::{Grant, HostLimits, MAX_POLICY_BYTES, PolicyTable};
+use lattice_api::exec_host::{Grant, HostLimits, MAX_POLICY_BYTES, PolicyFileError, PolicyTable};
 use latticed::{
     Authentication, ServerConfig, ServerHandle, SqlConfig, SqlServer, TlsConfig,
     require_private_file,
@@ -184,11 +184,18 @@ fn run() -> Result<(), String> {
             };
             let mut policies = PolicyTable::new(development);
             if let Some(path) = account_policies.as_deref() {
-                let bytes = bounded_file(path, MAX_POLICY_BYTES)?;
+                // Grants decide who may write, so the file gets the same mode check as key material.
+                let bytes = bounded_secret_file(path, MAX_POLICY_BYTES)?;
                 let text =
                     std::str::from_utf8(&bytes).map_err(|_| "invalid policy file encoding")?;
-                let accounts = PolicyTable::parse_accounts(text)
-                    .map_err(|_| "invalid account policy configuration")?;
+                let accounts = PolicyTable::parse_accounts(text).map_err(|e| match e {
+                    PolicyFileError::Malformed { line } => {
+                        format!("invalid account policy configuration (line {line})")
+                    }
+                    PolicyFileError::OutOfBounds => {
+                        "account policy configuration exceeds bounds".to_string()
+                    }
+                })?;
                 policies = policies.with_accounts(accounts);
             }
             let server = SqlServer::start(

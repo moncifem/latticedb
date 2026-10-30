@@ -39,13 +39,18 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
 - **Row policy.** Scans only return rows the actor may read, and the engine checks every final
   old-to-new transition at commit (`42501`). The executor's own constraint probes ignore the read policy,
   as PostgreSQL does for row security, so a duplicate key reveals that a hidden row exists.
+- **Hiding the catalog.** `ActorPolicy::hiding_catalog` makes binding and `describe` see no tables for that
+  actor, so every table reference is `42P01` with the message used for a missing table, and `Parse`/`Describe`
+  discloses no names or columns. `latticed` uses it for `deny-all` principals. Without it, `describe` and
+  binding errors (`42703` versus `42P01`) reveal names to any actor that may connect.
 - **DDL follows the policy too.** `CREATE TABLE` and `DROP TABLE` commit through a transaction bound to
   the actor's policy, and `ActorPolicy` forwards `authorize_ddl` to it: an actor without that grant gets
   `42501` before anything about the catalog (which names exist) is revealed. Row access never implies
   DDL.
-- **`describe` reveals names.** Describing a statement (the extended protocol's `Parse`) binds it against
-  the catalog without running it, so a column or table name is answered to any actor that may connect,
-  whatever its row policy. Names are not rows; hiding them is a policy question for Phase 4.
+- **`describe` reveals names** unless the actor's policy hides the catalog (see above). Describing a
+  statement (the extended protocol's `Parse`) binds it against the catalog without running it, so for an
+  actor that does not hide the catalog a column or table name is answered whatever its row policy.
+  Table-level visibility for finer policies is a Phase 4 question.
 - **Known side channel (interim rule, revisit with the Phase 4 policy).** A duplicate primary key or
   `UNIQUE` value is `23505` even when the row that holds it is hidden from the actor, as in PostgreSQL
   row-level security, so an actor can learn that a key exists. Nothing else is revealed: the message is

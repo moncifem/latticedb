@@ -145,22 +145,42 @@ refused), replays it, then serves the single-table SQL executor (`lattice-exec`)
 connection. Startup fails before binding if the log cannot be recovered or the policy options are
 inconsistent: `--development-policy` is required in trust mode and rejected in SCRAM mode, and
 `--account-policies` is required in SCRAM mode and rejected in trust mode. There is no allow-all
-default for anyone. `deny-all` also refuses `CREATE TABLE` and `DROP TABLE` (`42501`). Only these two
+default for anyone. `deny-all` refuses `CREATE TABLE` and `DROP TABLE` (`42501`) before looking at any name, and it also hides the catalog: for that principal every table reference in `SELECT`, `INSERT`, `UPDATE`, `DELETE` and in `Parse`/`Describe` is `42P01` with the same message as for a table that does not exist, so a denied account cannot learn table or column names (it never sees `42703` or `42501` on DML). The account policy file and the key and decoy files must be regular files with no group or other permission bits, and a data directory that already exists must be mode 0700 (a new one is created 0700). Only these two
 grants exist until the Phase 4 policy language lands.
 
-**One database thread.** The executor is single-threaded, so one thread owns the database
-(`lattice_api::exec_host`) and each connection forwards its statements to it. Statements therefore run
-one at a time: a slow statement delays the others. `--statement-timeout-max-ms` (default 30000) is
-both the default statement timeout and the ceiling a client's `SET statement_timeout` cannot lift;
-`--statement-memory-bytes` (default 64 MiB) bounds the rows one statement holds. A CancelRequest
-reaches a running statement between rows, and a statement cancelled while queued does not start.
-`--max-connections` and the timeouts above apply as before. A connection that drops mid-transaction
-commits nothing.
+**One database thread, and what bounds a wait.** The executor is single-threaded, so one thread owns the
+database (`lattice_api::exec_host`) and each connection forwards its statements to it; a connection has
+at most one request in flight. Statements therefore run one at a time. `--statement-timeout-max-ms`
+(default 30000) is both the default statement timeout and the ceiling a client's `SET statement_timeout`
+cannot lift; `--statement-memory-bytes` (default 64 MiB) bounds the rows one statement holds.
+
+A connection waits for its answer at most the ceiling plus 5 seconds, then gets `57014` and its statement
+is cancelled: the database thread skips it if it has not started and stops it at the next row if it has.
+So the delay a client can see is bounded by that, not by the number of connections, but the database
+thread's own backlog is not: a statement queued behind others can time out before it starts, and with
+`--max-connections` busy connections the thread can spend up to `max-connections x ceiling` on work
+whose clients already left. Reasons the bound is not tighter:
+
+- a client that disconnects mid-statement does not stop it (the connection worker is blocked waiting
+  for the answer, so it only notices at the next read); it ends at the ceiling at the latest;
+- the ceiling is checked between rows. Materialising the table's rows before a scan (`scan_at`) and the
+  comparison pass of a sort are not interrupted and not counted, so a very large table can exceed the
+  ceiling by the time of those steps;
+- a CancelRequest reaches a running statement at the same between-row points.
+
+Shutdown stops the listener, which cancels every registered statement, then answers requests still
+queued with `57P01` without running them; it waits for at most the statement that is running (itself
+bounded as above). A connection that drops mid-transaction commits nothing.
+
+**If the database thread dies.** A panic on that thread makes every later statement answer `57P01`
+(connections stay up), `SqlServer::is_finished` turns true, and `latticed` exits non-zero with
+`the SQL thread panicked`; the directory lock is released with the thread. The exit code path is tested
+at library level (a planted failure); the process-level exit is the supervisor loop in `main.rs`.
 
 **What survives a restart or a crash.** Every committed statement is on disk when the client sees the
 command tag. Recovery replays the log, so committed rows and table names come back. **Column
 definitions do not** (#379): after a restart the recovered tables exist only by name, `SELECT` on one
-answers `42P01`, and `CREATE TABLE` of the same name answers `42P07`. The server prints
+answers `42P01`, and `CREATE TABLE` of the same name answers `42P07`. The test that kills the process with SIGKILL shows the committed row's bytes are in the log files (they reached the operating system); that the log is `fsync`ed before the command tag is returned is the kernel's behaviour (its sync calls), not something that test proves. The server prints
 `N recovered table(s) have no column definitions` on stderr at startup. Until the schema is persisted
 (an RFC and an ADR, then a guarded log record), a data directory is useful for tables created in the
 current run only, and a new table name is needed after each restart. The stored row layout is not a

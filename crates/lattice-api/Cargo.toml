@@ -26,6 +26,10 @@ sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
 subtle = { version = "=2.6.1", default-features = false }
 zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 
+[features]
+# Exposes `ExecHost::crash_for_test` so other crates can test a dead database thread.
+test-hooks = []
+
 [dev-dependencies]
 lattice-sim = { path = "../lattice-sim" }
 lattice-testkit = { path = "../lattice-testkit" }

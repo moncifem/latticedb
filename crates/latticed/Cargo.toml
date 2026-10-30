@@ -28,6 +28,7 @@ default = []
 intel = ["dep:lattice-intel"]
 
 [dev-dependencies]
+lattice-api = { path = "../lattice-api", features = ["test-hooks"] }
 rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
 base64 = "=0.22.1"
 hmac = "=0.13.0"

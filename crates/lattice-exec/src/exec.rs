@@ -41,12 +41,26 @@ use crate::value::{Datum, total_order};
 
 /// The policy a transaction is bound to: the actor's row policy, shared by the session.
 #[derive(Clone)]
-pub struct ActorPolicy(pub(crate) Rc<dyn PolicyEvaluator>);
+pub struct ActorPolicy(pub(crate) Rc<dyn PolicyEvaluator>, pub(crate) bool);
 
 impl ActorPolicy {
     /// Wraps an evaluator supplied by a trusted host.
     pub fn new(policy: Rc<dyn PolicyEvaluator>) -> Self {
-        ActorPolicy(policy)
+        ActorPolicy(policy, true)
+    }
+
+    /// Hides the catalog from this actor: binding and describing see no tables, so every table
+    /// reference is `42P01` exactly as for a table that does not exist. Use it for an actor whose
+    /// policy grants nothing, so a denied actor cannot learn table or column names from error codes
+    /// or from `Parse`/`Describe`.
+    #[must_use]
+    pub fn hiding_catalog(mut self) -> Self {
+        self.1 = false;
+        self
+    }
+
+    pub(crate) fn sees_catalog(&self) -> bool {
+        self.1
     }
 }
 

@@ -131,7 +131,8 @@ impl Server {
         error
     }
 
-    /// SIGKILL: no shutdown path runs.
+    /// SIGKILL: no shutdown path runs. A test that uses it shows bytes reached the operating system
+    /// (the files can be read back), not that they were synced to disk.
     fn crash(mut self) -> String {
         self.child.kill().unwrap();
         self.child.wait().unwrap();
@@ -228,6 +229,19 @@ fn query(stream: &mut (impl Read + Write), sql: &str) -> Reply {
     read_reply(stream)
 }
 
+/// Parse plus Describe of the statement, then Sync: what a driver sends to learn result columns.
+fn parse_describe(stream: &mut (impl Read + Write), sql: &str) -> Reply {
+    let mut parse = vec![0];
+    parse.extend_from_slice(sql.as_bytes());
+    parse.extend_from_slice(&[0, 0, 0]);
+    let mut flight = frame(b'P', &parse);
+    flight.extend(frame(b'D', b"S\0"));
+    flight.extend(frame(b'S', b""));
+    stream.write_all(&flight).unwrap();
+    stream.flush().unwrap();
+    read_reply(stream)
+}
+
 /// Extended protocol: Parse, Bind (text parameters, text results), Execute and Sync in one flight.
 fn extended(stream: &mut (impl Read + Write), sql: &str, params: &[Option<&str>]) -> Reply {
     let mut parse = vec![0]; // unnamed statement
@@ -302,7 +316,7 @@ fn read_reply(stream: &mut impl Read) -> Reply {
                 reply.status = body[0];
                 return reply;
             }
-            b'I' | b'N' | b'S' | b'1' | b'2' => {}
+            b'I' | b'N' | b'S' | b'1' | b'2' | b't' | b'n' => {}
             other => panic!("unexpected message {:?}", other as char),
         }
     }
@@ -637,16 +651,21 @@ fn scram_accounts_get_their_own_row_policy_and_unlisted_accounts_are_denied() {
 
     // deny-all account: cannot write, cannot change the catalog, and sees no rows.
     let mut reader = scram_connect(server.address, &fixture.roots, "reader", b"pencil").unwrap();
+    // The catalog is hidden from it too, so DML on an existing table is `42P01`, as for a missing one;
+    // changing the catalog is `42501`.
     let r = query(&mut reader, "INSERT INTO ledger VALUES (3, 30)");
-    assert_eq!(r.code(), Some("42501"), "{r:?}");
+    assert_eq!(r.code(), Some("42P01"), "{r:?}");
     assert_eq!(r.status, b'I');
     assert_eq!(
         query(&mut reader, "CREATE TABLE sneaky (id INT PRIMARY KEY)").code(),
         Some("42501")
     );
-    assert_eq!(query(&mut reader, "DELETE FROM ledger").code(), None);
+    assert_eq!(
+        query(&mut reader, "DELETE FROM ledger").code(),
+        Some("42P01")
+    );
     let r = query(&mut reader, "SELECT id FROM ledger");
-    assert_eq!((r.error, r.rows.len()), (None, 0));
+    assert_eq!((r.code(), r.rows.len()), (Some("42P01"), 0));
     // The denied account changed nothing.
     assert_eq!(query(&mut writer, "SELECT id FROM ledger").rows.len(), 2);
 
@@ -655,9 +674,16 @@ fn scram_accounts_get_their_own_row_policy_and_unlisted_accounts_are_denied() {
         scram_connect(server.address, &fixture.roots, "stranger", b"pencil").unwrap();
     assert_eq!(
         query(&mut stranger, "INSERT INTO ledger VALUES (4, 40)").code(),
+        Some("42P01")
+    );
+    assert_eq!(
+        query(&mut stranger, "CREATE TABLE sneaky (id INT PRIMARY KEY)").code(),
         Some("42501")
     );
-    assert_eq!(query(&mut stranger, "SELECT id FROM ledger").rows.len(), 0);
+    assert_eq!(
+        query(&mut stranger, "SELECT id FROM ledger").code(),
+        Some("42P01")
+    );
     for client in [writer, reader, stranger] {
         terminate(client);
     }
@@ -773,7 +799,14 @@ fn one_server_at_a_time_may_use_a_data_directory() {
     let args = ["--data-dir", &data, "--development-policy", "allow-all"];
     let first = start(&args).unwrap();
     let second = start(&args);
-    assert!(second.is_err(), "a second server opened the same directory");
+    let refusal = second
+        .err()
+        .expect("a second server opened the same directory");
+    assert!(
+        refusal.starts_with("latticed: cannot open or recover the data directory")
+            && refusal.contains("another server may be using the directory"),
+        "{refusal:?}"
+    );
     // The first server is unaffected.
     let mut c = trust_connect(first.address);
     assert_eq!(
@@ -873,7 +906,10 @@ fn sql_options_are_validated_and_there_is_no_allow_all_default() {
 fn a_malformed_account_policy_file_is_refused_before_binding() {
     let fixture = scram_fixture("badpolicy", "writer\tallow\n");
     let error = start(&refs(&fixture.args)).err().unwrap();
-    assert_eq!(error, "latticed: invalid account policy configuration\n");
+    assert_eq!(
+        error,
+        "latticed: invalid account policy configuration (line 1)\n"
+    );
     // The data directory was not created by a server that refused to start.
     assert!(!fixture.scratch.path("data").exists());
 }
@@ -887,4 +923,83 @@ fn without_a_data_directory_the_placeholder_still_answers_select_one_only() {
     assert_eq!(query(&mut c, "SELECT * FROM t").code(), Some("0A000"));
     terminate(c);
     server.stop();
+}
+
+#[test]
+fn a_denied_account_cannot_learn_the_catalog_by_parse_or_by_error_code() {
+    let fixture = scram_fixture("catalog", "writer\tallow-all\nreader\tdeny-all\n");
+    let server = start(&refs(&fixture.args)).unwrap();
+    let mut writer = scram_connect(server.address, &fixture.roots, "writer", b"pencil").unwrap();
+    query(
+        &mut writer,
+        "CREATE TABLE payroll (id INT PRIMARY KEY, salary INT)",
+    );
+    // The allowed account can describe it, so the comparison below is meaningful.
+    assert_eq!(
+        parse_describe(&mut writer, "SELECT salary FROM payroll").error,
+        None
+    );
+    let mut reader = scram_connect(server.address, &fixture.roots, "reader", b"pencil").unwrap();
+    for sql in [
+        "SELECT salary FROM payroll",
+        "SELECT nope FROM payroll",
+        "INSERT INTO payroll VALUES (1, 2)",
+        "DELETE FROM payroll",
+    ] {
+        let absent_sql = sql.replace("payroll", "nothing_here");
+        let described = parse_describe(&mut reader, sql);
+        let described_absent = parse_describe(&mut reader, &absent_sql);
+        let ran = query(&mut reader, sql);
+        let ran_absent = query(&mut reader, &absent_sql);
+        for (existing, absent) in [(&described, &described_absent), (&ran, &ran_absent)] {
+            let (code, message) = existing.error.clone().unwrap_or_default();
+            assert_eq!(code, "42P01", "{sql}");
+            let (absent_code, absent_message) = absent.error.clone().unwrap_or_default();
+            assert_eq!(code, absent_code, "{sql}");
+            assert_eq!(
+                message.replace("payroll", "X"),
+                absent_message.replace("nothing_here", "X"),
+                "{sql}"
+            );
+        }
+    }
+    // DDL is refused before any name is looked up.
+    for name in ["payroll", "nothing_here"] {
+        assert_eq!(
+            query(&mut reader, &format!("DROP TABLE {name}")).code(),
+            Some("42501")
+        );
+    }
+    terminate(writer);
+    terminate(reader);
+    server.stop();
+}
+
+#[test]
+fn an_existing_data_directory_and_the_policy_file_must_be_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("modes");
+    let open_dir = scratch.path("open-data");
+    std::fs::create_dir(&open_dir).unwrap();
+    std::fs::set_permissions(&open_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir_arg = open_dir.to_string_lossy().into_owned();
+    let refusal = start(&["--data-dir", &dir_arg, "--development-policy", "allow-all"])
+        .err()
+        .unwrap();
+    assert!(
+        refusal.contains("must not be accessible to group or others"),
+        "{refusal:?}"
+    );
+    // Tightened, the same directory is accepted.
+    std::fs::set_permissions(&open_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    start(&["--data-dir", &dir_arg, "--development-policy", "allow-all"])
+        .unwrap()
+        .stop();
+
+    let fixture = scram_fixture("modes-policy", "writer\tallow-all\n");
+    let policy = fixture.scratch.arg("policies.txt");
+    std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let refusal = start(&refs(&fixture.args)).err().unwrap();
+    assert!(refusal.contains("policies.txt"), "{refusal:?}");
+    assert!(!fixture.scratch.path("data").exists());
 }

@@ -66,6 +66,15 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         ExecCatalog {
             schema: &self.schema,
             version: self.catalog_version(),
+            hidden: false,
+        }
+    }
+
+    /// The binder's view for one actor: empty when the actor's policy hides the catalog.
+    pub fn catalog_view_for(&self, policy: &ActorPolicy) -> ExecCatalog<'_> {
+        ExecCatalog {
+            hidden: !policy.sees_catalog(),
+            ..self.catalog_view()
         }
     }
 

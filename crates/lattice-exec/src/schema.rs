@@ -557,10 +557,15 @@ impl Schema {
 pub struct ExecCatalog<'a> {
     pub(crate) schema: &'a Schema,
     pub(crate) version: u64,
+    /// True for an actor that may not see the catalog: every table lookup misses.
+    pub(crate) hidden: bool,
 }
 
 impl CatalogView for ExecCatalog<'_> {
     fn table(&self, name: &str) -> Option<TableInfo> {
+        if self.hidden {
+            return None;
+        }
         self.schema.table(name).map(TableDef::info)
     }
 

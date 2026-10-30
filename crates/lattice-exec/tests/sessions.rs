@@ -980,3 +980,31 @@ fn attaching_a_table_above_the_largest_id_is_refused() {
     def.id = lattice_exec::schema::MAX_TABLE_ID + 1;
     assert_eq!(f.db.attach_table(def).unwrap_err().sqlstate(), "42P01");
 }
+
+#[test]
+fn an_actor_that_hides_the_catalog_gets_undefined_table_for_an_existing_table() {
+    let (mut f, _admin) = accounts();
+    let hidden = ActorPolicy::new(Rc::new(DenyAll)).hiding_catalog();
+    let mut s = ExecSession::new(hidden);
+    for sql in [
+        "SELECT bal FROM acct",
+        "SELECT nope FROM acct",
+        "INSERT INTO acct VALUES (9, 9, 'z')",
+        "DELETE FROM acct",
+    ] {
+        let existing = err(&mut f.db, &mut s, sql);
+        let absent = err(&mut f.db, &mut s, &sql.replace("acct", "absent"));
+        assert_eq!(existing.sqlstate(), "42P01", "{sql}");
+        assert_eq!(
+            existing.message().replace("acct", "X"),
+            absent.message().replace("absent", "X"),
+            "{sql}"
+        );
+        // Parse/Describe answers the same way.
+        let described = s.describe(&f.db, sql).unwrap_err();
+        assert_eq!(described.sqlstate(), "42P01", "{sql}");
+    }
+    // A plain deny-all policy still sees the catalog: hiding it is an explicit choice.
+    let visible = ExecSession::new(ActorPolicy::new(Rc::new(DenyAll)));
+    assert!(visible.describe(&f.db, "SELECT bal FROM acct").is_ok());
+}

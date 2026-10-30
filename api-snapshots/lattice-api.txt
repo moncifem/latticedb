@@ -235,6 +235,7 @@ impl core::marker::Copy for lattice_api::exec_host::Grant
 impl core::marker::StructuralPartialEq for lattice_api::exec_host::Grant
 pub enum lattice_api::exec_host::PolicyFileError
 pub lattice_api::exec_host::PolicyFileError::Malformed
+pub lattice_api::exec_host::PolicyFileError::Malformed::line: usize
 pub lattice_api::exec_host::PolicyFileError::OutOfBounds
 impl core::clone::Clone for lattice_api::exec_host::PolicyFileError
 pub fn lattice_api::exec_host::PolicyFileError::clone(&self) -> Self
@@ -248,7 +249,8 @@ impl core::marker::StructuralPartialEq for lattice_api::exec_host::PolicyFileErr
 pub struct lattice_api::exec_host::ExecHost
 impl lattice_api::exec_host::ExecHost
 pub fn lattice_api::exec_host::ExecHost::handler(&self) -> lattice_api::exec_host::ExecProxy
-pub fn lattice_api::exec_host::ExecHost::shutdown(&self)
+pub fn lattice_api::exec_host::ExecHost::is_alive(&self) -> bool
+pub fn lattice_api::exec_host::ExecHost::shutdown(&self) -> core::result::Result<(), alloc::string::String>
 pub fn lattice_api::exec_host::ExecHost::start<I, C, R>(impl core::ops::function::FnOnce() -> core::result::Result<lattice_exec::db::Database<I, C, R>, lattice_exec::error::ExecError> + core::marker::Send + 'static, lattice_api::exec_host::PolicyTable, lattice_api::exec_host::HostLimits) -> core::result::Result<Self, alloc::string::String> where I: lattice_seams::Io + 'static, C: lattice_seams::Clock + core::clone::Clone + 'static, R: lattice_seams::Rng + 'static
 pub fn lattice_api::exec_host::ExecHost::start_dir(std::path::PathBuf, lattice_api::exec_host::PolicyTable, lattice_api::exec_host::HostLimits) -> core::result::Result<Self, alloc::string::String>
 pub fn lattice_api::exec_host::ExecHost::unattached_tables(&self) -> &[alloc::string::String]
@@ -265,6 +267,7 @@ pub fn lattice_api::exec_host::ExecProxy::execute_cancellable(&mut self, &lattic
 pub struct lattice_api::exec_host::HostLimits
 pub lattice_api::exec_host::HostLimits::max_timeout_ms: core::option::Option<u64>
 pub lattice_api::exec_host::HostLimits::memory_bytes: u64
+pub lattice_api::exec_host::HostLimits::queue_depth: usize
 impl core::clone::Clone for lattice_api::exec_host::HostLimits
 pub fn lattice_api::exec_host::HostLimits::clone(&self) -> Self
 impl core::cmp::Eq for lattice_api::exec_host::HostLimits

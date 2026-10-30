@@ -258,7 +258,7 @@ impl ExecSession {
             | Statement::Insert(_)
             | Statement::Update(_)
             | Statement::Delete(_) => {
-                let bound = bind_statement(&stmt, &db.catalog_view())?;
+                let bound = bind_statement(&stmt, &db.catalog_view_for(&self.policy))?;
                 Ok(bound
                     .plan
                     .output()
@@ -374,7 +374,7 @@ impl ExecSession {
             | Statement::Insert(_)
             | Statement::Update(_)
             | Statement::Delete(_)) => {
-                let bound = bind_statement(&stmt, &db.catalog_view())?;
+                let bound = bind_statement(&stmt, &db.catalog_view_for(&self.policy))?;
                 let values = decode_params(&bound.param_types, params)?;
                 self.run_bound(db, &bound, &values, cancel)
             }

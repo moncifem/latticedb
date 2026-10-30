@@ -416,9 +416,11 @@ executor over the existing bounded pgwire listener (loopback trust or SCRAM over
 **What is checked, through the real binary** (`crates/latticed/tests/sql_binary.rs`, a plain pgwire
 client written in the test, no driver): create, insert, update, delete and select; `RETURNING`; two
 connections with snapshot isolation; `23505`, `23502`, `42P01` and `25P02`; a connection dropped
-mid-transaction commits nothing; `42501` for a `deny-all` development policy and, under SCRAM over
-verified TLS, for a `deny-all` account and for an account the policy file does not list (no allow-all
-fallback); a client's `SET statement_timeout` is clamped to `--statement-timeout-max-ms`; a second
+mid-transaction commits nothing; `42501` for DDL by a `deny-all` development policy and, under SCRAM over
+verified TLS, by a `deny-all` account and by an account the policy file does not list (no allow-all
+fallback); for those principals the catalog is hidden, so DML and `Parse`/`Describe` on an existing table
+are `42P01` with the message of a missing table (checked against both, in `lattice-exec`, `lattice-api` and
+through the binary); a client's `SET statement_timeout` is clamped to `--statement-timeout-max-ms`; a second
 server on the same directory is refused; a committed row is in the log after a clean stop and after
 SIGKILL (the test looks for the row's bytes in the log files, since SQL cannot read it back, see below);
 the extended protocol with text parameters (Parse, Bind, Execute, Sync), including a `22P02` bad parameter; option validation. `lattice-api` has unit tests for the policy file and the database thread.
@@ -428,7 +430,11 @@ definitions are not (#379), so a recovered table cannot be addressed by SQL: `SE
 `CREATE TABLE` of the same name is `42P07`. "Create a table, insert, select and see the data survive a
 crash" from issue 345 is therefore **not met**: the data survives, SQL cannot read it back.
 
-**Limits.** One database thread runs statements serially; a statement cannot be interrupted inside the
+**Limits.** One database thread runs statements serially; a connection waits at most the statement
+ceiling plus 5 s and then gets `57014` (the statement is cancelled and skipped if not started), but a
+client that disconnects mid-statement does not stop it before the ceiling, and the backlog of abandoned
+work can reach `max-connections x ceiling`; a dead database thread is detected (`57P01`, non-zero exit);
+the SIGKILL test shows the row's bytes reached the log files, not that they were `fsync`ed; a statement cannot be interrupted inside the
 engine's scan materialisation or a sort comparison (see the `lattice-exec` README). Row policy has two
 grants, `allow-all` and `deny-all`. Binary result formats are not exercised. No driver conformance is claimed.
 
