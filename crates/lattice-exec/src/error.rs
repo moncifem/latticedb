@@ -179,6 +179,11 @@ impl From<RowError> for ExecError {
             RowError::InDoubt(_) => {
                 ExecError::new(ErrorKind::Storage, "40003", "the commit outcome is unknown")
             }
+            RowError::KeyTooLong { max, .. } => ExecError::new(
+                ErrorKind::Limit,
+                "54000",
+                format!("a primary key or unique value is longer than the {max} byte limit"),
+            ),
             // Engine detail (paths, offsets, record contents) is not for clients.
             RowError::Corrupt(_) => ExecError::corrupt(),
             _ => ExecError::new(ErrorKind::Storage, "XX000", "internal storage error"),

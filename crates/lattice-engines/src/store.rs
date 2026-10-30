@@ -113,6 +113,14 @@ pub enum RowError {
     InvalidCatalog(CatalogError),
     /// The writes do not fit the payload format.
     Encode(RowOpsError),
+    /// A row key is longer than [`rowops::MAX_KEY_BYTES`], the bound the change feed can carry.
+    /// Nothing was written; shorten the key.
+    KeyTooLong {
+        /// The length of the first offending key.
+        len: usize,
+        /// The longest key the store accepts.
+        max: usize,
+    },
     /// A statement limit (cancellation, deadline or memory budget) stopped a read; nothing was
     /// changed and the read can be retried with fresh limits.
     Limit(LimitError),
@@ -140,6 +148,9 @@ impl fmt::Display for RowError {
             RowError::InvalidIndexes(why) => write!(f, "invalid index definitions: {why}"),
             RowError::InvalidCatalog(error) => write!(f, "invalid catalog change: {error}"),
             RowError::Encode(e) => write!(f, "cannot encode writes: {e:?}"),
+            RowError::KeyTooLong { len, max } => {
+                write!(f, "row key of {len} bytes exceeds the {max} byte limit")
+            }
             RowError::PermissionDenied => f.write_str("row write denied"),
             RowError::Limit(e) => write!(f, "statement limit: {e}"),
         }
@@ -154,11 +165,33 @@ impl Classify for RowError {
             RowError::SnapshotTooOld { .. } | RowError::NoSuchIndex { .. } => ErrorClass::Rejected,
             RowError::Corrupt(_) => ErrorClass::Fatal,
             RowError::Encode(_)
+            | RowError::KeyTooLong { .. }
             | RowError::Limit(_)
             | RowError::InvalidIndexes(_)
             | RowError::PermissionDenied
             | RowError::InvalidCatalog(_) => ErrorClass::Rejected,
         }
+    }
+}
+
+/// Refuses a write set that puts a key the change feed could not carry, before anything is
+/// appended. Deletes are not checked: a row written before the limit existed must stay removable,
+/// and a delete of a row that is not there produces no feed event for anyone.
+fn check_key_lengths(writes: &[rowops::RowWrite]) -> Result<(), RowError> {
+    if bugs::active(Bug::RowOversizeKeyAccepted) {
+        return Ok(());
+    }
+    match writes
+        .iter()
+        .filter(|(_, value)| value.is_some())
+        .map(|((_, key), _)| key.len())
+        .find(|len| *len > rowops::MAX_KEY_BYTES)
+    {
+        Some(len) => Err(RowError::KeyTooLong {
+            len,
+            max: rowops::MAX_KEY_BYTES,
+        }),
+        None => Ok(()),
     }
 }
 
@@ -472,6 +505,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
             .map_err(RowError::InvalidCatalog)?;
         let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
+        check_key_lengths(&writes)?;
         let changes = self
             .indexes
             .catalog_changes_for(&self.table, &writes, &definitions)
@@ -647,10 +681,12 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     ) -> Result<Charged<'l, Vec<Vec<u8>>>, RowError> {
         self.check_snapshot(snap)?;
         limits.check(clock).map_err(RowError::Limit)?;
+        // Same rule as `lookup_at`: an index that does not exist at the snapshot (never used, not
+        // yet created, or dropped) is an error, never "no matching rows".
         let Some(table) = self.indexes.table_for(snap, index) else {
-            return Ok(Charged {
-                value: Vec::new(),
-                _held: Vec::new(),
+            return Err(RowError::NoSuchIndex {
+                index,
+                snapshot: snap.as_of,
             });
         };
         let candidates = self.indexes.lookup(snap, index, key).map_err(mvcc_error)?;
@@ -921,6 +957,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         }
         let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
+        check_key_lengths(&writes)?;
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {

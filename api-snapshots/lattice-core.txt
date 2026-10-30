@@ -81,6 +81,7 @@ pub lattice_core::bugs::Bug::RowHistoryOverwritten
 pub lattice_core::bugs::Bug::RowIndexMissingInsert
 pub lattice_core::bugs::Bug::RowIndexPrefixLookup
 pub lattice_core::bugs::Bug::RowIndexStaleEntries
+pub lattice_core::bugs::Bug::RowOversizeKeyAccepted
 pub lattice_core::bugs::Bug::RowPartialApply
 pub lattice_core::bugs::Bug::RowPolicyReadSkipped
 pub lattice_core::bugs::Bug::RowPolicyWriteSkipped
@@ -106,6 +107,7 @@ pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 8]
 pub const lattice_core::bugs::Bug::EXEC_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::KEY_LIMIT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::POLICY: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::PRINCIPAL: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::RECOVERY_ORDER: [lattice_core::bugs::Bug; 1]

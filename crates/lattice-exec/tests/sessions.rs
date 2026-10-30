@@ -1073,3 +1073,35 @@ fn like_and_concatenation_obey_the_statement_limits() {
         .unwrap_err();
     assert_eq!((e.sqlstate(), e.kind()), ("53200", ErrorKind::Limit));
 }
+
+#[test]
+fn a_key_the_store_cannot_carry_is_a_statement_error_not_an_internal_one() {
+    let (mut f, mut s) = accounts();
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE named (k TEXT PRIMARY KEY, u TEXT UNIQUE)",
+    );
+    // A text key is its bytes plus a two byte terminator, so 4094 characters is the longest.
+    let fits = "x".repeat(4094);
+    ok(
+        &mut f.db,
+        &mut s,
+        &format!("INSERT INTO named VALUES ('{fits}', 'one')"),
+    );
+    let long = "y".repeat(4095);
+    for sql in [
+        format!("INSERT INTO named VALUES ('{long}', 'two')"),
+        format!("INSERT INTO named VALUES ('short', '{long}')"),
+    ] {
+        let e = err(&mut f.db, &mut s, &sql);
+        assert_eq!(e.sqlstate(), "54000", "{e}");
+        assert_eq!(e.kind(), ErrorKind::Limit);
+    }
+    // Nothing was written and the session carries on.
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT u FROM named"),
+        strs(&[&["one"]])
+    );
+    assert_eq!(s.status(), TxStatus::Idle);
+}

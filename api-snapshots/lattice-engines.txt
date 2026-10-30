@@ -135,6 +135,9 @@ pub enum lattice_engines::feed_emit::FeedReadError
 pub lattice_engines::feed_emit::FeedReadError::CursorTooOld
 pub lattice_engines::feed_emit::FeedReadError::CursorTooOld::floor: u64
 pub lattice_engines::feed_emit::FeedReadError::Feed(lattice_core::feed::FeedError)
+pub lattice_engines::feed_emit::FeedReadError::KeyTooLarge
+pub lattice_engines::feed_emit::FeedReadError::KeyTooLarge::cursor: lattice_core::feed::Cursor
+pub lattice_engines::feed_emit::FeedReadError::KeyTooLarge::len: usize
 pub lattice_engines::feed_emit::FeedReadError::MissingCommitTime
 pub lattice_engines::feed_emit::FeedReadError::MissingCommitTime::lsn: u64
 impl core::clone::Clone for lattice_engines::feed_emit::FeedReadError
@@ -503,6 +506,7 @@ impl core::fmt::Debug for lattice_engines::rowops::RowOpsError
 pub fn lattice_engines::rowops::RowOpsError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_engines::rowops::RowOpsError
 pub const lattice_engines::rowops::MAGIC: [u8; 4]
+pub const lattice_engines::rowops::MAX_KEY_BYTES: usize
 pub fn lattice_engines::rowops::decode(&[u8]) -> core::result::Result<alloc::vec::Vec<lattice_engines::rowops::RowWrite>, lattice_engines::rowops::RowOpsError>
 pub fn lattice_engines::rowops::encode(&[lattice_engines::rowops::RowWrite]) -> core::result::Result<alloc::vec::Vec<u8>, lattice_engines::rowops::RowOpsError>
 pub fn lattice_engines::rowops::is_row_payload(&[u8]) -> bool
@@ -517,6 +521,9 @@ pub lattice_engines::store::RowError::Encode(lattice_engines::rowops::RowOpsErro
 pub lattice_engines::store::RowError::InDoubt(lattice_core::txn::TxnError)
 pub lattice_engines::store::RowError::InvalidCatalog(lattice_engines::catalog::CatalogError)
 pub lattice_engines::store::RowError::InvalidIndexes(alloc::string::String)
+pub lattice_engines::store::RowError::KeyTooLong
+pub lattice_engines::store::RowError::KeyTooLong::len: usize
+pub lattice_engines::store::RowError::KeyTooLong::max: usize
 pub lattice_engines::store::RowError::Limit(lattice_engines::limits::LimitError)
 pub lattice_engines::store::RowError::NoSuchIndex
 pub lattice_engines::store::RowError::NoSuchIndex::index: u32

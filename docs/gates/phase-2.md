@@ -120,6 +120,22 @@ non-empty `AS OF TIMESTAMP` lookups. It ran clean at 10,000 cases per property o
 does not cover crashes or injected faults (see the fault suites above) and the bug-injection
 (planted bug) suite is separate.
 
+## Audit follow-ups: limited index lookup and the row key bound (issues 443 and 444)
+
+`RowStore::lookup_at_limited` now returns `RowError::NoSuchIndex` for an index that was never used, is not
+yet created at the snapshot or was dropped, exactly as `lookup_at` does; before, it answered an empty list
+that a caller would read as "no matching rows". `tests/unknown_index.rs` runs the same five cases through
+both functions and fails against the old behavior.
+
+The row store refuses a put whose key is over 4096 bytes (`RowError::KeyTooLong`, SQLSTATE `54000` through
+`lattice-exec`), the same bound as the change feed, so one oversize key can no longer make
+`events_since_as` fail for every reader. A log written before the rule may still hold one: the feed
+returns `FeedReadError::KeyTooLarge` only to a reader allowed to read that row, and resuming from the
+reported cursor skips it. Deletes are not bounded, so such a row can be removed. Witnessed with
+`Bug::RowOversizeKeyAccepted` (`tests/key_limit.rs`). In SQL the error surfaces at commit for a long text
+or bytea primary key or unique value, not at the statement that built the key. The format note is in
+`formats/rowops-v1.md` and ADR 0023; this limit is format-adjacent and needs independent review.
+
 ## Still missing
 
 Catalog-backed index definitions; completed typed-table integration; checkpoint-based recovery with

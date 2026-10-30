@@ -119,6 +119,53 @@ fn an_index_unknown_at_the_snapshot_is_an_error_not_an_empty_result() {
 }
 
 #[test]
+fn the_limited_lookup_reports_an_unknown_index_exactly_like_the_plain_one() {
+    use lattice_engines::limits::{CancellationFlag, StatementLimits};
+    let (disk, clock) = fresh();
+    let mut store = open(&disk, &clock);
+    store.commit_catalog(vec![table(7)], vec![]).unwrap();
+    let mut tx = store.begin();
+    tx.put((7, b"a".to_vec()), b"alpha".to_vec());
+    let before_create = store.commit(tx).unwrap();
+    let created = store
+        .commit_catalog(
+            vec![],
+            vec![IndexOp::Create(definition(9, 7, IndexKey::WholeValue))],
+        )
+        .unwrap();
+    let dropped = store
+        .commit_catalog(vec![], vec![IndexOp::Drop { id: 9 }])
+        .unwrap();
+    let shared = SharedClock(clock.clone());
+    let limits = StatementLimits::new(&shared, None, 1 << 20, CancellationFlag::default()).unwrap();
+    let found = vec![b"a".to_vec()];
+    let cases = [
+        (before_create, 9, false),
+        (created, 9, true),
+        (dropped, 9, false),
+        (created, 77, false),
+        (dropped, 77, false),
+    ];
+    for (at, index, exists) in cases {
+        let snap = Snapshot { as_of: at };
+        let plain = store.lookup_at(snap, index, b"alpha", &allow());
+        let limited = store
+            .lookup_at_limited(snap, index, b"alpha", &allow(), &limits, &shared)
+            .map(|charged| charged.value.clone());
+        let want = if exists {
+            Ok(found.clone())
+        } else {
+            Err(RowError::NoSuchIndex {
+                index,
+                snapshot: at,
+            })
+        };
+        assert_eq!(plain, want);
+        assert_eq!(limited, want);
+    }
+}
+
+#[test]
 fn a_wrong_magic_is_reported_as_bad_magic_not_truncated() {
     use lattice_engines::rowops::{self, RowOpsError};
     assert_eq!(

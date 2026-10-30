@@ -21,5 +21,11 @@ A decoder must:
 - reject a version other than 1, a kind other than 0 or 1, and bytes after the last write;
 - apply writes in order, so when one change set writes the same key twice the last write wins.
 
-Not yet specified: maximum key and value sizes, whether an empty write list is valid, and a distinct error
-for a payload that does not start with the magic (today it is reported as truncated).
+**Key bound (write side).** The layout carries a key of up to `u32::MAX` bytes, but the row store refuses
+to commit a put whose key is longer than 4096 bytes (`MAX_KEY_BYTES`, the same number as the change feed's
+key bound in [change-feed-v1.md](change-feed-v1.md)), with `RowError::KeyTooLong` and nothing appended.
+Deletes are not checked. The bytes of the format do not change, and a decoder still accepts a longer key:
+a log written before this rule may hold one. The change feed then withholds only that row, see
+`lattice_engines::feed_emit`. Value sizes remain bounded only by the payload.
+
+Not yet specified: the maximum value size, and whether an empty write list is valid.

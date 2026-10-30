@@ -23,11 +23,16 @@
 //!   incomplete. A cursor at or below a non-zero floor is therefore refused with
 //!   [`FeedReadError::CursorTooOld`]; the consumer must re-snapshot instead of resuming at a different
 //!   position. With no vacuum the floor is 0 and every cursor, including [`Cursor::ORIGIN`], is valid.
+//! * **Key bound.** The store refuses a put whose key is over [`MAX_KEY_BYTES`], so new history never
+//!   holds one. A log from before that rule may. Such a row cannot be an event, so a reader who may
+//!   read it gets [`FeedReadError::KeyTooLarge`] at its cursor and skips it by resuming from that
+//!   cursor; a reader who may not read it, and every cursor past it, are unaffected.
 //! * **Provenance.** The store commits with no author or turn, so events carry author 0 and no turn.
 //!
 //! Cost: one call reads every retained version at or after the cursor's LSN.
 
 use crate::limits::{AllowAll, PolicyEvaluator, RowRef};
+use crate::rowops::MAX_KEY_BYTES;
 use crate::store::RowStore;
 use lattice_core::changeset::ChangeSet;
 use lattice_core::feed::{ChangeEvent, ChangeOp, Cursor, EntityChange, FeedError, events_for};
@@ -47,8 +52,17 @@ pub enum FeedReadError {
         /// The commit LSN.
         lsn: u64,
     },
-    /// The change set cannot be expressed as events (a key over the feed's size bound).
+    /// The change set cannot be expressed as events (a value over the feed's size bound).
     Feed(FeedError),
+    /// The next event this reader may see carries a key over the feed's size bound. Only a log
+    /// written before the store refused such keys can hold one. It blocks only readers allowed to
+    /// read that row; a reader resumes past it by reading again from `cursor`.
+    KeyTooLarge {
+        /// The cursor of the event that cannot be carried.
+        cursor: Cursor,
+        /// The length of its key in bytes.
+        len: usize,
+    },
 }
 
 impl fmt::Display for FeedReadError {
@@ -59,6 +73,14 @@ impl fmt::Display for FeedReadError {
             }
             Self::MissingCommitTime { lsn } => write!(f, "no commit time for lsn {lsn}"),
             Self::Feed(e) => write!(f, "{e}"),
+            Self::KeyTooLarge { cursor, len } => write!(
+                f,
+                "the event at lsn {} index {} has a {len} byte key over the {} byte feed limit; \
+                 resume from that cursor to skip it",
+                cursor.lsn(),
+                cursor.index(),
+                MAX_KEY_BYTES
+            ),
         }
     }
 }
@@ -105,7 +127,14 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 .iter()
                 .map(|e| EntityChange {
                     kind: e.key.0,
-                    key: e.key.1.clone(),
+                    // An oversize key (only in a log from before the store bounded keys) is
+                    // replaced here so the rest of the set still becomes events; its own event is
+                    // never emitted, see below.
+                    key: if e.key.1.len() > MAX_KEY_BYTES {
+                        Vec::new()
+                    } else {
+                        e.key.1.clone()
+                    },
                     op: match e.value {
                         Some(v) => ChangeOp::Upsert(v.clone()),
                         None => ChangeOp::Delete,
@@ -124,9 +153,16 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                         value,
                     })
                 });
-                if allowed {
-                    out.push(event);
+                if !allowed {
+                    continue;
                 }
+                if entry.key.1.len() > MAX_KEY_BYTES {
+                    return Err(FeedReadError::KeyTooLarge {
+                        cursor: event.cursor,
+                        len: entry.key.1.len(),
+                    });
+                }
+                out.push(event);
             }
         }
         Ok(out.into_iter())

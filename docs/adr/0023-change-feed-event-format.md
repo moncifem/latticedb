@@ -31,6 +31,12 @@ vacuum do not renumber retained records. The enclosing subscription must define 
 history-unavailable errors, filtering, atomic delivery, replay and admission; this cursor cannot by
 itself disambiguate unrelated/restored logs. Bound aggregate memory separately from per-event limits.
 
+The 4096 byte key bound is also enforced where rows are written: the row store refuses a put with a longer
+key (see [rowops-v1](../../formats/rowops-v1.md)), so new history always fits the feed. A log from before
+that rule can hold one; the feed then fails only for a reader allowed to read that row, with an error that
+names its cursor, and that reader resumes from that cursor to skip it. This tightens what the store accepts
+and changes no encoded byte; it still needs the independent format review noted above.
+
 Handwritten vectors and synthetic ordering/codec tests exist; actual restart/replay and subscription
 proof, scheduled fuzz execution and frozen independent golden fixtures remain outstanding. Before
 activation or freezing, resolve those gaps and compatibility expectations with consumers. Preserve

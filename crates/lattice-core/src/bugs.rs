@@ -119,6 +119,8 @@ pub enum Bug {
     /// The executor's unique-constraint lookup fetches the row without the actor's read policy
     /// (hidden rows revealed).
     ExecIndexPolicySkipped,
+    /// A row commit accepts a key longer than the change feed can carry (feed availability).
+    RowOversizeKeyAccepted,
 }
 
 impl Bug {
@@ -156,6 +158,9 @@ impl Bug {
     pub const POLICY: [Bug; 2] = [Bug::RowPolicyReadSkipped, Bug::RowPolicyWriteSkipped];
     /// Catalog-managed definition recovery defects, exercised by the focused fault witness.
     pub const CATALOG_INDEX: [Bug; 2] = [Bug::ManagedIndexesNotRecovered, Bug::DdlPolicySkipped];
+
+    /// Key-limit defects, detected by the oversize key witnesses in `lattice-engines`.
+    pub const KEY_LIMIT: [Bug; 1] = [Bug::RowOversizeKeyAccepted];
 
     /// Strict HLC snapshot defects, detected by the focused retention witness.
     pub const HLC_SNAPSHOT: [Bug; 1] = [Bug::HlcSnapshotClamped];
@@ -274,6 +279,7 @@ mod tests {
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
+            .chain(Bug::KEY_LIMIT)
             .chain(Bug::FENCE_ORDER)
             .chain(Bug::RECOVERY_ORDER)
     }
@@ -292,10 +298,11 @@ mod tests {
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
+            .chain(Bug::KEY_LIMIT)
             .chain(Bug::FENCE_ORDER)
             .chain(Bug::RECOVERY_ORDER)
             .collect();
-        assert_eq!(all.len(), 53);
+        assert_eq!(all.len(), 54);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

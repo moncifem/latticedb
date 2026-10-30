@@ -15,6 +15,12 @@ pub type RowWrite = (RowKey, Option<Vec<u8>>);
 pub const MAGIC: [u8; 4] = *b"LROW";
 const VERSION: u8 = 1;
 
+/// The longest row key the store accepts at commit, in bytes. It is the change feed's key bound
+/// (`lattice_core::feed::MAX_KEY_LEN`), because every committed row must be expressible as a feed
+/// event; the two limits are one constant so they cannot drift apart. The row-write layout itself
+/// can carry longer keys (`u32` length), and a log written before this limit may hold one.
+pub const MAX_KEY_BYTES: usize = lattice_core::feed::MAX_KEY_LEN;
+
 /// Why a payload could not be read as row writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowOpsError {
