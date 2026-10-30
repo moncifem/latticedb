@@ -1123,6 +1123,47 @@ fn put_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
+/// Length of `s` as a quoted JSON string in the canonical encoding, computed without building it.
+fn quoted_len(s: &str) -> usize {
+    2 + s
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            c if u32::from(c) < 0x20 => 6,
+            c => c.len_utf8(),
+        })
+        .sum::<usize>()
+}
+
+/// Most bytes an `append` line has besides its records: the longest `id`, `session` and `turn`,
+/// the field names and the brackets. With that envelope the line is exactly this plus each
+/// [`append_record_len`] plus one comma between neighbouring records; compare it with
+/// [`MAX_LINE_BYTES`].
+pub const APPEND_ENVELOPE_MAX_BYTES: usize = {
+    let open = "{\"v\":1,\"t\":\"append\"".len();
+    let id = ",\"id\":".len() + 2 + MAX_ID_BYTES;
+    let session = ",\"session\":".len() + 2 + MAX_ID_BYTES;
+    // The largest turn, 2^53 - 1, has 16 digits.
+    let turn = ",\"turn\":".len() + 16;
+    let records = ",\"records\":[]".len();
+    open + id + session + turn + records + "}".len()
+};
+
+/// Exact length, in bytes, of one record as it appears in the `records` array of an encoded
+/// `append`, without the separating comma. JSON escaping makes this up to six times the body
+/// length (a control character becomes `\u00XX`), so the body length alone says nothing about the
+/// line.
+#[must_use]
+pub fn append_record_len(rid: &str, kind: Kind, body: &str) -> usize {
+    "{\"rid\":".len()
+        + quoted_len(rid)
+        + ",\"kind\":".len()
+        + quoted_len(kind.as_str())
+        + ",\"body\":".len()
+        + quoted_len(body)
+        + "}".len()
+}
+
 fn field_str(out: &mut String, key: &str, v: &str) {
     out.push_str(",\"");
     out.push_str(key);

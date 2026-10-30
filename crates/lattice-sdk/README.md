@@ -48,7 +48,8 @@ property fail.
 `outbox::Outbox` is a sans-I/O write queue for offline use (P3-04). `enqueue(turn, kind, body)` returns a stable
 record id `<client id>-<counter>` (the counter is stored with the queue; no time, no randomness). The queue is
 bounded by item count and body bytes and answers an explicit `Full` error. `poll(now, jitter)` returns the next
-`Batch` (one turn, at most `max_batch` records, in enqueue order); one batch is in flight at a time and is resent
+`Batch` (one turn, at most `max_batch` records and at most 1 MiB of encoded `append` line, in enqueue order; a body
+whose escaped line cannot fit alone is refused at `enqueue` with `BodyUnsendable`); one batch is in flight at a time and is resent
 when its deadline passes, with `base_delay << attempt` capped at `max_delay` plus a caller-supplied jitter, all on
 a logical clock. `on_receipts` clears `recorded` and `duplicate` writes; `fenced` drops every queued write of that
 turn, returns them to the application and refuses the turn from then on. `connection_lost` keeps every unacked

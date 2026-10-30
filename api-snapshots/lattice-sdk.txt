@@ -374,6 +374,7 @@ pub fn lattice_sdk::contract::Record::eq(&self, &Self) -> bool
 impl core::fmt::Debug for lattice_sdk::contract::Record
 pub fn lattice_sdk::contract::Record::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_sdk::contract::Record
+pub const lattice_sdk::contract::APPEND_ENVELOPE_MAX_BYTES: usize
 pub const lattice_sdk::contract::MAX_BODY_BYTES: usize
 pub const lattice_sdk::contract::MAX_EXTERNAL_ID_BYTES: usize
 pub const lattice_sdk::contract::MAX_ID_BYTES: usize
@@ -384,6 +385,7 @@ pub const lattice_sdk::contract::MAX_RECORDS: usize
 pub const lattice_sdk::contract::MAX_RID_BYTES: usize
 pub const lattice_sdk::contract::MAX_SOURCE_BYTES: usize
 pub const lattice_sdk::contract::VERSION: u64
+pub fn lattice_sdk::contract::append_record_len(&str, lattice_sdk::contract::Kind, &str) -> usize
 pub fn lattice_sdk::contract::decode_line(&[u8]) -> core::result::Result<lattice_sdk::contract::Message, lattice_sdk::contract::ContractError>
 pub fn lattice_sdk::contract::encode_line(&lattice_sdk::contract::Message) -> core::result::Result<alloc::string::String, lattice_sdk::contract::ContractError>
 pub mod lattice_sdk::mcp
@@ -678,6 +680,7 @@ impl core::marker::StructuralPartialEq for lattice_sdk::outbox::DecodeError
 pub enum lattice_sdk::outbox::OutboxError
 pub lattice_sdk::outbox::OutboxError::BodyExceedsBudget
 pub lattice_sdk::outbox::OutboxError::BodyTooLarge
+pub lattice_sdk::outbox::OutboxError::BodyUnsendable
 pub lattice_sdk::outbox::OutboxError::CounterExhausted
 pub lattice_sdk::outbox::OutboxError::Full
 pub lattice_sdk::outbox::OutboxError::Full::bytes: usize

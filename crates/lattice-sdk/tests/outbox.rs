@@ -850,3 +850,191 @@ fn fuzz_seeds_decode_as_their_names_say() {
         }
     }
 }
+
+// ---- line size bound --------------------------------------------------------------------------
+
+use lattice_sdk::contract::{MAX_LINE_BYTES, Message, Record, encode_line};
+
+/// The `append` line a client would send for `b`, with the longest id, session and turn the
+/// contract allows: the worst case the outbox cannot see.
+fn worst_case_line(b: &Batch) -> Result<String, lattice_sdk::contract::ContractError> {
+    encode_line(&Message::Append {
+        id: "i".repeat(64),
+        session: "s".repeat(64),
+        turn: (1 << 53) - 1,
+        records: b
+            .records
+            .iter()
+            .map(|r| Record {
+                rid: r.rid.clone(),
+                kind: r.kind,
+                body: r.body.clone(),
+            })
+            .collect(),
+    })
+}
+
+fn big_cfg() -> OutboxConfig {
+    OutboxConfig {
+        max_items: 64,
+        max_bytes: 4 * 1024 * 1024,
+        max_batch: 32,
+        base_delay: 2,
+        max_delay: 16,
+    }
+}
+
+/// Send every batch to a server that records each id once; return the batch sizes.
+fn drain(o: &mut Outbox) -> Vec<usize> {
+    let mut s = Server::default();
+    let mut sizes = Vec::new();
+    while let Some(b) = o.poll(0, 0) {
+        let line = worst_case_line(&b).expect("every batch fits one line");
+        assert!(line.len() <= MAX_LINE_BYTES);
+        sizes.push(b.records.len());
+        o.on_receipts(&s.append(&b));
+    }
+    assert!(o.is_empty(), "the queue drains");
+    sizes
+}
+
+#[test]
+fn five_maximum_bodies_are_split_into_batches_that_fit_one_line() {
+    let mut o = Outbox::new("c1", big_cfg()).unwrap();
+    let body = "a".repeat(256 * 1024);
+    for _ in 0..5 {
+        o.enqueue(1, Kind::ToolResult, &body).unwrap();
+    }
+    persist(&mut o);
+    // Three bodies are 786,432 bytes; a fourth would pass the 1,048,576 byte limit by itself.
+    assert_eq!(drain(&mut o), [3, 2]);
+}
+
+#[test]
+fn a_control_character_body_that_escapes_past_the_line_limit_is_refused_at_enqueue() {
+    let mut o = Outbox::new("c1", big_cfg()).unwrap();
+    let body = "\u{1}".repeat(256 * 1024);
+    // 262,144 control characters escape to 1,572,864 bytes.
+    assert_eq!(
+        o.enqueue(1, Kind::ToolResult, &body),
+        Err(OutboxError::BodyUnsendable)
+    );
+    assert!(o.is_empty());
+    // Nothing was consumed: the next write still gets counter 0.
+    assert_eq!(o.enqueue(1, Kind::Note, "ok").unwrap(), "c1-0");
+}
+
+#[test]
+fn enqueue_accepts_exactly_the_bodies_whose_worst_case_line_fits() {
+    let mut accepted = 0usize;
+    let mut total = 0usize;
+    for n in (170_000..=176_000).step_by(100) {
+        let body = "\u{1}".repeat(n);
+        let mut o = Outbox::new("c1", big_cfg()).unwrap();
+        let queued = o.enqueue(1, Kind::ToolResult, &body).is_ok();
+        // Whether the line fits is decided by the encoder alone.
+        let batch = Batch {
+            turn: 1,
+            records: vec![Record {
+                rid: "c1-0".into(),
+                kind: Kind::ToolResult,
+                body,
+            }],
+            attempt: 0,
+        };
+        let fits = worst_case_line(&batch).is_ok();
+        assert_eq!(queued, fits, "{n} control characters");
+        accepted += usize::from(fits);
+        total += 1;
+    }
+    assert!(
+        accepted > 0 && accepted < total,
+        "the scan crosses the limit"
+    );
+}
+
+#[test]
+fn the_exact_edge_is_one_character() {
+    let fits = |n: usize| {
+        let mut o = Outbox::new("c1", big_cfg()).unwrap();
+        o.enqueue(1, Kind::ToolResult, &"\u{1}".repeat(n)).is_ok()
+    };
+    // Derived by hand from the format, not from the code: the longest envelope is 19 + 72 + 77
+    // + 24 + 13 + 1 = 206 bytes, the record around the body is {"rid":"c1-0","kind":
+    // "tool_result","body":""} = 7 + 6 + 8 + 13 + 8 + 2 + 1 = 45 bytes, and each control
+    // character takes six: 6 * n + 251 <= 1,048,576 holds up to n = 174,720.
+    assert!(fits(174_720));
+    assert!(!fits(174_721));
+}
+
+#[test]
+fn a_stored_queue_holding_an_undeliverable_body_is_refused() {
+    let big = vec![1u8; 200_000];
+    let bytes = raw("c", 1, &[], &[item(0, 1, 2, &big)]);
+    assert_eq!(
+        Outbox::from_bytes(&bytes, big_cfg()).err(),
+        Some(DecodeError::NonCanonical("body does not fit in one line"))
+    );
+    let ok = vec![1u8; 170_000];
+    let bytes = raw("c", 1, &[], &[item(0, 1, 2, &ok)]);
+    assert!(Outbox::from_bytes(&bytes, big_cfg()).is_ok());
+}
+
+#[test]
+fn a_resent_batch_is_never_a_line_the_server_must_refuse() {
+    let mut o = Outbox::new("c1", big_cfg()).unwrap();
+    let body = "\u{1}".repeat(100_000);
+    for _ in 0..4 {
+        o.enqueue(1, Kind::ToolResult, &body).unwrap();
+    }
+    persist(&mut o);
+    // Each body escapes to 600,000 bytes: one record per batch. No receipts arrive; the same
+    // batch comes back at each deadline and is encodable every time.
+    let first = o.poll(0, 0).unwrap();
+    assert_eq!(first.records.len(), 1);
+    for attempt in 1..=3u32 {
+        let again = o.poll(1000 * u64::from(attempt), 0).unwrap();
+        assert_eq!(again.records, first.records);
+        assert_eq!(again.attempt, attempt);
+        worst_case_line(&again).unwrap();
+    }
+    // Receipts for it release the next one, which is again a single encodable record.
+    let mut s = Server::default();
+    o.on_receipts(&s.append(&first));
+    let next = o.poll(0, 0).unwrap();
+    assert_eq!(rids(&next), ["c1-1"]);
+}
+
+fn chunk() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("a".to_owned()),
+        Just("\u{1}".to_owned()),
+        Just("\"".to_owned()),
+        Just("\\".to_owned()),
+        Just("\n".to_owned()),
+        Just("\u{e9}".to_owned()),
+        Just("\u{1F600}".to_owned()),
+    ]
+}
+
+proptest! {
+    /// Whatever mix of escapes and sizes is queued, a write is either refused at enqueue or
+    /// leaves in a batch whose worst-case line fits, and the queue drains.
+    #[test]
+    fn every_batch_fits_one_line(
+        items in proptest::collection::vec((chunk(), 0usize..60_000, 0usize..3), 1..8),
+        max_batch in 1usize..=64,
+    ) {
+        let cfg = OutboxConfig { max_batch, ..big_cfg() };
+        let mut o = Outbox::new("c1", cfg).unwrap();
+        for (c, n, k) in &items {
+            let kind = [Kind::Message, Kind::ToolCall, Kind::ToolResult][*k];
+            match o.enqueue(1, kind, &c.repeat(*n)) {
+                Ok(_) | Err(OutboxError::Full { .. }) => {}
+                Err(e) => prop_assert!(false, "unexpected {e:?}"),
+            }
+        }
+        persist(&mut o);
+        drain(&mut o);
+    }
+}
