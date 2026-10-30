@@ -31,9 +31,16 @@ jobs:
           key: fuzz-24h-corpus-${{ github.ref_name }}-${{ matrix.target }}-${{ matrix.shard }}-${{ github.run_id }}
           restore-keys: fuzz-24h-corpus-${{ github.ref_name }}-${{ matrix.target }}-${{ matrix.shard }}-
       - name: fuzz ${{ matrix.target }} shard ${{ matrix.shard }} for 5h40m
+        env:
+          TARGET: ${{ matrix.target }}
+          SHARD: ${{ matrix.shard }}
         run: |
-          cd fuzz && mkdir -p corpus/${{ matrix.target }} && cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- \
-            -max_total_time=20400 -seed=$((${{ matrix.shard }} * 7919))
+          cd fuzz
+          FUZZ_FLAGS=$(python3 ../tools/check_fuzz_matrices.py flags "$TARGET")
+          echo "libFuzzer limits: $FUZZ_FLAGS"
+          # shellcheck disable=SC2086 # FUZZ_FLAGS is several arguments on purpose
+          mkdir -p "corpus/$TARGET" && cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- \
+            $FUZZ_FLAGS -max_total_time=20400 -seed=$((SHARD * 7919))
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:

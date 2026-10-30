@@ -1,0 +1,1 @@
+Scheduled fuzz runs now pass an explicit `-timeout`, `-rss_limit_mb` and a per-target `-max_len` taken from `fuzz/settings.toml`, the nightly job keeps and merges a corpus between nights, and the pull request gate fails when a target has no limits or a `fuzz run` omits them. The values are unmeasured choices and no scheduled run with them has completed yet.

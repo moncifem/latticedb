@@ -39,7 +39,14 @@ jobs:
           key: fuzz-corpus-${{ github.ref_name }}-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ github.ref_name }}-${{ matrix.target }}-
       - name: fuzz ${{ matrix.target }} for 5 hours (the corpus carries over between weeks)
-        run: cd fuzz && mkdir -p corpus/${{ matrix.target }} && cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=18000
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cd fuzz
+          FUZZ_FLAGS=$(python3 ../tools/check_fuzz_matrices.py flags "$TARGET")
+          echo "libFuzzer limits: $FUZZ_FLAGS"
+          # shellcheck disable=SC2086 # FUZZ_FLAGS is several arguments on purpose
+          mkdir -p "corpus/$TARGET" && cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- $FUZZ_FLAGS -max_total_time=18000
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:

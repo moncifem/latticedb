@@ -71,7 +71,126 @@ class CheckFuzzMatrices(unittest.TestCase):
     def test_repository_matrices_are_complete_and_seeded(self):
         cargo = (check.ROOT / 'fuzz/Cargo.toml').read_text()
         flows = {n: (check.ROOT / '.github/workflows' / n).read_text() for n in check.MATRICES}
-        self.assertEqual(check.problems(cargo, flows, check.seeded_targets(check.ROOT / 'fuzz/seeds')), [])
+        self.assertEqual(check.problems(cargo, flows, check.seeded_targets(check.ROOT / 'fuzz/seeds'), check.load_settings()), [])
+
+
+SETTINGS = {
+    'defaults': {'timeout_secs': 20, 'rss_limit_mb': 2048},
+    'targets': {'alpha': {'max_len': 128, 'basis': 'a'}, 'beta': {'max_len': 4096, 'basis': 'b'}},
+}
+RUN_OK = (
+    '      - run: |\n'
+    '          FUZZ_FLAGS=$(python3 ../tools/check_fuzz_matrices.py flags "$T")\n'
+    '          cargo fuzz run x "c" -- $FUZZ_FLAGS -max_total_time=600\n'
+)
+
+
+def copy_settings(**changes):
+    out = {'defaults': dict(SETTINGS['defaults']), 'targets': {k: dict(v) for k, v in SETTINGS['targets'].items()}}
+    for key, value in changes.items():
+        out['defaults' if key in out['defaults'] else 'targets'][key] = value
+    return out
+
+
+class CheckFuzzSettings(unittest.TestCase):
+    def run_problems(self, settings=None, text=None):
+        flows = {'a.yml': workflow('alpha, beta') + (RUN_OK if text is None else text)}
+        return check.problems(CARGO, flows, None, SETTINGS if settings is None else settings)
+
+    def test_complete_settings_and_flags_pass(self):
+        self.assertEqual(self.run_problems(), [])
+
+    def test_flags_are_built_from_defaults_and_the_target(self):
+        self.assertEqual(check.flags_for(SETTINGS, 'beta'), '-timeout=20 -rss_limit_mb=2048 -max_len=4096')
+
+    def test_flags_for_an_unknown_target_raise(self):
+        with self.assertRaises(KeyError):
+            check.flags_for(SETTINGS, 'gamma')
+
+    def test_missing_target_entry_is_reported(self):
+        settings = copy_settings()
+        del settings['targets']['beta']
+        self.assertEqual(self.run_problems(settings), ['fuzz/settings.toml: no [targets.beta] entry for fuzz target `beta`'])
+
+    def test_entry_for_a_removed_target_is_reported(self):
+        settings = copy_settings()
+        settings['targets']['gamma'] = {'max_len': 1, 'basis': 'x'}
+        self.assertEqual(self.run_problems(settings),
+                         ['fuzz/settings.toml: [targets.gamma] is not a fuzz target in fuzz/Cargo.toml'])
+
+    def test_bad_max_len_is_reported(self):
+        for bad in (0, -1, check.MAX_LEN_CEILING + 1, '4096', True, None):
+            settings = copy_settings()
+            settings['targets']['alpha']['max_len'] = bad
+            found = self.run_problems(settings)
+            self.assertEqual(len(found), 1, bad)
+            self.assertIn('[targets.alpha] max_len', found[0])
+
+    def test_max_len_ceiling_itself_is_allowed(self):
+        settings = copy_settings()
+        settings['targets']['alpha']['max_len'] = check.MAX_LEN_CEILING
+        self.assertEqual(self.run_problems(settings), [])
+
+    def test_missing_or_blank_basis_is_reported(self):
+        for bad in (None, '', '   ', 3):
+            settings = copy_settings()
+            settings['targets']['beta']['basis'] = bad
+            found = self.run_problems(settings)
+            self.assertEqual(len(found), 1, bad)
+            self.assertIn('[targets.beta] needs a `basis`', found[0])
+
+    def test_timeout_must_fit_inside_the_shortest_run(self):
+        for bad in (0, check.TIMEOUT_CEILING + 1, None, 1.5, True):
+            settings = copy_settings()
+            settings['defaults']['timeout_secs'] = bad
+            found = self.run_problems(settings)
+            self.assertEqual(len(found), 1, bad)
+            self.assertIn('timeout_secs', found[0])
+        settings = copy_settings()
+        settings['defaults']['timeout_secs'] = check.TIMEOUT_CEILING
+        self.assertEqual(self.run_problems(settings), [])
+
+    def test_rss_limit_is_required(self):
+        settings = copy_settings()
+        del settings['defaults']['rss_limit_mb']
+        self.assertEqual(len(self.run_problems(settings)), 1)
+
+    def test_fuzz_run_without_flags_is_reported_with_its_line(self):
+        text = '      - run: cargo fuzz run x c -- -max_total_time=600\n'
+        found = self.run_problems(text=text + '          FUZZ=x # flags\n')
+        self.assertTrue(any('does not pass $FUZZ_FLAGS' in m for m in found), found)
+        self.assertTrue(any('never builds the limits' in m for m in found), found)
+
+    def test_flags_variable_on_a_continuation_line_counts(self):
+        text = ('      - run: |\n'
+                '          F=$(python3 ../tools/check_fuzz_matrices.py flags "$T")\n'
+                '          cargo fuzz run x c -- \\\n'
+                '            ${FUZZ_FLAGS} -max_total_time=1\n')
+        self.assertEqual(self.run_problems(text=text), [])
+
+    def test_flags_on_a_later_command_do_not_count(self):
+        text = ('      - run: |\n'
+                '          FUZZ_FLAGS=$(python3 ../tools/check_fuzz_matrices.py flags "$T")\n'
+                '          cargo fuzz run x c -- -max_total_time=1\n'
+                '          echo $FUZZ_FLAGS\n')
+        found = self.run_problems(text=text)
+        self.assertEqual(len(found), 1)
+        self.assertIn('a.yml:', found[0])
+
+    def test_every_run_command_is_checked(self):
+        found = self.run_problems(text=RUN_OK + '      - run: cargo fuzz run y c -- -merge=1\n')
+        self.assertEqual(len(found), 1)
+        self.assertIn('does not pass $FUZZ_FLAGS', found[0])
+
+    def test_workflow_without_fuzz_run_needs_no_flags(self):
+        self.assertEqual(self.run_problems(text=''), [])
+
+    def test_flags_command_prints_the_repository_settings(self):
+        settings = check.load_settings()
+        self.assertEqual(check.main(['flags', 'pgwire']), 0)
+        self.assertEqual(check.main(['flags', 'no_such_target']), 1)
+        self.assertEqual(check.main(['flags']), 2)
+        self.assertIn('pgwire', settings['targets'])
 
 
 if __name__ == '__main__':
