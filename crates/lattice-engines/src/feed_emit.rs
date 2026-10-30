@@ -31,14 +31,20 @@
 //!   that event, so nothing else is lost. A reader who may not read it is unaffected.
 //! * **Provenance.** The store commits with no author or turn, so events carry author 0 and no turn.
 //!
-//! Cost: `history_from` visits every key of every table, so a call is O(total rows) even for a
-//! caught-up reader, plus O(versions at or after the cursor's LSN); events (with cloned values) are
-//! built for every write after the cursor, hidden tables included, before the policy filter, so
-//! memory is O(history after the cursor). Nothing interrupts a running call. Issue #543.
+//! Cost: [`RowStore::read_feed_as`] walks the commit index (commit LSN to the keys it wrote,
+//! kept in memory by the version table, rebuilt by replay on open, pruned at the vacuum floor), so a
+//! read costs one binary search to find the cursor, then one step per version examined, at most
+//! [`FeedLimits::max_scanned`] of them; a caught-up reader examines nothing. Events (with cloned
+//! values) are built only for rows the policy allows and the table filter selects, at most
+//! [`FeedLimits::max_events`], so memory per read is the returned page, never the history. The page
+//! carries a resume cursor and a `more` flag, so a long run of rows the reader cannot see is read
+//! in slices that each give the executor back. [`RowStore::events_since_as`] is the unbounded form
+//! of the same walk. Issues #543 and #581.
 
 use crate::limits::{AllowAll, PolicyEvaluator, RowRef};
 use crate::rowops::MAX_KEY_BYTES;
 use crate::store::RowStore;
+use lattice_core::bugs::{self, Bug};
 use lattice_core::changeset::ChangeSet;
 use lattice_core::feed::{ChangeEvent, ChangeOp, Cursor, EntityChange, FeedError, events_for};
 use lattice_seams::{Clock, Io, Rng};
@@ -59,6 +65,12 @@ pub enum FeedReadError {
     },
     /// The change set cannot be expressed as events (a value over the feed's size bound).
     Feed(FeedError),
+    /// The commit index names a version the table no longer holds. The store's own metadata
+    /// disagrees with its rows.
+    IndexInconsistent {
+        /// The commit LSN.
+        lsn: u64,
+    },
     /// The first event this read would deliver carries a key over the feed's size bound. Only a log
     /// written before the store refused such keys can hold one. It blocks only readers allowed to
     /// read that row, and only once the events before it were delivered by an earlier read. Reading
@@ -79,6 +91,9 @@ impl fmt::Display for FeedReadError {
             }
             Self::MissingCommitTime { lsn } => write!(f, "no commit time for lsn {lsn}"),
             Self::Feed(e) => write!(f, "{e}"),
+            Self::IndexInconsistent { lsn } => {
+                write!(f, "the commit index and the rows disagree at lsn {lsn}")
+            }
             Self::KeyTooLarge { cursor, len } => write!(
                 f,
                 "the event at lsn {} index {} has a {len} byte key over the {} byte feed limit; \
@@ -93,8 +108,46 @@ impl fmt::Display for FeedReadError {
 
 impl std::error::Error for FeedReadError {}
 
+/// How much one feed read may do. Both bounds are checked before each version is looked at, so a
+/// read never overshoots them by more than the one version in hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeedLimits {
+    /// Most events returned. Raised to 1.
+    pub max_events: usize,
+    /// Most versions examined, whether they become events or not (rows of other tables and rows
+    /// the reader may not read count). The positions at or before the cursor inside its own change
+    /// set are skipped by arithmetic and are not counted. Raised to 1.
+    pub max_scanned: usize,
+}
+
+impl FeedLimits {
+    /// No bound: the read runs to the end of history.
+    pub const UNBOUNDED: FeedLimits = FeedLimits {
+        max_events: usize::MAX,
+        max_scanned: usize::MAX,
+    };
+}
+
+/// One bounded answer of [`RowStore::read_feed_as`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedPage {
+    /// The events, in cursor order, all strictly after the cursor that was read from.
+    pub events: Vec<ChangeEvent>,
+    /// The cursor of the last version this read dealt with (delivered, or passed over because it
+    /// belongs to another table or the reader may not read it). Reading again from here continues
+    /// exactly where this read stopped, so it is safe to resume from even when `events` is empty.
+    /// It is the cursor that was read from if nothing was examined.
+    pub resume: Cursor,
+    /// True when the read stopped before the end of history (a bound was reached, or a version the
+    /// feed cannot carry follows). False means there was nothing more to read at the time.
+    pub more: bool,
+    /// How many versions were examined.
+    pub scanned: usize,
+}
+
 impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     /// The events strictly after `cursor`, in commit order, for a reader with no access restrictions.
+    /// Unbounded: see [`RowStore::read_feed_as`] for a read with a cost bound.
     pub fn events_since(
         &self,
         cursor: Cursor,
@@ -103,53 +156,87 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     }
 
     /// The events strictly after `cursor`, in commit order, limited to what `policy` may read.
+    /// Unbounded: the call runs to the end of history, so a serving path uses
+    /// [`RowStore::read_feed_as`] instead.
     pub fn events_since_as<P: PolicyEvaluator + ?Sized>(
         &self,
         cursor: Cursor,
         policy: &P,
     ) -> Result<std::vec::IntoIter<ChangeEvent>, FeedReadError> {
+        let page = self.read_feed_as(cursor, None, policy, FeedLimits::UNBOUNDED)?;
+        Ok(page.events.into_iter())
+    }
+
+    /// One bounded read of the feed: the events strictly after `cursor` that `policy` may read, in
+    /// commit order, at most `limits.max_events` of them, after examining at most
+    /// `limits.max_scanned` versions. With `table` set only that table's rows can become events (the
+    /// others are passed over without a policy check or an allocation). The page says where to
+    /// resume and whether there may be more.
+    ///
+    /// The work is the commits after the cursor, found through the commit index, never the rows of
+    /// the tables: a reader that is caught up examines nothing, and a read examines at most
+    /// `max_scanned` versions plus one binary search per version. Events are built only for rows the
+    /// policy allows, so the memory is `max_events` events.
+    pub fn read_feed_as<P: PolicyEvaluator + ?Sized>(
+        &self,
+        cursor: Cursor,
+        table: Option<u32>,
+        policy: &P,
+        limits: FeedLimits,
+    ) -> Result<FeedPage, FeedReadError> {
         let floor = self.oldest_snapshot().as_of;
         if floor > 0 && cursor.lsn() <= floor {
             return Err(FeedReadError::CursorTooOld { floor });
         }
-        let history = self.history_from(cursor.lsn().max(1));
-        let mut out = Vec::new();
-        let mut at = 0;
-        while let Some(first) = history.get(at) {
-            let lsn = first.lsn;
-            let len = history
-                .get(at..)
-                .unwrap_or_default()
-                .iter()
-                .take_while(|e| e.lsn == lsn)
-                .count();
-            let group = history.get(at..at + len).unwrap_or_default();
-            at += len;
-            let mut cs = ChangeSet::new(first.cs, Vec::new());
-            cs.hlc = self
+        let max_events = if bugs::active(Bug::FeedLimitIgnored) {
+            usize::MAX
+        } else {
+            limits.max_events.max(1)
+        };
+        let max_scanned = if bugs::active(Bug::FeedScanBudgetIgnored) {
+            usize::MAX
+        } else {
+            limits.max_scanned.max(1)
+        };
+        let mut page = FeedPage {
+            events: Vec::new(),
+            resume: cursor,
+            more: false,
+            scanned: 0,
+        };
+        let mut commits = self.versions().commits_from(cursor.lsn().max(1)).peekable();
+        while let Some(commit) = commits.next() {
+            let lsn = commit.lsn();
+            let len = commit.len();
+            let set_len = u32::try_from(len)
+                .map_err(|_| FeedReadError::Feed(FeedError::TooManyChanges(len)))?;
+            // Only the cursor's own change set can hold positions at or before it.
+            let first = if lsn == cursor.lsn() {
+                (cursor.index() as usize).saturating_add(1)
+            } else {
+                0
+            };
+            if first >= len {
+                continue;
+            }
+            let hlc = self
                 .commit_time_at(lsn)
                 .ok_or(FeedReadError::MissingCommitTime { lsn })?;
-            let changes = group
-                .iter()
-                .map(|e| EntityChange {
-                    kind: e.key.0,
-                    // An oversize key (only in a log from before the store bounded keys) is
-                    // replaced here so the rest of the set still becomes events; its own event is
-                    // never emitted, see below.
-                    key: if e.key.1.len() > MAX_KEY_BYTES {
-                        Vec::new()
-                    } else {
-                        e.key.1.clone()
-                    },
-                    op: match e.value {
-                        Some(v) => ChangeOp::Upsert(v.clone()),
-                        None => ChangeOp::Delete,
-                    },
-                })
-                .collect();
-            let events = events_for(lsn, &cs, changes).map_err(FeedReadError::Feed)?;
-            for (event, entry) in events.into_iter().zip(group) {
-                if event.cursor <= cursor {
+            for i in first..len {
+                if page.scanned >= max_scanned {
+                    page.more = true;
+                    return Ok(page);
+                }
+                page.scanned += 1;
+                let entry = commit
+                    .entry(i)
+                    .ok_or(FeedReadError::IndexInconsistent { lsn })?;
+                // `len` fits `u32` (checked above) and `i < len`, so the index does too.
+                let index = u32::try_from(i)
+                    .map_err(|_| FeedReadError::Feed(FeedError::TooManyChanges(i)))?;
+                let here = Cursor::new(lsn, index).map_err(FeedReadError::Feed)?;
+                if table.is_some_and(|t| t != entry.key.0) {
+                    page.resume = here;
                     continue;
                 }
                 let allowed = entry.value.or(entry.previous).is_some_and(|value| {
@@ -160,24 +247,49 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                     })
                 });
                 if !allowed {
+                    page.resume = here;
                     continue;
                 }
                 if entry.key.1.len() > MAX_KEY_BYTES {
                     // Everything before the blocked event is delivered first, so skipping it
                     // loses nothing. The read that starts at the prefix's last cursor then
                     // reports the block as its error.
-                    if out.is_empty() {
+                    if page.events.is_empty() {
                         return Err(FeedReadError::KeyTooLarge {
-                            cursor: event.cursor,
+                            cursor: here,
                             len: entry.key.1.len(),
                         });
                     }
-                    return Ok(out.into_iter());
+                    page.more = true;
+                    return Ok(page);
                 }
-                out.push(event);
+                let mut cs = ChangeSet::new(entry.cs, Vec::new());
+                cs.hlc = hlc;
+                let change = EntityChange {
+                    kind: entry.key.0,
+                    key: entry.key.1.clone(),
+                    op: match entry.value {
+                        Some(v) => ChangeOp::Upsert(v.clone()),
+                        None => ChangeOp::Delete,
+                    },
+                };
+                // `events_for` validates the change and fills the provenance; the position inside
+                // the full change set is set here.
+                let mut event = events_for(lsn, &cs, vec![change])
+                    .map_err(FeedReadError::Feed)?
+                    .pop()
+                    .ok_or(FeedReadError::IndexInconsistent { lsn })?;
+                event.cursor = here;
+                event.set_len = set_len;
+                page.events.push(event);
+                page.resume = here;
+                if page.events.len() >= max_events {
+                    page.more = i + 1 < len || commits.peek().is_some();
+                    return Ok(page);
+                }
             }
         }
-        Ok(out.into_iter())
+        Ok(page)
     }
 }
 
@@ -481,3 +593,7 @@ mod tests {
         assert!(skipped > 100 && reordered > 100 && inclusive > 100);
     }
 }
+
+#[cfg(test)]
+#[path = "feed_bound_tests.rs"]
+mod bound_tests;

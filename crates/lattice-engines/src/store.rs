@@ -924,12 +924,9 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         self.commit_times.get(i).map(|(h, _, _)| *h)
     }
 
-    /// Retained row versions written at or after `from_lsn`, ordered by `(lsn, key)`. Read-only.
-    pub fn history_from(
-        &self,
-        from_lsn: u64,
-    ) -> Vec<crate::mvcc::HistoryEntry<'_, RowKey, Vec<u8>>> {
-        self.table.history_from(from_lsn)
+    /// The version table, for the change feed's read path. Read-only.
+    pub(crate) fn versions(&self) -> &Table<RowKey, Vec<u8>> {
+        &self.table
     }
 
     /// The commit LSN of the newest change set applied.

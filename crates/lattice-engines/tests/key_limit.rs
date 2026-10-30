@@ -296,3 +296,65 @@ fn the_bound_is_on_row_keys_not_on_index_values() {
     store.commit(tx).unwrap();
     assert_eq!(store.events_since(Cursor::ORIGIN).unwrap().count(), 1);
 }
+
+#[test]
+fn a_bounded_read_pages_past_a_legacy_oversize_key_one_event_at_a_time() {
+    use lattice_engines::feed_emit::FeedLimits;
+    let (disk, clock) = fresh();
+    legacy_log(
+        &disk,
+        &clock,
+        vec![
+            vec![((7, b"a".to_vec()), Some(b"1".to_vec()))],
+            vec![
+                ((7, b"c".to_vec()), Some(b"2".to_vec())),
+                ((8, vec![b'b'; MAX_KEY_BYTES + 1]), Some(b"3".to_vec())),
+            ],
+            vec![((7, b"d".to_vec()), Some(b"4".to_vec()))],
+        ],
+    );
+    clock.advance(1);
+    let store = open(&disk, &clock);
+    let limits = FeedLimits {
+        max_events: 1,
+        max_scanned: 2,
+    };
+    // A reader of table 7 never reaches the oversize row of table 8: it is passed over.
+    let mut at = Cursor::ORIGIN;
+    let mut seen = Vec::new();
+    loop {
+        let page = store.read_feed_as(at, Some(7), &AllowAll, limits).unwrap();
+        seen.extend(page.events.iter().map(|e| e.change.key.clone()));
+        if !page.more {
+            break;
+        }
+        at = page.resume;
+    }
+    assert_eq!(seen, vec![b"a".to_vec(), b"c".to_vec(), b"d".to_vec()]);
+    // A reader of every table gets the prefix, is told about the block, then skips it.
+    let blocked = Cursor::new(2, 1).unwrap();
+    let error = store
+        .read_feed_as(
+            Cursor::new(2, 0).unwrap(),
+            None,
+            &AllowAll,
+            FeedLimits {
+                max_events: 5,
+                max_scanned: 5,
+            },
+        )
+        .err();
+    assert_eq!(
+        error,
+        Some(FeedReadError::KeyTooLarge {
+            cursor: blocked,
+            len: MAX_KEY_BYTES + 1
+        })
+    );
+    let page = store
+        .read_feed_as(blocked, None, &AllowAll, limits)
+        .unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].change.key, b"d".to_vec());
+    assert!(!page.more);
+}

@@ -1,9 +1,9 @@
 //! A kernel-backed [`EventSource`]: committed row changes of the SQL executor's database, served to
 //! a [`SubscriptionHost`](crate::subscribe::SubscriptionHost).
 //!
-//! [`FeedSource`] asks the executor actor (see [`crate::exec_host`]) for one bounded read at a time,
-//! so the single-threaded row store is never shared. The actor calls `read_feed`, which does the
-//! work:
+//! [`FeedSource`] asks the executor actor (see [`crate::exec_host`]) for one bounded step at a time,
+//! so the single-threaded row store is never shared. The actor calls `read_feed_chunk`, which does
+//! the work:
 //!
 //! * **Scope.** `table/<name>` names a table of the engine catalog. Any other scope, a table that
 //!   does not exist and every table for a principal whose policy hides the catalog are all
@@ -13,32 +13,42 @@
 //! * **Policy.** The principal becomes an [`ActorPolicy`](lattice_exec::ActorPolicy) through
 //!   [`PolicyTable::grant_for`], the mapping the SQL handler uses: the development principal gets the
 //!   host's development grant, an account its listed grant, an unlisted account deny-all. There is no
-//!   allow-all fallback. The policy filters the feed in the engine ([`RowStore::events_since_as`]).
+//!   allow-all fallback. The policy filters the feed in the engine ([`RowStore::read_feed_as`]), and
+//!   it runs before any event is built.
 //! * **Cursor.** The wire cursor is the 12 byte feed cursor (`lsn u64 | index u32`, big endian), so
 //!   byte order is cursor order. An empty cursor is the origin. A cursor of another length, or one past
 //!   the newest applied commit, is [`SourceError::BadCursor`]; one at or below the vacuum floor is
 //!   [`SourceError::TooOld`].
 //! * **Payload.** `Event::data` is the `change-feed-v1` encoding of the event.
 //! * **Oversize keys.** A log from before the store bounded keys may hold a row the feed cannot
-//!   carry. The engine returns the events before it, and then fails a read that starts at it. The source
-//!   keeps reading from the last cursor it saw, whatever table it belonged to, and skips exactly the
-//!   blocked event, so a reader is never wedged and no other event is lost or repeated. Events of
-//!   other tables are passed over the same way, so a page is empty only at the end of the feed.
+//!   carry. The engine returns the events before it, and then fails a read that starts at it. The
+//!   source skips exactly the blocked event by continuing from its cursor, so a reader is never
+//!   wedged and no other event is lost or repeated. Only a table's own blocked rows can block its
+//!   feed: other tables are passed over inside the engine.
 //!
 //! # Bounds
 //!
-//! One read returns at most `min(limit, max_events)` events, and the host asks again from the last
-//! cursor it sent. That bounds only what is returned and encoded. The cost of a read is not bounded
-//! by it: `history_from` visits every key of every table (O(total rows), even when the reader is
-//! caught up) plus the versions after the cursor, and `events_since_as` builds events and clones
-//! values for every write after the cursor, hidden tables included, before the policy filter, so
-//! memory per read is O(history after the cursor). A running scan is never interrupted: a
-//! cancellation or a reader that gave up is seen only before the scan starts. A reader that is not
-//! caught up scans twice, because the source reads once more from the last cursor to confirm the end.
-//! Only principals with an allow-all grant reach the scan today. The engine-side limit, a
-//! per-principal cap and an LSN index are issue #543. A reader that waits longer than the statement
-//! ceiling plus slack gets [`SourceError::Unavailable`], and its queued read is skipped if it has not
-//! started; a denied request still takes a queue slot.
+//! One read returns at most `min(limit, max_events)` events. Its cost is bounded too, in steps:
+//!
+//! * A step is one actor request. The engine examines at most a scan budget of versions (default
+//!   [`DEFAULT_SCAN_BUDGET`], see [`FeedSource::with_scan_budget`]) and builds at most the events
+//!   still wanted, so a step costs one binary search to find the cursor plus one lookup per version
+//!   examined, and holds memory for the events it returns, whatever the history. A caught-up reader
+//!   examines nothing. The commit index that makes this possible is in memory (issue #581).
+//! * A read that is not full after a step and is told there may be more asks again from the step's
+//!   resume cursor as a new request, queued behind whatever commits arrived meanwhile, so a long
+//!   run of history the reader cannot see (other tables, rows its policy hides) is read in slices
+//!   that each give the executor back. It makes at most [`MAX_ROUNDS`] steps, so history of that many
+//!   scan budgets after the cursor with nothing readable in it is [`SourceError::Unavailable`] rather
+//!   than an empty page that would claim the reader is caught up; the scan is not per table, so a
+//!   reader of a quiet table behind a very busy one pays for the busy one's versions.
+//! * A cancellation or a reader that gave up is seen before each step. A reader that waits longer
+//!   than the statement ceiling plus slack for one step gets [`SourceError::Unavailable`], and its
+//!   queued step is skipped if it has not started; a denied request still takes a queue slot.
+//!
+//! Not done: a per-principal cap on feed work. Principals with an allow-all grant or a granted table
+//! reach the scan; a principal who is denied is stopped before it, but the queue slot is shared.
+//! Issue #543.
 
 use crate::exec_host::{FeedHandle, Grant, PolicyTable};
 use crate::principal::Principal;
@@ -46,7 +56,7 @@ use crate::subscribe::{EventSource, SourceError};
 use crate::sync::{Event, MAX_CURSOR_LEN};
 use lattice_core::bugs::{self, Bug};
 use lattice_core::feed::Cursor;
-use lattice_engines::feed_emit::FeedReadError;
+use lattice_engines::feed_emit::{FeedLimits, FeedReadError};
 use lattice_engines::limits::PolicyEvaluator;
 use lattice_engines::store::RowStore;
 use lattice_exec::Database;
@@ -55,10 +65,24 @@ use lattice_seams::{Clock, Io, Rng};
 /// The scope prefix that names a table.
 const TABLE_PREFIX: &str = "table/";
 
-/// Most times one read goes back to the engine after a short answer. Each trip passes at least one
-/// event or skips one oversize-key event; the bound only matters for a log with very many such
-/// events.
-const MAX_ROUNDS: usize = 64;
+/// Versions one step may examine unless [`FeedSource::with_scan_budget`] says otherwise. Each costs a
+/// policy check and, for an event, a copy of its value, so a step stays far below a statement.
+pub const DEFAULT_SCAN_BUDGET: usize = 4096;
+
+/// Most steps one read makes. Each step either returns events, passes over at most a scan budget of
+/// versions, or skips one oversize-key event; the bound only matters for a long run of history the
+/// reader cannot see.
+pub const MAX_ROUNDS: usize = 1024;
+
+/// What one actor step produced: events, where to continue and whether the engine stopped early.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Chunk {
+    pub(crate) events: Vec<Event>,
+    /// Continue strictly after this cursor.
+    pub(crate) resume: Cursor,
+    /// True when the step stopped before the end of history.
+    pub(crate) more: bool,
+}
 
 /// A change-feed reader backed by the executor actor. Cheap to clone through
 /// [`ExecHost::feed_source`](crate::exec_host::ExecHost::feed_source); a read blocks the calling
@@ -66,6 +90,7 @@ const MAX_ROUNDS: usize = 64;
 pub struct FeedSource {
     handle: FeedHandle,
     max_events: usize,
+    scan_budget: usize,
 }
 
 impl FeedSource {
@@ -73,7 +98,16 @@ impl FeedSource {
         FeedSource {
             handle,
             max_events: max_events.max(1),
+            scan_budget: DEFAULT_SCAN_BUDGET,
         }
+    }
+
+    /// Bounds the versions one actor step may examine (raised to 1). A smaller budget gives the
+    /// executor back more often and makes a read that has to pass over much history take more steps.
+    #[must_use]
+    pub fn with_scan_budget(mut self, versions: usize) -> Self {
+        self.scan_budget = versions.max(1);
+        self
     }
 }
 
@@ -88,15 +122,50 @@ impl EventSource for FeedSource {
         // A cursor longer than the wire allows is not one this source issued; a denied principal's
         // answer must not depend on it, so the actor checks scope first and this only bounds memory.
         if after.len() > MAX_CURSOR_LEN {
-            return self.handle.read(principal, scope, &[0xff; 13], 1);
+            return self
+                .handle
+                .read(principal, scope, &[0xff; 13], 1, 1)
+                .map(|chunk| chunk.events);
         }
-        self.handle
-            .read(principal, scope, after, limit.min(self.max_events))
+        let limit = limit.min(self.max_events);
+        let mut out: Vec<Event> = Vec::new();
+        let mut at = after.to_vec();
+        for _ in 0..MAX_ROUNDS {
+            let want = limit.saturating_sub(out.len());
+            match self
+                .handle
+                .read(principal, scope, &at, want, self.scan_budget)
+            {
+                Ok(chunk) => {
+                    out.extend(chunk.events);
+                    if out.len() >= limit || !chunk.more {
+                        return Ok(out);
+                    }
+                    at = chunk.resume.to_bytes().to_vec();
+                }
+                // What was found is delivered; the next read reports the failure from its cursor.
+                Err(_) if !out.is_empty() => return Ok(out),
+                Err(e) => return Err(e),
+            }
+        }
+        give_up(out)
     }
 }
 
-/// One read of `scope` for `principal` strictly after `after`, at most `limit` events. Runs on the
-/// actor thread; also callable on a database owned by the caller.
+/// The answer of a read that used up its steps: what it found, or `Unavailable`. An empty page would
+/// claim the reader is caught up, which is untrue.
+fn give_up(out: Vec<Event>) -> Result<Vec<Event>, SourceError> {
+    if out.is_empty() {
+        Err(SourceError::Unavailable)
+    } else {
+        Ok(out)
+    }
+}
+
+/// One read of `scope` for `principal` strictly after `after`, at most `limit` events, run to its end
+/// on a database owned by the caller (the actor itself serves one step at a time with
+/// [`read_feed_chunk`]).
+#[cfg(test)]
 pub(crate) fn read_feed<I: Io, C: Clock + Clone, R: Rng>(
     db: &Database<I, C, R>,
     policies: &PolicyTable,
@@ -105,6 +174,38 @@ pub(crate) fn read_feed<I: Io, C: Clock + Clone, R: Rng>(
     after: &[u8],
     limit: usize,
 ) -> Result<Vec<Event>, SourceError> {
+    let mut out: Vec<Event> = Vec::new();
+    let mut at = after.to_vec();
+    for _ in 0..MAX_ROUNDS {
+        let chunk = read_feed_chunk(
+            db,
+            policies,
+            principal,
+            scope,
+            &at,
+            limit.saturating_sub(out.len()),
+            DEFAULT_SCAN_BUDGET,
+        )?;
+        out.extend(chunk.events);
+        if out.len() >= limit || !chunk.more {
+            return Ok(out);
+        }
+        at = chunk.resume.to_bytes().to_vec();
+    }
+    give_up(out)
+}
+
+/// One step of a read of `scope` for `principal` strictly after `after`: at most `limit` events,
+/// after examining at most `scan` versions. Runs on the actor thread.
+pub(crate) fn read_feed_chunk<I: Io, C: Clock + Clone, R: Rng>(
+    db: &Database<I, C, R>,
+    policies: &PolicyTable,
+    principal: &Principal,
+    scope: &str,
+    after: &[u8],
+    limit: usize,
+    scan: usize,
+) -> Result<Chunk, SourceError> {
     let grant = if bugs::active(Bug::FeedSourcePolicyDropped) {
         Grant::AllowAll
     } else {
@@ -116,18 +217,19 @@ pub(crate) fn read_feed<I: Io, C: Clock + Clone, R: Rng>(
         .strip_prefix(TABLE_PREFIX)
         .and_then(|name| db.visible_table_id(&policy, name))
         .ok_or(SourceError::UnknownScope)?;
-    feed_page(db.store(), &policy, table, after, limit)
+    feed_chunk(db.store(), &policy, table, after, limit, scan)
 }
 
-/// One page of table `table` strictly after `after` from `store`, filtered by `policy`.
-fn feed_page<I: Io, C: Clock, R: Rng, P: PolicyEvaluator + ?Sized>(
+/// One step on table `table` of `store` strictly after `after`, filtered by `policy`.
+fn feed_chunk<I: Io, C: Clock, R: Rng, P: PolicyEvaluator + ?Sized>(
     store: &RowStore<I, C, R>,
     policy: &P,
     table: u32,
     after: &[u8],
     limit: usize,
-) -> Result<Vec<Event>, SourceError> {
-    let mut pos = if after.is_empty() {
+    scan: usize,
+) -> Result<Chunk, SourceError> {
+    let pos = if after.is_empty() {
         Cursor::ORIGIN
     } else {
         Cursor::from_bytes(after).map_err(|_| SourceError::BadCursor)?
@@ -135,44 +237,83 @@ fn feed_page<I: Io, C: Clock, R: Rng, P: PolicyEvaluator + ?Sized>(
     if pos.lsn() > store.applied_lsn() {
         return Err(SourceError::BadCursor);
     }
-    let mut out = Vec::new();
-    for _ in 0..MAX_ROUNDS {
-        if out.len() >= limit {
-            break;
-        }
-        match store.events_since_as(pos, policy) {
-            Ok(events) => {
-                let mut any = false;
-                for event in events {
-                    any = true;
-                    pos = event.cursor;
-                    if event.change.kind != table {
-                        continue;
-                    }
-                    let data = event.encode().map_err(|_| SourceError::Unavailable)?;
-                    out.push(Event {
-                        cursor: event.cursor.to_bytes().to_vec(),
-                        data,
-                    });
-                    if out.len() == limit {
-                        return Ok(out);
-                    }
-                }
-                if !any {
-                    return Ok(out);
-                }
-                // The answer may have stopped before an oversize key; ask again from where it ended.
+    if limit == 0 {
+        return Ok(Chunk {
+            events: Vec::new(),
+            resume: pos,
+            more: false,
+        });
+    }
+    let limits = FeedLimits {
+        max_events: limit,
+        max_scanned: scan,
+    };
+    match store.read_feed_as(pos, Some(table), policy, limits) {
+        Ok(page) => {
+            let mut events = Vec::with_capacity(page.events.len());
+            for event in &page.events {
+                let data = event.encode().map_err(|_| SourceError::Unavailable)?;
+                events.push(Event {
+                    cursor: event.cursor.to_bytes().to_vec(),
+                    data,
+                });
             }
-            Err(FeedReadError::KeyTooLarge { cursor, .. }) => pos = cursor,
-            Err(e) => return Err(source_error(&e)),
+            Ok(Chunk {
+                events,
+                resume: page.resume,
+                more: page.more,
+            })
         }
+        // The first readable event this step would deliver cannot be carried: continue after it. The
+        // versions before it were passed over, so nothing else is skipped.
+        Err(FeedReadError::KeyTooLarge { cursor, .. }) => Ok(Chunk {
+            events: Vec::new(),
+            resume: cursor,
+            more: true,
+        }),
+        Err(e) => Err(source_error(&e)),
     }
-    if out.is_empty() && limit > 0 {
-        // Gave up before reaching the end of the feed and found nothing to return: answering with an
-        // empty page would say "caught up", which is untrue.
-        return Err(SourceError::Unavailable);
+}
+
+/// A whole read on a bare store, as the tests drive it.
+#[cfg(test)]
+fn feed_page<I: Io, C: Clock, R: Rng, P: PolicyEvaluator + ?Sized>(
+    store: &RowStore<I, C, R>,
+    policy: &P,
+    table: u32,
+    after: &[u8],
+    limit: usize,
+) -> Result<Vec<Event>, SourceError> {
+    feed_page_with(store, policy, table, after, limit, DEFAULT_SCAN_BUDGET)
+}
+
+#[cfg(test)]
+fn feed_page_with<I: Io, C: Clock, R: Rng, P: PolicyEvaluator + ?Sized>(
+    store: &RowStore<I, C, R>,
+    policy: &P,
+    table: u32,
+    after: &[u8],
+    limit: usize,
+    scan: usize,
+) -> Result<Vec<Event>, SourceError> {
+    let mut out: Vec<Event> = Vec::new();
+    let mut at = after.to_vec();
+    for _ in 0..MAX_ROUNDS {
+        let chunk = feed_chunk(
+            store,
+            policy,
+            table,
+            &at,
+            limit.saturating_sub(out.len()),
+            scan,
+        )?;
+        out.extend(chunk.events);
+        if out.len() >= limit || !chunk.more {
+            return Ok(out);
+        }
+        at = chunk.resume.to_bytes().to_vec();
     }
-    Ok(out)
+    give_up(out)
 }
 
 /// How a feed failure other than the skippable oversize key is told to the host.
@@ -182,6 +323,7 @@ fn source_error(e: &FeedReadError) -> SourceError {
         // The store's own metadata or a value over the feed's bound: nothing a cursor can fix, and
         // saying more would reveal storage detail.
         FeedReadError::MissingCommitTime { .. }
+        | FeedReadError::IndexInconsistent { .. }
         | FeedReadError::Feed(_)
         | FeedReadError::KeyTooLarge { .. } => SourceError::Unavailable,
     }
@@ -238,6 +380,19 @@ mod tests {
     fn exec(h: &mut Handler, sql: &str) {
         let p = Principal::local_development();
         h.execute(&QueryContext::new(&p), sql, &[]).unwrap();
+    }
+
+    /// Waits without a sleep call: a receive that times out on a channel nobody sends to.
+    fn pause(ms: u64) {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let _ = rx.recv_timeout(std::time::Duration::from_millis(ms));
+        drop(tx);
+    }
+
+    /// Runs a statement through the executor actor as the development principal.
+    fn run_sql(sql: &mut crate::exec_host::ExecProxy, q: &str) {
+        let p = Principal::local_development();
+        sql.execute(&QueryContext::new(&p), q, &[]).unwrap();
     }
 
     fn policies() -> PolicyTable {
@@ -856,5 +1011,116 @@ mod tests {
             )),
             Grant::DenyAll
         );
+    }
+
+    // ---- the bound on one read (issues #581 and #543) ----
+
+    #[test]
+    fn a_step_passes_over_at_most_its_scan_budget_and_says_where_to_continue() {
+        let (db, mut h) = writer();
+        exec(
+            &mut h,
+            "CREATE TABLE hidden (id BIGINT PRIMARY KEY, v BIGINT)",
+        );
+        exec(&mut h, "CREATE TABLE t (id BIGINT PRIMARY KEY, v BIGINT)");
+        for i in 1..=20 {
+            exec(&mut h, &format!("INSERT INTO hidden VALUES ({i}, 0)"));
+        }
+        exec(&mut h, "INSERT INTO t VALUES (1, 0)");
+        let dev = Principal::local_development();
+        let step = |after: &[u8]| {
+            read_feed_chunk(&db.borrow(), &policies(), &dev, "table/t", after, 100, 6).unwrap()
+        };
+        // 20 versions of another table sit between the origin and the one row of `t`: the first
+        // steps deliver nothing, say so, and advance by exactly the budget.
+        let mut at = Vec::new();
+        let mut steps = 0;
+        let mut events = Vec::new();
+        let mut last = Cursor::ORIGIN;
+        loop {
+            let chunk = step(&at);
+            steps += 1;
+            assert!(chunk.resume >= last);
+            last = chunk.resume;
+            events.extend(chunk.events);
+            if !chunk.more {
+                break;
+            }
+            at = chunk.resume.to_bytes().to_vec();
+            assert!(steps < 50, "does not end");
+        }
+        assert_eq!(events.len(), 1);
+        // 21 versions at a budget of 6: four steps, the last one finds the end.
+        assert_eq!(steps, 4);
+        // A caught-up reader is one step with nothing more.
+        let chunk = step(&events[0].cursor);
+        assert!(chunk.events.is_empty() && !chunk.more);
+    }
+
+    #[test]
+    fn a_long_read_yields_the_executor_between_steps_so_a_commit_lands_in_the_middle_of_it() {
+        let host = start_host();
+        let dev = Principal::local_development();
+        let mut sql = host.handler();
+        run_sql(
+            &mut sql,
+            "CREATE TABLE hidden (id BIGINT PRIMARY KEY, v BIGINT)",
+        );
+        run_sql(&mut sql, "CREATE TABLE t (id BIGINT PRIMARY KEY, v BIGINT)");
+        for i in 1..=30 {
+            run_sql(&mut sql, &format!("INSERT INTO hidden VALUES ({i}, 0)"));
+        }
+        run_sql(&mut sql, "INSERT INTO t VALUES (1, 0)");
+        // One version per step: the read needs about 32 separate requests.
+        let source = host.feed_source(1000).with_scan_budget(1);
+        let stall = host.stall_for_test();
+        let seen = std::thread::scope(|s| {
+            let reader = s.spawn(|| source.read_after(&dev, "table/t", &[], 1000).unwrap());
+            // The reader's first request is queued before the commit's. The sleep only orders the
+            // two senders; a late reader would still pass, so it cannot hide a failure.
+            pause(200);
+            let writer = s.spawn(|| {
+                let mut other = host.handler();
+                run_sql(&mut other, "INSERT INTO t VALUES (2, 0)");
+            });
+            pause(200);
+            drop(stall);
+            writer.join().unwrap();
+            reader.join().unwrap()
+        });
+        // A single uninterrupted read would have ended before the commit ran and missed row 2.
+        assert_eq!(seen.len(), 2, "the commit made between steps is read");
+        host.shutdown().unwrap();
+    }
+
+    #[test]
+    fn a_read_that_cannot_find_anything_in_its_step_budget_is_unavailable_not_caught_up() {
+        let host = start_host();
+        let dev = Principal::local_development();
+        let mut sql = host.handler();
+        for q in [
+            "CREATE TABLE hidden (id BIGINT PRIMARY KEY, v BIGINT)",
+            "CREATE TABLE t (id BIGINT PRIMARY KEY, v BIGINT)",
+        ] {
+            QueryHandler::execute(&mut sql, &QueryContext::new(&dev), q, &[]).unwrap();
+        }
+        for i in 1..=(MAX_ROUNDS + 4) {
+            QueryHandler::execute(
+                &mut sql,
+                &QueryContext::new(&dev),
+                &format!("INSERT INTO hidden VALUES ({i}, 0)"),
+                &[],
+            )
+            .unwrap();
+        }
+        let source = host.feed_source(10).with_scan_budget(1);
+        assert_eq!(
+            source.read_after(&dev, "table/t", &[], 10),
+            Err(SourceError::Unavailable)
+        );
+        // With the default budget the same history is one step and the table is simply empty.
+        let source = host.feed_source(10);
+        assert_eq!(source.read_after(&dev, "table/t", &[], 10), Ok(Vec::new()));
+        host.shutdown().unwrap();
     }
 }

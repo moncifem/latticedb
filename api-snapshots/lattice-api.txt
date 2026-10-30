@@ -308,8 +308,12 @@ pub const lattice_api::exec_host::MAX_POLICY_BYTES: usize
 pub const lattice_api::exec_host::MAX_POLICY_ENTRIES: usize
 pub mod lattice_api::feed_source
 pub struct lattice_api::feed_source::FeedSource
+impl lattice_api::feed_source::FeedSource
+pub fn lattice_api::feed_source::FeedSource::with_scan_budget(self, usize) -> Self
 impl lattice_api::subscribe::EventSource for lattice_api::feed_source::FeedSource
 pub fn lattice_api::feed_source::FeedSource::read_after(&self, &lattice_api::principal::Principal, &str, &[u8], usize) -> core::result::Result<alloc::vec::Vec<lattice_api::sync::Event>, lattice_api::subscribe::SourceError>
+pub const lattice_api::feed_source::DEFAULT_SCAN_BUDGET: usize
+pub const lattice_api::feed_source::MAX_ROUNDS: usize
 pub mod lattice_api::pgwire
 pub enum lattice_api::pgwire::Backend
 pub lattice_api::pgwire::Backend::AuthenticationCleartextPassword

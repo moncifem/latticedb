@@ -54,7 +54,6 @@ use crate::pgwire::Column;
 use crate::principal::{Principal, PrincipalKind, QueryContext};
 use crate::session::{QueryError, QueryHandler, QueryOutput};
 use crate::subscribe::SourceError;
-use crate::sync::Event;
 
 /// Most account policy entries a policy file may hold (the credential store's own bound).
 pub const MAX_POLICY_ENTRIES: usize = 1024;
@@ -261,8 +260,9 @@ enum Request {
         scope: String,
         after: Vec<u8>,
         limit: usize,
+        scan: usize,
         token: CancellationToken,
-        reply: SyncSender<Result<Vec<Event>, SourceError>>,
+        reply: SyncSender<Result<crate::feed_source::Chunk, SourceError>>,
     },
     /// Makes the actor look at the list of closed connections. At most one is queued at a time.
     Wake,
@@ -858,6 +858,7 @@ fn serve<I, C, R>(
                 scope,
                 after,
                 limit,
+                scan,
                 token,
                 reply,
             } => {
@@ -865,13 +866,14 @@ fn serve<I, C, R>(
                     // The reader gave up before the read started; nothing is read.
                     Err(SourceError::Unavailable)
                 } else {
-                    crate::feed_source::read_feed(
+                    crate::feed_source::read_feed_chunk(
                         &db.borrow(),
                         policies,
                         &principal,
                         &scope,
                         &after,
                         limit,
+                        scan,
                     )
                 };
                 let _ = reply.send(result);
@@ -1154,7 +1156,8 @@ impl FeedHandle {
         scope: &str,
         after: &[u8],
         limit: usize,
-    ) -> Result<Vec<Event>, SourceError> {
+        scan: usize,
+    ) -> Result<crate::feed_source::Chunk, SourceError> {
         let mut budget = Budget::new(self.wait);
         let token = CancellationToken::default();
         let (reply, answer) = mpsc::sync_channel(1);
@@ -1163,6 +1166,7 @@ impl FeedHandle {
             scope: scope.to_string(),
             after: after.to_vec(),
             limit,
+            scan,
             token: token.clone(),
             reply,
         };

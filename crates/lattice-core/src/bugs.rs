@@ -129,6 +129,15 @@ pub enum Bug {
     /// The kernel-backed event source reads the feed with an allow-all policy instead of the
     /// principal's, so a denied principal sees rows and tables it may not (authorization).
     FeedSourcePolicyDropped,
+    /// The engine's feed read ignores the caller's event limit and returns everything after the
+    /// cursor (unbounded memory and executor time per read).
+    FeedLimitIgnored,
+    /// The engine's feed read ignores its bound on versions scanned, so one read over history the
+    /// reader may not see runs to the end (unbounded executor time per read).
+    FeedScanBudgetIgnored,
+    /// The row store leaves a change set out of its commit index, so the feed misses its events
+    /// (silent loss for every subscriber).
+    FeedIndexCommitSkipped,
 }
 
 impl Bug {
@@ -198,6 +207,14 @@ impl Bug {
     /// Feed-source authorization defect, detected by the principal witness in
     /// `lattice-api::feed_source`.
     pub const FEED_SOURCE: [Bug; 1] = [Bug::FeedSourcePolicyDropped];
+
+    /// Feed read-bound defects, detected by the bounded-read witnesses in `lattice-engines`
+    /// (`feed_emit` tests and `tests/feed_bound.rs`).
+    pub const FEED_BOUND: [Bug; 3] = [
+        Bug::FeedLimitIgnored,
+        Bug::FeedScanBudgetIgnored,
+        Bug::FeedIndexCommitSkipped,
+    ];
     /// Guarded-WAL admission defects, exercised by independent context witnesses.
     pub const ADMISSION: [Bug; 2] = [Bug::RequiredGuardOmitted, Bug::GuardRewriteUnstaged];
 
@@ -241,10 +258,10 @@ mod imp {
     use std::cell::Cell;
 
     thread_local! {
-        static MASK: Cell<u64> = const { Cell::new(0) };
+        static MASK: Cell<u128> = const { Cell::new(0) };
     }
 
-    fn bit(b: Bug) -> u64 {
+    fn bit(b: Bug) -> u128 {
         1 << (b as u32)
     }
 
@@ -292,6 +309,7 @@ mod tests {
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
             .chain(Bug::FEED_SOURCE)
+            .chain(Bug::FEED_BOUND)
             .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
@@ -313,6 +331,7 @@ mod tests {
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
             .chain(Bug::FEED_SOURCE)
+            .chain(Bug::FEED_BOUND)
             .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
@@ -323,9 +342,9 @@ mod tests {
             .chain(Bug::RECOVERY_ORDER)
             .chain(Bug::NON_PREFIX)
             .collect();
-        assert_eq!(all.len(), 57);
+        assert_eq!(all.len(), 60);
         for bug in all {
-            assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
+            assert!((bug as u32) < u128::BITS, "guard mask exhausted: {bug:?}");
             clear();
             enable(bug);
             assert!(active(bug));

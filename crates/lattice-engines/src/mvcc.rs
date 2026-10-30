@@ -9,6 +9,8 @@
 
 use lattice_core::ChangeSetId;
 use lattice_core::bugs::{self, Bug};
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ops::{Bound, RangeBounds};
 
@@ -59,7 +61,7 @@ struct Version<V> {
     value: Option<V>,
 }
 
-/// One retained version of one key, as returned by [`Table::history_from`].
+/// One retained version of one key, as returned by [`CommitView::entry`].
 #[derive(Debug, Clone, Copy)]
 pub struct HistoryEntry<'a, K, V> {
     /// Commit LSN of the change set that wrote the version.
@@ -74,6 +76,54 @@ pub struct HistoryEntry<'a, K, V> {
     pub previous: Option<&'a V>,
 }
 
+/// The writes of one applied change set, as found through the commit index.
+#[derive(Debug, Clone, Copy)]
+pub struct CommitView<'a, K, V> {
+    lsn: u64,
+    keys: &'a [K],
+    rows: &'a BTreeMap<K, Vec<Version<V>>>,
+    #[cfg(test)]
+    visited: &'a Cell<u64>,
+}
+
+impl<'a, K: Ord, V> CommitView<'a, K, V> {
+    /// The commit LSN.
+    pub fn lsn(&self) -> u64 {
+        self.lsn
+    }
+
+    /// How many keys the change set wrote (a key written twice counts once).
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// True when the change set wrote nothing; the index never holds such a commit.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// The `i`-th write in key order: one binary search in the key's versions, so O(log versions).
+    /// `None` past the end, or if the versions of the key no longer hold this commit.
+    pub fn entry(&self, i: usize) -> Option<HistoryEntry<'a, K, V>> {
+        let key = self.keys.get(i)?;
+        #[cfg(test)]
+        self.visited.set(self.visited.get() + 1);
+        let versions = self.rows.get(key)?;
+        let at = versions.binary_search_by_key(&self.lsn, |v| v.lsn).ok()?;
+        let v = versions.get(at)?;
+        Some(HistoryEntry {
+            lsn: v.lsn,
+            cs: v.cs,
+            key,
+            value: v.value.as_ref(),
+            previous: at
+                .checked_sub(1)
+                .and_then(|j| versions.get(j))
+                .and_then(|p| p.value.as_ref()),
+        })
+    }
+}
+
 /// A keyed table with every retained version of every row.
 #[derive(Debug, Clone)]
 pub struct Table<K: Ord, V> {
@@ -81,6 +131,14 @@ pub struct Table<K: Ord, V> {
     applied: u64,
     /// Vacuum horizon: snapshots below it may have lost versions.
     floor: u64,
+    /// The commit index: for each change set applied above the floor, the keys it wrote in key
+    /// order, by increasing LSN. It lets a reader walk the commits after a position without
+    /// visiting every key, and costs one extra copy of each written key. It is rebuilt by replay
+    /// (every recovered change set goes through [`Table::apply`]) and pruned by [`Table::vacuum`].
+    commits: Vec<(u64, Vec<K>)>,
+    /// Versions a [`CommitView`] has handed out, so a test can count the work a read did.
+    #[cfg(test)]
+    visited: Cell<u64>,
 }
 
 impl<K: Ord, V> Default for Table<K, V> {
@@ -89,6 +147,9 @@ impl<K: Ord, V> Default for Table<K, V> {
             rows: BTreeMap::new(),
             applied: 0,
             floor: 0,
+            commits: Vec::new(),
+            #[cfg(test)]
+            visited: Cell::new(0),
         }
     }
 }
@@ -130,7 +191,9 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
                 applied: self.applied,
             });
         }
+        let mut keys = Vec::with_capacity(writes.len());
         for (key, value) in writes {
+            keys.push(key.clone());
             let versions = self.rows.entry(key).or_default();
             if bugs::active(Bug::RowHistoryOverwritten) {
                 versions.clear();
@@ -139,6 +202,12 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
                 Some(last) if last.lsn == lsn => last.value = value,
                 _ => versions.push(Version { lsn, cs, value }),
             }
+        }
+        // A key written twice in the set is one write (last wins), so it is one index entry.
+        keys.sort();
+        keys.dedup();
+        if !keys.is_empty() && !bugs::active(Bug::FeedIndexCommitSkipped) {
+            self.commits.push((lsn, keys));
         }
         self.applied = lsn;
         Ok(())
@@ -168,6 +237,10 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
     pub fn vacuum(&mut self, horizon: u64) -> usize {
         let horizon = horizon.min(self.applied).max(self.floor);
         self.floor = horizon;
+        // Commits at or below the horizon may have lost versions, and a feed reader needs a cursor
+        // above the floor, so their index entries are not reachable any more.
+        let pruned = self.commits.partition_point(|(lsn, _)| *lsn <= horizon);
+        self.commits.drain(..pruned);
         let mut removed = 0;
         self.rows.retain(|_, versions| {
             let end = versions.partition_point(|v| v.lsn <= horizon);
@@ -265,9 +338,36 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
             }))
     }
 
+    /// The commits written at or after `from_lsn`, in LSN order, found through the commit index
+    /// (a binary search, then one step per commit), so a reader that is caught up visits nothing
+    /// old. Only commits above the vacuum floor are indexed: a `from_lsn` at or below a non-zero
+    /// floor starts at the first commit above it. Read-only; the change feed uses it.
+    pub fn commits_from(&self, from_lsn: u64) -> impl Iterator<Item = CommitView<'_, K, V>> {
+        let start = self.commits.partition_point(|(lsn, _)| *lsn < from_lsn);
+        self.commits
+            .get(start..)
+            .unwrap_or_default()
+            .iter()
+            .map(|(lsn, keys)| CommitView {
+                lsn: *lsn,
+                keys,
+                rows: &self.rows,
+                #[cfg(test)]
+                visited: &self.visited,
+            })
+    }
+
+    /// Versions handed out by [`CommitView::entry`] so far (tests only).
+    #[cfg(test)]
+    pub(crate) fn visited(&self) -> u64 {
+        self.visited.get()
+    }
+
     /// Every retained version written at or after `from_lsn`, ordered by `(lsn, key)`, each with the
-    /// value of the version before it for the same key. Read-only; the change feed uses it.
-    pub fn history_from(&self, from_lsn: u64) -> Vec<HistoryEntry<'_, K, V>> {
+    /// value of the version before it for the same key. This walks every key of the table, so it is
+    /// O(rows); it is the independent oracle for [`Table::commits_from`].
+    #[cfg(test)]
+    pub(crate) fn history_from(&self, from_lsn: u64) -> Vec<HistoryEntry<'_, K, V>> {
         let mut out = Vec::new();
         for (key, versions) in &self.rows {
             let start = versions.partition_point(|v| v.lsn < from_lsn);
