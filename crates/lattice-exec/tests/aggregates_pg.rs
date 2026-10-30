@@ -17,6 +17,7 @@
 mod common;
 
 use common::{fixture, text};
+use lattice_core::bugs::Bug;
 
 const STEPS: &[(&str, &[&str])] = &[
     (
@@ -193,4 +194,52 @@ fn aggregates_answer_as_postgresql_does() {
         };
         assert_eq!(&got, want, "{sql}");
     }
+}
+
+/// Switches a defect off again however the test ends.
+struct Planted;
+
+impl Planted {
+    fn on(b: lattice_core::bugs::Bug) -> Self {
+        lattice_core::bugs::enable(b);
+        Planted
+    }
+}
+
+impl Drop for Planted {
+    fn drop(&mut self) {
+        lattice_core::bugs::clear();
+    }
+}
+
+/// `count(x)` skips `NULL`s: 3 of the 4 rows have a value, and `count(*)` counts all 4.
+fn nulls_are_skipped() -> Result<(), String> {
+    let mut f = fixture();
+    let mut s = common::admin();
+    common::ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE nn (id INT PRIMARY KEY, v INT)",
+    );
+    common::ok(
+        &mut f.db,
+        &mut s,
+        "INSERT INTO nn VALUES (1, 10), (2, NULL), (3, 20), (4, 30)",
+    );
+    let got = common::rows(
+        &mut f.db,
+        &mut s,
+        "SELECT count(v), count(*), sum(v) FROM nn",
+    );
+    if got != [["3", "4", "60"]] {
+        return Err(format!("{got:?}"));
+    }
+    Ok(())
+}
+
+#[test]
+fn an_aggregate_that_feeds_nulls_to_the_fold_is_caught() {
+    assert_eq!(nulls_are_skipped(), Ok(()));
+    let _g = Planted::on(Bug::AggregateSkipsNull);
+    assert!(nulls_are_skipped().is_err());
 }

@@ -430,6 +430,8 @@ failing `53200` where each step alone fits); smaller ones are not, so peak memor
 budget only up to 4 KiB per nesting level. `LIKE` stays O(text x pattern); no
 `repeat`/`lpad` functions exist.
 
+**Ungrouped aggregates (issue 592, part).** `count`, `sum`, `avg`, `min` and `max` without `GROUP BY` run through a new `Aggregate` plan operator that yields one row. Evidence: 111 statements compared with PostgreSQL 16 in `crates/lattice-exec/tests/aggregates_pg.rs`, and 62 PostgreSQL-verified sqllogictest records that were listed as failing now pass. Planted bug `AggregateSkipsNull` (group `Bug::EXEC_AGGREGATE`, `NULL` arguments reach the fold) is caught by a witness in the same file. Not run locally: mutation testing. Not built: expressions over aggregates, `ORDER BY` an aggregate, `count(DISTINCT x)`, `GROUP BY` and `HAVING` (#593).
+
 **What does not run.** Joins, `GROUP BY`, `DISTINCT`, subqueries, expressions over aggregates, `ALTER TABLE`, indexes
 (`CREATE INDEX`, and no scan uses an index), the `jsonb` operators, and DDL inside a transaction block.
 Column definitions are recovered after a restart from the definition `CREATE TABLE` stores with the table

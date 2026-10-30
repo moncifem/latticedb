@@ -561,7 +561,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 for t in rows {
                     self.gov.check()?;
                     let v = eval(arg, &t.vals, &self.ctx())?;
-                    if !v.is_null() {
+                    if !v.is_null() || bugs::active(Bug::AggregateSkipsNull) {
                         args.push(v);
                     }
                 }

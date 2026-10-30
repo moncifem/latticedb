@@ -50,6 +50,7 @@ pub lattice_core::bugs::Bug::AccountFileOverwritten
 pub lattice_core::bugs::Bug::AccountNoLock
 pub lattice_core::bugs::Bug::AccountRemoveKeepsTokens
 pub lattice_core::bugs::Bug::AckBeforeSync
+pub lattice_core::bugs::Bug::AggregateSkipsNull
 pub lattice_core::bugs::Bug::AuthorFromClient
 pub lattice_core::bugs::Bug::AuthorIdTruncatedHash
 pub lattice_core::bugs::Bug::AuthorRegistryLogCheckSkipped
@@ -147,6 +148,7 @@ pub const lattice_core::bugs::Bug::BEARER: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 9]
+pub const lattice_core::bugs::Bug::EXEC_AGGREGATE: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::EXEC_DEFINITIONS: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::EXEC_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::FEED_BOUND: [lattice_core::bugs::Bug; 3]
