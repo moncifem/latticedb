@@ -1304,4 +1304,92 @@ reader	allow-all
         drop(host);
         std::fs::remove_dir_all(path).unwrap();
     }
+
+    /// A statement from inside a block that times out and then runs late, as the block's last word.
+    fn late_closing_statement(closing: &str) -> (usize, String) {
+        let (host, path) = quick_host(&format!("late-{}", closing.to_lowercase()));
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        p.execute(&ctx, "BEGIN", &[]).unwrap();
+        p.execute(&ctx, "INSERT INTO t VALUES (1)", &[]).unwrap();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
+        p.hold_next_for_test(entered_tx, release_rx);
+        let sql = closing.to_string();
+        let worker = thread::Builder::new()
+            .spawn(move || {
+                let principal = Principal::local_development();
+                let ctx = QueryContext::new(&principal);
+                let error = p.execute(&ctx, &sql, &[]).unwrap_err();
+                (p, error.code)
+            })
+            .unwrap();
+        entered_rx.recv().unwrap();
+        let (mut p, code) = worker.join().unwrap();
+        assert_eq!(code, "57014");
+        drop(release_tx);
+        // The closing statement ran late and ended the block, so the abort queued behind it finds no
+        // block and does nothing: the next statement is an ordinary autocommit statement.
+        let tag = p
+            .execute(&ctx, "INSERT INTO t VALUES (2)", &[])
+            .unwrap()
+            .tag;
+        let rows = rows_of(&host, "SELECT id FROM t");
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+        (rows, tag)
+    }
+
+    #[test]
+    fn the_abort_after_a_late_commit_or_rollback_finds_no_block() {
+        // Late COMMIT: the block's row is committed, and the next statement is not refused.
+        assert_eq!(
+            late_closing_statement("COMMIT"),
+            (2, "INSERT 0 1".to_string())
+        );
+        // Late ROLLBACK: the block's row is gone, and the next statement is not refused.
+        assert_eq!(
+            late_closing_statement("ROLLBACK"),
+            (1, "INSERT 0 1".to_string())
+        );
+    }
+
+    #[test]
+    fn a_begin_retried_straight_after_a_timeout_queues_behind_the_abort() {
+        let (host, path) = quick_host("retry-begin");
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
+        p.hold_next_for_test(entered_tx, release_rx);
+        let worker = thread::Builder::new()
+            .spawn(move || {
+                let principal = Principal::local_development();
+                let ctx = QueryContext::new(&principal);
+                let error = p.execute(&ctx, "BEGIN", &[]).unwrap_err();
+                (p, error.code)
+            })
+            .unwrap();
+        entered_rx.recv().unwrap();
+        let (mut p, code) = worker.join().unwrap();
+        assert_eq!(code, "57014");
+        drop(release_tx);
+        // The retry is queued after the abort of the first BEGIN, so the abort discards the first
+        // block and does not touch the retry's.
+        assert_eq!(p.execute(&ctx, "BEGIN", &[]).unwrap().tag, "BEGIN");
+        p.execute(&ctx, "INSERT INTO t VALUES (7)", &[]).unwrap();
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "COMMIT");
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 1);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }
