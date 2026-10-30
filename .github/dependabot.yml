@@ -3,15 +3,18 @@ updates:
   - package-ecosystem: cargo
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
     groups:
       artifact-actions:
         patterns: ["actions/upload-artifact", "actions/download-artifact"]
   - package-ecosystem: pip
     directory: /.github
     schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
   - package-ecosystem: npm
     directory: /clients/typescript
     schedule: { interval: weekly }
