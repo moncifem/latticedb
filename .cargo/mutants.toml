@@ -81,6 +81,12 @@ exclude_re = [
     # only with `seq` at or below the cursor, and every queued event is above the cursor, so the front
     # entry never satisfies the second condition when nothing is in flight; `> 0` versus `>= 0` is the same.
     "backpressure\\.rs:183:\\d+: replace > with >= in SubscriberQueue::ack",
+    # Outbox receipts: an acknowledgement id is parsed and then looked up among the queued counters. An
+    # empty digit string cannot parse, and a 17-digit one parses to a counter above any issued, so the
+    # emptiness and length conditions only decide earlier what the lookup would decide anyway. Marking
+    # the same persisted point twice (`>` versus `>=`) sets the same value.
+    "outbox\\.rs:402:\\d+: replace .* in Outbox::counter_of",
+    "outbox\\.rs:424:\\d+: replace > with >= in Outbox::mark_persisted",
     "sim_cli\\.rs:96:\\d+: replace \\+= with (-=|\\*=) in execute_with",
     # The binary only wires `execute_with` to stdout, stderr and the ledger file; the testkit may not
     # spawn a process, so its exit-code plumbing is exercised by `cargo xtask sim` in the nightly.
