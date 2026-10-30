@@ -1,8 +1,8 @@
 # ADR 0025: SQL planner: build in house
 
-Status: accepted (2026-10-29)
+Status: accepted
 
-Decided by the tech lead under the owner's delegation of 2026-10-29. The conditions below are part of
+Accepted 2026-10-29. Decided by the tech lead under the owner's delegation of 2026-10-29. The conditions below are part of
 the decision. Requirement P2-10.
 
 [ADR 0013](0013-sql-planner-and-executor.md) holds the criteria C1 to C7 and the measured spike. It
