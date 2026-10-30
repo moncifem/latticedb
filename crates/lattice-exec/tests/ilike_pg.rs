@@ -135,9 +135,9 @@ const STEPS: &[(&str, &[&str])] = &[
         "SELECT id FROM il WHERE s NOT ILIKE '%l_o' ORDER BY id",
         &["4", "6", "7", "8", "9"],
     ),
-    ("SELECT id FROM il WHERE s ILIKE 'hel' ORDER BY id", &[]),
+    ("SELECT id FROM il WHERE s ILIKE 'hell' ORDER BY id", &[]),
     (
-        "SELECT id FROM il WHERE s NOT ILIKE 'hel' ORDER BY id",
+        "SELECT id FROM il WHERE s NOT ILIKE 'hell' ORDER BY id",
         &["1", "2", "3", "4", "6", "7", "8", "9"],
     ),
     ("SELECT id FROM il WHERE s ILIKE '%X%' ORDER BY id", &[]),
