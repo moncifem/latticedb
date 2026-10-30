@@ -143,6 +143,9 @@ pub lattice_engines::feed_emit::FeedReadError::KeyTooLarge::cursor: lattice_core
 pub lattice_engines::feed_emit::FeedReadError::KeyTooLarge::len: usize
 pub lattice_engines::feed_emit::FeedReadError::MissingCommitTime
 pub lattice_engines::feed_emit::FeedReadError::MissingCommitTime::lsn: u64
+pub lattice_engines::feed_emit::FeedReadError::ValueTooLarge
+pub lattice_engines::feed_emit::FeedReadError::ValueTooLarge::cursor: lattice_core::feed::Cursor
+pub lattice_engines::feed_emit::FeedReadError::ValueTooLarge::len: usize
 impl core::clone::Clone for lattice_engines::feed_emit::FeedReadError
 pub fn lattice_engines::feed_emit::FeedReadError::clone(&self) -> Self
 impl core::cmp::Eq for lattice_engines::feed_emit::FeedReadError
@@ -547,6 +550,7 @@ pub fn lattice_engines::rowops::RowOpsError::fmt(&self, &mut core::fmt::Formatte
 impl core::marker::StructuralPartialEq for lattice_engines::rowops::RowOpsError
 pub const lattice_engines::rowops::MAGIC: [u8; 4]
 pub const lattice_engines::rowops::MAX_KEY_BYTES: usize
+pub const lattice_engines::rowops::MAX_VALUE_BYTES: usize
 pub fn lattice_engines::rowops::decode(&[u8]) -> core::result::Result<alloc::vec::Vec<lattice_engines::rowops::RowWrite>, lattice_engines::rowops::RowOpsError>
 pub fn lattice_engines::rowops::encode(&[lattice_engines::rowops::RowWrite]) -> core::result::Result<alloc::vec::Vec<u8>, lattice_engines::rowops::RowOpsError>
 pub fn lattice_engines::rowops::is_row_payload(&[u8]) -> bool
@@ -573,6 +577,9 @@ pub lattice_engines::store::RowError::Rejected(lattice_core::txn::TxnError)
 pub lattice_engines::store::RowError::SnapshotTooOld
 pub lattice_engines::store::RowError::SnapshotTooOld::floor: u64
 pub lattice_engines::store::RowError::Stale
+pub lattice_engines::store::RowError::ValueTooLarge
+pub lattice_engines::store::RowError::ValueTooLarge::len: usize
+pub lattice_engines::store::RowError::ValueTooLarge::max: usize
 impl core::clone::Clone for lattice_engines::store::RowError
 pub fn lattice_engines::store::RowError::clone(&self) -> Self
 impl core::cmp::PartialEq for lattice_engines::store::RowError

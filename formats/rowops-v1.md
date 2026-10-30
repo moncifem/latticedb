@@ -26,6 +26,6 @@ to commit a put whose key is longer than 4096 bytes (`MAX_KEY_BYTES`, the same n
 key bound in [change-feed-v1.md](change-feed-v1.md)), with `RowError::KeyTooLong` and nothing appended.
 Deletes are not checked. The bytes of the format do not change, and a decoder still accepts a longer key:
 a log written before this rule may hold one. The change feed then withholds only that row, see
-`lattice_engines::feed_emit`. Value sizes remain bounded only by the payload.
+`lattice_engines::feed_emit`. **Value bound (write side).** The row store also refuses to commit a put whose value is longer than 16777216 bytes (`MAX_VALUE_BYTES`, the same number as the change feed's value bound), with `RowError::ValueTooLarge` and nothing appended; deletes carry no value. The log refuses a record over `MAX_PAYLOAD`, which is the same number, so today no value over the bound can reach the store: the check is what keeps every committed row expressible as a feed event if that limit grows. A log written under a larger bound may hold a longer value; the change feed then withholds only that row from readers who may read it.
 
-Not yet specified: the maximum value size, and whether an empty write list is valid.
+Not yet specified: whether an empty write list is valid.

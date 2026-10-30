@@ -139,8 +139,7 @@ checks the primary key and each unique entry key, so a long text or bytea value 
 `54000`; the store check is the backstop. The format note is in `formats/rowops-v1.md` and ADR 0023; this
 limit is format-adjacent and needs independent review.
 
-Same class, not fixed here: `FeedError::ValueTooLarge` (a value over 16 MiB) still makes
-`events_since_as` fail for every reader, including those who may not read the row. Tracked in issue 488.
+The same rule holds for values (issue 488): the row store refuses a put whose value is over 16 MiB (`RowError::ValueTooLarge`, `rowops::MAX_VALUE_BYTES`, the feed's `MAX_VALUE_LEN`; SQLSTATE `54000` through `lattice-exec`), deletes are not checked, and a row that is already in a log under a larger bound is handled as an oversize key is: a reader who may not read it is unaffected, a reader who may read it gets the events before it and then `FeedReadError::ValueTooLarge` naming the cursor, and reading again from that cursor skips exactly that event. Before, `events_for` validated the whole change set before the policy filter, so one such value failed the feed for every reader. Honest scope: the log refuses a record over `MAX_PAYLOAD` (16 MiB), which equals the value bound, so no value over it can be committed today (a probe with a one-byte key shows the record framing adds 79 bytes, so the largest committable value is 79 bytes under the bound, and `the_log_record_limit_keeps_every_value_over_the_feed_bound_out_today` pins it); the check and the skip keep the feed total if that limit ever grows, and the tests lower the store's bound to stand for a log written under a larger one. Witnessed with `Bug::RowOversizeValueAccepted` (`feed_emit::bound_tests`). Format-adjacent, no byte changes.
 
 ## Still missing
 

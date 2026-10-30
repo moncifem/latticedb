@@ -77,6 +77,15 @@ impl ExecError {
         )
     }
 
+    /// A stored row does not fit the row store's value bound (SQLSTATE 54000).
+    pub(crate) fn value_too_large(max: usize) -> Self {
+        ExecError::new(
+            ErrorKind::Limit,
+            "54000",
+            format!("a row is larger than the {max} byte limit"),
+        )
+    }
+
     /// Stored data failed to decode. The detail stays out of the message a client sees.
     pub(crate) fn corrupt() -> Self {
         ExecError::new(ErrorKind::Storage, "XX001", "stored data is corrupt")
@@ -189,9 +198,23 @@ impl From<RowError> for ExecError {
                 ExecError::new(ErrorKind::Storage, "40003", "the commit outcome is unknown")
             }
             RowError::KeyTooLong { max, .. } => ExecError::key_too_long(max),
+            RowError::ValueTooLarge { max, .. } => ExecError::value_too_large(max),
             // Engine detail (paths, offsets, record contents) is not for clients.
             RowError::Corrupt(_) => ExecError::corrupt(),
             _ => ExecError::new(ErrorKind::Storage, "XX000", "internal storage error"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_oversize_row_value_is_a_limit_error_not_an_internal_one() {
+        let e = ExecError::from(RowError::ValueTooLarge { len: 9, max: 8 });
+        assert_eq!(e.kind(), ErrorKind::Limit);
+        assert_eq!(e.sqlstate(), "54000");
+        assert_eq!(e.message(), "a row is larger than the 8 byte limit");
     }
 }

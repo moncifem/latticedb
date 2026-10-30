@@ -21,6 +21,12 @@ const VERSION: u8 = 1;
 /// can carry longer keys (`u32` length), and a log written before this limit may hold one.
 pub const MAX_KEY_BYTES: usize = lattice_core::feed::MAX_KEY_LEN;
 
+/// The longest row value the store accepts at commit, in bytes: the change feed's value bound
+/// (`lattice_core::feed::MAX_VALUE_LEN`), one constant for the same reason as [`MAX_KEY_BYTES`].
+/// Today the log refuses a record over `MAX_PAYLOAD`, which is the same number, so no value over this
+/// bound can reach the store; the check is what keeps the feed total if that log limit ever grows.
+pub const MAX_VALUE_BYTES: usize = lattice_core::feed::MAX_VALUE_LEN;
+
 /// Why a payload could not be read as row writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowOpsError {

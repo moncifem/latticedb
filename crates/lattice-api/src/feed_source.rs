@@ -20,7 +20,7 @@
 //!   the newest applied commit, is [`SourceError::BadCursor`]; one at or below the vacuum floor is
 //!   [`SourceError::TooOld`].
 //! * **Payload.** `Event::data` is the `change-feed-v1` encoding of the event.
-//! * **Oversize keys.** A log from before the store bounded keys may hold a row the feed cannot
+//! * **Oversize keys and values.** A log from before the store bounded them may hold a row the feed cannot
 //!   carry. The engine returns the events before it, and then fails a read that starts at it. The
 //!   source skips exactly the blocked event by continuing from its cursor, so a reader is never
 //!   wedged and no other event is lost or repeated. Only a table's own blocked rows can block its
@@ -266,7 +266,9 @@ fn feed_chunk<I: Io, C: Clock, R: Rng, P: PolicyEvaluator + ?Sized>(
         }
         // The first readable event this step would deliver cannot be carried: continue after it. The
         // versions before it were passed over, so nothing else is skipped.
-        Err(FeedReadError::KeyTooLarge { cursor, .. }) => Ok(Chunk {
+        Err(
+            FeedReadError::KeyTooLarge { cursor, .. } | FeedReadError::ValueTooLarge { cursor, .. },
+        ) => Ok(Chunk {
             events: Vec::new(),
             resume: cursor,
             more: true,
@@ -325,7 +327,8 @@ fn source_error(e: &FeedReadError) -> SourceError {
         FeedReadError::MissingCommitTime { .. }
         | FeedReadError::IndexInconsistent { .. }
         | FeedReadError::Feed(_)
-        | FeedReadError::KeyTooLarge { .. } => SourceError::Unavailable,
+        | FeedReadError::KeyTooLarge { .. }
+        | FeedReadError::ValueTooLarge { .. } => SourceError::Unavailable,
     }
 }
 

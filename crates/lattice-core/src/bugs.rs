@@ -121,6 +121,8 @@ pub enum Bug {
     ExecIndexPolicySkipped,
     /// A row commit accepts a key longer than the change feed can carry (feed availability).
     RowOversizeKeyAccepted,
+    /// A row commit accepts a value longer than the change feed can carry (feed availability).
+    RowOversizeValueAccepted,
     /// The tree CRDT replays any number of live ops for one peer operation (CPU exhaustion).
     TreeReplayBudgetSkipped,
     /// Recovery keeps a zero-filled torn tail in place instead of truncating it, so later
@@ -176,8 +178,9 @@ impl Bug {
     /// Catalog-managed definition recovery defects, exercised by the focused fault witness.
     pub const CATALOG_INDEX: [Bug; 2] = [Bug::ManagedIndexesNotRecovered, Bug::DdlPolicySkipped];
 
-    /// Key-limit defects, detected by the oversize key witnesses in `lattice-engines`.
-    pub const KEY_LIMIT: [Bug; 1] = [Bug::RowOversizeKeyAccepted];
+    /// Key-limit and value-limit defects, detected by the oversize key and value witnesses in
+    /// `lattice-engines`.
+    pub const KEY_LIMIT: [Bug; 2] = [Bug::RowOversizeKeyAccepted, Bug::RowOversizeValueAccepted];
 
     /// Strict HLC snapshot defects, detected by the focused retention witness.
     pub const HLC_SNAPSHOT: [Bug; 1] = [Bug::HlcSnapshotClamped];
@@ -342,7 +345,7 @@ mod tests {
             .chain(Bug::RECOVERY_ORDER)
             .chain(Bug::NON_PREFIX)
             .collect();
-        assert_eq!(all.len(), 60);
+        assert_eq!(all.len(), 61);
         for bug in all {
             assert!((bug as u32) < u128::BITS, "guard mask exhausted: {bug:?}");
             clear();

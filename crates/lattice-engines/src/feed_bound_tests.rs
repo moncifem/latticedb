@@ -13,6 +13,8 @@
 )]
 
 use super::*;
+use crate::catalog::CatalogOp;
+use crate::store::RowError;
 use lattice_core::Config;
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
 use lattice_testkit::scenario::{SharedClock, SharedIo};
@@ -600,6 +602,163 @@ fn the_scan_bound_planted_bug_is_caught() {
             return Err(format!("visited {visited}, scanned {}", page.scanned));
         }
         Ok(())
+    });
+}
+
+// ---- the value bound (issue #488) ----
+//
+// The log refuses a record over `MAX_PAYLOAD`, which is the feed's value bound, so no value over the
+// bound can be committed today. The tests lower the store's bound to stand for a log written under a
+// larger one: rows are committed first, then the bound drops below them.
+
+fn put(store: &mut Store, table: u32, key: &[u8], len: usize) -> Result<u64, RowError> {
+    let mut tx = store.begin();
+    tx.put((table, key.to_vec()), vec![9u8; len]);
+    store.commit(tx)
+}
+
+#[test]
+fn the_log_record_limit_keeps_every_value_over_the_feed_bound_out_today() {
+    use crate::rowops::MAX_VALUE_BYTES;
+    assert_eq!(MAX_VALUE_BYTES, lattice_core::feed::MAX_VALUE_LEN);
+    // The record limit is not above the value bound, so a record that holds a value of the bound
+    // plus its own framing is already refused by the log: the check at commit never has work today.
+    const { assert!(lattice_core::record::MAX_PAYLOAD <= MAX_VALUE_BYTES) };
+    let (_d, _c, mut store) = fresh();
+    let refused = put(&mut store, 7, b"k", MAX_VALUE_BYTES);
+    assert!(matches!(refused, Err(RowError::Rejected(_))), "{refused:?}");
+}
+
+#[test]
+fn a_value_over_the_bound_is_refused_whole_at_commit_and_a_value_at_it_is_not() {
+    let (_d, _c, mut store) = fresh();
+    store.set_value_limit(8);
+    assert_eq!(put(&mut store, 7, b"a", 8), Ok(1));
+    let applied = store.applied_lsn();
+    assert_eq!(
+        put(&mut store, 7, b"b", 9),
+        Err(RowError::ValueTooLarge { len: 9, max: 8 })
+    );
+    // One oversize put refuses the whole transaction, and nothing was appended.
+    let mut tx = store.begin();
+    tx.put((7, b"c".to_vec()), vec![1; 3]);
+    tx.put((8, b"d".to_vec()), vec![1; 99]);
+    assert_eq!(
+        store.commit(tx),
+        Err(RowError::ValueTooLarge { len: 99, max: 8 })
+    );
+    assert_eq!(store.applied_lsn(), applied);
+    assert_eq!(store.events_since(Cursor::ORIGIN).unwrap().count(), 1);
+    // The catalog commit path applies the same bound.
+    let mut tx = store.begin();
+    tx.put((9, b"e".to_vec()), vec![1; 9]);
+    let catalog = vec![CatalogOp::Create {
+        table: 9,
+        name: "t".into(),
+    }];
+    assert_eq!(
+        store.commit_with_catalog(tx, catalog, Vec::new()),
+        Err(RowError::ValueTooLarge { len: 9, max: 8 })
+    );
+    // A delete carries no value: a row that is too large can still be removed.
+    store.set_value_limit(100);
+    put(&mut store, 7, b"big", 50).unwrap();
+    store.set_value_limit(8);
+    let mut tx = store.begin();
+    tx.delete((7, b"big".to_vec()));
+    assert!(store.commit(tx).is_ok());
+    assert_eq!(
+        RowError::ValueTooLarge { len: 9, max: 8 }.to_string(),
+        "row value of 9 bytes exceeds the 8 byte limit"
+    );
+}
+
+#[test]
+fn a_legacy_oversize_value_stops_only_readers_who_can_read_it_and_can_be_skipped() {
+    let (_d, _c, mut store) = fresh();
+    put(&mut store, 7, b"a", 3).unwrap();
+    // Table 7 sorts before table 8: the oversize row is index 1 of this set.
+    let mut tx = store.begin();
+    tx.put((7, b"c".to_vec()), vec![9; 3]);
+    tx.put((8, b"x".to_vec()), vec![9; 40]);
+    store.commit(tx).unwrap();
+    put(&mut store, 7, b"d", 3).unwrap();
+    // The bound drops below the row that was committed under the larger one.
+    store.set_value_limit(8);
+    let keys = |events: Vec<ChangeEvent>| -> Vec<Vec<u8>> {
+        events.into_iter().map(|e| e.change.key).collect()
+    };
+    // A reader who cannot read table 8 gets the whole feed, as if the row were not there.
+    let page = store
+        .read_feed_as(Cursor::ORIGIN, None, &EvenOnly(8), FeedLimits::UNBOUNDED)
+        .unwrap();
+    assert_eq!(
+        keys(page.events),
+        [b"a".to_vec(), b"c".to_vec(), b"d".to_vec()]
+    );
+    // A reader who can read it gets everything before it, then the typed error at its cursor.
+    let blocked = Cursor::new(2, 1).unwrap();
+    let first = store
+        .read_feed_as(Cursor::ORIGIN, None, &AllowAll, FeedLimits::UNBOUNDED)
+        .unwrap();
+    assert!(first.more);
+    assert_eq!(first.resume, Cursor::new(2, 0).unwrap());
+    assert_eq!(keys(first.events.clone()), [b"a".to_vec(), b"c".to_vec()]);
+    let error = FeedReadError::ValueTooLarge {
+        cursor: blocked,
+        len: 40,
+    };
+    assert_eq!(
+        store
+            .read_feed_as(first.resume, None, &AllowAll, FeedLimits::UNBOUNDED)
+            .err(),
+        Some(error.clone())
+    );
+    assert!(error.to_string().contains("resume from that cursor"));
+    // Reading again from the blocked cursor skips exactly that event.
+    let rest = store
+        .read_feed_as(blocked, None, &AllowAll, FeedLimits::UNBOUNDED)
+        .unwrap();
+    assert_eq!(keys(rest.events), [b"d".to_vec()]);
+    // The same through the unbounded form, and with a table filter that never meets the row.
+    assert_eq!(store.events_since(Cursor::ORIGIN).unwrap().count(), 2);
+    let only_7 = store
+        .read_feed_as(Cursor::ORIGIN, Some(7), &AllowAll, FeedLimits::UNBOUNDED)
+        .unwrap();
+    assert_eq!(only_7.events.len(), 3);
+    // Removing the oversize row is itself an event for a reader who could read the old value: the
+    // delete carries no value, so the size of what it removed blocks nobody.
+    let mut tx = store.begin();
+    tx.delete((8, b"x".to_vec()));
+    store.commit(tx).unwrap();
+    let from_blocked = store
+        .read_feed_as(blocked, None, &AllowAll, FeedLimits::UNBOUNDED)
+        .unwrap();
+    let deletes = from_blocked
+        .events
+        .iter()
+        .filter(|e| matches!(e.change.op, ChangeOp::Delete))
+        .count();
+    assert_eq!(deletes, 1);
+}
+
+/// Reads every table except one.
+struct EvenOnly(u32);
+impl PolicyEvaluator for EvenOnly {
+    fn allows_read(&self, row: RowRef<'_>) -> bool {
+        row.table != self.0
+    }
+}
+
+#[test]
+fn the_oversize_value_planted_bug_is_caught() {
+    witness(Bug::RowOversizeValueAccepted, || {
+        let (_d, _c, mut store) = fresh();
+        store.set_value_limit(8);
+        match put(&mut store, 7, b"k", 9) {
+            Err(RowError::ValueTooLarge { .. }) => Ok(()),
+            other => Err(format!("an oversize value was not refused: {other:?}")),
+        }
     });
 }
 

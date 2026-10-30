@@ -97,6 +97,14 @@ fn a_change_the_kernel_rejects_is_rejected_and_leaves_the_store_usable() {
     let mut store = open(&disk, &clock, 1).unwrap();
     let mut tx = store.begin();
     tx.put((1, b"big".to_vec()), vec![0u8; 17 * 1024 * 1024]);
+    // Over the feed's value bound: refused by the store itself, before the kernel is asked.
+    match store.commit(tx) {
+        Err(RowError::ValueTooLarge { len, .. }) => assert_eq!(len, 17 * 1024 * 1024),
+        other => panic!("expected the store to refuse an oversized value, got {other:?}"),
+    }
+    // At the bound the value is allowed but its record is not: the kernel rejects it.
+    let mut tx = store.begin();
+    tx.put((1, b"edge".to_vec()), vec![0u8; 16 * 1024 * 1024]);
     match store.commit(tx) {
         Err(RowError::Rejected(_)) => {}
         other => panic!("expected the kernel to reject an oversized change, got {other:?}"),

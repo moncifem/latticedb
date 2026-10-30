@@ -121,6 +121,14 @@ pub enum RowError {
         /// The longest key the store accepts.
         max: usize,
     },
+    /// A row value is longer than [`rowops::MAX_VALUE_BYTES`], the bound the change feed can carry.
+    /// Nothing was written; store a smaller value.
+    ValueTooLarge {
+        /// The length of the first offending value.
+        len: usize,
+        /// The longest value the store accepts.
+        max: usize,
+    },
     /// A statement limit (cancellation, deadline or memory budget) stopped a read; nothing was
     /// changed and the read can be retried with fresh limits.
     Limit(LimitError),
@@ -151,6 +159,9 @@ impl fmt::Display for RowError {
             RowError::KeyTooLong { len, max } => {
                 write!(f, "row key of {len} bytes exceeds the {max} byte limit")
             }
+            RowError::ValueTooLarge { len, max } => {
+                write!(f, "row value of {len} bytes exceeds the {max} byte limit")
+            }
             RowError::PermissionDenied => f.write_str("row write denied"),
             RowError::Limit(e) => write!(f, "statement limit: {e}"),
         }
@@ -166,6 +177,7 @@ impl Classify for RowError {
             RowError::Corrupt(_) => ErrorClass::Fatal,
             RowError::Encode(_)
             | RowError::KeyTooLong { .. }
+            | RowError::ValueTooLarge { .. }
             | RowError::Limit(_)
             | RowError::InvalidIndexes(_)
             | RowError::PermissionDenied
@@ -191,6 +203,22 @@ fn check_key_lengths(writes: &[rowops::RowWrite]) -> Result<(), RowError> {
             len,
             max: rowops::MAX_KEY_BYTES,
         }),
+        None => Ok(()),
+    }
+}
+
+/// Refuses a write set that puts a value the change feed could not carry, before anything is
+/// appended. Deletes carry no value and are not checked.
+fn check_value_lengths(writes: &[rowops::RowWrite], max: usize) -> Result<(), RowError> {
+    if bugs::active(Bug::RowOversizeValueAccepted) {
+        return Ok(());
+    }
+    match writes
+        .iter()
+        .filter_map(|(_, value)| value.as_ref().map(Vec::len))
+        .find(|len| *len > max)
+    {
+        Some(len) => Err(RowError::ValueTooLarge { len, max }),
         None => Ok(()),
     }
 }
@@ -264,6 +292,9 @@ pub struct RowStore<I: Io, C: Clock, R: Rng> {
     commit_lsn: std::collections::BTreeMap<ChangeSetId, u64>,
     commit_times: Vec<(Hlc, u64, ChangeSetId)>,
     stale: bool,
+    /// The longest value a commit may hold and the feed will carry; [`rowops::MAX_VALUE_BYTES`]
+    /// unless a test lowers it to stand for a log written under a larger bound.
+    value_limit: usize,
 }
 
 impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
@@ -416,6 +447,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 commit_lsn,
                 commit_times,
                 stale: false,
+                value_limit: rowops::MAX_VALUE_BYTES,
             }),
         }
     }
@@ -506,6 +538,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
         check_key_lengths(&writes)?;
+        check_value_lengths(&writes, self.value_limit)?;
         let changes = self
             .indexes
             .catalog_changes_for(&self.table, &writes, &definitions)
@@ -929,6 +962,17 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         &self.table
     }
 
+    /// The longest value a commit may hold and the feed will carry.
+    pub(crate) fn value_limit(&self) -> usize {
+        self.value_limit
+    }
+
+    /// Lowers the value bound, which stands for a log written under a larger one (tests only).
+    #[cfg(test)]
+    pub(crate) fn set_value_limit(&mut self, max: usize) {
+        self.value_limit = max;
+    }
+
     /// The commit LSN of the newest change set applied.
     pub fn applied_lsn(&self) -> u64 {
         self.table.applied_lsn()
@@ -955,6 +999,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
         check_key_lengths(&writes)?;
+        check_value_lengths(&writes, self.value_limit)?;
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {

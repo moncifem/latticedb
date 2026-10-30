@@ -29,6 +29,12 @@
 //!   of the feed), and a read that starts at the blocked event fails with
 //!   [`FeedReadError::KeyTooLarge`] naming its cursor. Reading again from that cursor skips exactly
 //!   that event, so nothing else is lost. A reader who may not read it is unaffected.
+//! * **Value bound.** The same holds for a value over [`crate::rowops::MAX_VALUE_BYTES`] (the feed's bound): the
+//!   store refuses it at commit with `RowError::ValueTooLarge`, a log written under a larger bound
+//!   may hold one, and then only readers who may read that row are stopped, with
+//!   [`FeedReadError::ValueTooLarge`] after the events before it. A delete carries no value, so it is
+//!   never blocked by the size of the value it removed. Today the log's record limit equals the
+//!   feed's value bound, so no value over it can be committed at all.
 //! * **Provenance.** The store commits with no author or turn, so events carry author 0 and no turn.
 //!
 //! Cost: [`RowStore::read_feed_as`] walks the commit index (commit LSN to the keys it wrote,
@@ -63,7 +69,8 @@ pub enum FeedReadError {
         /// The commit LSN.
         lsn: u64,
     },
-    /// The change set cannot be expressed as events (a value over the feed's size bound).
+    /// An event cannot be expressed on the wire for a reason other than the size of its key or value
+    /// (which have their own, skippable, errors).
     Feed(FeedError),
     /// The commit index names a version the table no longer holds. The store's own metadata
     /// disagrees with its rows.
@@ -81,6 +88,17 @@ pub enum FeedReadError {
         /// The length of its key in bytes.
         len: usize,
     },
+    /// The first event this read would deliver carries a value over the feed's size bound, the
+    /// same case as [`FeedReadError::KeyTooLarge`] for a value. The store refuses such values at
+    /// commit (and today the log's record limit keeps them out), so only a log written under a
+    /// larger bound can hold one. Reading again from `cursor` skips that one event; a reader who
+    /// may not read the row is unaffected.
+    ValueTooLarge {
+        /// The cursor of the event that cannot be carried.
+        cursor: Cursor,
+        /// The length of its value in bytes.
+        len: usize,
+    },
 }
 
 impl fmt::Display for FeedReadError {
@@ -94,6 +112,14 @@ impl fmt::Display for FeedReadError {
             Self::IndexInconsistent { lsn } => {
                 write!(f, "the commit index and the rows disagree at lsn {lsn}")
             }
+            Self::ValueTooLarge { cursor, len } => write!(
+                f,
+                "the event at lsn {} index {} has a {len} byte value over the {} byte feed limit; \
+                 resume from that cursor to skip it",
+                cursor.lsn(),
+                cursor.index(),
+                lattice_core::feed::MAX_VALUE_LEN
+            ),
             Self::KeyTooLarge { cursor, len } => write!(
                 f,
                 "the event at lsn {} index {} has a {len} byte key over the {} byte feed limit; \
@@ -250,15 +276,29 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                     page.resume = here;
                     continue;
                 }
-                if entry.key.1.len() > MAX_KEY_BYTES {
+                // Only a row the reader may read can block it, and only if the row cannot be an
+                // event: a key or a value over the feed's bound (history from before the store
+                // refused them at commit).
+                let blocked = if entry.key.1.len() > MAX_KEY_BYTES {
+                    Some(FeedReadError::KeyTooLarge {
+                        cursor: here,
+                        len: entry.key.1.len(),
+                    })
+                } else {
+                    entry
+                        .value
+                        .filter(|v| v.len() > self.value_limit())
+                        .map(|v| FeedReadError::ValueTooLarge {
+                            cursor: here,
+                            len: v.len(),
+                        })
+                };
+                if let Some(error) = blocked {
                     // Everything before the blocked event is delivered first, so skipping it
                     // loses nothing. The read that starts at the prefix's last cursor then
                     // reports the block as its error.
                     if page.events.is_empty() {
-                        return Err(FeedReadError::KeyTooLarge {
-                            cursor: here,
-                            len: entry.key.1.len(),
-                        });
+                        return Err(error);
                     }
                     page.more = true;
                     return Ok(page);
