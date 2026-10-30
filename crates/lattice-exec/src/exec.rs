@@ -166,6 +166,18 @@ impl<'a, C: Clock> Gov<'a, C> {
     }
 }
 
+impl<C: Clock> crate::eval::Bounds for Gov<'_, C> {
+    fn poll(&self) -> Result<(), ExecError> {
+        self.check()
+    }
+
+    fn admit(&self, bytes: u64) -> Result<(), ExecError> {
+        // Reserve and release at once: the value is transient, but it must fit right now.
+        drop(self.limits.reserve(self.clock, bytes)?);
+        self.check()
+    }
+}
+
 /// One row on its way through the plan. `key` is the storage key while the row comes straight from
 /// a scan (and so can be updated or deleted).
 pub(crate) struct Tuple {
@@ -201,6 +213,7 @@ fn output_columns(cols: &[OutputColumn]) -> Vec<(String, SqlType)> {
 impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
     fn ctx(&self) -> EvalCtx<'_> {
         EvalCtx {
+            bounds: self.gov,
             params: self.params,
             now_micros: self.now_micros,
         }

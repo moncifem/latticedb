@@ -1029,3 +1029,47 @@ fn an_actor_that_hides_the_catalog_gets_undefined_table_for_an_existing_table() 
     let visible = ExecSession::new(ActorPolicy::new(Rc::new(DenyAll)));
     assert!(visible.describe(&f.db, "SELECT bal FROM acct").is_ok());
 }
+
+#[test]
+fn like_and_concatenation_obey_the_statement_limits() {
+    let (mut db, mut s) = ticking_db();
+    let text = "a".repeat(30_000);
+    let pattern = format!("%{}b", "a".repeat(10_000));
+    let sql = format!("SELECT id FROM big WHERE '{text}' LIKE '{pattern}'");
+    // The clock moves a millisecond per read and the matcher polls every thousand steps, so a
+    // pathological match is cut off by a short timeout instead of running to completion.
+    s.execute(&mut db, "SET statement_timeout = 50").unwrap();
+    let e = s.execute(&mut db, &sql).unwrap_err();
+    assert_eq!((e.sqlstate(), e.kind()), ("57014", ErrorKind::Limit));
+    s.execute(&mut db, "SET statement_timeout = 0").unwrap();
+    // Cancellation reaches the matcher too.
+    let polls = Cell::new(0u32);
+    let cancel = || {
+        polls.set(polls.get() + 1);
+        polls.get() > 20
+    };
+    let e = s.execute_with(&mut db, &sql, &[], &cancel).unwrap_err();
+    assert_eq!(e.sqlstate(), "57014");
+
+    // A concatenation tree is refused before the value exists, under the memory budget.
+    let mut tree = String::from("s");
+    for _ in 0..14 {
+        tree = format!("({tree} || {tree})");
+    }
+    s.execute(&mut db, "CREATE TABLE strs (id INT PRIMARY KEY, s TEXT)")
+        .unwrap();
+    s.execute(
+        &mut db,
+        &format!("INSERT INTO strs VALUES (1, '{}')", "x".repeat(1000)),
+    )
+    .unwrap();
+    s.set_limits(ExecLimits {
+        timeout_ms: None,
+        memory_bytes: 1 << 20,
+        max_timeout_ms: None,
+    });
+    let e = s
+        .execute(&mut db, &format!("SELECT {tree} FROM strs"))
+        .unwrap_err();
+    assert_eq!((e.sqlstate(), e.kind()), ("53200", ErrorKind::Limit));
+}

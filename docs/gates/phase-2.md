@@ -380,7 +380,12 @@ carries only the constraint name, and a test pins that. `UNIQUE` entries live in
 whose id has bit 31 set; evaluators must follow the owning table (`lattice_exec::owning_table`), and a
 test covers a restrictive policy that does. `RETURNING` does not re-check the read policy. A scan is not
 polled while the engine materialises row references, and write amplification is not charged against the
-memory budget.
+memory budget. Expression evaluation is bounded (#461, #462): `LIKE` polls the deadline and
+cancellation every 1,024 steps (a test cancels a 40,000 x 20,000 pattern at the third poll, and a
+session test times one out on the tick clock), and `||`/`lower`/`upper` refuse a result over 16 MiB
+(`54000`) or over the remaining statement budget (`53200`) before building it (a 2^16-leaf balanced
+tree over a 1 KiB value fails at the first oversized node). `LIKE` stays O(text x pattern); no
+`repeat`/`lpad` functions exist.
 
 **What does not run.** Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, `ALTER TABLE`, indexes
 (`CREATE INDEX`, and no scan uses an index), the `jsonb` operators, and DDL inside a transaction block.

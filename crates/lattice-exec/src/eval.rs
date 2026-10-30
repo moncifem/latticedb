@@ -15,14 +15,62 @@ use crate::value::{
     micros_to_date, parse_text,
 };
 
+#[cfg(test)]
+#[path = "eval_bounds_tests.rs"]
+mod bounds_tests;
+
 /// Deepest expression tree evaluated. The binder refuses anything deeper than 256 levels.
 pub(crate) const MAX_EVAL_DEPTH: usize = 600;
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const MICROS_PER_DAY: i64 = 86_400_000_000;
 
+/// Largest text or bytea value an expression may build. PostgreSQL allows 1 GB; this subset keeps a
+/// value small enough that a tree of concatenations fails before it can exhaust the process.
+pub(crate) const MAX_VALUE_BYTES: u64 = 16 << 20;
+
+/// Characters `LIKE` matches between two polls of the statement limits.
+const LIKE_POLL_STEPS: u32 = 1024;
+
+/// The statement limits an expression polls while it runs.
+pub(crate) trait Bounds {
+    /// Fails with a limit error once the statement is cancelled or past its deadline.
+    fn poll(&self) -> Result<(), ExecError>;
+    /// Fails with `53200` unless `bytes` more would fit in the statement's memory budget now. The
+    /// bytes are not kept: an intermediate value is freed when the expression finishes with it.
+    fn admit(&self, bytes: u64) -> Result<(), ExecError>;
+}
+
+/// No limits, for tests that exercise values rather than governance.
+#[cfg(test)]
+pub(crate) struct Unbounded;
+
+#[cfg(test)]
+impl Bounds for Unbounded {
+    fn poll(&self) -> Result<(), ExecError> {
+        Ok(())
+    }
+    fn admit(&self, _bytes: u64) -> Result<(), ExecError> {
+        Ok(())
+    }
+}
+
+/// Refuses a value over [`MAX_VALUE_BYTES`] or over the memory budget, before it is built.
+fn admit_value(bounds: &dyn Bounds, bytes: u64) -> Result<(), ExecError> {
+    if bytes > MAX_VALUE_BYTES {
+        return Err(ExecError::new(
+            crate::error::ErrorKind::Limit,
+            "54000",
+            format!("value of {bytes} bytes exceeds the limit of {MAX_VALUE_BYTES} bytes"),
+        ));
+    }
+    bounds.admit(bytes)
+}
+
 /// What an expression may read besides the row.
 pub(crate) struct EvalCtx<'a> {
+    /// The statement's limits, polled by long loops and checked before large values are built.
+    pub bounds: &'a dyn Bounds,
     /// Values of `$1`, `$2`, ...
     pub params: &'a [Datum],
     /// The statement's `now()`, in microseconds since the epoch.
@@ -100,7 +148,7 @@ fn go(e: &TypedExpr, row: &[Datum], ctx: &EvalCtx<'_>, depth: usize) -> Result<D
             _ => {
                 let l = sub(left)?;
                 let r = sub(right)?;
-                binary(*op, l, r, e.ty)
+                binary(*op, l, r, e.ty, ctx.bounds)
             }
         },
         ExprNode::IsNull { expr, negated } => {
@@ -160,7 +208,9 @@ fn go(e: &TypedExpr, row: &[Datum], ctx: &EvalCtx<'_>, depth: usize) -> Result<D
             let v = sub(expr)?;
             let p = sub(pattern)?;
             match (v, p) {
-                (Datum::Text(s), Datum::Text(p)) => Ok(Datum::Bool(like(&s, &p)? != *negated)),
+                (Datum::Text(s), Datum::Text(p)) => {
+                    Ok(Datum::Bool(like(&s, &p, ctx.bounds)? != *negated))
+                }
                 (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
                 _ => Err(ExecError::bind_type("LIKE needs text operands")),
             }
@@ -260,7 +310,13 @@ fn cmp_op(op: BinaryOp, l: &Datum, r: &Datum) -> Result<Option<bool>, ExecError>
     }))
 }
 
-fn binary(op: BinaryOp, l: Datum, r: Datum, ty: SqlType) -> Result<Datum, ExecError> {
+fn binary(
+    op: BinaryOp,
+    l: Datum,
+    r: Datum,
+    ty: SqlType,
+    bounds: &dyn Bounds,
+) -> Result<Datum, ExecError> {
     use BinaryOp::{
         Add, Concat, Contains, Div, Eq, Gt, GtEq, JsonGet, JsonGetText, Lt, LtEq, Mod, Mul, NotEq,
         Sub,
@@ -278,8 +334,13 @@ fn binary(op: BinaryOp, l: Datum, r: Datum, ty: SqlType) -> Result<Datum, ExecEr
         }
         Concat => match (l, r) {
             (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
-            (Datum::Text(a), Datum::Text(b)) => Ok(Datum::Text(a + &b)),
+            (Datum::Text(mut a), Datum::Text(b)) => {
+                admit_value(bounds, (a.len() as u64).saturating_add(b.len() as u64))?;
+                a.push_str(&b);
+                Ok(Datum::Text(a))
+            }
             (Datum::Bytes(mut a), Datum::Bytes(b)) => {
+                admit_value(bounds, (a.len() as u64).saturating_add(b.len() as u64))?;
                 a.extend_from_slice(&b);
                 Ok(Datum::Bytes(a))
             }
@@ -371,13 +432,19 @@ fn arithmetic(op: BinaryOp, l: &Datum, r: &Datum, ty: SqlType) -> Result<Datum, 
 }
 
 /// `LIKE` with `%`, `_` and backslash escapes; matching is by character.
-pub(crate) fn like(text: &str, pattern: &str) -> Result<bool, ExecError> {
+pub(crate) fn like(text: &str, pattern: &str, bounds: &dyn Bounds) -> Result<bool, ExecError> {
     #[derive(Clone, Copy)]
     enum Tok {
         Any,
         One,
         Lit(char),
     }
+    // The token and character copies are built from both operands (up to 8 bytes per input byte).
+    bounds.admit(
+        (text.len() as u64)
+            .saturating_add(pattern.len() as u64)
+            .saturating_mul(8),
+    )?;
     let mut toks = Vec::new();
     let mut it = pattern.chars();
     while let Some(c) = it.next() {
@@ -399,7 +466,13 @@ pub(crate) fn like(text: &str, pattern: &str) -> Result<bool, ExecError> {
     let chars: Vec<char> = text.chars().collect();
     let (mut t, mut p) = (0usize, 0usize);
     let mut star: Option<(usize, usize)> = None;
+    let mut steps = 0u32;
     while t < chars.len() {
+        steps += 1;
+        if steps >= LIKE_POLL_STEPS {
+            steps = 0;
+            bounds.poll()?;
+        }
         match toks.get(p) {
             Some(Tok::Any) => {
                 star = Some((p, t));
@@ -508,8 +581,16 @@ fn function(name: &str, a: &[Datum], ty: SqlType, ctx: &EvalCtx<'_>) -> Result<D
             .ok_or_else(|| ExecError::internal(format!("{name}: missing argument {i}")))
     };
     match name {
-        "lower" => Ok(Datum::Text(text_arg(arg(0)?)?.to_lowercase())),
-        "upper" => Ok(Datum::Text(text_arg(arg(0)?)?.to_uppercase())),
+        // Case mapping can lengthen a string (some characters expand), so admit three times its size.
+        "lower" | "upper" => {
+            let s = text_arg(arg(0)?)?;
+            ctx.bounds.admit((s.len() as u64).saturating_mul(3))?;
+            Ok(Datum::Text(if name == "lower" {
+                s.to_lowercase()
+            } else {
+                s.to_uppercase()
+            }))
+        }
         "length" => match arg(0)? {
             Datum::Text(s) => Ok(Datum::Int(
                 i64::try_from(s.chars().count()).unwrap_or(i64::MAX),
@@ -700,6 +781,7 @@ mod tests {
 
     fn ctx() -> EvalCtx<'static> {
         EvalCtx {
+            bounds: &Unbounded,
             params: &[],
             now_micros: 0,
         }
@@ -835,9 +917,16 @@ mod tests {
             ("abcabd", "%abc", false),
             ("aXbXc", "%X%X%", true),
         ] {
-            assert_eq!(like(text, pat).unwrap(), want, "{text} LIKE {pat}");
+            assert_eq!(
+                like(text, pat, &Unbounded).unwrap(),
+                want,
+                "{text} LIKE {pat}"
+            );
         }
-        assert_eq!(like("a", "a\\").unwrap_err().sqlstate(), "22025");
+        assert_eq!(
+            like("a", "a\\", &Unbounded).unwrap_err().sqlstate(),
+            "22025"
+        );
     }
 
     #[test]
@@ -1139,7 +1228,7 @@ mod tests {
                 row in prop::collection::vec(datum(), 0..5),
                 params in prop::collection::vec(datum(), 0..3),
             ) {
-                let ctx = EvalCtx { params: &params, now_micros: 0 };
+                let ctx = EvalCtx { bounds: &Unbounded, params: &params, now_micros: 0 };
                 // Ok or Err are both fine; reaching this line means nothing panicked.
                 match eval(&e, &row, &ctx) {
                     Ok(_) => {}

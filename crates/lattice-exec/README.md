@@ -77,7 +77,12 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
   budget by one row. `scan_at` materialises the table's borrowed row references before any poll or
   charge, so that step is neither cancellable nor counted; a sort polls once per key evaluation and its
   comparison pass is not interruptible. Write amplification (staged copies of rows and entries) is not
-  charged. A snapshot that was vacuumed away is `72000` with its own `ErrorKind::SnapshotTooOld`.
+  charged. `LIKE` polls the deadline and cancellation every 1,024 characters it steps through (its
+  worst case is still O(text x pattern), as in PostgreSQL, but a timeout or cancel stops it), and
+  admits its token and character copies against the budget first. `||` on text or bytea and
+  `lower`/`upper` check the result size before building it: a value over 16 MiB is `54000`, and one
+  that does not fit the remaining statement budget is `53200`. The check is transient (the bytes are
+  not held), so an intermediate value does not count against later rows. A snapshot that was vacuumed away is `72000` with its own `ErrorKind::SnapshotTooOld`.
 
 ## Access paths
 
