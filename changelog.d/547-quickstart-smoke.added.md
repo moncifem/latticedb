@@ -1,0 +1,1 @@
+Quickstart smoke test: a `quickstart-smoke` workflow builds `latticed`, runs the SQL from the README "Try it" section through `psql`, stops the server with `shutdown`, restarts it on the same data directory and checks the documented restart behaviour (#379), so the README and the binary cannot drift apart unnoticed.

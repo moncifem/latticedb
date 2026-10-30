@@ -1,0 +1,125 @@
+name: quickstart-smoke
+# Proves the README "Try it" section works: builds latticed, starts it exactly as the README does,
+# runs the README's own SQL through psql and checks the result, stops it with `shutdown` on stdin,
+# restarts it on the same data directory and checks the restart behaviour the README documents
+# (table names recovered, columns not queryable until #379). It fails when the README and the
+# binary drift apart. It is a smoke test of the quickstart, not a driver compatibility test (#413).
+on:
+  pull_request:
+    paths:
+      - "README.md"
+      - "crates/latticed/**"
+      - "crates/lattice-exec/**"
+      - "crates/lattice-api/**"
+      - "Cargo.lock"
+      - ".github/workflows/quickstart-smoke.yml"
+  workflow_dispatch:
+  schedule: [{ cron: "30 5 * * 1" }]
+permissions:
+  contents: read
+concurrency:
+  group: quickstart-smoke-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: build latticed
+        run: cargo build --release --locked -p latticed
+      - name: psql client
+        run: |
+          command -v psql >/dev/null || {
+            sudo apt-get update -q
+            sudo apt-get install -y -q postgresql-client
+          }
+          psql --version
+      - name: version
+        run: |
+          out=$(target/release/latticed --version)
+          echo "$out"
+          case "$out" in "latticed "[0-9]*) ;; *) echo "unexpected --version output" >&2; exit 1 ;; esac
+      - name: README quickstart, restart and recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/quickstart"
+          mkdir -p "$work"
+          cd "$work"
+          bin="$GITHUB_WORKSPACE/target/release/latticed"
+
+          # The SQL under "Try it" in the README is the test input, so editing it changes the test.
+          awk '/^## Try it/ { t = 1 } t && /^```sql/ { on = 1; next } on && /^```/ { exit } on { print }' \
+            "$GITHUB_WORKSPACE/README.md" > quickstart.sql
+          test -s quickstart.sql || { echo "no sql block under 'Try it' in README.md" >&2; exit 1; }
+          grep -q 'CREATE TABLE notes' quickstart.sql || { echo "README quickstart changed shape" >&2; exit 1; }
+          cat quickstart.sql
+
+          pid=""
+          start_server() {
+            # A FIFO holds stdin open, like a terminal does, until the script writes `shutdown`.
+            rm -f ctl && mkfifo ctl
+            "$bin" --data-dir ./data --development-policy allow-all < ctl > "server-$1.log" 2>&1 &
+            pid=$!
+            exec 3> ctl
+            for _ in $(seq 1 60); do
+              grep -q 'latticed listening on 127.0.0.1:5432' "server-$1.log" && return 0
+              kill -0 "$pid" 2>/dev/null || { echo "latticed exited during startup" >&2; return 1; }
+              sleep 0.5
+            done
+            echo "latticed did not start listening" >&2
+            return 1
+          }
+          stop_server() {
+            echo shutdown >&3
+            exec 3>&-
+            for _ in $(seq 1 40); do
+              kill -0 "$pid" 2>/dev/null || { wait "$pid"; return $?; }
+              sleep 0.5
+            done
+            echo "latticed did not stop after shutdown" >&2
+            kill "$pid" || true
+            return 1
+          }
+          cleanup() { kill "$pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          psql_run() { psql -X -q -t -A -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -h 127.0.0.1 -p 5432 -U dev "$@"; }
+
+          echo "::group::first run"
+          start_server first
+          got=$(psql_run -f quickstart.sql)
+          echo "result: $got"
+          [ "$got" = '1|write the spec|f' ] || { echo "README SELECT returned an unexpected result" >&2; exit 1; }
+          stop_server
+          echo "::endgroup::"
+
+          echo "::group::restart on the same data directory"
+          start_server second
+          grep -q '1 recovered table(s) have no column definitions' server-second.log \
+            || { echo "restart did not report the recovered table" >&2; exit 1; }
+          # Documented current behaviour (#379): the recovered table is unknown to SQL.
+          if err=$(psql_run -c 'SELECT * FROM notes;' 2>&1); then
+            echo "SELECT after restart unexpectedly succeeded: $err" >&2; exit 1
+          fi
+          echo "$err" | grep -q 42P01 || { echo "expected 42P01 after restart, got: $err" >&2; exit 1; }
+          if err=$(psql_run -c 'CREATE TABLE notes (id INT PRIMARY KEY);' 2>&1); then
+            echo "CREATE TABLE after restart unexpectedly succeeded: $err" >&2; exit 1
+          fi
+          echo "$err" | grep -q 42P07 || { echo "expected 42P07 after restart, got: $err" >&2; exit 1; }
+          stop_server
+          echo "::endgroup::"
+          echo "quickstart smoke passed"
+      - name: server logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quickstart-smoke-logs
+          path: ${{ runner.temp }}/quickstart/*.log
+          if-no-files-found: ignore
+          retention-days: 7
