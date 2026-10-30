@@ -31,6 +31,11 @@ fn credential_inputs_are_bounded_on_every_side() {
     assert!(!ok(b"p", &[0u8; 65], MIN_ITERATIONS));
     assert!(!ok(b"p", &SALT, MIN_ITERATIONS - 1));
     assert!(!ok(b"p", &SALT, MAX_ITERATIONS + 1));
+    // The bound is checked before any key derivation: an absurd cost is refused at once, not after
+    // billions of PBKDF2 rounds (a second check inside `from_keys` would give the same answer, much later).
+    assert!(!ok(b"p", &SALT, u32::MAX));
+    assert!(!ok(&[b'p'; 1025], &SALT, u32::MAX));
+    assert!(!ok(b"p", &[0u8; 8], u32::MAX));
     // Any one violation is enough, with the other two fine.
     assert!(!ok(&[b'p'; 1025], &SALT, MIN_ITERATIONS));
     assert!(!ok(b"p", &[0u8; 8], MIN_ITERATIONS));
@@ -73,6 +78,13 @@ fn attribute_grammar_refusals_each_stand_alone() {
         initial("n,,n=user,n=other,r=abc"),
         Err(ScramError::Malformed)
     ); // repeated key
+    // Only the first two attributes are used, so a bad key in a later position is the only thing that
+    // makes the grammar check matter: none of these may be silently ignored.
+    assert_eq!(initial("n,,n=user,r=abc,1=x"), Err(ScramError::Malformed)); // key not a letter
+    assert_eq!(initial("n,,n=user,r=abc,x1=x"), Err(ScramError::Malformed)); // key too long
+    assert_eq!(initial("n,,n=user,r=abc,x="), Err(ScramError::Malformed)); // empty value
+    assert_eq!(initial("n,,n=user,r=abc,n=y"), Err(ScramError::Malformed)); // repeated key
+    assert_eq!(initial("n,,n=user,r=abc,x=y"), Ok(())); // a harmless extra attribute is allowed
     assert_eq!(
         initial("n,,n=user,r=abc,m=ext"),
         Err(ScramError::UnsupportedExtension)
