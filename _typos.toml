@@ -1,10 +1,12 @@
-# BA is the business analyst role in diagrams; abd and ba appear in test fixtures; tru is a
-# deliberately invalid JSON literal in the PostgreSQL reference checks.
+# BA is the business analyst role in diagrams; abd and ba appear in test fixtures; tru, fals and nulll are
+# deliberately invalid JSON literals in the PostgreSQL reference checks.
 [default.extend-words]
 BA = "BA"
 ba = "ba"
 abd = "abd"
 tru = "tru"
+fals = "fals"
+nulll = "nulll"
 
 [files]
 extend-exclude = ["Cargo.lock", "fuzz/Cargo.lock", "LICENSE"]
