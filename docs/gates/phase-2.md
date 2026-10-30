@@ -386,13 +386,17 @@ and `attach_table` checks only the id and name, so it can silently stop enforcin
 in-process fingerprint refuses a different re-attach, see #379), and the stored row layout is not a
 frozen format.
 
-**sqllogictest.** The five scripts in `crates/lattice-testkit/tests/slt/` run unchanged through the
-executor. By record: `basics.test` 7 passed and 2 failed, `joins.test` 7 and 4, `aggregates.test` 9 and
-5, `changes.test` 14 and 0, `transactions.test` 15 and 1; 52 passed, 12 failed. All 12 failures are
-statements the binder refuses with `0A000` (aggregates, joins, `GROUP BY`, `DISTINCT`) and are listed
-with reasons in `crates/lattice-exec/tests/slt_expected_failures.txt`; the test fails if a listed
-record starts passing. This is **not** the 100 percent P2-13 asks for, and no differential run against
-PostgreSQL was made for this executor.
+**sqllogictest.** All 21 scripts in `crates/lattice-testkit/tests/slt/` (669 records) run unchanged through
+the executor: **451 pass and 218 fail**. `changes.test` (14) and `unsupported.test` (64) pass in full;
+`transactions_visibility.test` 54 of 65, `constraints.test` 40 of 45 and `basics.test` 7 of 9, for example.
+The failures are listed one by one, with a reason, in `crates/lattice-exec/tests/slt_expected_failures.txt`.
+208 are statements refused with `0A000` (aggregates 69, `SELECT` without `FROM` 34, joins 25, `GROUP BY`
+and `HAVING` 16, subqueries 10, `DISTINCT` 6, `ALTER TABLE`/`CREATE INDEX` 6, `jsonb` operators 4, and 38 whose
+expected error is not reached because an earlier part of the statement is refused). The other 10 are not `0A000`:
+the `numeric(p, s)` scale and range records (the plan carries no type modifiers) and three records that depend on
+`ALTER TABLE` or `CREATE UNIQUE INDEX` having run. The test fails if an unlisted record fails or a listed one
+passes. This is **not** the 100 percent P2-13 asks for, and no differential run against PostgreSQL was made
+for this executor.
 
 **Evidence run locally for `lattice-exec` and the `lattice-api` adapter only, at default proptest case
 counts:** unit, operator, session, model (random workloads against an in-memory oracle, with a

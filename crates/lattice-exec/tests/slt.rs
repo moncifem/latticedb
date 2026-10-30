@@ -19,26 +19,90 @@ use common::{Db, fixture};
 use lattice_exec::{Datum, ExecSession};
 use lattice_testkit::slt::{ExecError, Executor, Outcome, Record, parse, run};
 
-const SCRIPTS: [(&str, &str); 5] = [
-    (
-        "basics.test",
-        include_str!("../../lattice-testkit/tests/slt/basics.test"),
-    ),
-    (
-        "joins.test",
-        include_str!("../../lattice-testkit/tests/slt/joins.test"),
-    ),
+const SCRIPTS: [(&str, &str); 21] = [
     (
         "aggregates.test",
         include_str!("../../lattice-testkit/tests/slt/aggregates.test"),
+    ),
+    (
+        "arithmetic_errors.test",
+        include_str!("../../lattice-testkit/tests/slt/arithmetic_errors.test"),
+    ),
+    (
+        "basics.test",
+        include_str!("../../lattice-testkit/tests/slt/basics.test"),
     ),
     (
         "changes.test",
         include_str!("../../lattice-testkit/tests/slt/changes.test"),
     ),
     (
+        "constraints.test",
+        include_str!("../../lattice-testkit/tests/slt/constraints.test"),
+    ),
+    (
+        "ddl_statements.test",
+        include_str!("../../lattice-testkit/tests/slt/ddl_statements.test"),
+    ),
+    (
+        "empty_aggregates.test",
+        include_str!("../../lattice-testkit/tests/slt/empty_aggregates.test"),
+    ),
+    (
+        "joins.test",
+        include_str!("../../lattice-testkit/tests/slt/joins.test"),
+    ),
+    (
+        "joins_small.test",
+        include_str!("../../lattice-testkit/tests/slt/joins_small.test"),
+    ),
+    (
+        "limit_offset.test",
+        include_str!("../../lattice-testkit/tests/slt/limit_offset.test"),
+    ),
+    (
+        "nulls_functions.test",
+        include_str!("../../lattice-testkit/tests/slt/nulls_functions.test"),
+    ),
+    (
+        "nulls_logic.test",
+        include_str!("../../lattice-testkit/tests/slt/nulls_logic.test"),
+    ),
+    (
+        "order_nulls.test",
+        include_str!("../../lattice-testkit/tests/slt/order_nulls.test"),
+    ),
+    (
+        "prepared_forms.test",
+        include_str!("../../lattice-testkit/tests/slt/prepared_forms.test"),
+    ),
+    (
+        "returning.test",
+        include_str!("../../lattice-testkit/tests/slt/returning.test"),
+    ),
+    (
+        "strings.test",
+        include_str!("../../lattice-testkit/tests/slt/strings.test"),
+    ),
+    (
+        "subqueries.test",
+        include_str!("../../lattice-testkit/tests/slt/subqueries.test"),
+    ),
+    (
         "transactions.test",
         include_str!("../../lattice-testkit/tests/slt/transactions.test"),
+    ),
+    (
+        "transactions_visibility.test",
+        include_str!("../../lattice-testkit/tests/slt/transactions_visibility.test"),
+    ),
+    (
+        "types_and_casts.test",
+        include_str!("../../lattice-testkit/tests/slt/types_and_casts.test"),
+    ),
+    (
+        "unsupported.test",
+        include_str!("../../lattice-testkit/tests/slt/unsupported.test"),
     ),
 ];
 
@@ -126,7 +190,9 @@ fn scripts_pass_except_the_listed_records() {
         for (line, detail) in &failed {
             if !expected.contains_key(&(name.to_string(), *line)) {
                 problems.push(format!("{name}:{line} fails and is not listed: {detail}"));
-            } else if !detail.contains("0A000") {
+            } else if !detail.contains("0A000")
+                && !expected[&(name.to_string(), *line)].starts_with("not-0A000:")
+            {
                 // Every listed failure is a binder refusal; any other error is a real defect.
                 problems.push(format!(
                     "{name}:{line} is listed but fails with something else: {detail}"

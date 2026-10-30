@@ -3,17 +3,224 @@
 # The scripts themselves are not changed. The test fails if a record outside this list fails, and if
 # a record listed here passes, so remove a line when the feature lands.
 #
-# Every entry is a statement the binder refuses with 0A000 (LSQL-0002) because the plan IR has no
-# operator for it yet; the executor never sees these plans.
-basics.test:20 aggregate function count(*): no aggregate operator in the plan IR
-basics.test:39 aggregate function count(*): no aggregate operator in the plan IR
-joins.test:15 JOIN: no join operator in the plan IR
-joins.test:25 JOIN: no join operator in the plan IR
-joins.test:37 JOIN: no join operator in the plan IR
-joins.test:47 JOIN: no join operator in the plan IR
-aggregates.test:9 GROUP BY: no aggregate operator in the plan IR
+# A failure must show 0A000 (the binder, the parser or the executor refusing a feature outside what
+# runs) unless its reason starts with "not-0A000:", which marks the few records whose result differs
+# for a stated reason or that depend on an earlier refused statement.
+aggregates.test:9 GROUP BY and HAVING: no aggregate operator in the plan IR
 aggregates.test:28 GROUP BY and HAVING: no aggregate operator in the plan IR
 aggregates.test:36 aggregate functions: no aggregate operator in the plan IR
 aggregates.test:41 DISTINCT: no distinct operator in the plan IR
 aggregates.test:48 aggregate functions: no aggregate operator in the plan IR
-transactions.test:38 aggregate function count(*): no aggregate operator in the plan IR
+arithmetic_errors.test:5 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:10 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:15 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:20 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:25 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:30 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:35 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:40 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:45 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:48 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:51 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:54 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:57 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:60 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:63 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:68 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:71 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:74 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:77 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:129 aggregate functions: no aggregate operator in the plan IR
+arithmetic_errors.test:137 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:140 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:143 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:146 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:149 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+arithmetic_errors.test:152 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:157 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:162 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:168 SELECT without FROM: the binder has no constant-row source
+arithmetic_errors.test:176 SELECT without FROM: the binder has no constant-row source
+basics.test:20 aggregate functions: no aggregate operator in the plan IR
+basics.test:39 aggregate functions: no aggregate operator in the plan IR
+constraints.test:79 aggregate functions: no aggregate operator in the plan IR
+constraints.test:105 aggregate functions: no aggregate operator in the plan IR
+constraints.test:129 aggregate functions: no aggregate operator in the plan IR
+constraints.test:153 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
+constraints.test:156 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
+ddl_statements.test:16 aggregate functions: no aggregate operator in the plan IR
+ddl_statements.test:25 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
+ddl_statements.test:28 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
+ddl_statements.test:31 not-0A000: depends on ALTER TABLE ADD COLUMN or CREATE UNIQUE INDEX, which are refused with 0A000 earlier in the script
+ddl_statements.test:47 not-0A000: depends on ALTER TABLE ADD COLUMN or CREATE UNIQUE INDEX, which are refused with 0A000 earlier in the script
+ddl_statements.test:50 not-0A000: depends on ALTER TABLE ADD COLUMN or CREATE UNIQUE INDEX, which are refused with 0A000 earlier in the script
+ddl_statements.test:56 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+ddl_statements.test:59 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+ddl_statements.test:63 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
+ddl_statements.test:66 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+ddl_statements.test:69 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+ddl_statements.test:72 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+ddl_statements.test:81 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
+ddl_statements.test:84 not-0A000: CREATE UNIQUE INDEX is refused earlier with 0A000, so the duplicate is accepted
+ddl_statements.test:87 not-0A000: depends on ALTER TABLE ADD COLUMN or CREATE UNIQUE INDEX, which are refused with 0A000 earlier in the script
+ddl_statements.test:91 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+ddl_statements.test:94 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
+ddl_statements.test:100 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+ddl_statements.test:103 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
+ddl_statements.test:123 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:13 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:21 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:27 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:32 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:37 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:41 DISTINCT: no distinct operator in the plan IR
+empty_aggregates.test:50 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:55 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:60 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:67 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:74 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:80 aggregate functions: no aggregate operator in the plan IR
+empty_aggregates.test:88 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:96 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:102 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:108 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:112 GROUP BY and HAVING: no aggregate operator in the plan IR
+empty_aggregates.test:118 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+empty_aggregates.test:121 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+empty_aggregates.test:124 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+joins.test:15 JOIN: no join operator in the plan IR
+joins.test:25 JOIN: no join operator in the plan IR
+joins.test:37 JOIN: no join operator in the plan IR
+joins.test:47 JOIN: no join operator in the plan IR
+joins_small.test:22 JOIN: no join operator in the plan IR
+joins_small.test:32 JOIN: no join operator in the plan IR
+joins_small.test:42 JOIN: no join operator in the plan IR
+joins_small.test:54 JOIN: no join operator in the plan IR
+joins_small.test:67 JOIN: no join operator in the plan IR
+joins_small.test:77 JOIN: no join operator in the plan IR
+joins_small.test:83 JOIN: no join operator in the plan IR
+joins_small.test:88 GROUP BY and HAVING: no aggregate operator in the plan IR
+joins_small.test:98 JOIN: no join operator in the plan IR
+joins_small.test:105 JOIN: no join operator in the plan IR
+joins_small.test:110 JOIN: no join operator in the plan IR
+joins_small.test:115 JOIN: no join operator in the plan IR
+joins_small.test:120 JOIN: no join operator in the plan IR
+joins_small.test:126 JOIN: no join operator in the plan IR
+joins_small.test:131 JOIN: no join operator in the plan IR
+joins_small.test:137 JOIN: no join operator in the plan IR
+joins_small.test:142 JOIN: no join operator in the plan IR
+joins_small.test:149 JOIN: no join operator in the plan IR
+joins_small.test:159 JOIN: no join operator in the plan IR
+joins_small.test:175 JOIN: no join operator in the plan IR
+joins_small.test:181 JOIN: no join operator in the plan IR
+joins_small.test:187 JOIN: no join operator in the plan IR
+joins_small.test:193 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+joins_small.test:199 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+joins_small.test:202 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+limit_offset.test:112 aggregate functions: no aggregate operator in the plan IR
+limit_offset.test:117 aggregate functions: no aggregate operator in the plan IR
+limit_offset.test:121 aggregate functions: no aggregate operator in the plan IR
+limit_offset.test:125 GROUP BY and HAVING: no aggregate operator in the plan IR
+limit_offset.test:134 DISTINCT: no distinct operator in the plan IR
+nulls_functions.test:37 SELECT without FROM: the binder has no constant-row source
+nulls_functions.test:42 SELECT without FROM: the binder has no constant-row source
+nulls_functions.test:76 SELECT without FROM: the binder has no constant-row source
+nulls_functions.test:81 SELECT without FROM: the binder has no constant-row source
+nulls_functions.test:86 SELECT without FROM: the binder has no constant-row source
+nulls_functions.test:113 SELECT without FROM: the binder has no constant-row source
+nulls_functions.test:118 SELECT without FROM: the binder has no constant-row source
+nulls_functions.test:124 aggregate functions: no aggregate operator in the plan IR
+nulls_functions.test:135 aggregate functions: no aggregate operator in the plan IR
+nulls_functions.test:141 aggregate functions: no aggregate operator in the plan IR
+nulls_functions.test:147 GROUP BY and HAVING: no aggregate operator in the plan IR
+nulls_functions.test:157 GROUP BY and HAVING: no aggregate operator in the plan IR
+nulls_functions.test:162 DISTINCT: no distinct operator in the plan IR
+nulls_functions.test:170 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+nulls_logic.test:73 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:78 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:83 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:88 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:94 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:99 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:104 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:109 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:114 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:119 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:124 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:129 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:135 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:140 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:145 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:150 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:169 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:187 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:197 aggregate functions: no aggregate operator in the plan IR
+nulls_logic.test:202 aggregate functions: no aggregate operator in the plan IR
+order_nulls.test:133 GROUP BY and HAVING: no aggregate operator in the plan IR
+order_nulls.test:141 GROUP BY and HAVING: no aggregate operator in the plan IR
+order_nulls.test:149 DISTINCT: no distinct operator in the plan IR
+order_nulls.test:156 DISTINCT: no distinct operator in the plan IR
+prepared_forms.test:36 aggregate functions: no aggregate operator in the plan IR
+prepared_forms.test:44 aggregate functions: no aggregate operator in the plan IR
+returning.test:118 aggregate functions: no aggregate operator in the plan IR
+returning.test:156 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+strings.test:44 aggregate functions: no aggregate operator in the plan IR
+strings.test:49 aggregate functions: no aggregate operator in the plan IR
+strings.test:55 aggregate functions: no aggregate operator in the plan IR
+strings.test:60 aggregate functions: no aggregate operator in the plan IR
+strings.test:93 aggregate functions: no aggregate operator in the plan IR
+strings.test:104 SELECT without FROM: the binder has no constant-row source
+strings.test:111 SELECT without FROM: the binder has no constant-row source
+strings.test:116 SELECT without FROM: the binder has no constant-row source
+strings.test:126 SELECT without FROM: the binder has no constant-row source
+strings.test:131 SELECT without FROM: the binder has no constant-row source
+strings.test:138 SELECT without FROM: the binder has no constant-row source
+strings.test:144 SELECT without FROM: the binder has no constant-row source
+strings.test:151 SELECT without FROM: the binder has no constant-row source
+strings.test:208 aggregate functions: no aggregate operator in the plan IR
+strings.test:214 aggregate functions: no aggregate operator in the plan IR
+subqueries.test:18 subquery: no subquery operator in the plan IR
+subqueries.test:23 subquery: no subquery operator in the plan IR
+subqueries.test:31 SELECT without FROM: the binder has no constant-row source
+subqueries.test:36 subquery: no subquery operator in the plan IR
+subqueries.test:43 SELECT without FROM: the binder has no constant-row source
+subqueries.test:48 subquery: no subquery operator in the plan IR
+subqueries.test:53 subquery: no subquery operator in the plan IR
+subqueries.test:59 subquery: no subquery operator in the plan IR
+subqueries.test:65 subquery: no subquery operator in the plan IR
+subqueries.test:70 subquery: no subquery operator in the plan IR
+subqueries.test:76 subquery: no subquery operator in the plan IR
+subqueries.test:81 subquery: no subquery operator in the plan IR
+subqueries.test:86 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+subqueries.test:89 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+subqueries.test:92 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+transactions.test:38 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:23 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:31 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:42 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:50 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:61 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:69 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:92 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:100 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:115 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:155 aggregate functions: no aggregate operator in the plan IR
+transactions_visibility.test:173 aggregate functions: no aggregate operator in the plan IR
+types_and_casts.test:33 aggregate functions: no aggregate operator in the plan IR
+types_and_casts.test:38 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+types_and_casts.test:45 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
+types_and_casts.test:53 aggregate functions: no aggregate operator in the plan IR
+types_and_casts.test:63 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
+types_and_casts.test:78 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
+types_and_casts.test:100 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+types_and_casts.test:103 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+types_and_casts.test:117 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+types_and_casts.test:121 jsonb operators ->, ->> and @> are bound but not executed
+types_and_casts.test:126 jsonb operators ->, ->> and @> are bound but not executed
+types_and_casts.test:131 jsonb operators ->, ->> and @> are bound but not executed
+types_and_casts.test:136 jsonb operators ->, ->> and @> are bound but not executed
+types_and_casts.test:141 aggregate functions: no aggregate operator in the plan IR
+types_and_casts.test:146 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+types_and_casts.test:150 SELECT without FROM: the binder has no constant-row source
+types_and_casts.test:157 SELECT without FROM: the binder has no constant-row source
+types_and_casts.test:162 SELECT without FROM: the binder has no constant-row source

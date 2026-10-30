@@ -4,5 +4,7 @@ row-store transactions with `BEGIN`, `COMMIT`, `ROLLBACK`, PostgreSQL command ta
 `22003`, `22012` and `40001` errors, stale-plan refusal, the actor's row policy and per-statement
 deadline, memory and cancellation limits. `CREATE TABLE` and `DROP TABLE` register tables; column
 definitions are in memory only. A `QueryHandler` adapter is in `lattice-api` and is not wired into
-`latticed`. Of the 64 records in the five sqllogictest scripts, 52 pass; the 12 failures are joins,
-aggregates, `GROUP BY` and `DISTINCT`, which the binder refuses. No exit criterion is claimed.
+`latticed`. Of the 669 records in the 21 sqllogictest
+scripts, 451 pass; the 218 failures are listed with reasons (aggregates, joins, `GROUP BY`, `DISTINCT`,
+subqueries, `SELECT` without `FROM` and DDL the binder or executor refuses, and `numeric(p, s)` modifiers).
+No exit criterion is claimed.

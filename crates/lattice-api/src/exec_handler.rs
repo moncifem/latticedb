@@ -6,13 +6,18 @@
 //! `SELECT 1`. Cancellation is routed from the session's [`CancellationToken`] into the executor's
 //! per-row poll, so a cancelled statement stops between rows and commits nothing.
 //!
-//! **Policy.** The handler is built from an [`ActorPolicy`], never from an allow-all default. The
-//! connection's actor is not known to this crate yet: authentication and the principal live in the
-//! session layer, and the query context that carries them (a principal per connection) is being
-//! designed separately. When it lands, the host derives the policy from the context's principal at
-//! connection setup and passes it here; this constructor is the one place that decision is made, so
-//! no executor call can happen with a policy nobody chose. Until then a host builds the policy
-//! explicitly, and tests use `AllowAll` by name.
+//! **Policy.** The row policy of a connection is derived from the authenticated principal in the
+//! [`QueryContext`] of its first statement, never from an allow-all default:
+//!
+//! - an *account* principal gets `accounts(name)`, a function the host supplies (it returns the
+//!   policy for that account, which may be as restrictive as `DenyAll`);
+//! - the *local-development* principal of loopback trust mode gets the `development` policy the host
+//!   passes to [`ExecHandler::new`]; the host must choose it explicitly (for example `AllowAll`
+//!   by name), nothing here picks one.
+//!
+//! The principal is fixed for a connection. The handler remembers the first one and refuses a
+//! statement that arrives under a different principal (`28000`), so a policy chosen for one identity
+//! cannot be reused for another.
 //!
 //! Transaction status is the session's own: the executor reports `BEGIN`, `COMMIT` and `ROLLBACK`
 //! in its command tags, and the session derives `ReadyForQuery` from them. One known difference:
@@ -30,44 +35,78 @@ use lattice_seams::{Clock, Io, Rng};
 
 use crate::cancel::CancellationToken;
 use crate::pgwire::Column;
+use crate::principal::{Principal, PrincipalKind, QueryContext};
 use crate::session::{QueryError, QueryHandler, QueryOutput};
+
+/// Chooses the policy of an account principal.
+type AccountPolicy = Box<dyn Fn(&str) -> ActorPolicy>;
 
 /// Runs statements for one connection against a shared database.
 pub struct ExecHandler<I: Io, C: Clock + Clone, R: Rng> {
     db: Rc<RefCell<Database<I, C, R>>>,
-    session: ExecSession,
+    development: ActorPolicy,
+    accounts: AccountPolicy,
+    /// The connection's principal and its session, created by the first statement.
+    bound: Option<(Principal, ExecSession)>,
 }
 
 impl<I: Io, C: Clock + Clone, R: Rng> ExecHandler<I, C, R> {
-    /// A handler for a connection acting under `policy`. The policy is required: there is no
-    /// default and no allow-all constructor, so a host cannot reach the executor without deciding
-    /// which rows the connection may touch.
-    pub fn new(db: Rc<RefCell<Database<I, C, R>>>, policy: ActorPolicy) -> Self {
+    /// A handler whose policy follows the connection's principal: `development` for the
+    /// local-development principal, `accounts(name)` for an account. There is no default for either.
+    pub fn new(
+        db: Rc<RefCell<Database<I, C, R>>>,
+        development: ActorPolicy,
+        accounts: impl Fn(&str) -> ActorPolicy + 'static,
+    ) -> Self {
         ExecHandler {
             db,
-            session: ExecSession::new(policy),
+            development,
+            accounts: Box::new(accounts),
+            bound: None,
         }
     }
 
-    /// The executor's view of the transaction block.
+    /// The executor's view of the transaction block (`Idle` before the first statement).
     pub fn tx_status(&self) -> TxStatus {
-        self.session.status()
+        self.bound
+            .as_ref()
+            .map_or(TxStatus::Idle, |(_, session)| session.status())
+    }
+
+    /// The session of the context's principal, created on first use.
+    fn session(&mut self, ctx: &QueryContext<'_>) -> Result<&mut ExecSession, QueryError> {
+        let principal = ctx.principal;
+        if self.bound.is_none() {
+            let policy = match principal.kind() {
+                PrincipalKind::LocalDevelopment => self.development.clone(),
+                PrincipalKind::Account => (self.accounts)(principal.name()),
+            };
+            self.bound = Some((principal.clone(), ExecSession::new(policy)));
+        }
+        match self.bound.as_mut() {
+            Some((bound, session)) if bound == principal => Ok(session),
+            _ => Err(QueryError::new(
+                "28000",
+                "the connection's principal changed after its first statement",
+            )),
+        }
     }
 
     fn run(
         &mut self,
+        ctx: &QueryContext<'_>,
         sql: &str,
         params: &[Option<Vec<u8>>],
         cancellation: &CancellationToken,
     ) -> Result<QueryOutput, QueryError> {
+        let db = Rc::clone(&self.db);
+        let session = self.session(ctx)?;
         // A host that lets two connections interleave inside one call would be a bug; fail the
         // statement rather than panic on the borrow.
-        let mut db = self
-            .db
+        let mut db = db
             .try_borrow_mut()
             .map_err(|_| QueryError::new("55P03", "the database is in use by another statement"))?;
-        let result = self
-            .session
+        let result = session
             .execute_with(&mut db, sql, params, &|| cancellation.is_cancelled())
             .map_err(error)?;
         Ok(output(&result))
@@ -105,28 +144,31 @@ fn output(r: &ExecResult) -> QueryOutput {
 impl<I: Io, C: Clock + Clone, R: Rng> QueryHandler for ExecHandler<I, C, R> {
     fn execute(
         &mut self,
+        ctx: &QueryContext<'_>,
         sql: &str,
         params: &[Option<Vec<u8>>],
     ) -> Result<QueryOutput, QueryError> {
-        self.run(sql, params, &CancellationToken::default())
+        self.run(ctx, sql, params, &CancellationToken::default())
     }
 
-    fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError> {
-        let db = self
-            .db
+    fn describe(&mut self, ctx: &QueryContext<'_>, sql: &str) -> Result<Vec<Column>, QueryError> {
+        let db = Rc::clone(&self.db);
+        let session = self.session(ctx)?;
+        let db = db
             .try_borrow()
             .map_err(|_| QueryError::new("55P03", "the database is in use by another statement"))?;
-        let cols = self.session.describe(&db, sql).map_err(error)?;
+        let cols = session.describe(&db, sql).map_err(error)?;
         Ok(cols.iter().map(column).collect())
     }
 
     fn execute_cancellable(
         &mut self,
+        ctx: &QueryContext<'_>,
         sql: &str,
         params: &[Option<Vec<u8>>],
         cancellation: &CancellationToken,
     ) -> Result<QueryOutput, QueryError> {
-        self.run(sql, params, cancellation)
+        self.run(ctx, sql, params, cancellation)
     }
 }
 
@@ -148,6 +190,13 @@ mod tests {
 
     type Db = Database<SharedIo, SharedClock, SeededRng>;
 
+    fn new_handler(db: Rc<RefCell<Db>>) -> ExecHandler<SharedIo, SharedClock, SeededRng> {
+        // The development policy is chosen by name; accounts are denied everything.
+        ExecHandler::new(db, admin(), |_| {
+            ActorPolicy::new(Rc::new(lattice_engines::limits::DenyAll))
+        })
+    }
+
     fn admin() -> ActorPolicy {
         ActorPolicy::new(Rc::new(lattice_engines::limits::AllowAll))
     }
@@ -166,8 +215,8 @@ mod tests {
     fn ready_session(
         db: &Rc<RefCell<Db>>,
     ) -> Session<ExecHandler<SharedIo, SharedClock, SeededRng>> {
-        let handler = ExecHandler::new(db.clone(), admin());
-        let mut s = Session::new(handler, 1, 2);
+        let handler = new_handler(db.clone());
+        let mut s = Session::local_trust(handler, 1, 2);
         let out = s.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
         assert!(!out.close);
         s
@@ -318,12 +367,14 @@ mod tests {
     #[test]
     fn a_cancelled_token_stops_the_statement_before_it_changes_anything() {
         let db = shared_db();
-        let mut handler = ExecHandler::new(db.clone(), admin());
+        let mut handler = new_handler(db.clone());
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
         handler
-            .execute("CREATE TABLE t (id INT PRIMARY KEY, v INT)", &[])
+            .execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY, v INT)", &[])
             .unwrap();
         handler
-            .execute("INSERT INTO t VALUES (1, 0), (2, 0)", &[])
+            .execute(&ctx, "INSERT INTO t VALUES (1, 0), (2, 0)", &[])
             .unwrap();
         let mut registry = CancelRegistry::new(4).unwrap();
         let mut rng = SeededRng::new(9);
@@ -331,17 +382,22 @@ mod tests {
         let token = registry.begin_query(key, 1).unwrap();
         assert!(registry.cancel(key, 2));
         let e = handler
-            .execute_cancellable("UPDATE t SET v = 1", &[], &token)
+            .execute_cancellable(&ctx, "UPDATE t SET v = 1", &[], &token)
             .unwrap_err();
         assert_eq!(e.code, "57014");
-        let out = handler.execute("SELECT v FROM t ORDER BY id", &[]).unwrap();
+        let out = handler
+            .execute(&ctx, "SELECT v FROM t ORDER BY id", &[])
+            .unwrap();
         assert_eq!(
             out.rows,
             vec![vec![Some(b"0".to_vec())], vec![Some(b"0".to_vec())]]
         );
         // A statement that is not cancelled still runs.
         assert_eq!(
-            handler.execute("UPDATE t SET v = 1", &[]).unwrap().tag,
+            handler
+                .execute(&ctx, "UPDATE t SET v = 1", &[])
+                .unwrap()
+                .tag,
             "UPDATE 2"
         );
     }
@@ -349,12 +405,18 @@ mod tests {
     #[test]
     fn describe_reports_columns_without_running_the_statement() {
         let db = shared_db();
-        let mut handler = ExecHandler::new(db, admin());
+        let mut handler = new_handler(db);
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
         handler
-            .execute("CREATE TABLE t (id BIGINT PRIMARY KEY, n NUMERIC)", &[])
+            .execute(
+                &ctx,
+                "CREATE TABLE t (id BIGINT PRIMARY KEY, n NUMERIC)",
+                &[],
+            )
             .unwrap();
         let cols = handler
-            .describe("INSERT INTO t VALUES (1, 1.5) RETURNING id, n")
+            .describe(&ctx, "INSERT INTO t VALUES (1, 1.5) RETURNING id, n")
             .unwrap();
         assert_eq!(
             cols.iter().map(|c| c.type_oid).collect::<Vec<_>>(),
@@ -362,16 +424,108 @@ mod tests {
         );
         assert!(
             handler
-                .execute("SELECT id FROM t", &[])
+                .execute(&ctx, "SELECT id FROM t", &[])
                 .unwrap()
                 .rows
                 .is_empty(),
             "describe wrote nothing"
         );
-        assert!(handler.describe("BEGIN").unwrap().is_empty());
+        assert!(handler.describe(&ctx, "BEGIN").unwrap().is_empty());
         assert_eq!(
-            handler.describe("SELECT nope FROM t").unwrap_err().code,
+            handler
+                .describe(&ctx, "SELECT nope FROM t")
+                .unwrap_err()
+                .code,
             "42703"
         );
+    }
+
+    #[test]
+    fn the_policy_follows_the_principal_of_the_connection() {
+        let db = shared_db();
+        let dev = Principal::local_development();
+        let mut developer = new_handler(db.clone());
+        let ctx = QueryContext::new(&dev);
+        developer
+            .execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        developer
+            .execute(&ctx, "INSERT INTO t VALUES (1)", &[])
+            .unwrap();
+        // An account gets the host's account policy, here deny-all: it sees nothing and cannot
+        // write, while the development principal sees the row.
+        let alice = Principal::account("alice");
+        let actx = QueryContext::new(&alice);
+        let mut account = new_handler(db.clone());
+        assert!(
+            account
+                .execute(&actx, "SELECT id FROM t", &[])
+                .unwrap()
+                .rows
+                .is_empty()
+        );
+        assert_eq!(
+            account
+                .execute(&actx, "INSERT INTO t VALUES (2)", &[])
+                .unwrap_err()
+                .code,
+            "42501"
+        );
+        assert_eq!(
+            developer
+                .execute(&ctx, "SELECT id FROM t", &[])
+                .unwrap()
+                .rows
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_account_policy_is_chosen_by_the_account_name() {
+        let db = shared_db();
+        let dev = Principal::local_development();
+        let mut setup = new_handler(db.clone());
+        let ctx = QueryContext::new(&dev);
+        setup
+            .execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        setup
+            .execute(&ctx, "INSERT INTO t VALUES (1)", &[])
+            .unwrap();
+        let by_name = |db: Rc<RefCell<Db>>| {
+            ExecHandler::new(db, admin(), |name| {
+                if name == "reader" {
+                    admin()
+                } else {
+                    ActorPolicy::new(Rc::new(lattice_engines::limits::DenyAll))
+                }
+            })
+        };
+        let reader = Principal::account("reader");
+        let other = Principal::account("other");
+        let rows = |h: &mut ExecHandler<_, _, _>, p: &Principal| {
+            h.execute(&QueryContext::new(p), "SELECT id FROM t", &[])
+                .unwrap()
+                .rows
+                .len()
+        };
+        assert_eq!(rows(&mut by_name(db.clone()), &reader), 1);
+        assert_eq!(rows(&mut by_name(db), &other), 0);
+    }
+
+    #[test]
+    fn a_connection_cannot_change_principal() {
+        let db = shared_db();
+        let mut h = new_handler(db);
+        let dev = Principal::local_development();
+        h.execute(&QueryContext::new(&dev), "CREATE TABLE t (id INT)", &[])
+            .unwrap();
+        let alice = Principal::account("alice");
+        let e = h
+            .execute(&QueryContext::new(&alice), "SELECT id FROM t", &[])
+            .unwrap_err();
+        assert_eq!(e.code, "28000");
+        assert_eq!(h.tx_status(), TxStatus::Idle);
     }
 }
