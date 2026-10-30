@@ -777,11 +777,11 @@ proptest! {
         } else {
             common::admin()
         };
-        let mut froms = vec!["t".to_string()];
+        let mut sources = vec!["t".to_string()];
         for id in ids.iter().flatten().step_by(3) {
-            froms.push(format!("t AS OF CHANGESET '{id}'"));
+            sources.push(format!("t AS OF CHANGESET '{id}'"));
         }
-        for from in &froms {
+        for from in &sources {
             for p in &preds {
                 same(&mut f.db, &mut actor, from, p);
             }
