@@ -195,6 +195,13 @@ impl ExecSession {
         }
     }
 
+    /// Ends the open transaction block without committing, as `ROLLBACK` would. A host calls it when a
+    /// `BEGIN` ran that the client was told failed, so the client believes it is outside any block.
+    pub fn discard_transaction(&mut self) {
+        self.txn = None;
+        self.failed = false;
+    }
+
     /// The limits applied to each statement.
     pub fn limits(&self) -> ExecLimits {
         self.limits

@@ -224,6 +224,7 @@ pub struct lattice_exec::ExecSession
 impl lattice_exec::ExecSession
 pub fn lattice_exec::ExecSession::abort_transaction(&mut self)
 pub fn lattice_exec::ExecSession::describe<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&self, &lattice_exec::Database<I, C, R>, &str) -> core::result::Result<alloc::vec::Vec<lattice_exec::ResultColumn>, lattice_exec::ExecError>
+pub fn lattice_exec::ExecSession::discard_transaction(&mut self)
 pub fn lattice_exec::ExecSession::execute<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&mut self, &mut lattice_exec::Database<I, C, R>, &str) -> core::result::Result<lattice_exec::ExecResult, lattice_exec::ExecError>
 pub fn lattice_exec::ExecSession::execute_bound<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&mut self, &mut lattice_exec::Database<I, C, R>, &lattice_sql::plan::BoundStatement, &[lattice_exec::Datum], &dyn core::ops::function::Fn() -> bool) -> core::result::Result<lattice_exec::ExecResult, lattice_exec::ExecError>
 pub fn lattice_exec::ExecSession::execute_with<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&mut self, &mut lattice_exec::Database<I, C, R>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &dyn core::ops::function::Fn() -> bool) -> core::result::Result<lattice_exec::ExecResult, lattice_exec::ExecError>

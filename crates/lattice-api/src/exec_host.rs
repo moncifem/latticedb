@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use lattice_core::Config;
 use lattice_engines::limits::{AllowAll, DenyAll};
-use lattice_exec::{ActorPolicy, Database, ExecError, ExecLimits};
+use lattice_exec::{ActorPolicy, Database, ExecError, ExecLimits, TxStatus};
 use lattice_seams::{Clock, Io, OsRng, Rng, StdIo, SystemClock};
 
 use crate::cancel::CancellationToken;
@@ -434,6 +434,10 @@ fn serve<I, C, R>(
 {
     let db = Rc::new(RefCell::new(db));
     let mut sessions: BTreeMap<u64, ExecHandler<I, C, R>> = BTreeMap::new();
+    // Whether each connection was inside a block when its latest statement was dequeued. A timed-out
+    // statement from outside a block is a `BEGIN` or an autocommit statement: the client is outside any
+    // block, so a block it left behind is discarded, not failed.
+    let mut was_in_block: BTreeMap<u64, bool> = BTreeMap::new();
     let make = |db: &Rc<RefCell<Database<I, C, R>>>| {
         let accounts = policies.clone();
         let mut handler =
@@ -457,6 +461,12 @@ fn serve<I, C, R>(
             } => {
                 #[cfg(any(test, feature = "test-hooks"))]
                 let mut token = token;
+                was_in_block.insert(
+                    conn,
+                    sessions
+                        .get(&conn)
+                        .is_some_and(|h| h.tx_status() != TxStatus::Idle),
+                );
                 let result = if stopping.load(Ordering::Acquire) {
                     Err(gone())
                 } else if token.is_cancelled() {
@@ -490,6 +500,12 @@ fn serve<I, C, R>(
                 token,
                 reply,
             } => {
+                was_in_block.insert(
+                    conn,
+                    sessions
+                        .get(&conn)
+                        .is_some_and(|h| h.tx_status() != TxStatus::Idle),
+                );
                 let result = if stopping.load(Ordering::Acquire) {
                     Err(gone())
                 } else if token.is_cancelled() {
@@ -505,10 +521,18 @@ fn serve<I, C, R>(
             }
             Request::Close(conn) => {
                 sessions.remove(&conn);
+                was_in_block.remove(&conn);
             }
             Request::Abort(conn) => {
                 if let Some(handler) = sessions.get_mut(&conn) {
-                    handler.abort_transaction();
+                    if was_in_block.get(&conn).copied().unwrap_or(false) {
+                        // The client's block saw an error: fail it so COMMIT rolls back.
+                        handler.abort_transaction();
+                    } else {
+                        // The client was outside a block and believes it still is (a `BEGIN`
+                        // that ran after its timeout): leave no block behind.
+                        handler.discard_transaction();
+                    }
                 }
             }
             #[cfg(any(test, feature = "test-hooks"))]
@@ -544,9 +568,6 @@ pub struct ExecProxy {
 }
 
 impl ExecProxy {
-    /// Sends a request and waits for its answer, at most the statement ceiling plus slack. On
-    /// timeout the statement's token is cancelled: the actor skips the request if it has not started
-    /// and stops it at its next row if it has, and this connection gets `57014`.
     /// Makes this proxy's next statement stop between dequeue and run until `release` closes
     /// (tests only). `entered` is signalled when it has stopped.
     #[cfg(any(test, feature = "test-hooks"))]
@@ -554,6 +575,10 @@ impl ExecProxy {
         self.hold = Some((entered, release));
     }
 
+    /// Sends a request and waits for its answer, at most the statement ceiling plus slack. On
+    /// timeout the statement's token is cancelled: the actor skips the request if it has not started
+    /// and stops it at its next row if it has, and this connection gets `57014`. The abort request
+    /// that follows is a blocking send, so the `57014` can be delayed until the queue has room.
     fn call<T>(
         &mut self,
         token: &CancellationToken,
@@ -1119,6 +1144,157 @@ reader	allow-all
         // Autocommit: no block to fail, and the skipped insert never ran.
         assert_eq!(
             p.execute(&ctx, "INSERT INTO t VALUES (2)", &[])
+                .unwrap()
+                .tag,
+            "INSERT 0 1"
+        );
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 1);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// An actor request sent without a proxy, so only the thread's own skip path can abort the block.
+    fn send_cancelled_execute(host: &ExecHost, proxy_conn: u64, sql: &str) -> QueryError {
+        let token = CancellationToken::default();
+        token.request();
+        let (reply, answer) = mpsc::sync_channel(1);
+        host.requests
+            .send(Request::Execute {
+                conn: proxy_conn,
+                principal: Principal::local_development(),
+                sql: sql.to_string(),
+                params: Vec::new(),
+                token,
+                reply,
+                hold: None,
+            })
+            .unwrap();
+        answer.recv().unwrap().unwrap_err()
+    }
+
+    fn send_cancelled_describe(host: &ExecHost, proxy_conn: u64, sql: &str) -> QueryError {
+        let token = CancellationToken::default();
+        token.request();
+        let (reply, answer) = mpsc::sync_channel(1);
+        host.requests
+            .send(Request::Describe {
+                conn: proxy_conn,
+                principal: Principal::local_development(),
+                sql: sql.to_string(),
+                token,
+                reply,
+            })
+            .unwrap();
+        answer.recv().unwrap().unwrap_err()
+    }
+
+    fn open_block(host: &ExecHost) -> ExecProxy {
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        p.execute(&ctx, "BEGIN", &[]).unwrap();
+        p.execute(&ctx, "INSERT INTO t VALUES (1)", &[]).unwrap();
+        p
+    }
+
+    #[test]
+    fn the_skip_path_alone_fails_the_block_of_a_cancelled_execute() {
+        let (host, path) = quick_host("skip-execute");
+        let mut p = open_block(&host);
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        // No proxy timeout here: the thread meets an already cancelled request inside the block.
+        let error = send_cancelled_execute(&host, p.conn, "INSERT INTO t VALUES (2)");
+        assert_eq!(error.code, "57014");
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn the_skip_path_alone_fails_the_block_of_a_cancelled_describe() {
+        let (host, path) = quick_host("skip-describe");
+        let mut p = open_block(&host);
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let error = send_cancelled_describe(&host, p.conn, "SELECT id FROM t");
+        assert_eq!(error.code, "57014");
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_describe_that_times_out_in_a_block_fails_the_block() {
+        let (host, path) = quick_host("timeout-describe");
+        let mut p = open_block(&host);
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let stall = host.stall_for_test();
+        assert_eq!(
+            p.describe(&ctx, "SELECT id FROM t").unwrap_err().code,
+            "57014"
+        );
+        drop(stall);
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_describe_error_in_a_block_fails_the_block() {
+        let (host, path) = quick_host("describe-error");
+        let mut p = open_block(&host);
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        // A Parse error in a block aborts it in PostgreSQL; a later COMMIT must not commit it.
+        assert_eq!(
+            p.describe(&ctx, "SELECT nope FROM t").unwrap_err().code,
+            "42703"
+        );
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_begin_that_runs_after_its_timeout_leaves_no_block_behind() {
+        let (host, path) = quick_host("late-begin");
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
+        p.hold_next_for_test(entered_tx, release_rx);
+        let worker = thread::Builder::new()
+            .spawn(move || {
+                let principal = Principal::local_development();
+                let ctx = QueryContext::new(&principal);
+                let error = p.execute(&ctx, "BEGIN", &[]).unwrap_err();
+                (p, error.code)
+            })
+            .unwrap();
+        entered_rx.recv().unwrap();
+        let (mut p, code) = worker.join().unwrap();
+        assert_eq!(code, "57014");
+        drop(release_tx);
+        // The client saw BEGIN fail, so it is outside any block: the next statement is an ordinary
+        // autocommit statement, not a refused statement of an aborted block, and it commits at once.
+        assert_eq!(
+            p.execute(&ctx, "INSERT INTO t VALUES (5)", &[])
                 .unwrap()
                 .tag,
             "INSERT 0 1"

@@ -85,6 +85,13 @@ impl<I: Io, C: Clock + Clone, R: Rng> ExecHandler<I, C, R> {
         }
     }
 
+    /// Ends the open transaction block without committing (see `ExecSession::discard_transaction`).
+    pub fn discard_transaction(&mut self) {
+        if let Some((_, session)) = self.bound.as_mut() {
+            session.discard_transaction();
+        }
+    }
+
     /// The executor's view of the transaction block (`Idle` before the first statement).
     pub fn tx_status(&self) -> TxStatus {
         self.bound
@@ -178,8 +185,15 @@ impl<I: Io, C: Clock + Clone, R: Rng> QueryHandler for ExecHandler<I, C, R> {
         let db = db
             .try_borrow()
             .map_err(|_| QueryError::new("55P03", "the database is in use by another statement"))?;
-        let cols = session.describe(&db, sql).map_err(error)?;
-        Ok(cols.iter().map(column).collect())
+        match session.describe(&db, sql) {
+            Ok(cols) => Ok(cols.iter().map(column).collect()),
+            Err(e) => {
+                // PostgreSQL aborts the block on a Parse error; the wire session reports a failed
+                // block, so the executor's must be failed too or a later COMMIT would commit it.
+                session.abort_transaction();
+                Err(error(e))
+            }
+        }
     }
 
     fn execute_cancellable(
