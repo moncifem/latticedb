@@ -37,7 +37,7 @@ fn fixture(budget: Duration) -> (ServerConfig, Arc<ClientConfig>) {
     // Python stdlib hashlib/hmac independently provisions the published RFC7677 account.
     let credential = "SCRAM-SHA-256$4096:W22ZaJ0SNY7soEsUEjb6gQ==$WG5d8oPm3OtcPnkdi4Uo7BkeZkBFzpcXkuLmtbsT4qY=:wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU=";
     let accounts = Accounts::parse(
-        &format!("user\t{credential}"),
+        &format!("user\t{credential}\nanalyst\t{credential}"),
         DecoySecret::from_bytes(&[7; 32]).unwrap(),
     )
     .unwrap();
@@ -404,5 +404,168 @@ fn registry_full_after_scram_success_reaches_the_client_as_53300() {
     assert_eq!(tag, b'E');
     assert!(error.windows(7).any(|bytes| bytes == b"C53300\0"));
     is_closed(&mut second);
+    server.shutdown().unwrap();
+}
+
+/// Records which principal reached the handler for every call. Shared with the test thread.
+#[derive(Clone, Default)]
+struct Log(Arc<std::sync::Mutex<Vec<String>>>);
+impl Log {
+    fn entries(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+    fn push(&self, entry: String) {
+        self.0.lock().unwrap().push(entry);
+    }
+}
+struct Recorder(Log);
+impl lattice_api::session::QueryHandler for Recorder {
+    fn execute(
+        &mut self,
+        ctx: &lattice_api::principal::QueryContext<'_>,
+        sql: &str,
+        _: &[Option<Vec<u8>>],
+    ) -> Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError> {
+        self.0.push(format!("execute {sql} as {}", ctx.principal));
+        Ok(lattice_api::session::QueryOutput {
+            tag: "OK".into(),
+            ..Default::default()
+        })
+    }
+    fn describe(
+        &mut self,
+        ctx: &lattice_api::principal::QueryContext<'_>,
+        sql: &str,
+    ) -> Result<Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError> {
+        self.0.push(format!("describe {sql} as {}", ctx.principal));
+        Ok(Vec::new())
+    }
+}
+fn recording_server(config: ServerConfig) -> (ServerHandle, Log) {
+    let log = Log::default();
+    let handler_log = log.clone();
+    let server =
+        ServerHandle::start_with_handler(config, move || Recorder(handler_log.clone())).unwrap();
+    (server, log)
+}
+/// Full SCRAM login; returns the client positioned after the first `ReadyForQuery`.
+fn login(address: SocketAddr, config: &Arc<ClientConfig>, user: &str) -> Client {
+    let mut client = tls(address, config.clone());
+    let first = begin(&mut client, user);
+    finish(&mut client, &first, b"pencil");
+    assert_eq!(message(&mut client).0, b'R'); // SASL final
+    assert_eq!(message(&mut client), (b'R', vec![0, 0, 0, 0]));
+    loop {
+        if message(&mut client).0 == b'Z' {
+            return client;
+        }
+    }
+}
+fn query(client: &mut Client, sql: &str) {
+    client
+        .write_all(&frame(b'Q', format!("{sql}\0").as_bytes()))
+        .unwrap();
+    client.flush().unwrap();
+    assert_eq!(message(client).0, b'C');
+    assert_eq!(message(client), (b'Z', vec![b'I']));
+}
+fn parse(client: &mut Client, sql: &str) {
+    let mut body = b"\0".to_vec();
+    body.extend_from_slice(sql.as_bytes());
+    body.extend_from_slice(&[0, 0, 0]);
+    client.write_all(&frame(b'P', &body)).unwrap();
+    client.write_all(&frame(b'S', b"")).unwrap();
+    client.flush().unwrap();
+    assert_eq!(message(client).0, b'1');
+    assert_eq!(message(client), (b'Z', vec![b'I']));
+}
+
+#[test]
+fn handler_receives_exactly_the_account_that_completed_scram_over_tls() {
+    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (server, log) = recording_server(config);
+    let address = server.local_addr();
+    let mut analyst = login(address, &client_config, "analyst");
+    let mut user = login(address, &client_config, "user");
+    query(&mut analyst, "Q1");
+    parse(&mut user, "P1");
+    query(&mut user, "Q2");
+    parse(&mut analyst, "P2");
+    // Each connection keeps the account it proved, whichever order the statements interleave.
+    let mut entries = log.entries();
+    entries.sort();
+    assert_eq!(
+        entries,
+        [
+            "describe P1 as account:user",
+            "describe P2 as account:analyst",
+            "execute Q1 as account:analyst",
+            "execute Q2 as account:user",
+        ]
+    );
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn nothing_reaches_the_handler_before_a_verified_proof() {
+    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (server, log) = recording_server(config);
+    let address = server.local_addr();
+    // Queries, parses and a password message sent in place of the proof.
+    for tag in *b"QPp" {
+        let mut client = tls(address, client_config.clone());
+        client.write_all(&startup("user")).unwrap();
+        client.flush().unwrap();
+        assert_eq!(message(&mut client).0, b'R');
+        client.write_all(&frame(tag, b"SELECT 1\0\0\0\0")).unwrap();
+        client.flush().unwrap();
+        assert_eq!(message(&mut client).0, b'E');
+        is_closed(&mut client);
+    }
+    // A wrong password for a real account, then a query on the same socket.
+    let mut client = tls(address, client_config.clone());
+    let first = begin(&mut client, "analyst");
+    finish(&mut client, &first, b"wrong-password");
+    assert_eq!(message(&mut client).0, b'E');
+    let _ = client.write_all(&frame(b'Q', b"SELECT 1\0"));
+    let _ = client.flush();
+    is_closed(&mut client);
+    // An unknown account.
+    let mut client = tls(address, client_config.clone());
+    let first = begin(&mut client, "missing");
+    finish(&mut client, &first, b"pencil");
+    assert_eq!(message(&mut client).0, b'E');
+    is_closed(&mut client);
+    assert_eq!(log.entries(), Vec::<String>::new());
+    // The listener still serves a correct login afterwards.
+    let mut ok = login(address, &client_config, "user");
+    query(&mut ok, "AFTER");
+    assert_eq!(log.entries(), ["execute AFTER as account:user"]);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn a_second_startup_user_cannot_select_a_different_account() {
+    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (server, log) = recording_server(config);
+    for pair in [("user", "analyst"), ("analyst", "user"), ("user", "user")] {
+        let mut client = tls(server.local_addr(), client_config.clone());
+        let mut bytes = vec![0, 0, 0, 0, 0, 3, 0, 0];
+        for name in [pair.0, pair.1] {
+            bytes.extend_from_slice(b"user\0");
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(0);
+        }
+        bytes.push(0);
+        let length = (bytes.len() as u32).to_be_bytes();
+        bytes[..4].copy_from_slice(&length);
+        client.write_all(&bytes).unwrap();
+        client.flush().unwrap();
+        let (tag, body) = message(&mut client);
+        assert_eq!(tag, b'E');
+        assert!(body.windows(6).any(|v| v == b"28P01\0"));
+        is_closed(&mut client);
+    }
+    assert!(log.entries().is_empty());
     server.shutdown().unwrap();
 }

@@ -251,6 +251,7 @@ fn output_one() -> lattice_api::session::QueryOutput {
 impl lattice_api::session::QueryHandler for Cooperative {
     fn execute(
         &mut self,
+        _: &lattice_api::principal::QueryContext<'_>,
         sql: &str,
         _: &[Option<Vec<u8>>],
     ) -> Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError> {
@@ -265,12 +266,13 @@ impl lattice_api::session::QueryHandler for Cooperative {
     }
     fn execute_cancellable(
         &mut self,
+        ctx: &lattice_api::principal::QueryContext<'_>,
         sql: &str,
         params: &[Option<Vec<u8>>],
         token: &lattice_api::cancel::CancellationToken,
     ) -> Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError> {
         if sql != "WAIT" {
-            return self.execute(sql, params);
+            return self.execute(ctx, sql, params);
         }
         self.started.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -291,6 +293,7 @@ impl lattice_api::session::QueryHandler for Cooperative {
     }
     fn describe(
         &mut self,
+        _: &lattice_api::principal::QueryContext<'_>,
         _: &str,
     ) -> Result<Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError> {
         Ok(output_one().columns)
@@ -685,5 +688,55 @@ fn cancel_request_at_full_worker_capacity_is_dropped_and_the_peer_sees_53300() {
     assert_eq!(tag, b'E');
     assert!(error.windows(7).any(|bytes| bytes == b"C53300\0"));
     drop(idle);
+    server.shutdown().unwrap();
+}
+
+struct PrincipalRecorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+impl lattice_api::session::QueryHandler for PrincipalRecorder {
+    fn execute(
+        &mut self,
+        ctx: &lattice_api::principal::QueryContext<'_>,
+        _: &str,
+        _: &[Option<Vec<u8>>],
+    ) -> Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError> {
+        self.0.lock().unwrap().push(ctx.principal.to_string());
+        Ok(output_one())
+    }
+    fn describe(
+        &mut self,
+        _: &lattice_api::principal::QueryContext<'_>,
+        _: &str,
+    ) -> Result<Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError> {
+        Ok(output_one().columns)
+    }
+}
+
+#[test]
+fn trust_mode_gives_every_connection_the_labeled_development_principal() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let handler_seen = seen.clone();
+    let server = ServerHandle::start_with_handler(
+        ServerConfig {
+            address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            ..ServerConfig::default()
+        },
+        move || PrincipalRecorder(handler_seen.clone()),
+    )
+    .unwrap();
+    // The startup `user` is client-supplied and carries no identity in trust mode: a name that looks
+    // like an administrator, and one that looks like the development principal, both get the same one.
+    for user in [&b"root"[..], b"local-development", b"socket-test"] {
+        let mut packet = vec![0, 0, 0, 0, 0, 3, 0, 0];
+        packet.extend_from_slice(b"user\0");
+        packet.extend_from_slice(user);
+        packet.extend_from_slice(b"\0\0");
+        let len = (packet.len() as i32).to_be_bytes();
+        packet[..4].copy_from_slice(&len);
+        let mut client = connect(server.local_addr());
+        client.write_all(&packet).unwrap();
+        ready(&mut client);
+        select_one(&mut client);
+    }
+    assert_eq!(*seen.lock().unwrap(), ["local-development"; 3]);
     server.shutdown().unwrap();
 }

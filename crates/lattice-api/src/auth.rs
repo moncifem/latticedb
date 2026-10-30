@@ -1,4 +1,5 @@
 //! Bounded, provisioned SCRAM account lookup; no password derivation on the network path.
+use crate::principal::Principal;
 use crate::scram::{ScramError, ScramServer, Verifier};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, KeyInit, Mac};
@@ -93,15 +94,18 @@ impl Accounts {
     }
 
     /// Selects only the startup account; SASL's client-first name never selects credentials.
+    /// The second value is the principal the session may adopt once the proof verifies: `Some` for a
+    /// provisioned account (named by the store's own key) and `None` for a synthetic unknown-user
+    /// verifier, which can never authenticate.
     pub fn exchange(
         &self,
         name: &str,
         rng: &mut (impl Rng + ?Sized),
-    ) -> Result<(ScramServer, bool), ScramError> {
+    ) -> Result<(ScramServer, Option<Principal>), ScramError> {
         if name.is_empty() || name.len() > 63 || name.chars().any(char::is_control) {
             return Err(ScramError::Malformed);
         }
-        let known = self.entries.get(name);
+        let known = self.entries.get_key_value(name);
         // Perform the synthetic work for known users too. Lookup still has public-data branches;
         // equal message shape is not a constant-time/timing-audit claim.
         let salt = self.derive(b"salt", name)?;
@@ -113,9 +117,10 @@ impl Accounts {
             *stored,
             *server,
         )?;
+        let principal = known.map(|(account, _)| Principal::account(account));
         Ok((
-            ScramServer::new(known.cloned().unwrap_or(decoy), rng),
-            known.is_some(),
+            ScramServer::new(known.map_or(decoy, |(_, verifier)| verifier.clone()), rng),
+            principal,
         ))
     }
     fn derive(&self, label: &[u8], name: &str) -> Result<Zeroizing<[u8; 32]>, ScramError> {
@@ -176,20 +181,21 @@ mod tests {
         )
         .unwrap();
         let challenge = |name| {
-            let (mut exchange, known) = accounts.exchange(name, &mut Counter(10)).unwrap();
+            let (mut exchange, principal) = accounts.exchange(name, &mut Counter(10)).unwrap();
             (
                 exchange
                     .initial(crate::scram::MECHANISM, b"n,,n=,r=clientnonce")
                     .unwrap(),
-                known,
+                principal,
             )
         };
         let unknown = challenge("missing");
-        assert!(!unknown.1);
+        assert!(unknown.1.is_none());
         assert_eq!(unknown, challenge("missing"));
         assert_ne!(unknown.0, challenge("othermissing").0);
         assert_ne!(unknown.0, challenge("user").0);
-        assert!(challenge("user").1);
+        // The principal is named by the store's entry, with the store's own spelling.
+        assert_eq!(challenge("user").1, Some(Principal::account("user")));
         assert!(accounts.exchange("", &mut Counter(0)).is_err());
         assert!(accounts.exchange(&"x".repeat(64), &mut Counter(0)).is_err());
     }

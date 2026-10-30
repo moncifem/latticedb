@@ -1,5 +1,6 @@
 #![no_main]
 use lattice_api::pgwire::{Backend, Column, Frontend, decode_frontend, decode_startup};
+use lattice_api::principal::QueryContext;
 use lattice_api::session::{QueryError, QueryHandler, QueryOutput, Session};
 use libfuzzer_sys::fuzz_target;
 
@@ -7,7 +8,12 @@ use libfuzzer_sys::fuzz_target;
 struct Refuse;
 
 impl QueryHandler for Refuse {
-    fn execute(&mut self, sql: &str, _: &[Option<Vec<u8>>]) -> Result<QueryOutput, QueryError> {
+    fn execute(
+        &mut self,
+        _: &QueryContext<'_>,
+        sql: &str,
+        _: &[Option<Vec<u8>>],
+    ) -> Result<QueryOutput, QueryError> {
         if sql.len().is_multiple_of(3) {
             return Err(QueryError::new("42601", sql));
         }
@@ -17,7 +23,7 @@ impl QueryHandler for Refuse {
         })
     }
 
-    fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError> {
+    fn describe(&mut self, _: &QueryContext<'_>, sql: &str) -> Result<Vec<Column>, QueryError> {
         if sql.len().is_multiple_of(5) {
             return Err(QueryError::new("42601", sql));
         }
@@ -27,7 +33,7 @@ impl QueryHandler for Refuse {
 
 fuzz_target!(|data: &[u8]| {
     // Whatever the bytes decode to, a session fed with it never panics and every reply encodes.
-    let mut session = Session::new(Refuse, 1, 2);
+    let mut session = Session::local_trust(Refuse, 1, 2);
     let mut at = 0;
     if let Ok(Some((startup, used))) = decode_startup(data) {
         at = used;

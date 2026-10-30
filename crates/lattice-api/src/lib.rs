@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod pgwire;
+pub mod principal;
 pub mod session;
 
 /// Layer marker used by the layer check. Do not remove.

@@ -29,6 +29,7 @@ use transport::Transport;
 use lattice_api::auth::Accounts;
 use lattice_api::cancel::{CancelKey, CancelRegistry, CancellationToken};
 use lattice_api::pgwire::{self, Backend, Column, Frontend, ProtoError, Startup};
+use lattice_api::principal::QueryContext;
 use lattice_api::session::{Outcome, QueryError, QueryHandler, QueryOutput, Session};
 use lattice_seams::OsRng;
 use std::collections::{HashMap, VecDeque};
@@ -724,7 +725,7 @@ where
                 }
                 // The cancel key is registered only once authentication succeeds (see `bind_key`).
                 let mut session = match &config.authentication {
-                    Authentication::DevelopmentTrust => Session::new(factory(), 0, 0),
+                    Authentication::DevelopmentTrust => Session::local_trust(factory(), 0, 0),
                     Authentication::ScramTls { accounts, .. } => {
                         let users: Vec<_> =
                             params.iter().filter(|(key, _)| key == "user").collect();
@@ -736,7 +737,7 @@ where
                         } else {
                             Err(lattice_api::scram::ScramError::Malformed)
                         };
-                        let (exchange, known) = match exchange {
+                        let (exchange, account) = match exchange {
                             Ok(exchange) => exchange,
                             Err(_) => {
                                 send(
@@ -746,7 +747,7 @@ where
                                 return Ok(());
                             }
                         };
-                        Session::with_scram(factory(), 0, 0, exchange, known)
+                        Session::with_scram(factory(), 0, 0, exchange, account)
                     }
                 };
                 let mut registration = None;
@@ -910,6 +911,7 @@ fn select_one(sql: &str) -> Result<Vec<Column>, QueryError> {
 impl QueryHandler for SelectOne {
     fn execute(
         &mut self,
+        _: &QueryContext<'_>,
         sql: &str,
         params: &[Option<Vec<u8>>],
     ) -> Result<QueryOutput, QueryError> {
@@ -925,7 +927,7 @@ impl QueryHandler for SelectOne {
             tag: "SELECT 1".into(),
         })
     }
-    fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError> {
+    fn describe(&mut self, _: &QueryContext<'_>, sql: &str) -> Result<Vec<Column>, QueryError> {
         select_one(sql)
     }
 }

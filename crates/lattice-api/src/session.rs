@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::cancel::CancellationToken;
+use crate::principal::{Principal, QueryContext};
 
 use crate::pgwire::{
     Backend, Column, ENCRYPTION_DECLINED, Frontend, ProtoError, SaslPhase, Startup, Target,
@@ -73,13 +74,21 @@ impl QueryError {
 }
 
 /// What the session asks of the database. The session owns the protocol; the handler owns the SQL.
+///
+/// Every call carries a [`QueryContext`] with the principal that authenticated the connection. The
+/// session calls the handler only after authentication completed, so the principal is never a
+/// placeholder for "not yet known".
 pub trait QueryHandler {
     /// Runs one statement. `params` are the bound values of an extended query, empty for a simple one.
-    fn execute(&mut self, sql: &str, params: &[Option<Vec<u8>>])
-    -> Result<QueryOutput, QueryError>;
+    fn execute(
+        &mut self,
+        ctx: &QueryContext<'_>,
+        sql: &str,
+        params: &[Option<Vec<u8>>],
+    ) -> Result<QueryOutput, QueryError>;
 
     /// Checks a statement at `Parse` time and returns the columns it will produce (empty for none).
-    fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError>;
+    fn describe(&mut self, ctx: &QueryContext<'_>, sql: &str) -> Result<Vec<Column>, QueryError>;
 
     /// Runs with a statement-local cancellation signal. Cooperative executors override this method
     /// and poll between bounded units of work, aborting before their commit boundary. The default
@@ -87,22 +96,24 @@ pub trait QueryHandler {
     /// A successful result is not changed into a cancellation error after the handler returns.
     fn execute_cancellable(
         &mut self,
+        ctx: &QueryContext<'_>,
         sql: &str,
         params: &[Option<Vec<u8>>],
         cancellation: &CancellationToken,
     ) -> Result<QueryOutput, QueryError> {
         check_cancellation(cancellation)?;
-        self.execute(sql, params)
+        self.execute(ctx, sql, params)
     }
 
     /// Describes with the same cooperative cancellation contract as execution.
     fn describe_cancellable(
         &mut self,
+        ctx: &QueryContext<'_>,
         sql: &str,
         cancellation: &CancellationToken,
     ) -> Result<Vec<Column>, QueryError> {
         check_cancellation(cancellation)?;
-        self.describe(sql)
+        self.describe(ctx, sql)
     }
 }
 
@@ -154,7 +165,13 @@ pub struct Session<H> {
     pid: i32,
     secret: i32,
     phase: Phase,
-    authentication: Option<(crate::scram::ScramServer, bool)>,
+    authentication: Option<crate::scram::ScramServer>,
+    /// The identity this connection will have once startup completes. For SCRAM it is the account
+    /// the exchange was selected for (absent for an unknown user); for trust it is the fixed
+    /// development principal. It becomes `principal` only when `AuthenticationOk` is produced.
+    pending: Option<Principal>,
+    /// Set once, when authentication completes; never changed or cleared afterwards.
+    principal: Option<Principal>,
     tx: TxStatus,
     /// After an error in the extended flow: ignore everything up to the next `Sync`.
     discarding: bool,
@@ -163,14 +180,35 @@ pub struct Session<H> {
 }
 
 impl<H: QueryHandler> Session<H> {
-    /// A session waiting for the startup message. `pid` and `secret` go out in `BackendKeyData`.
-    pub fn new(handler: H, pid: i32, secret: i32) -> Self {
+    /// A session in explicit local development trust: no credential is checked and the connection
+    /// is [`Principal::local_development`], whatever `user` the client names. The host must have
+    /// configured this mode and restricted it to loopback. `pid` and `secret` go out in
+    /// `BackendKeyData`.
+    pub fn local_trust(handler: H, pid: i32, secret: i32) -> Self {
+        Self::build(
+            handler,
+            pid,
+            secret,
+            None,
+            Some(Principal::local_development()),
+        )
+    }
+
+    fn build(
+        handler: H,
+        pid: i32,
+        secret: i32,
+        authentication: Option<crate::scram::ScramServer>,
+        pending: Option<Principal>,
+    ) -> Self {
         Self {
             handler,
             pid,
             secret,
             phase: Phase::AwaitingStartup,
-            authentication: None,
+            authentication,
+            pending,
+            principal: None,
             tx: TxStatus::Idle,
             discarding: false,
             statements: BTreeMap::new(),
@@ -180,17 +218,23 @@ impl<H: QueryHandler> Session<H> {
 
     /// Requires a configured SCRAM exchange before any query or successful startup output.
     /// The host must select the verifier from the startup user and provide protected transport.
-    /// `known_account` is false for a synthetic unknown-user verifier, which must never succeed.
+    /// `account` is the principal returned by [`Accounts::exchange`](crate::auth::Accounts::exchange):
+    /// `None` for a synthetic unknown-user verifier, which must never succeed. The startup `user`
+    /// must equal the account's name or startup is refused.
     pub fn with_scram(
         handler: H,
         pid: i32,
         secret: i32,
         exchange: crate::scram::ScramServer,
-        known_account: bool,
+        account: Option<Principal>,
     ) -> Self {
-        let mut session = Self::new(handler, pid, secret);
-        session.authentication = Some((exchange, known_account));
-        session
+        Self::build(handler, pid, secret, Some(exchange), account)
+    }
+
+    /// The authenticated principal, or `None` until authentication has completed. It never changes
+    /// afterwards: there is no re-authentication or role switch on a connection.
+    pub fn principal(&self) -> Option<&Principal> {
+        self.principal.as_ref()
     }
 
     /// The only permitted frontend password layout during an authentication exchange.
@@ -246,10 +290,26 @@ impl<H: QueryHandler> Session<H> {
                 closed()
             }
             Startup::Params(params) => {
-                if !params.iter().any(|(k, v)| k == "user" && !v.is_empty()) {
+                let mut users = params.iter().filter(|(k, _)| k == "user");
+                let user = users
+                    .next()
+                    .map(|(_, v)| v.as_str())
+                    .filter(|v| !v.is_empty());
+                let Some(user) = user else {
                     return self.fatal(
                         "28000",
                         "no user name specified in the startup packet".to_string(),
+                    );
+                };
+                // The startup name only selects an account; it is never the identity. A second
+                // `user`, or one that is not the account the exchange was built for, is refused.
+                if users.next().is_some()
+                    || (self.authentication.is_some()
+                        && self.pending.as_ref().is_some_and(|p| p.name() != user))
+                {
+                    return self.fatal(
+                        "28000",
+                        "startup user does not match the authenticated account".to_string(),
                     );
                 }
                 if self.authentication.is_some() {
@@ -266,6 +326,11 @@ impl<H: QueryHandler> Session<H> {
     }
 
     fn startup_success(&mut self) -> Outcome {
+        // The only place a principal is published. No pending principal means no way in.
+        let Some(principal) = self.pending.take() else {
+            return self.fatal("28000", "no authenticated principal".to_string());
+        };
+        self.principal = Some(principal);
         self.phase = Phase::Ready;
         Outcome {
             messages: vec![
@@ -294,7 +359,7 @@ impl<H: QueryHandler> Session<H> {
             self.phase = Phase::Closed;
             return closed();
         }
-        let Some((exchange, known)) = self.authentication.as_mut() else {
+        let Some(exchange) = self.authentication.as_mut() else {
             return self.fatal("28P01", "password authentication failed".into());
         };
         let result = match (self.phase, message) {
@@ -316,7 +381,7 @@ impl<H: QueryHandler> Session<H> {
                     ..Outcome::default()
                 }
             }
-            Ok(message) if *known && exchange.is_authenticated() => {
+            Ok(message) if self.pending.is_some() && exchange.is_authenticated() => {
                 self.authentication = None;
                 let mut outcome = self.startup_success();
                 outcome.messages.insert(0, message);
@@ -439,8 +504,15 @@ impl<H: QueryHandler> Session<H> {
                 "current transaction is aborted, commands ignored until end of transaction block",
             ));
         }
-        let result = check_cancellation(cancellation)
-            .and_then(|()| self.handler.execute_cancellable(sql, params, cancellation));
+        let result = check_cancellation(cancellation).and_then(|()| {
+            let principal = self.principal.as_ref().ok_or_else(no_principal)?;
+            self.handler.execute_cancellable(
+                &QueryContext::new(principal),
+                sql,
+                params,
+                cancellation,
+            )
+        });
         match result {
             Ok(result) => {
                 match result.tag.as_str() {
@@ -484,7 +556,12 @@ impl<H: QueryHandler> Session<H> {
                     Vec::new()
                 } else {
                     check_cancellation(cancellation)?;
-                    self.handler.describe_cancellable(&query, cancellation)?
+                    let principal = self.principal.as_ref().ok_or_else(no_principal)?;
+                    self.handler.describe_cancellable(
+                        &QueryContext::new(principal),
+                        &query,
+                        cancellation,
+                    )?
                 };
                 self.statements.insert(
                     name,
@@ -647,6 +724,11 @@ impl<H: QueryHandler> Session<H> {
     }
 }
 
+/// A ready session always has a principal; if it somehow did not, the handler is not called.
+fn no_principal() -> QueryError {
+    QueryError::new("28000", "no authenticated principal")
+}
+
 fn check_cancellation(cancellation: &CancellationToken) -> Result<(), QueryError> {
     if cancellation.is_cancelled() {
         Err(QueryError::new(
@@ -714,6 +796,8 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         executed: Vec<String>,
+        /// The principal each `execute` and `describe` call carried, as `Display` text.
+        seen: Vec<String>,
     }
 
     fn col() -> Column {
@@ -731,10 +815,12 @@ mod tests {
     impl QueryHandler for Fake {
         fn execute(
             &mut self,
+            ctx: &QueryContext<'_>,
             sql: &str,
             params: &[Option<Vec<u8>>],
         ) -> Result<QueryOutput, QueryError> {
             self.executed.push(sql.to_string());
+            self.seen.push(ctx.principal.to_string());
             let select = |rows: Vec<Row>| {
                 let tag = format!("SELECT {}", rows.len());
                 Ok(QueryOutput {
@@ -759,7 +845,12 @@ mod tests {
             }
         }
 
-        fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError> {
+        fn describe(
+            &mut self,
+            ctx: &QueryContext<'_>,
+            sql: &str,
+        ) -> Result<Vec<Column>, QueryError> {
+            self.seen.push(ctx.principal.to_string());
             match sql.trim() {
                 "BAD" => Err(QueryError::new("42601", "syntax error")),
                 s if s.starts_with("SELECT") => Ok(vec![col()]),
@@ -769,7 +860,7 @@ mod tests {
     }
 
     fn ready() -> Session<Fake> {
-        let mut s = Session::new(Fake::default(), 1, 2);
+        let mut s = Session::local_trust(Fake::default(), 1, 2);
         s.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
         s
     }
@@ -837,7 +928,7 @@ mod tests {
         // 00 00 00 08 04 d2 16 2f is the SSLRequest: length 8, code 80877103.
         let bytes = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
         let (msg, _) = decode_startup(&bytes).unwrap().unwrap();
-        let mut s = Session::new(Fake::default(), 1, 2);
+        let mut s = Session::local_trust(Fake::default(), 1, 2);
         let out = s.on_startup(msg);
         assert_eq!(out.encryption_reply, Some(b'N'));
         assert!(out.messages.is_empty() && !out.close);
@@ -858,7 +949,7 @@ mod tests {
         let mut bytes = ((body.len() + 4) as u32).to_be_bytes().to_vec();
         bytes.extend_from_slice(&body);
         let (msg, _) = decode_startup(&bytes).unwrap().unwrap();
-        let mut s = Session::new(Fake::default(), 1, 2);
+        let mut s = Session::local_trust(Fake::default(), 1, 2);
         let out = s.on_startup(msg);
 
         let mut expected = vec![b'R', 0, 0, 0, 8, 0, 0, 0, 0];
@@ -874,7 +965,7 @@ mod tests {
 
     #[test]
     fn startup_without_a_user_is_fatal() {
-        let mut s = Session::new(Fake::default(), 1, 2);
+        let mut s = Session::local_trust(Fake::default(), 1, 2);
         let out = s.on_startup(Startup::Params(vec![("database".into(), "d".into())]));
         assert_eq!(err_code(&out.messages[0]), "28000");
         assert!(out.close && s.is_closed());
@@ -882,7 +973,7 @@ mod tests {
 
     #[test]
     fn messages_before_startup_and_a_second_startup_are_fatal() {
-        let mut s = Session::new(Fake::default(), 1, 2);
+        let mut s = Session::local_trust(Fake::default(), 1, 2);
         let out = s.on_message(q("SELECT 1"));
         assert_eq!(err_code(&out.messages[0]), "08P01");
         assert!(out.close);
@@ -895,7 +986,7 @@ mod tests {
 
     #[test]
     fn cancel_request_closes_silently() {
-        let mut s = Session::new(Fake::default(), 1, 2);
+        let mut s = Session::local_trust(Fake::default(), 1, 2);
         let out = s.on_startup(Startup::Cancel { pid: 1, secret: 2 });
         assert!(out.messages.is_empty() && out.close && s.is_closed());
     }
@@ -1331,7 +1422,7 @@ mod tests {
             starts in proptest::collection::vec(startup(), 0..3),
             msgs in proptest::collection::vec(frontend(), 0..40),
         ) {
-            let mut s = Session::new(Fake::default(), 7, 9);
+            let mut s = Session::local_trust(Fake::default(), 7, 9);
             let mut sink = Vec::new();
             for st in starts {
                 let out = s.on_startup(st);
@@ -1459,16 +1550,22 @@ mod tests {
         impl QueryHandler for Cooperative {
             fn execute(
                 &mut self,
+                ctx: &QueryContext<'_>,
                 sql: &str,
                 params: &[Option<Vec<u8>>],
             ) -> Result<QueryOutput, QueryError> {
-                self.fallback.execute(sql, params)
+                self.fallback.execute(ctx, sql, params)
             }
-            fn describe(&mut self, sql: &str) -> Result<Vec<Column>, QueryError> {
-                self.fallback.describe(sql)
+            fn describe(
+                &mut self,
+                ctx: &QueryContext<'_>,
+                sql: &str,
+            ) -> Result<Vec<Column>, QueryError> {
+                self.fallback.describe(ctx, sql)
             }
             fn execute_cancellable(
                 &mut self,
+                ctx: &QueryContext<'_>,
                 sql: &str,
                 params: &[Option<Vec<u8>>],
                 token: &CancellationToken,
@@ -1488,7 +1585,7 @@ mod tests {
                             ..QueryOutput::default()
                         })
                     }
-                    _ => self.execute(sql, params),
+                    _ => self.execute(ctx, sql, params),
                 }
             }
         }
@@ -1500,7 +1597,7 @@ mod tests {
             committed: false,
             fallback: Fake::default(),
         };
-        let mut session = Session::new(handler, key.pid, key.secret);
+        let mut session = Session::local_trust(handler, key.pid, key.secret);
         session.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
         for sql in ["BEGIN", "ABORT", "ROLLBACK", "BEGIN"] {
             let token = registry.borrow_mut().begin_query(key, 0).unwrap();
@@ -1531,6 +1628,7 @@ mod tests {
         impl QueryHandler for Returning {
             fn execute(
                 &mut self,
+                _: &QueryContext<'_>,
                 _: &str,
                 _: &[Option<Vec<u8>>],
             ) -> Result<QueryOutput, QueryError> {
@@ -1542,11 +1640,15 @@ mod tests {
                     tag: "INSERT 0 2".into(),
                 })
             }
-            fn describe(&mut self, _: &str) -> Result<Vec<Column>, QueryError> {
+            fn describe(
+                &mut self,
+                _: &QueryContext<'_>,
+                _: &str,
+            ) -> Result<Vec<Column>, QueryError> {
                 Ok(vec![col()])
             }
         }
-        let mut session = Session::new(
+        let mut session = Session::local_trust(
             Returning {
                 committed: false,
                 calls: 0,
@@ -1602,7 +1704,13 @@ mod tests {
             "%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0",
         )
         .unwrap();
-        Session::with_scram(Fake::default(), 17, 23, exchange, known)
+        Session::with_scram(
+            Fake::default(),
+            17,
+            23,
+            exchange,
+            known.then(|| Principal::account("user")),
+        )
     }
     fn scram_first() -> Frontend {
         Frontend::SaslInitialResponse {
@@ -1680,5 +1788,96 @@ mod tests {
                 message: "password authentication failed".into()
             }]
         );
+    }
+
+    #[test]
+    fn scram_principal_is_the_store_account_and_reaches_every_handler_call() {
+        let mut session = scram_session(true);
+        assert!(session.principal().is_none());
+        session.on_startup(Startup::Params(vec![("user".into(), "user".into())]));
+        session.on_message(scram_first());
+        assert!(session.principal().is_none(), "not published mid-exchange");
+        session.on_message(scram_final());
+        assert_eq!(session.principal(), Some(&Principal::account("user")));
+        session.on_message(q("SELECT 1"));
+        session.on_message(Frontend::Parse {
+            name: "s".into(),
+            query: "SELECT 3".into(),
+            param_types: vec![],
+        });
+        // One execute and one describe, both as the authenticated account.
+        assert_eq!(session.handler().seen, ["account:user", "account:user"]);
+        assert_eq!(session.principal(), Some(&Principal::account("user")));
+    }
+
+    #[test]
+    fn startup_user_that_differs_from_the_exchange_account_is_refused_before_any_offer() {
+        for params in [
+            vec![("user".to_string(), "other".to_string())],
+            vec![
+                ("user".to_string(), "user".to_string()),
+                ("user".to_string(), "other".to_string()),
+            ],
+            vec![
+                ("user".to_string(), "user".to_string()),
+                ("user".to_string(), "user".to_string()),
+            ],
+        ] {
+            let mut session = scram_session(true);
+            let out = session.on_startup(Startup::Params(params));
+            assert!(out.close);
+            assert_eq!(err_code(&out.messages[0]), "28000");
+            assert!(session.principal().is_none());
+            assert!(session.is_closed());
+            assert!(session.on_message(scram_first()).messages.is_empty());
+            assert!(session.handler().seen.is_empty());
+        }
+    }
+
+    #[test]
+    fn unauthenticated_input_never_reaches_the_handler_or_publishes_a_principal() {
+        let mut session = scram_session(true);
+        // Before startup.
+        let out = session.on_message(q("SELECT 1"));
+        assert_eq!(err_code(&out.messages[0]), "08P01");
+        let mut session = scram_session(true);
+        session.on_startup(Startup::Params(vec![("user".into(), "user".into())]));
+        // A wrong proof ends the exchange without a principal.
+        session.on_message(scram_first());
+        let bad = Frontend::SaslResponse(b"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_vec());
+        let out = session.on_message(bad);
+        assert!(out.close);
+        assert!(session.principal().is_none());
+        assert!(session.on_message(q("SELECT 1")).messages.is_empty());
+        assert!(session.handler().seen.is_empty());
+    }
+
+    #[test]
+    fn trust_mode_yields_the_labeled_development_principal_whatever_user_is_named() {
+        let mut session = Session::local_trust(Fake::default(), 1, 2);
+        assert!(session.principal().is_none());
+        session.on_startup(Startup::Params(vec![("user".into(), "root".into())]));
+        assert_eq!(session.principal(), Some(&Principal::local_development()));
+        session.on_message(q("SELECT 1"));
+        assert_eq!(session.handler().seen, ["local-development"]);
+        // Trust still needs a non-empty, single `user`.
+        let mut session = Session::local_trust(Fake::default(), 1, 2);
+        let out = session.on_startup(Startup::Params(vec![
+            ("user".into(), "a".into()),
+            ("user".into(), "b".into()),
+        ]));
+        assert_eq!(err_code(&out.messages[0]), "28000");
+        assert!(session.principal().is_none());
+    }
+
+    #[test]
+    fn a_ready_session_without_a_principal_fails_closed() {
+        let mut session = Session::local_trust(Fake::default(), 1, 2);
+        session.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
+        // Test-only: simulate a bug that lost the principal after startup.
+        session.principal = None;
+        let out = session.on_message(q("SELECT 1"));
+        assert_eq!(err_code(&out.messages[0]), "28000");
+        assert!(session.handler().executed.is_empty());
     }
 }
