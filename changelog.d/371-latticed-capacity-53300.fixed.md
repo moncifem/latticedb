@@ -1,0 +1,1 @@
+latticed: a connection refused because every worker is busy now receives a best-effort FATAL 53300 ("sorry, too many clients already") instead of a silent close, and a CancelRequest arriving at that point is dropped as before (the peer sees the error, not EOF). `ServerHandle::open_connections()` exposes the tracked worker count.

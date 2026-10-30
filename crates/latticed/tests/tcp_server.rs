@@ -457,7 +457,12 @@ fn bounded_control_slots_cannot_make_shutdown_wait_for_slow_startup_clients() {
         stream.write_all(&[0]).unwrap();
         pending.push(stream);
     }
-    std::thread::sleep(Duration::from_millis(100));
+    // Wait until the acceptor tracks the primary plus all 8 control sockets; no fixed sleep.
+    let until = Instant::now() + Duration::from_secs(10);
+    while server.open_connections() < 1 + latticed::CONTROL_CONNECTION_RESERVE {
+        assert!(Instant::now() < until, "workers never filled");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let mut excess = connect(address);
     let (tag, error) = message(&mut excess);
     assert_eq!(tag, b'E');
@@ -554,7 +559,7 @@ fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
     let until = Instant::now() + Duration::from_secs(10);
     while server.open_connections() != 0 {
         assert!(Instant::now() < until, "abandoned workers never drained");
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
     loop {
         assert!(Instant::now() < until, "slots were never released");
@@ -573,7 +578,7 @@ fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
             }
             None => {}
         }
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
     server.shutdown().unwrap();
 }
@@ -582,7 +587,10 @@ fn try_message(stream: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
     stream.read_exact(&mut tag).ok()?;
     let mut length = [0; 4];
     stream.read_exact(&mut length).ok()?;
-    let mut payload = vec![0; (i32::from_be_bytes(length) as usize).checked_sub(4)?];
+    let size = usize::try_from(i32::from_be_bytes(length))
+        .ok()?
+        .checked_sub(4)?;
+    let mut payload = vec![0; size];
     stream.read_exact(&mut payload).ok()?;
     Some((tag[0], payload))
 }
@@ -595,7 +603,7 @@ fn connections_beyond_worker_capacity_get_fatal_53300_not_a_silent_close() {
     let until = Instant::now() + Duration::from_secs(5);
     while server.open_connections() < 9 {
         assert!(Instant::now() < until, "workers never filled");
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
     let mut refused = connect(server.local_addr());
     let (tag, error) = message(&mut refused);
@@ -653,5 +661,29 @@ fn startup_packet_boundary_is_exactly_ten_thousand_bytes() {
     let (tag, error) = message(&mut refused);
     assert_eq!(tag, b'E');
     assert!(error.windows(7).any(|bytes| bytes == b"C08P01\0"));
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn cancel_request_at_full_worker_capacity_is_dropped_and_the_peer_sees_53300() {
+    // Documented behaviour: with every worker busy nothing can classify the packet, so a
+    // CancelRequest is not routed. The peer receives FATAL 53300 (best effort), not a bare EOF.
+    let server = server(1, Duration::from_secs(5));
+    let idle: Vec<TcpStream> = (0..9).map(|_| connect(server.local_addr())).collect();
+    let until = Instant::now() + Duration::from_secs(10);
+    while server.open_connections() < 9 {
+        assert!(Instant::now() < until, "workers never filled");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let mut peer = connect(server.local_addr());
+    let mut packet = 16i32.to_be_bytes().to_vec();
+    packet.extend_from_slice(&80877102i32.to_be_bytes());
+    packet.extend_from_slice(&1i32.to_be_bytes());
+    packet.extend_from_slice(&2i32.to_be_bytes());
+    let _ = peer.write_all(&packet);
+    let (tag, error) = message(&mut peer);
+    assert_eq!(tag, b'E');
+    assert!(error.windows(7).any(|bytes| bytes == b"C53300\0"));
+    drop(idle);
     server.shutdown().unwrap();
 }

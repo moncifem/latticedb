@@ -260,6 +260,9 @@ fn classify(error: &io::Error) -> AcceptFailure {
 
 /// Best-effort FATAL 53300 for a connection refused before any worker serves it. Never blocks the
 /// accept loop: the socket is non-blocking and a full send buffer simply drops the message.
+/// Best effort only: if the peer's startup bytes are still unread when we close, Linux turns the
+/// close into a reset that can discard the reply, so a client may see a reset instead of the error.
+/// A CancelRequest that arrives here is dropped, because no worker is free to route it.
 fn refuse_at_capacity(socket: &TcpStream) {
     let mut bytes = Vec::new();
     let encoded = fatal("53300", "sorry, too many clients already")
