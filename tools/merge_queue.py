@@ -7,8 +7,11 @@ required context passed, otherwise park it with the failing check names and go o
 requests come back in the next round, so a fixed branch is picked up without a restart.
 
 Safety rules, each covered by tests/test_merge_queue.py:
-  * never merges unless every required context (tools/branch-protection.json) passed on the exact
-    head that is merged (`--match-head-commit`), and no check failed or is pending;
+  * never merges unless every required context (tools/branch-protection.json) and every `--also-require`
+    check (default risk-gate) passed on the exact head that is merged (`--match-head-commit`), and no
+    check failed or is pending;
+  * decides "behind the base" from the compare API (`behind_by`), not from mergeStateStatus alone,
+    which GitHub often reports as UNKNOWN or BLOCKED for a branch that is behind;
   * an API error, an empty answer or malformed JSON is "unknown": wait and ask again, never a result;
   * never force-pushes and never uses `--admin`; the only branch change is `gh pr update-branch
     --rebase`, which GitHub performs on the server;
@@ -24,6 +27,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,6 +39,10 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_REQUIRED_FILE = HERE / "branch-protection.json"
 DEFAULT_BASE = "main"
 DEFAULT_HOLD_LABEL = "hold"
+# Required by the queue itself even if branch protection does not list it: a red or missing risk gate
+# (the owner's `reviewed` label on risky paths) must never be merged over.
+DEFAULT_ALSO_REQUIRE = ("risk-gate",)
+UNKNOWN_STATE_TRIES = 3
 HEAD_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 RUN_RE = re.compile(r"/actions/runs/([0-9]+)")
 # `gh pr checks` exits 1 when a check failed and 8 while checks are pending, with valid JSON on stdout.
@@ -213,7 +221,7 @@ class GhApi:
 
     def run(self, args):
         cmd = ["gh", *args]
-        if self.repo:
+        if self.repo and args[:1] != ["api"]:
             cmd += ["-R", self.repo]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
@@ -233,6 +241,15 @@ class GhApi:
         rc, out, _ = self.run(["pr", "list", "--state", "open", "--base", base, "--limit", "200",
                                "--json", "number,isDraft,author,labels"])
         return parse_json(out, list) if rc == 0 else None
+
+    def behind_by(self, info):
+        """Commits the head is behind its base, or None (unknown) on an API error or odd answer."""
+        slug = self.repo or "{owner}/{repo}"
+        rc, out, _ = self.run(["api", f"repos/{slug}/compare/{info['baseRefName']}...{info['headRefOid']}",
+                               "--jq", ".behind_by"])
+        if rc != 0 or not re.fullmatch(r"[0-9]+", out or ""):
+            return None
+        return int(out)
 
     def update_branch(self, n):
         rc, out, err = self.run(["pr", "update-branch", str(n), "--rebase"])
@@ -256,6 +273,7 @@ class Options:
         self.base = DEFAULT_BASE
         self.hold_label = DEFAULT_HOLD_LABEL
         self.include_bots = False
+        self.also_require = DEFAULT_ALSO_REQUIRE
         self.dry_run = False
         self.per_pr_timeout = 40 * 60.0
         self.poll = 30.0
@@ -274,7 +292,7 @@ class Options:
 class Queue:
     def __init__(self, api, required, opts, out=None):
         self.api = api
-        self.required = required
+        self.required = sorted(set(required) | set(opts.also_require or ()))
         self.opts = opts
         self.out = out if out is not None else sys.stdout
         self.sleep = time.sleep
@@ -288,8 +306,13 @@ class Queue:
         line = f"[{datetime.now(timezone.utc):%H:%M:%S}] {msg}"
         print(line, file=self.out, flush=True)
         if self.opts.log_file:
-            with open(self.opts.log_file, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+            try:
+                fd = os.open(self.opts.log_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except OSError as exc:
+                # A logging failure must never abort the queue, least of all right after a merge.
+                print(f"warning: cannot write the log ({exc})", file=sys.stderr)
 
     def write_status(self):
         self.state["updated"] = now_iso()
@@ -297,14 +320,17 @@ class Queue:
         if not path:
             return
         directory = os.path.dirname(os.path.abspath(path))
-        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".status-", suffix=".tmp")
+        tmp = None
         try:
+            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".status-", suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(self.state, fh, indent=2, sort_keys=True)
                 fh.write("\n")
             os.replace(tmp, path)
+        except OSError as exc:
+            print(f"warning: cannot write the status file ({exc})", file=sys.stderr)
         finally:
-            if os.path.exists(tmp):
+            if tmp and os.path.exists(tmp):
                 os.unlink(tmp)
 
     def record(self, n, state, reason="", head=None, failed=None):
@@ -354,6 +380,7 @@ class Queue:
         self.state["current"] = n
         self.write_status()
         attempts = 0
+        unknown_state = 0
         while attempts < MAX_ATTEMPTS:
             if self.clock() >= deadline:
                 self.record(n, "parked", "timed out")
@@ -371,12 +398,23 @@ class Queue:
                 self.record(n, "skipped", reason, head=info["headRefOid"])
                 return "skipped"
             head = info["headRefOid"]
-            if info["mergeStateStatus"] == "BEHIND":
+            if info["mergeStateStatus"] == "UNKNOWN" and unknown_state < UNKNOWN_STATE_TRIES:
+                # GitHub computes the merge state lazily: ask again before deciding anything.
+                unknown_state += 1
+                self.log(f"PR {n}: merge state UNKNOWN, asking again ({unknown_state}/{UNKNOWN_STATE_TRIES})")
+                self.sleep(self.opts.poll)
+                continue
+            behind = self.api.behind_by(info)
+            if behind is None:
+                self.log(f"PR {n}: cannot tell whether the branch is behind (API), asking again")
+                self.sleep(self.opts.poll)
+                continue
+            if behind > 0 or info["mergeStateStatus"] == "BEHIND":
                 if self.opts.dry_run:
                     self.record(n, "dry-run", "behind the base: would update the branch", head=head)
                     return "skipped"
                 attempts += 1
-                self.record(n, "updating", "behind the base, updating the branch", head=head)
+                self.record(n, "updating", f"behind the base by {behind}, updating the branch", head=head)
                 rc, text = self.api.update_branch(n)
                 if rc != 0 and mentions_conflict(text):
                     self.record(n, "skipped", "update-branch reports conflicts", head=head)
@@ -445,8 +483,9 @@ class Queue:
         if kind == "skip":
             self.record(n, "skipped", reason, head=head)
             return "skipped"
-        if info["mergeStateStatus"] == "BEHIND":
-            self.log(f"PR {n}: behind again, updating")
+        behind = self.api.behind_by(info)
+        if behind is None or behind > 0 or info["mergeStateStatus"] == "BEHIND":
+            self.log(f"PR {n}: behind the base or unknown ({behind}) right before the merge, starting over")
             return None
         verdict, names = classify_checks(self.api.checks(n), self.required)
         if verdict != "green":
@@ -466,7 +505,7 @@ class Queue:
     def run_round(self, numbers, listed):
         results = {}
         for n in numbers:
-            results[n] = self.process(n, listed=(n in listed))
+            results[n] = self.process(n, listed=(n in listed or self.opts.include_bots))
         self.state["current"] = None
         self.write_status()
         return results
@@ -521,6 +560,17 @@ def default_paths():
     return base / "status.json", base / "queue.log"
 
 
+def private_dir(path):
+    """Create `path` (mode 0700) or accept an existing real directory owned by this user."""
+    path = Path(path)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise OSError(f"{path} is not a directory owned by you (symlink or foreign owner); refusing to use it")
+    if st.st_mode & 0o077:
+        os.chmod(path, 0o700)
+
+
 def build_parser():
     p = argparse.ArgumentParser(description="Serial merge queue: update, wait for all checks, merge, park failures.")
     p.add_argument("prs", nargs="*", type=int, metavar="PR", help="pull request numbers in merge order; "
@@ -533,6 +583,8 @@ def build_parser():
     p.add_argument("--poll", type=float, default=30.0, help="seconds between check polls (default 30)")
     p.add_argument("--settle", type=float, default=20.0, help="seconds to let GitHub register a new run (default 20)")
     p.add_argument("--rerun-grace", type=float, default=180.0, help="seconds a re-run may take to register (default 180)")
+    p.add_argument("--also-require", action="append", metavar="CHECK", help="check that must pass in addition to the "
+                   "required file (repeatable; default risk-gate)")
     p.add_argument("--base", default=DEFAULT_BASE, help="base branch (default main)")
     p.add_argument("--hold-label", default=DEFAULT_HOLD_LABEL, help="label that keeps a pull request out (default hold)")
     p.add_argument("--include-bots", action="store_true", help="also queue Dependabot pull requests when discovering")
@@ -556,9 +608,16 @@ def main(argv=None):
     status_default, log_default = default_paths()
     status_file = Path(args.status_file) if args.status_file else status_default
     log_file = Path(args.log_file) if args.log_file else log_default
-    status_file.parent.mkdir(parents=True, exist_ok=True)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if not args.status_file or not args.log_file:
+            private_dir(status_default.parent)
+        for path in (status_file, log_file):
+            path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     opts = Options(base=args.base, hold_label=args.hold_label, include_bots=args.include_bots,
+                   also_require=tuple(args.also_require) if args.also_require else DEFAULT_ALSO_REQUIRE,
                    dry_run=args.dry_run, per_pr_timeout=args.timeout * 60, poll=args.poll,
                    settle=args.settle, rerun_grace=args.rerun_grace, rounds=max(1, args.rounds),
                    round_sleep=args.round_sleep, status_file=str(status_file), log_file=str(log_file))

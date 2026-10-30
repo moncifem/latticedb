@@ -38,6 +38,12 @@ def reply(out="", rc=0, err=""):
     sys.stderr.write(err)
     sys.exit(rc)
 
+if args[:1] == ["api"]:
+    sha = args[1].split("...")[-1]
+    item = nxt(s.get("behind", {}).get(sha, [0]))
+    if isinstance(item, dict):
+        reply("", item["api_rc"], "HTTP 502")
+    reply(str(item) + "\n")
 if args[:2] == ["pr", "list"]:
     reply(json.dumps(s.get("list", [])))
 if args[:2] == ["pr", "view"]:
@@ -82,7 +88,7 @@ def check(name, bucket="pass", run="100", started="2026-10-30T10:00:00Z"):
 
 
 def all_checks(**buckets):
-    return [check(name, buckets.get(name, "pass")) for name in REQUIRED]
+    return [check(name, buckets.get(name, "pass")) for name in REQUIRED + ["risk-gate"]]
 
 
 def ans(checks, rc=0):
@@ -144,6 +150,9 @@ class QueueCase(unittest.TestCase):
         self.out = io.StringIO()
         q = mq.Queue(mq.GhApi(), sorted(REQUIRED), mq.Options(**base), out=self.out)
         return q
+
+    def set_behind(self, sha, *values):
+        self.state.setdefault("behind", {})[sha] = list(values)
 
     def status_of(self, n):
         return json.loads(self.status.read_text())["prs"][str(n)]
@@ -380,6 +389,134 @@ class ChecksTests(unittest.TestCase):
         self.assertIsNone(mq.required_contexts({"required_status_checks": {"contexts": [1]}}))
 
 
+class BehindTests(QueueCase):
+    def merged_on(self, expected):
+        merge = self.calls_of("pr", "merge")[0]
+        self.assertEqual(merge[merge.index("--match-head-commit") + 1], expected)
+
+    def test_unknown_merge_state_with_behind_by_updates_the_branch(self):
+        # The live shape of PRs 373/374/375/377: UNKNOWN while one commit behind.
+        self.pr(5, [view(H1, merge="UNKNOWN"), view(H1, merge="UNKNOWN"), view(H1, merge="UNKNOWN"),
+                    view(H1, merge="UNKNOWN"), view(H2)])
+        self.set_behind(H1, 1)
+        self.assertEqual(self.make().process(5), "merged")
+        self.assertEqual(self.calls_of("pr", "update-branch"), [["pr", "update-branch", "5", "--rebase"]])
+        self.merged_on(H2)
+
+    def test_blocked_merge_state_with_behind_by_updates_the_branch(self):
+        self.pr(5, [view(H1, merge="BLOCKED"), view(H2)])
+        self.set_behind(H1, 2)
+        self.assertEqual(self.make().process(5), "merged")
+        self.assertEqual(len(self.calls_of("pr", "update-branch")), 1)
+        self.merged_on(H2)
+
+    def test_unknown_state_is_asked_again_before_deciding(self):
+        self.pr(5, [view(H1, merge="UNKNOWN"), view(H1, merge="CLEAN")])
+        self.assertEqual(self.make().process(5), "merged")
+        self.assertEqual(self.calls_of("pr", "update-branch"), [])
+        self.assertGreaterEqual(len(self.calls_of("pr", "view")), 3)
+
+    def test_up_to_date_unknown_state_after_asking_proceeds_on_behind_by_zero(self):
+        self.pr(5, [view(H1, merge="UNKNOWN")])
+        self.assertEqual(self.make().process(5), "merged")
+        self.assertEqual(self.calls_of("pr", "update-branch"), [])
+
+    def test_behind_by_api_error_is_unknown_and_never_merges(self):
+        self.pr(5, [view()])
+        self.set_behind(H1, {"api_rc": 1})
+        self.assertEqual(self.make(per_pr_timeout=0.4).process(5), "parked")
+        self.assertEqual(self.merges(), [])
+
+    def test_behind_by_api_error_once_is_retried(self):
+        self.pr(5, [view()])
+        self.set_behind(H1, {"api_rc": 1}, 0)
+        self.assertEqual(self.make().process(5), "merged")
+
+    def test_falling_behind_right_before_the_merge_blocks_it(self):
+        # behind_by: 0 at the start, 1 at the pre-merge read, then the branch is updated.
+        self.pr(5, [view(H1), view(H1), view(H1), view(H1), view(H2)])
+        self.set_behind(H1, 0, 1)
+        self.assertEqual(self.make().process(5), "merged")
+        self.assertEqual(len(self.calls_of("pr", "update-branch")), 1)
+        self.merged_on(H2)
+
+    def test_dry_run_reports_behind_by(self):
+        self.pr(5, [view(H1, merge="UNKNOWN")])
+        self.set_behind(H1, 3)
+        q = self.make(dry_run=True)
+        q.process(5)
+        self.assertIn("would update", self.status_of(5)["reason"])
+        self.assertEqual(self.calls_of("pr", "update-branch"), [])
+
+
+class AlsoRequireTests(QueueCase):
+    def test_missing_risk_gate_never_merges_even_if_all_protection_checks_pass(self):
+        without = ans([check(name) for name in REQUIRED])
+        self.pr(5, [view()], checks=[without])
+        self.assertEqual(self.make(per_pr_timeout=0.4).process(5), "parked")
+        self.assertEqual(self.merges(), [])
+        self.assertIn("timed out", self.status_of(5)["reason"])
+
+    def test_red_risk_gate_parks_and_never_merges(self):
+        red = ans(all_checks(**{"risk-gate": "fail"}), rc=1)
+        self.pr(5, [view()], checks=[red])
+        self.assertEqual(self.make().process(5), "parked")
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.status_of(5)["failed_checks"], ["risk-gate"])
+
+    def test_risk_gate_turning_up_later_lets_it_merge(self):
+        without = ans([check(name) for name in REQUIRED])
+        self.pr(5, [view()], checks=[without, without, GREEN])
+        self.assertEqual(self.make().process(5), "merged")
+
+    def test_also_require_option_and_default(self):
+        self.assertEqual(self.make().required, sorted(REQUIRED + ["risk-gate"]))
+        q = self.make(also_require=("risk-gate", "extra"))
+        self.assertEqual(q.required, sorted(REQUIRED + ["risk-gate", "extra"]))
+        self.assertEqual(mq.DEFAULT_ALSO_REQUIRE, ("risk-gate",))
+
+    def test_include_bots_marks_bot_prs_as_listed(self):
+        self.pr(5, [view(bot=True)])
+        q = self.make(include_bots=True)
+        self.assertEqual(q.run_round([5], set()), {5: "merged"})
+
+
+class HardeningTests(QueueCase):
+    def test_a_log_failure_does_not_abort_the_queue(self):
+        self.pr(5, [view()])
+        q = self.make(log_file=str(Path(self.tmp.name) / "no-such-dir" / "q.log"))
+        self.assertEqual(q.process(5), "merged")
+
+    def test_a_symlinked_log_file_is_not_followed(self):
+        target = Path(self.tmp.name) / "victim.txt"
+        target.write_text("keep\n")
+        link = Path(self.tmp.name) / "link.log"
+        link.symlink_to(target)
+        self.pr(5, [view()])
+        q = self.make(log_file=str(link))
+        self.assertEqual(q.process(5), "merged")
+        self.assertEqual(target.read_text(), "keep\n")
+
+    def test_status_write_failure_does_not_abort_the_queue(self):
+        self.pr(5, [view()])
+        q = self.make(status_file=str(Path(self.tmp.name) / "no-such-dir" / "s.json"))
+        self.assertEqual(q.process(5), "merged")
+
+    def test_private_dir_rules(self):
+        base = Path(self.tmp.name)
+        good = base / "q"
+        mq.private_dir(good)
+        self.assertEqual(good.stat().st_mode & 0o777, 0o700)
+        link = base / "linkdir"
+        link.symlink_to(good)
+        with self.assertRaises(OSError):
+            mq.private_dir(link)
+        loose = base / "loose"
+        loose.mkdir(mode=0o755)
+        mq.private_dir(loose)
+        self.assertEqual(loose.stat().st_mode & 0o777, 0o700)
+
+
 class OrderingTests(QueueCase):
     def test_discovery_sorts_and_filters(self):
         prs = [{"number": 9, "isDraft": False, "labels": [], "author": {"login": "a"}},
@@ -497,7 +634,8 @@ class CommandLineTests(QueueCase):
         self.pr(7, [view()], checks=[GREEN])
         code, out = self.run_main("--dry-run", "5", "6", "7")
         self.assertEqual(code, 0)
-        self.assertEqual([c[1] for c in self.calls()], ["view", "checks", "view", "view", "checks"])
+        self.assertEqual([c[1] if c[0] == "pr" else c[0] for c in self.calls()],
+                         ["view", "api", "checks", "view", "api", "view", "api", "checks"])
         self.assertEqual(self.calls_of("pr", "merge") + self.calls_of("pr", "update-branch")
                          + self.calls_of("run", "rerun"), [])
         data = json.loads(self.status.read_text())
