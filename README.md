@@ -6,145 +6,169 @@
 
 Your specs say one thing. Your code does another. Your docs find out last.
 
-Lattice is an open-source Rust database being built to give software teams one shared history of
-work items, docs, specs, designs and deployments—with agents working inside the same permissions.
-The goal is to connect what the team knows, what it is building and what actually shipped.
+Lattice is an open-source Rust database that keeps one shared, permissioned history of a team's work
+items, docs, specs, designs and deployments. People and AI agents work inside the same permissions,
+and every change stays on the record. The core makes no model calls.
 
-**[Explore the architecture](docs/ARCHITECTURE.md) · [Follow the roadmap](https://github.com/users/moncifem/projects/1) · [Get involved](CONTRIBUTING.md)**
+The database is built the hard way: a deterministic simulator replays crashes and disk faults,
+deliberately planted bugs prove the checks can fail, decoders are fuzzed, and the trickiest rules
+have formal models. Features come after the evidence that the layer below them holds.
 
-Documentation: the reviewed documents are in [`docs/`](docs). A site built from them is published at
-https://moncifem.github.io/latticedb/ and a read-only wiki mirrors the main pages, but the site is **not live
-until the owner enables GitHub Pages** and the wiki stays empty until its first page exists
-([owner steps](docs/site-setup.md)). Edit `docs/`, never the wiki.
+**[Architecture](docs/ARCHITECTURE.md) · [Roadmap board](https://github.com/users/moncifem/projects/1) · [Contribute](CONTRIBUTING.md)**
 
-> **Pre-alpha.** The storage kernel and early row engine work today. A development TCP listener
-> runs single-table SQL against a data directory (`--data-dir`); table columns do not survive a
-> restart yet (#379), and the connected team workspace is still ahead.
-> The Phase 1 gate remains open; Phase 2 development
-> is proceeding under a [documented waiver](docs/gates/phase-1-review.md), and Phase 3 building blocks have
-> started on the same terms ([status](docs/gates/phase-3.md)). See the [roadmap](docs/roadmap.md). Use test data only.
-
-## Why build another database?
-
-- **Team context belongs together.** A requirement, its implementation and the deployment that shipped
-  it should be linked data, rather than a trail across disconnected tools.
-- **History should answer questions.** The design preserves changes so questions like “when did this
-  feature start?” can have an answer with evidence.
-- **Agents should be teammates with boundaries.** Scoped grants, auditable changes and reviewable
-  proposals are part of the design. The core makes no model calls; model acceleration is optional.
-- **Trust starts below the interface.** A deterministic simulator, crash recovery and tests that plant
-  deliberate defects come before the product features.
-
-These are the design goals. The [phase status](docs/gates) separates them from implemented behavior.
+> **Pre-alpha. Use test data only.** No release exists, no phase gate is signed, and nothing here is
+> production ready. The numbers below come from the repository and CI; the
+> [gate pages](docs/gates) are the source of truth.
 
 ## What works today
 
-| Built | What it does |
-|---|---|
-| Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
-| Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, persisted managed-index definitions/history, callback legacy mode and in-memory version vacuum; reads below the vacuum floor return an error; strict full-HLC resolution rejects expired history alongside the existing clamping helper |
-| Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS. With `--data-dir` it runs the single-table SQL executor against a durable log (explicit row policy per account); without it, a `SELECT 1` placeholder |
-| SQL front end | A bounded parser and AST, a binder with a logical plan (`lattice-sql`) and an executor for single-table `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE` and `DROP TABLE` (`lattice-exec`). Joins, aggregates, `DISTINCT` and subqueries return `0A000` |
-| Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
-| Sync building blocks | Early Phase 3 pieces, none connected to a server yet: a typed change-feed event model with a stable cursor, a sync protocol frame codec, a WebSocket codec, a tree CRDT with moves (with a TLA+ model), an agent plugin contract with a conformance suite, a client state machine that resumes without gaps, and experimental TypeScript and Python clients ([`clients/typescript`](clients/typescript), [`clients/python`](clients/python)) whose codecs are checked against vectors written by the Rust side |
-| Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
-| Contributor automation | A risk gate and overlap labels on pull requests, a serial merger, strict up-to-date checks and a proposal-only main guard; see the [agent workflow guide](docs/agent-workflow.md) |
-| Verification tools | `lattice doctor`, a results ledger, unsigned scorecards, fault simulation, fuzz targets and benchmark gates |
+You can start a server, connect with a PostgreSQL client and run single-table SQL against a
+write-ahead log that survives crashes.
 
-The [accepted WAL capability guard](docs/rfc/0008-wal-capability-admission.md) has completed bounded
-old-reader/crash checks and [hosted admission measurements](docs/evidence/wal-admission-40908208450.md).
-The owner waived this guard's review wait and separately accepted
-[managed-index recovery](docs/rfc/0005-catalog-managed-indexes.md). Default managed opens rebuild
-physical-byte indexes from persisted definitions; callback opens remain legacy-only. Synchronous
-build cost and full retained-state memory bounds are still unmeasured; see the
-[bounded engine proof](docs/evidence/managed-index-40916386232.md).
+| Area | What exists |
+|---|---|
+| Storage kernel | Checksummed write-ahead log (WAL), crash recovery that refuses a valid record at an unexpected position instead of truncating it, group commit, deduplication, turn fencing, scrubber |
+| Row engine | MVCC tables, snapshot reads, `AS OF` history, first-committer-wins conflicts, secondary indexes (rebuilt on open from persisted definitions), versioned catalog, version vacuum, a capability guard so old readers refuse protected history |
+| SQL | Parser, binder, logical plan and an executor for single-table `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `DROP TABLE`. Primary key and `UNIQUE` predicates read a key range or one entry instead of scanning |
+| Server (`latticed`) | PostgreSQL wire v3 (simple and extended query), SCRAM-SHA-256 over TLS or loopback trust, bounded connections, timeouts, cancellation, row policy per account |
+| CRDTs | Registers, observed-remove set, text sequence, tree with moves, with limits on what one hostile peer can make a replica hold |
+| Sync pieces | Change-feed events with stable cursors, sync frame codec, WebSocket codec, principal-bound subscriptions |
+| SDK pieces | Rust sync client state machine, outbox, plugin contract with a conformance suite, MCP server codec with scoped tools, experimental [TypeScript](clients/typescript) and [Python](clients/python) clients checked against vectors written by the Rust side |
+| Schema language | LSL parser, validator, formatter, compatibility checker, typed-row codec |
+| Tooling | `lattice doctor`, results ledger, scorecards, benchmark gates, a risk gate and serial merger for pull requests |
+
+## What is not there yet
+
+- Durable column definitions: after a restart, committed rows and table names come back but column
+  definitions do not, so a recovered table cannot be queried ([#379](https://github.com/moncifem/latticedb/issues/379)).
+- Joins, aggregates, `DISTINCT`, subqueries (they return `0A000`) and binary result formats.
+- A PostgreSQL driver compatibility matrix ([#413](https://github.com/moncifem/latticedb/issues/413)).
+- Authenticated agent permissions: row policy is a per-account allow-all or deny-all, supplied by the host.
+- A sync server. The sync and SDK pieces are not connected to the listener yet.
+- The connected team workspace (work items, docs, specs and the links between them) and everything after it.
+- A release. Nightly builds exist, with checksums, SBOMs and build provenance, but the first alpha tag
+  waits for the Phase 1 gate.
+
+## Progress toward the product
+
+Twelve phases, each with a written specification and an exit gate. The owner signs gates; no page
+claims one passed before that. Phases 2 and 3 run ahead of the open earlier gates under a
+[documented waiver](docs/gates/phase-1-review.md) that forbids release tags and exit-criteria claims
+for them.
+
+```mermaid
+flowchart LR
+  p0["0 Repository<br/>done"] --> p1["1 Foundations<br/>built, gate open"]
+  p1 --> p2["2 Storage and SQL<br/>in progress"]
+  p2 --> p3["3 Sync and SDKs<br/>started"]
+  p3 --> p4["4 to 12<br/>identity, blobs, packs,<br/>search, cluster, 1.0<br/>not started"]
+  classDef done fill:#173449,color:#fff,stroke:#173449
+  classDef now fill:#e88368,color:#000,stroke:#e88368
+  classDef next fill:#eee,color:#333,stroke:#999
+  class p0 done
+  class p1,p2,p3 now
+  class p4 next
+```
+
+| Phase | State | Evidence |
+|---|---|---|
+| 0 Repository and conventions | Done | [phase-0](docs/gates/phase-0.md) |
+| 1 Foundations and evaluation | Built. Gate open: 2 of 7 clean nightly runs recorded, Linux runtime numbers and two-maintainer sign-off pending | [phase-1](docs/gates/phase-1.md) |
+| 2 Storage engines and SQL | Storage, wire, auth, parser and single-table executor exist. Durable columns, joins and driver matrix open | [phase-2](docs/gates/phase-2.md) |
+| 3 Sync, CRDTs and SDKs | Building blocks that need no server exist. Live sync not started | [phase-3](docs/gates/phase-3.md) |
+| 4 to 12 | Identity and policy, blobs and S3, schema packs, search, intelligence, role packs, cluster, optional models, 1.0 | [spec](docs/spec/README.md) |
+
+Full detail: [roadmap](docs/roadmap.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
+
+## Try it
+
+You need Rust (`rustup` installs the toolchain pinned in `rust-toolchain.toml`) and a PostgreSQL
+client. Start the development server on loopback with a data directory:
+
+```bash
+cargo run -p latticed -- --data-dir ./data --development-policy allow-all
+```
+
+It listens on `127.0.0.1:5432` with trust authentication. The policy flag is required and never
+implied. Keep stdin open; type `shutdown` and press enter to stop it. In another terminal:
+
+```bash
+psql -h 127.0.0.1 -p 5432 -U dev
+```
+
+```sql
+CREATE TABLE notes (id INT PRIMARY KEY, title TEXT NOT NULL, done BOOLEAN);
+INSERT INTO notes VALUES (1, 'write the spec', false);
+SELECT * FROM notes;
+```
+
+After a restart the committed rows are recovered from the log, but column definitions are not (see
+above), so query the table in the run that created it. Without `--data-dir` the server only answers
+`SELECT 1`. For configured SCRAM over TLS, timeouts and the other flags, see the
+[listener guide](crates/latticed/README.md).
+
+Other commands:
+
+```bash
+cargo run -p lattice-cli -- doctor --dir path/to/data   # check a data directory
+cargo run -p lattice-cli -- lsl compat old.lsl new.lsl  # schema compatibility check
+cargo xtask sim --seeds 1000                            # replay crashes across five fault profiles
+cargo xtask ci                                          # the full pull request gate
+```
+
+Nightly archives for Linux x86_64, Linux arm64 and macOS arm64 are on the
+[releases page](https://github.com/moncifem/latticedb/releases/tag/nightly), and
+`docker run --rm ghcr.io/moncifem/latticedb:nightly --version` runs the container. They may predate the
+latest source.
+
+## How it is built
+
+Layers only depend downwards. `cargo xtask check-layers` fails the build on a forbidden dependency,
+and deterministic crates may not touch real time, files, threads or `HashMap`.
 
 ```mermaid
 flowchart TB
-  subgraph ahead["Not built yet"]
-    direction LR
-    sql["Joins, aggregates, durable table columns (#379), driver matrix (#413)"] ~~~ pol["Authenticated agent policy"] ~~~ sync["Live sync"] ~~~ ws["Team workspace"]
-  end
-  subgraph have["Works today"]
-    direction TB
-    ifc["Interfaces: development TCP listener with single-table SQL, CLI, SQL/LSL parsers"]
-    eng["Storage engine: row engine, AS OF reads, indexes, catalog"]
-    ker["Durable kernel: WAL, recovery, commit logic, checkpoints"]
-    ver["Verification: simulator, fuzzing, mutation tests, TLA+, Miri, ASan, Loom"]
-    ifc --> eng --> ker
-    ver -.-> ker
-  end
-  ahead -.-> have
+  api["Interfaces: latticed (pgwire, SCRAM, TLS) · lattice-cli · SDKs, MCP, sync codecs"]
+  sql["SQL: lattice-sql (parse, bind, plan) · lattice-exec (execute)"]
+  eng["Row engine: lattice-engines (MVCC, AS OF, indexes, catalog)"]
+  ker["Kernel: lattice-core (WAL, recovery, commit, CRDTs, scrub)"]
+  low["Foundations: lattice-seams (I/O, clock, rng traits) · lattice-lsl · lattice-abi · lattice-sys"]
+  api --> sql --> eng --> ker --> low
+  sim["lattice-sim: deterministic simulator, fake disk, fault injection"] -.-> ker
 ```
 
-Single-table SQL runs from a durable data directory, but column definitions are not recovered after a restart (#379); joins, aggregates, the PostgreSQL driver matrix (#413) and binary result formats are open. Live sync, authenticated agent permissions and the connected workspace are still ahead.
-Row policies currently come from a trusted host; authenticated listener identities are not yet bound to those evaluators.
-See the [delivery plan](docs/spec/README.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
+The design is in [ARCHITECTURE.md](docs/ARCHITECTURE.md), the engineering plan in
+[ENGINEERING.md](docs/ENGINEERING.md), and decisions in [`docs/adr`](docs/adr) and [`docs/rfc`](docs/rfc).
+Byte formats live in [`formats/`](formats) with golden files.
 
-## Try the foundations
+## How we know it works
 
-Nightly archives for Linux x86_64, Linux arm64 and macOS arm64 are available on the
-[releases page](https://github.com/moncifem/latticedb/releases/tag/nightly). Or inspect the container:
+| Evidence | Where it stands |
+|---|---|
+| Simulator | Seeded crashes, torn writes, disk errors and bit rot across 5 fault profiles. Nightly runs 1,000,000 seeds per profile. 10,000 seeds reproduce identical traces |
+| Planted bugs | 53 switchable defects across the kernel, row engine, CRDTs, policy and executor. The simulator catches the 21 kernel ones; the others have focused witnesses |
+| Crash recovery | Power cut at every storage operation of 100 workloads: 4,729 cut points, every acknowledged change recovered |
+| Fuzzing | 19 targets (WAL records, pgwire, SQL, LSL, sync and WebSocket frames, CRDTs, MCP and more). Six core targets ran 28 h 20 min each with no crash |
+| Formal models | TLA+ for commit, fencing, clocks, set convergence and tree moves. The tree model has variants with a protection removed that must fail |
+| Bounded proofs | Kani harnesses cover decoders, cursors and the tree cycle check. 4 of 10 are proven on a verified CI job (the change-feed harnesses); the other 6 time out or are killed on the runner and are not claimed ([#424](https://github.com/moncifem/latticedb/issues/424), [#425](https://github.com/moncifem/latticedb/issues/425)) |
+| Memory and UB | Miri, AddressSanitizer and Loom jobs |
+| Mutation testing | No verified complete score yet. The last campaign lost shard outcomes, so we report no number ([E1-7](docs/gates/phase-1.md)) |
 
-```bash
-docker run --rm ghcr.io/moncifem/latticedb:nightly --version
-```
+Properties run 10,000 cases on every pull request and 1,000,000 nightly. Known gaps stay in the gate
+pages, next to the passes. See also the [threat model](docs/threat-model.md); no second maintainer has
+reviewed it yet.
 
-To build from source, use the Rust version pinned in `rust-toolchain.toml`:
+## Follow along and contribute
 
-```bash
-cargo xtask ci                               # the complete pull request gate
-cargo xtask gate --phase 1                    # collect a pending review package
-cargo xtask sim --seeds 1000                  # replay crashes across five fault profiles
-cargo run -p lattice-cli -- doctor --dir path/to/data
-cargo run -p lattice-cli -- lsl compat old.lsl new.lsl
-```
-
-To try the development listener from the current source tree:
-
-```bash
-cargo run -p latticed -- --listen 127.0.0.1:5432 --max-connections 32
-```
-
-Keep stdin open, then enter `shutdown` to stop cleanly; EOF also stops it. Without `--data-dir` this
-placeholder answers `SELECT 1` only, uses plaintext and trust authentication and opens no database.
-To run SQL, add `--data-dir ./data --development-policy allow-all` (the policy is never implied).
-Committed rows and table names are recovered after a restart or a crash; column definitions are not
-yet (#379), so a recovered table cannot be queried. See the
-[listener guide](crates/latticed/README.md) for timeouts, configured TLS/SCRAM authentication and
-externally provisioned verifier files. Published nightly
-archives may predate these source changes.
-
-<details>
-<summary><strong>How the foundation is checked</strong></summary>
-
-The simulator replays seeded crashes, torn writes, disk errors and bit rot. Twenty-one planted kernel
-bugs prove its checks can fail; ten storage defects have specific witnesses with clean controls. The
-row engine also has seeded history and fault-profile tests. Mutation
-checks, independent format fixtures, TLA+ models, fuzzing, Miri and AddressSanitizer provide different
-kinds of evidence. Long-run evidence and known gaps stay visible in the [gate records](docs/gates).
-
-Nightly archives include checksums, SBOMs and build provenance. See [release verification](docs/releasing.md).
-
-A first-draft [threat model](docs/threat-model.md) and [security test plan](docs/security-test-plan.md) list the trust
-boundaries, the mitigations that exist, and the open gaps with their priorities. No second maintainer has reviewed them.
-
-</details>
-
-## Build it with us
-
-This is early enough to influence the foundations. Review a [design decision](docs/adr), try an
-[open work package](https://github.com/moncifem/latticedb/issues?q=is%3Aissue+is%3Aopen+label%3A%22type%3A+feature%22), challenge an
-assumption in [Discussions](https://github.com/moncifem/latticedb/discussions), or contribute a test
-that makes the database harder to break. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
-
-**Want to follow the build?** [Star Lattice](https://github.com/moncifem/latticedb/stargazers) to keep it
-on your radar. Use **Watch → Custom → Releases** for new builds, or **All Activity** to follow the work
-as it lands. Progress is tracked in the [public roadmap](https://github.com/users/moncifem/projects/1)
-and [changelog](CHANGELOG.md).
+- **Watch progress:** the [roadmap board](https://github.com/users/moncifem/projects/1),
+  [milestones](https://github.com/moncifem/latticedb/milestones), [changelog](CHANGELOG.md) and
+  [gate pages](docs/gates). Star the repo, or use Watch, then Custom, then Releases.
+- **Pick up work:** [open work packages](https://github.com/moncifem/latticedb/issues?q=is%3Aissue+is%3Aopen+label%3A%22type%3A+feature%22),
+  or a `type: docs` or `type: test` issue to start small.
+- **Rules:** [CONTRIBUTING.md](CONTRIBUTING.md), the [agent workflow](docs/agent-workflow.md) for humans and
+  automated contributors, and the [conventions](docs/conventions.md). Commits use Conventional Commits
+  with a crate or directory as scope.
+- **Talk:** [Discussions](https://github.com/moncifem/latticedb/discussions). Challenge a design decision.
+- **Security:** report privately, see [SECURITY.md](SECURITY.md).
 
 Apache-2.0. See [LICENSE](LICENSE).
-
-A [manual same-host foundation diagnostic](docs/foundation-comparison.md) compares the original Phase 1
-benchmark binary with a fixed current candidate. It is not yet measured and cannot establish a
-historical SQL baseline or accept the planner ADR.
