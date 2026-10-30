@@ -800,4 +800,237 @@ pub fn lattice_api::sync::decode(&[u8]) -> core::result::Result<core::option::Op
 pub fn lattice_api::sync::decode_with_limit(&[u8], usize) -> core::result::Result<core::option::Option<(lattice_api::sync::Message, usize)>, lattice_api::sync::SyncError>
 pub fn lattice_api::sync::encode(&lattice_api::sync::Message, &mut alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_api::sync::SyncError>
 pub fn lattice_api::sync::negotiate(u16, u16) -> core::result::Result<u16, lattice_api::sync::ErrorCode>
+pub mod lattice_api::websocket
+pub mod lattice_api::websocket::close_code
+pub const lattice_api::websocket::close_code::GOING_AWAY: u16
+pub const lattice_api::websocket::close_code::INTERNAL: u16
+pub const lattice_api::websocket::close_code::INVALID_PAYLOAD: u16
+pub const lattice_api::websocket::close_code::NORMAL: u16
+pub const lattice_api::websocket::close_code::POLICY: u16
+pub const lattice_api::websocket::close_code::PROTOCOL: u16
+pub const lattice_api::websocket::close_code::TOO_BIG: u16
+pub const lattice_api::websocket::close_code::UNSUPPORTED: u16
+pub enum lattice_api::websocket::EncodeError
+pub lattice_api::websocket::EncodeError::BadControlFrame
+impl core::clone::Clone for lattice_api::websocket::EncodeError
+pub fn lattice_api::websocket::EncodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::EncodeError
+impl core::cmp::PartialEq for lattice_api::websocket::EncodeError
+pub fn lattice_api::websocket::EncodeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::websocket::EncodeError
+impl core::fmt::Debug for lattice_api::websocket::EncodeError
+pub fn lattice_api::websocket::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::websocket::EncodeError
+pub fn lattice_api::websocket::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::websocket::EncodeError
+impl core::marker::StructuralPartialEq for lattice_api::websocket::EncodeError
+pub enum lattice_api::websocket::Event
+pub lattice_api::websocket::Event::Closed
+pub lattice_api::websocket::Event::Closed::code: core::option::Option<u16>
+pub lattice_api::websocket::Event::Closed::reason: alloc::string::String
+pub lattice_api::websocket::Event::Message(lattice_api::websocket::Message)
+pub lattice_api::websocket::Event::ProtocolError
+pub lattice_api::websocket::Event::ProtocolError::code: u16
+pub lattice_api::websocket::Event::ProtocolError::reason: &'static str
+pub lattice_api::websocket::Event::TimedOut
+impl core::clone::Clone for lattice_api::websocket::Event
+pub fn lattice_api::websocket::Event::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Event
+impl core::cmp::PartialEq for lattice_api::websocket::Event
+pub fn lattice_api::websocket::Event::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::websocket::Event
+pub fn lattice_api::websocket::Event::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Event
+pub enum lattice_api::websocket::Message
+pub lattice_api::websocket::Message::Binary(alloc::vec::Vec<u8>)
+pub lattice_api::websocket::Message::Text(alloc::string::String)
+impl core::clone::Clone for lattice_api::websocket::Message
+pub fn lattice_api::websocket::Message::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Message
+impl core::cmp::PartialEq for lattice_api::websocket::Message
+pub fn lattice_api::websocket::Message::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::websocket::Message
+pub fn lattice_api::websocket::Message::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Message
+pub enum lattice_api::websocket::Opcode
+pub lattice_api::websocket::Opcode::Binary
+pub lattice_api::websocket::Opcode::Close
+pub lattice_api::websocket::Opcode::Continuation
+pub lattice_api::websocket::Opcode::Ping
+pub lattice_api::websocket::Opcode::Pong
+pub lattice_api::websocket::Opcode::Text
+impl lattice_api::websocket::Opcode
+pub const fn lattice_api::websocket::Opcode::is_control(self) -> bool
+impl core::clone::Clone for lattice_api::websocket::Opcode
+pub fn lattice_api::websocket::Opcode::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Opcode
+impl core::cmp::PartialEq for lattice_api::websocket::Opcode
+pub fn lattice_api::websocket::Opcode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::websocket::Opcode
+pub fn lattice_api::websocket::Opcode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::websocket::Opcode
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Opcode
+pub enum lattice_api::websocket::OriginPolicy
+pub lattice_api::websocket::OriginPolicy::AllowList(alloc::vec::Vec<alloc::string::String>)
+pub lattice_api::websocket::OriginPolicy::Any
+pub lattice_api::websocket::OriginPolicy::NoBrowsers
+impl lattice_api::websocket::OriginPolicy
+pub fn lattice_api::websocket::OriginPolicy::allows(&self, core::option::Option<&str>) -> bool
+impl core::clone::Clone for lattice_api::websocket::OriginPolicy
+pub fn lattice_api::websocket::OriginPolicy::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::OriginPolicy
+impl core::cmp::PartialEq for lattice_api::websocket::OriginPolicy
+pub fn lattice_api::websocket::OriginPolicy::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::websocket::OriginPolicy
+pub fn lattice_api::websocket::OriginPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::OriginPolicy
+pub enum lattice_api::websocket::SendError
+pub lattice_api::websocket::SendError::BadClose
+pub lattice_api::websocket::SendError::NotOpen
+pub lattice_api::websocket::SendError::TooLarge
+impl core::clone::Clone for lattice_api::websocket::SendError
+pub fn lattice_api::websocket::SendError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::SendError
+impl core::cmp::PartialEq for lattice_api::websocket::SendError
+pub fn lattice_api::websocket::SendError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::websocket::SendError
+impl core::fmt::Debug for lattice_api::websocket::SendError
+pub fn lattice_api::websocket::SendError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::websocket::SendError
+pub fn lattice_api::websocket::SendError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::websocket::SendError
+impl core::marker::StructuralPartialEq for lattice_api::websocket::SendError
+pub struct lattice_api::websocket::Config
+pub lattice_api::websocket::Config::allow_text: bool
+pub lattice_api::websocket::Config::close_timeout: u64
+pub lattice_api::websocket::Config::max_frame_payload: usize
+pub lattice_api::websocket::Config::max_message: usize
+pub lattice_api::websocket::Config::ping_interval: u64
+pub lattice_api::websocket::Config::pong_timeout: u64
+impl core::clone::Clone for lattice_api::websocket::Config
+pub fn lattice_api::websocket::Config::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Config
+impl core::cmp::PartialEq for lattice_api::websocket::Config
+pub fn lattice_api::websocket::Config::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_api::websocket::Config
+pub fn lattice_api::websocket::Config::default() -> Self
+impl core::fmt::Debug for lattice_api::websocket::Config
+pub fn lattice_api::websocket::Config::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Config
+pub struct lattice_api::websocket::Connection
+impl lattice_api::websocket::Connection
+pub fn lattice_api::websocket::Connection::close(&mut self, u16, &str, u64) -> core::result::Result<(), lattice_api::websocket::SendError>
+pub fn lattice_api::websocket::Connection::drain_output(&mut self, &mut alloc::vec::Vec<u8>)
+pub fn lattice_api::websocket::Connection::is_done(&self) -> bool
+pub fn lattice_api::websocket::Connection::is_open(&self) -> bool
+pub fn lattice_api::websocket::Connection::new(lattice_api::websocket::Config, u64) -> Self
+pub fn lattice_api::websocket::Connection::next_deadline(&self) -> core::option::Option<u64>
+pub fn lattice_api::websocket::Connection::receive(&mut self, &[u8], u64) -> lattice_api::websocket::Step
+pub fn lattice_api::websocket::Connection::send_binary(&mut self, &[u8], &mut alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_api::websocket::SendError>
+pub fn lattice_api::websocket::Connection::send_text(&mut self, &str, &mut alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_api::websocket::SendError>
+pub fn lattice_api::websocket::Connection::tick(&mut self, u64) -> core::option::Option<lattice_api::websocket::Event>
+impl core::fmt::Debug for lattice_api::websocket::Connection
+pub fn lattice_api::websocket::Connection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_api::websocket::Frame
+pub lattice_api::websocket::Frame::fin: bool
+pub lattice_api::websocket::Frame::opcode: lattice_api::websocket::Opcode
+pub lattice_api::websocket::Frame::payload: alloc::vec::Vec<u8>
+impl core::clone::Clone for lattice_api::websocket::Frame
+pub fn lattice_api::websocket::Frame::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Frame
+impl core::cmp::PartialEq for lattice_api::websocket::Frame
+pub fn lattice_api::websocket::Frame::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::websocket::Frame
+pub fn lattice_api::websocket::Frame::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Frame
+pub struct lattice_api::websocket::HandshakeError
+pub lattice_api::websocket::HandshakeError::reason: &'static str
+pub lattice_api::websocket::HandshakeError::status: u16
+impl lattice_api::websocket::HandshakeError
+pub fn lattice_api::websocket::HandshakeError::response(&self) -> alloc::vec::Vec<u8>
+impl core::clone::Clone for lattice_api::websocket::HandshakeError
+pub fn lattice_api::websocket::HandshakeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::HandshakeError
+impl core::cmp::PartialEq for lattice_api::websocket::HandshakeError
+pub fn lattice_api::websocket::HandshakeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::websocket::HandshakeError
+impl core::fmt::Debug for lattice_api::websocket::HandshakeError
+pub fn lattice_api::websocket::HandshakeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::websocket::HandshakeError
+pub fn lattice_api::websocket::HandshakeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::HandshakeError
+pub struct lattice_api::websocket::Step
+pub lattice_api::websocket::Step::consumed: usize
+pub lattice_api::websocket::Step::event: core::option::Option<lattice_api::websocket::Event>
+impl core::clone::Clone for lattice_api::websocket::Step
+pub fn lattice_api::websocket::Step::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Step
+impl core::cmp::PartialEq for lattice_api::websocket::Step
+pub fn lattice_api::websocket::Step::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::websocket::Step
+pub fn lattice_api::websocket::Step::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Step
+pub struct lattice_api::websocket::Upgrade
+pub lattice_api::websocket::Upgrade::host: alloc::string::String
+pub lattice_api::websocket::Upgrade::key: alloc::string::String
+pub lattice_api::websocket::Upgrade::origin: core::option::Option<alloc::string::String>
+pub lattice_api::websocket::Upgrade::path: alloc::string::String
+pub lattice_api::websocket::Upgrade::subprotocol: core::option::Option<&'static str>
+impl lattice_api::websocket::Upgrade
+pub fn lattice_api::websocket::Upgrade::accept(&self) -> alloc::string::String
+pub fn lattice_api::websocket::Upgrade::response(&self) -> alloc::vec::Vec<u8>
+impl core::clone::Clone for lattice_api::websocket::Upgrade
+pub fn lattice_api::websocket::Upgrade::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Upgrade
+impl core::cmp::PartialEq for lattice_api::websocket::Upgrade
+pub fn lattice_api::websocket::Upgrade::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::websocket::Upgrade
+pub fn lattice_api::websocket::Upgrade::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Upgrade
+pub struct lattice_api::websocket::UpgradeConfig
+pub lattice_api::websocket::UpgradeConfig::max_head: usize
+pub lattice_api::websocket::UpgradeConfig::origins: lattice_api::websocket::OriginPolicy
+pub lattice_api::websocket::UpgradeConfig::require_subprotocol: bool
+impl core::clone::Clone for lattice_api::websocket::UpgradeConfig
+pub fn lattice_api::websocket::UpgradeConfig::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::UpgradeConfig
+impl core::cmp::PartialEq for lattice_api::websocket::UpgradeConfig
+pub fn lattice_api::websocket::UpgradeConfig::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_api::websocket::UpgradeConfig
+pub fn lattice_api::websocket::UpgradeConfig::default() -> Self
+impl core::fmt::Debug for lattice_api::websocket::UpgradeConfig
+pub fn lattice_api::websocket::UpgradeConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::websocket::UpgradeConfig
+pub struct lattice_api::websocket::Violation
+pub lattice_api::websocket::Violation::code: u16
+pub lattice_api::websocket::Violation::reason: &'static str
+impl core::clone::Clone for lattice_api::websocket::Violation
+pub fn lattice_api::websocket::Violation::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::websocket::Violation
+impl core::cmp::PartialEq for lattice_api::websocket::Violation
+pub fn lattice_api::websocket::Violation::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_api::websocket::Violation
+impl core::fmt::Debug for lattice_api::websocket::Violation
+pub fn lattice_api::websocket::Violation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::websocket::Violation
+pub fn lattice_api::websocket::Violation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::websocket::Violation
+impl core::marker::StructuralPartialEq for lattice_api::websocket::Violation
+pub const lattice_api::websocket::ACCEPT_GUID: &str
+pub const lattice_api::websocket::DEFAULT_MAX_FRAME_PAYLOAD: usize
+pub const lattice_api::websocket::DEFAULT_MAX_HEAD: usize
+pub const lattice_api::websocket::DEFAULT_MAX_MESSAGE: usize
+pub const lattice_api::websocket::MAX_CLOSE_REASON: usize
+pub const lattice_api::websocket::MAX_CONTROL_PAYLOAD: usize
+pub const lattice_api::websocket::MAX_HEADERS: usize
+pub const lattice_api::websocket::SUBPROTOCOL: &str
+pub const lattice_api::websocket::WEBSOCKET_VERSION: &str
+pub fn lattice_api::websocket::accept_key(&str) -> alloc::string::String
+pub fn lattice_api::websocket::decode_client_frame(&[u8], usize) -> core::result::Result<core::option::Option<(lattice_api::websocket::Frame, usize)>, lattice_api::websocket::Violation>
+pub fn lattice_api::websocket::decode_server_frame(&[u8], usize) -> core::result::Result<core::option::Option<(lattice_api::websocket::Frame, usize)>, lattice_api::websocket::Violation>
+pub fn lattice_api::websocket::encode_client_frame(bool, lattice_api::websocket::Opcode, &[u8], [u8; 4], &mut alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_api::websocket::EncodeError>
+pub fn lattice_api::websocket::encode_frame(bool, lattice_api::websocket::Opcode, &[u8], &mut alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_api::websocket::EncodeError>
+pub const fn lattice_api::websocket::is_valid_close_code(u16) -> bool
+pub fn lattice_api::websocket::parse_upgrade(&[u8], &lattice_api::websocket::UpgradeConfig) -> core::result::Result<core::option::Option<(lattice_api::websocket::Upgrade, usize)>, lattice_api::websocket::HandshakeError>
+pub fn lattice_api::websocket::parse_upgrade_with(&[u8], &lattice_api::websocket::UpgradeConfig, &dyn core::ops::function::Fn(core::option::Option<&str>) -> bool) -> core::result::Result<core::option::Option<(lattice_api::websocket::Upgrade, usize)>, lattice_api::websocket::HandshakeError>
 pub const lattice_api::LAYER: u8
