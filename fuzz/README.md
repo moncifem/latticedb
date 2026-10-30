@@ -71,8 +71,6 @@ tools/list, a missing and a mistyped `_meta`, an allowed read, a denied write, a
 version, JSON-RPC text inside an argument, a duplicate key, deep nesting and invalid UTF-8. The target is
 registered in the nightly, weekly and manual 24-hour matrices.
 
-not yet in the nightly, weekly or 24-hour matrices (workflows are not edited in this change).
-
 ## Outbox decode target
 
 `outbox_decode` feeds arbitrary bytes to `lattice_sdk::outbox::Outbox::from_bytes`. Input that decodes must
