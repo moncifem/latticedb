@@ -38,11 +38,30 @@ unexpected LSN:
   is a torn tail and is truncated; otherwise the log is corrupt and recovery refuses to continue;
 * in any other segment the log is corrupt.
 
-The frame at the first bad position counts as evidence too. A frame there that is complete and passes
-its checksum but carries the wrong LSN (a gap, a repeat or a first record that does not match the
-segment name) is not a torn write, which can only leave an incomplete or checksum-failing frame. It
-means acknowledged records were lost or reordered, so recovery **refuses** even when that frame is the
-last one in the file, and never truncates it. `lattice scrub` reports it as mid-log damage.
+**Tightening (issue 441).** The frame at the first bad position counts as evidence too, so the rule
+above is narrowed for one shape. A frame there that is complete and passes its checksum but carries the
+wrong LSN (a gap, a repeat, a lower LSN, or a first record that does not match the segment name) is not
+a torn write, which can only leave an incomplete or checksum-failing frame. It means acknowledged
+records were lost or reordered, so recovery **refuses** even when no higher valid record follows and
+the frame is the last one in the file, and never truncates it. Earlier text and earlier versions
+truncated that case, silently losing the record. This is a change to the recovery rule, not to the
+layout: no bytes change. `lattice scrub` reports it as mid-log damage.
+
+### Operator procedure when recovery refuses
+
+The error names the segment, the byte offset and both LSNs, for example
+`segment <name> has a valid record with lsn 3 where 2 was expected at offset <offset>: refusing to truncate`.
+Recovery never repairs this by itself.
+
+1. Stop every process using the log and copy the whole log directory somewhere safe first.
+2. Either restore the log from a backup that predates the damage, or accept the loss: truncate the named
+   segment file at exactly the reported offset, which discards that record and everything after it in
+   that segment. Do this only if losing those records is acceptable; the missing LSN was already
+   acknowledged data that the storage layer lost.
+3. Run `lattice doctor` / scrub on the result before restarting.
+
+A `lattice` command that does this safely is tracked in issue 475 (cli: log repair command for refused
+recovery).
 
 ### Known ambiguity (fail safe)
 

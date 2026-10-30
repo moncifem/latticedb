@@ -23,3 +23,11 @@ replication (Phase 10) can recover it. Recovery cost is linear in log size until
 recovery refuse (never silently drop). Its scan only checksums candidates with a plausible LSN and
 length, which bounds the work. Recovery fsyncs what it adopts before returning it, and a log takes an
 exclusive lock so two writers cannot interleave.
+
+## Amendment (issue 441)
+
+The decision text "recovery truncates only a tail with no valid record after it" is tightened. A
+complete, checksum-valid frame with an unexpected LSN at the first bad position is itself evidence of
+lost data, so recovery now refuses it even as the last frame, where it used to truncate it. Incomplete
+and checksum-failing tails are still truncated. The layout is unchanged. Status of this ADR is
+unchanged; the rule is in `formats/wal-v1.md`.

@@ -1200,4 +1200,28 @@ mod tests {
         assert_eq!(seen, [1]);
         assert_eq!(io.read(SEG1).unwrap(), segment_of(&[1]));
     }
+
+    #[test]
+    fn recovery_refuses_a_valid_gap_frame_followed_by_a_torn_tail() {
+        // The gap frame is real data; the tear after it must not let recovery drop it.
+        let whole = encode_record(4, 1, b"intact");
+        for tail in [vec![0xAB; 40], whole[..5].to_vec()] {
+            let mut data = segment_of(&[1, 3]);
+            data.extend_from_slice(&tail);
+            assert_refused_untouched(&[(SEG1, data)], "lsn 3 where 2 was expected");
+        }
+    }
+
+    #[test]
+    fn a_header_only_newest_segment_after_rotation_recovers_without_truncation() {
+        let second = "wal/00000000000000000003.seg";
+        let files = [(SEG1, segment_of(&[1, 2])), (second, segment_of(&[]))];
+        let mut io = sim_log(&files);
+        let mut seen = Vec::new();
+        let rec = recover(&mut io, "wal", 0, &mut |r, _| seen.push(r.lsn)).unwrap();
+        assert_eq!(seen, [1, 2]);
+        assert_eq!(rec.next_lsn, 3);
+        assert_eq!(rec.report.truncated_bytes, 0);
+        assert_eq!(io.read(second).unwrap(), segment_of(&[]));
+    }
 }
