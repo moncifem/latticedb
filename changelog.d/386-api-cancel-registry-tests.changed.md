@@ -1,0 +1,1 @@
+Cancel registry tests: capacity and emptiness, keys that differ from a live key only in the top bit of the pid or secret, and the error text. Two equivalent mutants are excluded with their reasons; this changes no behaviour.
