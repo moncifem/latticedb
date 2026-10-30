@@ -566,7 +566,7 @@ fn a_numeric_default_the_executor_cannot_parse_refuses_to_open() {
             assert_eq!(e.sqlstate(), "XX001");
             assert!(e.message().contains("wide"), "{e}");
         }
-        Ok(_) => panic!("an unparseable numeric default must refuse the open"),
+        Ok(_) => panic!("an unparsable numeric default must refuse the open"),
     }
 }
 
