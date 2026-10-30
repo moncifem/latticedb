@@ -69,6 +69,12 @@ exclude_re = [
     # The binary only wires `execute_with` to stdout, stderr and the ledger file; the testkit may not
     # spawn a process, so its exit-code plumbing is exercised by `cargo xtask sim` in the nightly.
     "bin/sim_runner\\.rs:\\d+:\\d+: replace (main -> ExitCode with Default::default\\(\\)|<= with > in main)",
+    # Convergence flaws: `LoseRemote`, `NoDedup` and the oracle in `lost_write` belong to deliberately broken
+    # replicas that the tests require the checkers to detect. A mutant that only changes which operations
+    # the broken replica drops, or which of the two oracle comparisons reports first, still yields the
+    # expected violation kind over a sweep; `convergence_replicas.rs` asserts the kind per planted flaw,
+    # not a particular drop pattern.
+    "convergence\\.rs:(332|392|395|424):\\d+: ",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
