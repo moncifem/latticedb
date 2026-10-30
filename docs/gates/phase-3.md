@@ -63,6 +63,18 @@ clients behind one NAT share 16 per second), each with a test in `crates/lattice
 Open from that issue: SCRAM channel binding (`SCRAM-SHA-256-PLUS`), the decoy-secret length-only check
 and a comment fix, all in `lattice-api`.
 
+Service mode of `latticed` (issue #584, part of the Alpha 0.1 definition #567, no exit criterion): SIGTERM and SIGINT
+start the same clean stop as the `shutdown` line (listener, then database thread, then the data-directory lock),
+`--stdin-control off` stops the process from reading stdin so `docker run -d`, systemd and launchd do not stop it at
+end-of-file (the default stays `on`), and `--stop-timeout-ms` or a second signal abandon a stop that does not finish
+(exit status 2; 0 is a clean stop, 1 a failure). The real-binary tests in `crates/latticed/tests/service.rs` cover
+SIGTERM and SIGINT with a client still connected, a restart of the same data directory, end-of-file with control on and
+off, and option validation (run locally: `cargo test -p latticed`). The forced-stop paths are tested only with an
+injected stuck shutdown (`latticed::stop`), because the real server has no worker that fails to return. Not verified:
+the systemd and launchd snippets in the crate README under those supervisors, Windows (no signal handling there), and a
+SIGTERM during recovery (it keeps the default action). The handler is one `signal(2)` declaration and call in
+`lattice-sys`; no dependency was added.
+
 ## Exit criteria
 
 | # | Criterion | State |

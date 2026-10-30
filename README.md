@@ -90,7 +90,9 @@ cargo run -p latticed -- --data-dir ./data --development-policy allow-all
 ```
 
 It listens on `127.0.0.1:5432` with trust authentication. The policy flag is required and never
-implied. Keep stdin open; type `shutdown` and press enter to stop it. In another terminal:
+implied. Press Ctrl-C to stop it, or keep stdin open and type `shutdown`. To run it detached or under
+a service manager, add `--stdin-control off` (see the [listener guide](crates/latticed/README.md#running-as-a-service)).
+In another terminal:
 
 ```bash
 psql -h 127.0.0.1 -p 5432 -U dev

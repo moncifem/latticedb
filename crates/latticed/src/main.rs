@@ -9,18 +9,25 @@
 
 use lattice_api::auth::{Accounts, DecoySecret, MAX_CREDENTIAL_BYTES};
 use lattice_api::exec_host::{Grant, HostLimits, MAX_POLICY_BYTES, PolicyFileError, PolicyTable};
+use latticed::stop::{self, DEFAULT_STOP_TIMEOUT, ForcedBy, StopCause, StopOutcome};
 use latticed::{
     Authentication, ServerConfig, ServerHandle, SqlConfig, SqlServer, TlsConfig,
     require_private_file,
 };
 use std::io::Read;
-use std::io::{self, BufRead};
+use std::io::{self};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-fn run() -> Result<(), String> {
+/// Exit status of a run that did not fail: the stop either finished or had to be abandoned.
+enum Exit {
+    Clean,
+    Forced,
+}
+
+fn run() -> Result<Exit, String> {
     let mut config = ServerConfig::default();
     let mut auth_mode = String::from("development-trust");
     let mut certificates = None;
@@ -31,17 +38,19 @@ fn run() -> Result<(), String> {
     let mut development_policy: Option<String> = None;
     let mut account_policies: Option<String> = None;
     let mut limits = HostLimits::default();
+    let mut stdin_control = true;
+    let mut stop_timeout = DEFAULT_STOP_TIMEOUT;
     let mut args = std::env::args().skip(1);
     while let Some(option) = args.next() {
         if option == "--version" || option == "-V" {
             println!("latticed {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
+            return Ok(Exit::Clean);
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows and table names survive a restart; column definitions do not yet (#379). SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows and table names survive a restart; column definitions do not yet (#379). SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. SIGTERM and SIGINT stop it cleanly; a second signal, or --stop-timeout-ms N (default 30000) elapsing, abandons a stop that does not finish. Stdin control is --stdin-control on|off (default on): with on, the line 'shutdown' on stdin stops the server and so does end-of-file, so run it with stdin held open; under a supervisor or container pass --stdin-control off, which never reads stdin. Exit status: 0 clean stop, 1 failure, 2 forced stop. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
             );
-            return Ok(());
+            return Ok(Exit::Clean);
         }
         let value = args
             .next()
@@ -53,6 +62,22 @@ fn run() -> Result<(), String> {
             "--scram-verifiers" => credentials = Some(value),
             "--scram-decoy-secret" => decoy_secret = Some(value),
             "--data-dir" => data_dir = Some(value),
+            "--stdin-control" => {
+                stdin_control = match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("--stdin-control must be on or off".into()),
+                }
+            }
+            "--stop-timeout-ms" => {
+                let ms: u64 = value
+                    .parse()
+                    .map_err(|e| format!("invalid stop timeout: {e}"))?;
+                if ms == 0 {
+                    return Err("invalid stop timeout: must be positive".into());
+                }
+                stop_timeout = Duration::from_millis(ms);
+            }
             "--development-policy" => development_policy = Some(value),
             "--account-policies" => account_policies = Some(value),
             "--statement-timeout-max-ms" => {
@@ -229,44 +254,50 @@ fn run() -> Result<(), String> {
     } else {
         "SELECT 1 only"
     };
+    // Handlers go in after startup, so recovery stays killable by the default signal action, and
+    // before the line below, which is what a supervisor or test waits for before signalling us.
+    stop::install_stop_signal_handlers()
+        .map_err(|e| format!("cannot install signal handlers: {e}"))?;
     println!(
         "latticed listening on {} ({mode}; {detail})",
         server.local_addr()
     );
-    // An explicit host control channel avoids an unsafe signal handler or a new runtime dependency.
-    // EOF also stops cleanly, so supervised use must keep stdin open until shutdown is requested.
-    // A reader thread forwards stdin so a dead listener can end the process instead of leaving it
-    // blocked on stdin while accepting nothing.
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for line in io::stdin().lock().lines() {
-            match line {
-                Ok(line) if line.trim() == "shutdown" => break,
-                Ok(_) => {}
-                Err(error) => {
-                    let _ = sender.send(Err(error.to_string()));
-                    return;
-                }
-            }
-        }
-        let _ = sender.send(Ok(()));
+    // With stdin control on, a reader thread forwards the line `shutdown` and end-of-file. With it
+    // off stdin is never read, so /dev/null or a closed pipe (docker run -d, systemd, launchd) does
+    // not stop the server. Stop signals work in both modes.
+    let control = stdin_control.then(stop::spawn_stdin_control);
+    let cause = stop::wait_for_stop(control.as_ref(), stop::stop_signals_received, || {
+        server.is_finished()
     });
-    loop {
-        match receiver.recv_timeout(Duration::from_millis(500)) {
-            Ok(Ok(())) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            Ok(Err(error)) => return Err(error),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if server.is_finished() {
-                    // Surfaces the listener's fatal error, or reports an unexpected exit.
-                    return server
-                        .shutdown()
-                        .map_err(|e| e.to_string())
-                        .and_then(|()| Err("listener stopped unexpectedly".into()));
-                }
-            }
-        }
+    match &cause {
+        StopCause::Signal => eprintln!("latticed: stop signal received, shutting down"),
+        StopCause::StdinClosed => eprintln!(
+            "latticed: stdin closed, shutting down (pass --stdin-control off to run under a supervisor)"
+        ),
+        StopCause::StdinCommand | StopCause::ListenerExited | StopCause::ControlFailed(_) => {}
     }
-    server.shutdown().map_err(|e| e.to_string())
+    let outcome = stop::stop_within(
+        move || server.shutdown(),
+        stop::stop_signals_received,
+        stop_timeout,
+    );
+    match (cause, outcome) {
+        (_, StopOutcome::Forced(by)) => {
+            let why = match by {
+                ForcedBy::SecondSignal => "second stop signal",
+                ForcedBy::Timeout => "stop timeout",
+            };
+            eprintln!("latticed: shutdown abandoned ({why}); exiting without finishing it");
+            Ok(Exit::Forced)
+        }
+        (_, StopOutcome::Failed(error)) => Err(error),
+        (StopCause::ControlFailed(error), StopOutcome::Clean) => Err(error),
+        // Surfaces an unexpected listener exit instead of reporting a clean stop.
+        (StopCause::ListenerExited, StopOutcome::Clean) => {
+            Err("listener stopped unexpectedly".into())
+        }
+        (_, StopOutcome::Clean) => Ok(Exit::Clean),
+    }
 }
 
 /// Stat before open so a configured FIFO or device cannot block startup. This is a check, not an
@@ -340,7 +371,8 @@ fn read_bounded(file: std::fs::File, limit: usize) -> Result<Zeroizing<Vec<u8>>,
 
 fn main() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(Exit::Clean) => ExitCode::SUCCESS,
+        Ok(Exit::Forced) => ExitCode::from(2),
         Err(error) => {
             eprintln!("latticed: {error}");
             ExitCode::FAILURE

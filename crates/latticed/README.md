@@ -19,16 +19,100 @@ Eight additional transport workers allow CancelRequest and startup packets to be
 the total worker bound is the configured count plus eight. At that absolute bound new transports
 close without a reply. Flooding the extra slots can still prevent cancellation from being admitted.
 
-Type `shutdown` followed by a newline on stdin to stop cleanly. EOF on stdin also stops the process;
-a supervisor must keep that control channel open while serving. This control mechanism does not
-install signal handlers. Embedders can call `ServerHandle::shutdown`; dropping the handle also stops
-the listener, interrupts active socket reads/writes and joins all connection workers.
+Stop the process with SIGTERM or SIGINT (Ctrl-C), or, by default, by typing `shutdown` and a newline
+on stdin; see [Running as a service](#running-as-a-service). Embedders can call
+`ServerHandle::shutdown`; dropping the handle also stops the listener, interrupts active socket
+reads/writes and joins all connection workers.
 
 Each accepted connection has one host thread. Protocol logic remains in `lattice-api`; socket I/O,
 thread lifecycle and admission limits stay in this composition crate. Socket tests independently
 encode their expected messages and cover fragmentation, pipelining, connection admission, timeouts,
 malformed lengths and shutdown. No phase or driver-conformance gate is established by this adapter.
 
+## Running as a service
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--stdin-control on\|off` | `on` | `on`: the line `shutdown` on stdin stops the server, and so does end-of-file. `off`: stdin is never read; a closed pipe or `/dev/null` changes nothing. |
+| `--stop-timeout-ms N` | `30000` | Upper bound on a graceful stop. When it elapses the stop is abandoned and the process exits with status 2. |
+
+SIGTERM and SIGINT start the same clean stop as `shutdown`, in both stdin modes: the listener closes,
+connections are interrupted and joined, the database thread ends and the data-directory lock is
+released, so the next start recovers the log without any repair. A second signal while that stop is
+running, or the stop timeout, abandons it. The log is crash-safe, so abandoning a stop loses no
+acknowledged commit; it is what a SIGKILL would have done, and the next start recovers as after a
+crash. Exit status: `0` clean stop, `1` startup or configuration error or a failed stop, `2` forced
+stop.
+
+**Which mode.** Default `on` keeps the interactive and script uses working (`echo shutdown |
+latticed ...`, a FIFO held open, the README quickstart). Anything that runs the server detached must
+pass `--stdin-control off`: `docker run -d` and `systemd` give a process `/dev/null` or a closed
+pipe, which `on` reads as end-of-file and stops at once (the server prints a hint when that
+happens). `off` is deliberately not the default, so a forgotten flag fails loudly instead of leaving
+a server that cannot be stopped from a terminal pipe.
+
+Signal handlers are installed after startup finishes and before the `latticed listening on` line is
+printed. A signal during recovery keeps its default action and kills the process (recovery is
+crash-safe). Wait for the listening line before signalling for a clean stop. The handler only
+increments an atomic counter; it lives in `lattice-sys`, the one crate that may contain `unsafe`,
+declares `signal(2)` itself and adds no dependency.
+
+The unit and plist below were written from the systemd and launchd documentation and have not been
+run under those supervisors; the real-binary tests cover the signal and stdin behaviour they rely on.
+
+systemd (`/etc/systemd/system/lattice.service`). Set `TimeoutStopSec` above `--stop-timeout-ms`.
+Trust mode is for loopback development; use `--auth scram-tls` with the files described below for
+anything reachable from other hosts:
+
+```ini
+[Unit]
+Description=Lattice database
+After=network.target
+
+[Service]
+Type=simple
+User=lattice
+StateDirectory=lattice
+ExecStart=/usr/local/bin/latticed --listen 127.0.0.1:5432 --data-dir /var/lib/lattice \
+  --development-policy allow-all --stdin-control off --stop-timeout-ms 30000
+KillSignal=SIGTERM
+TimeoutStopSec=40
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+launchd (`~/Library/LaunchAgents/dev.lattice.latticed.plist`; launchd sends SIGTERM and kills after
+`ExitTimeOut` seconds):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.lattice.latticed</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/latticed</string>
+    <string>--listen</string><string>127.0.0.1:5432</string>
+    <string>--data-dir</string><string>/usr/local/var/lattice</string>
+    <string>--development-policy</string><string>allow-all</string>
+    <string>--stdin-control</string><string>off</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ExitTimeOut</key><integer>40</integer>
+</dict>
+</plist>
+```
+
+Containers: pass `--stdin-control off` after the image name (the image entrypoint is `latticed`), and
+give `docker stop` more time than `--stop-timeout-ms` (`docker stop -t 40`, or lower the flag below
+Docker's default of 10 seconds). A process running as PID 1 only receives signals it has a handler
+for, and `latticed` installs one for SIGTERM and SIGINT. Trust mode
+refuses a non-loopback bind, so a container that publishes the port needs `--auth scram-tls`. The
+container image itself is tracked separately (#587).
 
 ## Cooperative cancellation
 
