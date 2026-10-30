@@ -314,7 +314,7 @@ mod tests {
             .chain(Bug::RECOVERY_ORDER)
             .chain(Bug::NON_PREFIX)
             .collect();
-        assert_eq!(all.len(), 55);
+        assert_eq!(all.len(), 56);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();
