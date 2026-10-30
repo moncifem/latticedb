@@ -95,6 +95,14 @@ pub enum RowError {
         /// The oldest snapshot that can still be read.
         floor: u64,
     },
+    /// No index with this id exists at the snapshot: it was not yet created, was already dropped,
+    /// or the id was never used. An empty result would wrongly read as "no matching rows".
+    NoSuchIndex {
+        /// The index id that was asked for.
+        index: u32,
+        /// The snapshot the lookup read at.
+        snapshot: u64,
+    },
     /// The log holds a row change set this code cannot read.
     Corrupt(String),
     /// The index definitions cannot identify their entries unambiguously.
@@ -125,6 +133,9 @@ impl fmt::Display for RowError {
                 )
             }
             RowError::Stale => write!(f, "store is stale after an ambiguous failure; reopen it"),
+            RowError::NoSuchIndex { index, snapshot } => {
+                write!(f, "no index {index} exists at snapshot {snapshot}")
+            }
             RowError::Corrupt(why) => write!(f, "row data corrupt: {why}"),
             RowError::InvalidIndexes(why) => write!(f, "invalid index definitions: {why}"),
             RowError::InvalidCatalog(error) => write!(f, "invalid catalog change: {error}"),
@@ -140,7 +151,7 @@ impl Classify for RowError {
         match self {
             RowError::Conflict { .. } | RowError::Stale => ErrorClass::Retryable,
             RowError::Rejected(e) | RowError::InDoubt(e) => e.class(),
-            RowError::SnapshotTooOld { .. } => ErrorClass::Rejected,
+            RowError::SnapshotTooOld { .. } | RowError::NoSuchIndex { .. } => ErrorClass::Rejected,
             RowError::Corrupt(_) => ErrorClass::Fatal,
             RowError::Encode(_)
             | RowError::Limit(_)
@@ -656,7 +667,10 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     ) -> Result<Vec<Vec<u8>>, RowError> {
         self.check_snapshot(snap)?;
         let Some(table) = self.indexes.table_for(snap, index) else {
-            return Ok(Vec::new());
+            return Err(RowError::NoSuchIndex {
+                index,
+                snapshot: snap.as_of,
+            });
         };
         let candidates = self.indexes.lookup(snap, index, key).map_err(mvcc_error)?;
         let mut allowed = Vec::new();
@@ -750,6 +764,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         let row_versions = self.table.vacuum(horizon);
         let applied_horizon = self.table.floor();
         let index_versions = self.indexes.vacuum(applied_horizon);
+        self.indexes.vacuum_definitions(applied_horizon);
+        self.catalog.vacuum_index_versions(applied_horizon);
         self.commit_lsn.retain(|_, lsn| *lsn >= applied_horizon);
         let before_floor = self
             .commit_times

@@ -178,15 +178,16 @@ fn create_update_drop_recreate_and_reopen_preserve_the_definition_timeline() {
         )
         .unwrap();
     assert_eq!(
-        store
-            .lookup_at(
-                Snapshot { as_of: before },
-                9,
-                b"a",
-                &lattice_engines::limits::AllowAll
-            )
-            .unwrap(),
-        Vec::<Vec<u8>>::new()
+        store.lookup_at(
+            Snapshot { as_of: before },
+            9,
+            b"a",
+            &lattice_engines::limits::AllowAll
+        ),
+        Err(RowError::NoSuchIndex {
+            index: 9,
+            snapshot: before
+        })
     );
     assert_eq!(
         store
@@ -245,16 +246,17 @@ fn create_update_drop_recreate_and_reopen_preserve_the_definition_timeline() {
             .unwrap(),
         vec![b"b".to_vec()]
     );
-    assert!(
-        store
-            .lookup_at(
-                Snapshot { as_of: replaced },
-                9,
-                b"g",
-                &lattice_engines::limits::AllowAll
-            )
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        store.lookup_at(
+            Snapshot { as_of: replaced },
+            9,
+            b"g",
+            &lattice_engines::limits::AllowAll
+        ),
+        Err(RowError::NoSuchIndex {
+            index: 9,
+            snapshot: replaced
+        })
     );
     assert_eq!(
         store
@@ -337,8 +339,7 @@ fn create_update_drop_recreate_and_reopen_preserve_the_definition_timeline() {
                 b"gamma",
                 &lattice_engines::limits::AllowAll
             )
-            .unwrap()
-            .is_empty()
+            .is_err_and(|e| matches!(e, RowError::NoSuchIndex { .. }))
     );
     assert_eq!(
         store
@@ -588,8 +589,8 @@ fn the_managed_recovery_planted_bug_fails_an_independent_semantic_oracle() {
                 b"x",
                 &lattice_engines::limits::AllowAll
             )
-            .unwrap(),
-        vec![b"a".to_vec()],
+            .ok(),
+        Some(vec![b"a".to_vec()]),
         "recovery defect must cause the expected semantic mismatch"
     );
     assert!(
@@ -675,8 +676,7 @@ fn power_cut(cut: Option<u64>) -> u64 {
                     b"new",
                     &lattice_engines::limits::AllowAll
                 )
-                .unwrap()
-                .is_empty()
+                .is_err_and(|e| matches!(e, RowError::NoSuchIndex { .. }))
         );
     }
     recovered.check_indexes().unwrap();
@@ -853,8 +853,7 @@ fn creation_after_vacuum_builds_current_rows_without_requiring_expired_history()
                 b"current",
                 &lattice_engines::limits::AllowAll
             )
-            .unwrap()
-            .is_empty()
+            .is_err_and(|e| matches!(e, RowError::NoSuchIndex { .. }))
     );
     assert!(matches!(
         store.lookup_at(
@@ -1087,8 +1086,8 @@ fn empty_index_recovery_omission_is_detected_before_a_later_write_can_bypass_mai
                 b"x",
                 &lattice_engines::limits::AllowAll
             )
-            .unwrap(),
-        vec![b"a".to_vec()]
+            .ok(),
+        Some(vec![b"a".to_vec()])
     );
     assert!(broken.check_indexes().is_err());
 }
@@ -1188,8 +1187,7 @@ fn compound_writes_and_historical_managed_lookups_preserve_the_bound_actor_polic
         assert!(
             store
                 .lookup_at(now, 9, b"alpha", &Actor)
-                .unwrap()
-                .is_empty()
+                .is_err_and(|e| matches!(e, RowError::NoSuchIndex { .. }))
         );
         assert_eq!(
             store.lookup_at(now, 10, b"after", &Actor).unwrap(),
@@ -1250,8 +1248,7 @@ fn literal_guarded_compound_recovers_rows_definitions_and_historical_index_witho
                     b"x",
                     &lattice_engines::limits::AllowAll
                 )
-                .unwrap()
-                .is_empty()
+                .is_err_and(|e| matches!(e, RowError::NoSuchIndex { .. }))
         );
         assert_eq!(
             store

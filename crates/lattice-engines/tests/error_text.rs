@@ -23,6 +23,7 @@ fn catalog_errors_print_their_variant_and_fields() {
         (CatalogError::OutOfOrder, "OutOfOrder"),
         (CatalogError::Empty, "Empty"),
         (CatalogError::Truncated, "Truncated"),
+        (CatalogError::BadMagic, "BadMagic"),
         (CatalogError::BadKind(9), "BadKind(9)"),
         (CatalogError::UnsupportedVersion(2), "UnsupportedVersion(2)"),
         (CatalogError::Trailing, "Trailing"),

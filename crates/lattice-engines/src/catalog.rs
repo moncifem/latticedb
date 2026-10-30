@@ -68,6 +68,8 @@ pub enum CatalogError {
     Empty,
     /// The bytes end inside a field.
     Truncated,
+    /// The payload does not start with the catalog magic.
+    BadMagic,
     /// A kind byte other than 1, 2 or 3.
     BadKind(u8),
     /// A format version this code cannot read.
@@ -170,7 +172,7 @@ impl<'a> Reader<'a> {
 pub fn decode(payload: &[u8]) -> Result<Vec<CatalogOp>, CatalogError> {
     let mut r = Reader { rest: payload };
     if r.take(4)? != MAGIC.as_slice() {
-        return Err(CatalogError::Truncated);
+        return Err(CatalogError::BadMagic);
     }
     match r.u8()? {
         VERSION => {}
@@ -329,7 +331,7 @@ pub fn decode_compound(payload: &[u8]) -> Result<CompoundChange, CatalogError> {
         // Keep that decoder's standalone format and error behavior unchanged.
         let mut header = Reader { rest: nested };
         if header.take(4)? != MAGIC.as_slice() {
-            return Err(CatalogError::Truncated);
+            return Err(CatalogError::BadMagic);
         }
         match header.u8()? {
             VERSION => {}
@@ -493,6 +495,15 @@ impl Catalog {
             .and_then(|i| self.index_versions.get(i))
             .map(|(_, defs)| defs.clone())
             .unwrap_or_default()
+    }
+
+    /// Drops managed definition versions no snapshot at or after `floor` can see: every version
+    /// before the newest one at or below `floor`. Used ids are kept so ids are never reused.
+    pub fn vacuum_index_versions(&mut self, floor: u64) -> usize {
+        let end = self.index_versions.partition_point(|(at, _)| *at <= floor);
+        let drop = end.saturating_sub(1);
+        self.index_versions.drain(..drop);
+        drop
     }
 
     /// Current managed definitions. This never includes process-local callback definitions.

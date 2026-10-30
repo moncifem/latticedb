@@ -297,6 +297,17 @@ impl Indexes {
         self.entries.vacuum(horizon)
     }
 
+    /// Drops managed definition versions no snapshot at or after `floor` can see: every version
+    /// before the newest one at or below `floor`. The current version is always kept.
+    pub(crate) fn vacuum_definitions(&mut self, floor: u64) -> usize {
+        let end = self
+            .managed_versions
+            .partition_point(|(lsn, _)| *lsn <= floor);
+        let drop = end.saturating_sub(1);
+        self.managed_versions.drain(..drop);
+        drop
+    }
+
     /// The primary keys of the rows whose index key is exactly `ikey`, as of `snap`, in key order.
     pub fn lookup(
         &self,

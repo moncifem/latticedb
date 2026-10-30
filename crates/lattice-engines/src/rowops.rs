@@ -20,6 +20,8 @@ const VERSION: u8 = 1;
 pub enum RowOpsError {
     /// The bytes end inside a field.
     Truncated,
+    /// The payload does not start with the row-write magic.
+    BadMagic,
     /// A kind byte other than 0 or 1.
     BadKind(u8),
     /// A format version this code cannot read.
@@ -102,7 +104,7 @@ pub fn decode(payload: &[u8]) -> Result<Vec<RowWrite>, RowOpsError> {
         at: 0,
     };
     if r.take(4)? != MAGIC.as_slice() {
-        return Err(RowOpsError::Truncated);
+        return Err(RowOpsError::BadMagic);
     }
     let version = r.u8()?;
     if version != VERSION {

@@ -1,0 +1,1 @@
+`RowStore::lookup_at` returns `RowError::NoSuchIndex { index, snapshot }` for an index id that does not exist at the snapshot (before creation, after a drop, or mistyped) instead of an empty result. The row-write and catalog decoders report `BadMagic` for a wrong magic instead of `Truncated`, and managed index definition history is now bounded by the vacuum floor.
