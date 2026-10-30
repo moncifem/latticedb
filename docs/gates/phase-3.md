@@ -41,7 +41,7 @@ id cannot make `Tree::apply_from` replay more than `DEFAULT_PEER_REPLAY_LIMIT` (
 changes. `crdt_peer_tests.rs` holds a scenario per limit, three property tests with generated hostile peers
 (refused input changes nothing, a flood cannot starve an honest peer, a hostile tree peer stays inside its share)
 and nine planted bugs (`Bug::CRDT_PEER`) that the scenarios catch. Not done: nothing in the repository calls these
-entry points yet (no sync layer) and the compaction frontier is still trusted. The depth rule is in
+entry points yet (no sync layer, and `Tree::apply_from` must not be wired in before issue 487 closes: the replay cap is a stopgap) and the compaction frontier is still trusted. The depth rule is in
 `tla/TreeMove.tla` (`MaxDepth = 2`, invariant `DepthBounded`) with `tla/negative/TreeMoveNoDepthCheck.cfg`,
 which must violate it. `tla/TreeMoveCycleOnly.cfg` checks the cycle rule alone (depth rule off). These models are
 written but not yet recorded as passing: the evidence is the pinned-TLC CI step, to be recorded after its first run.

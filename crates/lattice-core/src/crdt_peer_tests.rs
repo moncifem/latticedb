@@ -963,3 +963,59 @@ proptest! {
         }
     }
 }
+
+/// The attack the replay cap leaves (issue 450 review, gap G-08): a peer with a valid binding
+/// sends `DEFAULT_PEER_REPLAY_LIMIT + 1` cheap moves stamped at the drift bound. Every honest op
+/// that is still in flight and older than the newest 4097 is then refused on that replica, while a
+/// replica that saw it before the flood keeps it. The caller-side mitigation is the trusted
+/// `apply` after the caller's own policy. The cap is a stopgap: `apply_from` must not be wired
+/// into a sync layer before the resync API and sender-charged budget exist.
+#[test]
+fn a_flood_of_new_ops_makes_a_replica_refuse_older_honest_ops_until_the_caller_applies_them() {
+    let limit = tree::DEFAULT_PEER_REPLAY_LIMIT;
+    let honest = tree::Op::new(h(1050, 2), NodeId(11), NodeId::ROOT, 0);
+    let flood: Vec<tree::Op> = (0..=limit as u32)
+        .map(|i| {
+            tree::Op::new(
+                Hlc {
+                    wall_ms: NOW + DRIFT,
+                    counter: i,
+                    node: 1,
+                },
+                NodeId(12),
+                NodeId::ROOT,
+                u64::from(i),
+            )
+        })
+        .collect();
+
+    // Replica A saw the honest op first, then the flood: nothing is ever replayed.
+    let mut a = tree::Tree::new();
+    a.apply_from(&ctx(2), honest).unwrap();
+    for op in &flood {
+        a.apply_from(&ctx(1), *op).unwrap();
+    }
+    assert!(a.contains(NodeId(11)));
+    assert_eq!(a.replayed_ops(), 0);
+
+    // Replica B received the flood first. The honest op is now ordered before 4097 live ops.
+    let mut b = tree::Tree::new();
+    for op in &flood {
+        b.apply_from(&ctx(1), *op).unwrap();
+    }
+    assert_eq!(
+        b.apply_from(&ctx(2), honest),
+        Err(TreeError::ReplayTooDeep { limit })
+    );
+    assert!(!b.contains(NodeId(11)));
+    assert_ne!(a.snapshot(), b.snapshot(), "the replicas now differ");
+    // Resending to the same replica does not help.
+    assert_eq!(
+        b.apply_from(&ctx(2), honest),
+        Err(TreeError::ReplayTooDeep { limit })
+    );
+
+    // Mitigation: the caller decides, by its own policy, to take the op through the trusted path.
+    assert_eq!(b.apply(honest), Ok(tree::Outcome::Applied));
+    assert_eq!(a.snapshot(), b.snapshot());
+}

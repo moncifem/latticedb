@@ -102,6 +102,12 @@
 //!   (compaction cannot lower the count without making the op [`Outcome::BelowFrontier`]); the
 //!   ways out are the caller's trusted [`Tree::apply`] after its own policy, or a resync from a
 //!   snapshot. A batch refused for its budget can simply be resent from the refused operation on.
+//!   **This cap is a stopgap.** A peer can send `DEFAULT_PEER_REPLAY_LIMIT + 1` cheap ops stamped
+//!   up to the drift bound ahead, after which every older honest op still in flight is refused on
+//!   this replica; no state-merge API exists to resync; and the limit is small for a long log.
+//!   Do not wire `apply_from` into a sync layer until
+//!   [#487](https://github.com/moncifem/latticedb/issues/487) (resync, sender-charged budget)
+//!   is closed.
 //! - **Permanent divergence**: a refusal by the op, node, origin or replay limit is local. The refused
 //!   operation is lost on this replica unless it is sent again, so replicas whose caps differ, or
 //!   that received operations in a different mix, can differ for good until a resync.

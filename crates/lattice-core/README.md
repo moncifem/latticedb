@@ -19,5 +19,5 @@ operations (the id's node must be the peer's), so a relay forwarding other repli
 trusting `apply` after its own checks, and quotas are charged per direct peer. A refusal by a cap is local to
 the replica and the operation is lost unless sent again. `Tree::apply` has no per-origin share unless
 `with_origin_quota` is set; `Tree::apply_from` always has one, and refuses an operation ordered before more than
-`DEFAULT_PEER_REPLAY_LIMIT` live ops (`ReplayTooDeep`), which a resend to the same replica does not cure. The compaction frontier is still supplied by
+`DEFAULT_PEER_REPLAY_LIMIT` live ops (`ReplayTooDeep`), which a resend to the same replica does not cure. This replay cap is a stopgap (a flood of 4097 new ops makes a replica refuse older honest ops): do not wire `apply_from` into a sync layer before issue 487 (resync API and sender-charged replay budget) is closed. The compaction frontier is still supplied by
 the caller and trusted.
