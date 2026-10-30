@@ -1,0 +1,32 @@
+name: tools-tests
+# Runs the unit tests of the Python tools under tools/. The tests use PATH shims for git and gh, so
+# they need no network and no token. Tests that need a built lattice-cli skip themselves.
+on:
+  pull_request:
+    paths:
+      - "tools/**"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tools-tests-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  tools-tests:
+    name: tools-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Run the tools unit tests
+        run: python3 -m unittest discover -s tools -p "test_*.py"
