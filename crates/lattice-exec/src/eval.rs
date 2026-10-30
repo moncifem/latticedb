@@ -454,7 +454,8 @@ pub(crate) fn cast(v: Datum, to: SqlType) -> Result<Datum, ExecError> {
                 return Err(range());
             }
             let r = f.round_ties_even();
-            if r < -9.223_372_036_854_775_808e18 || r >= 9.223_372_036_854_775_808e18 {
+            let lo = i64::MIN as f64;
+            if r < lo || r >= -lo {
                 return Err(range());
             }
             Ok(Datum::Int(check_int(r as i128, t)?))
@@ -940,5 +941,207 @@ mod tests {
             };
         }
         assert_eq!(eval(&e, &[], &ctx()).unwrap_err().sqlstate(), "54001");
+    }
+
+    // Plans from the binder are well typed, but the evaluator must not rely on it: it is total over
+    // trees with any mix of operators, types and arities.
+    mod structural {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn ty() -> impl Strategy<Value = SqlType> {
+            prop::sample::select(vec![
+                SqlType::Boolean,
+                SqlType::SmallInt,
+                SqlType::Integer,
+                SqlType::BigInt,
+                SqlType::Numeric,
+                SqlType::DoublePrecision,
+                SqlType::Text,
+                SqlType::Bytea,
+                SqlType::Timestamptz,
+                SqlType::Date,
+                SqlType::Uuid,
+                SqlType::Jsonb,
+            ])
+        }
+
+        fn value() -> impl Strategy<Value = Value> {
+            prop_oneof![
+                Just(Value::Null),
+                any::<bool>().prop_map(Value::Bool),
+                prop_oneof![any::<i64>(), -3i64..4].prop_map(Value::Int),
+                prop::sample::select(vec![
+                    "0",
+                    "1.5",
+                    "-2",
+                    "1e400",
+                    "99999999999999999999999999999999999999",
+                    ".",
+                    "abc"
+                ])
+                .prop_map(|s| Value::Number(s.to_string())),
+                "[ -~]{0,6}".prop_map(Value::Text),
+            ]
+        }
+
+        fn datum() -> impl Strategy<Value = Datum> {
+            prop_oneof![
+                Just(Datum::Null),
+                any::<bool>().prop_map(Datum::Bool),
+                any::<i64>().prop_map(Datum::Int),
+                any::<f64>().prop_map(Datum::Float),
+                "[a-z%_]{0,4}".prop_map(Datum::Text),
+                any::<i64>().prop_map(Datum::Timestamp),
+                any::<i32>().prop_map(Datum::Date),
+            ]
+        }
+
+        fn binary_op() -> impl Strategy<Value = BinaryOp> {
+            prop::sample::select(vec![
+                BinaryOp::Or,
+                BinaryOp::And,
+                BinaryOp::Eq,
+                BinaryOp::NotEq,
+                BinaryOp::Lt,
+                BinaryOp::GtEq,
+                BinaryOp::Concat,
+                BinaryOp::JsonGet,
+                BinaryOp::Contains,
+                BinaryOp::Add,
+                BinaryOp::Sub,
+                BinaryOp::Mul,
+                BinaryOp::Div,
+                BinaryOp::Mod,
+            ])
+        }
+
+        fn expr() -> BoxedStrategy<TypedExpr> {
+            let leaf = prop_oneof![
+                (0usize..6, ty()).prop_map(|(index, t)| TypedExpr {
+                    kind: ExprNode::Column {
+                        index,
+                        name: "c".into()
+                    },
+                    ty: t,
+                }),
+                (value(), ty()).prop_map(|(v, t)| TypedExpr {
+                    kind: ExprNode::Const(v),
+                    ty: t
+                }),
+                (0u32..4, ty()).prop_map(|(n, t)| TypedExpr {
+                    kind: ExprNode::Param(n),
+                    ty: t
+                }),
+            ];
+            leaf.prop_recursive(4, 40, 4, |inner| {
+                let boxed = |e: TypedExpr| Box::new(e);
+                prop_oneof![
+                    (inner.clone(), ty()).prop_map(move |(e, t)| TypedExpr {
+                        kind: ExprNode::Unary {
+                            op: UnaryOp::Minus,
+                            expr: boxed(e)
+                        },
+                        ty: t,
+                    }),
+                    (binary_op(), inner.clone(), inner.clone(), ty()).prop_map(|(op, l, r, t)| {
+                        TypedExpr {
+                            kind: ExprNode::Binary {
+                                op,
+                                left: Box::new(l),
+                                right: Box::new(r),
+                            },
+                            ty: t,
+                        }
+                    }),
+                    (inner.clone(), any::<bool>()).prop_map(|(e, negated)| TypedExpr {
+                        kind: ExprNode::IsNull {
+                            expr: Box::new(e),
+                            negated
+                        },
+                        ty: SqlType::Boolean,
+                    }),
+                    (
+                        inner.clone(),
+                        prop::collection::vec(inner.clone(), 0..3),
+                        any::<bool>()
+                    )
+                        .prop_map(|(e, list, negated)| TypedExpr {
+                            kind: ExprNode::InList {
+                                expr: Box::new(e),
+                                list,
+                                negated
+                            },
+                            ty: SqlType::Boolean,
+                        }),
+                    (inner.clone(), inner.clone(), inner.clone()).prop_map(|(e, l, h)| TypedExpr {
+                        kind: ExprNode::Between {
+                            expr: Box::new(e),
+                            low: Box::new(l),
+                            high: Box::new(h),
+                            negated: false,
+                        },
+                        ty: SqlType::Boolean,
+                    }),
+                    (inner.clone(), inner.clone()).prop_map(|(e, p)| TypedExpr {
+                        kind: ExprNode::Like {
+                            expr: Box::new(e),
+                            pattern: Box::new(p),
+                            negated: true
+                        },
+                        ty: SqlType::Boolean,
+                    }),
+                    (inner.clone(), ty()).prop_map(|(e, t)| TypedExpr {
+                        kind: ExprNode::Cast { expr: Box::new(e) },
+                        ty: t,
+                    }),
+                    (
+                        prop::sample::select(vec![
+                            "coalesce",
+                            "nullif",
+                            "lower",
+                            "upper",
+                            "length",
+                            "substring",
+                            "position",
+                            "trim_both",
+                            "trim_leading",
+                            "abs",
+                            "round",
+                            "now",
+                            "date_trunc",
+                            "extract",
+                            "nope",
+                        ]),
+                        prop::collection::vec(inner, 0..4),
+                        ty(),
+                    )
+                        .prop_map(|(name, args, t)| TypedExpr {
+                            kind: ExprNode::Function {
+                                name: name.to_string(),
+                                args
+                            },
+                            ty: t,
+                        }),
+                ]
+            })
+            .boxed()
+        }
+
+        proptest! {
+            #[test]
+            fn evaluation_is_total_over_any_tree(
+                e in expr(),
+                row in prop::collection::vec(datum(), 0..5),
+                params in prop::collection::vec(datum(), 0..3),
+            ) {
+                let ctx = EvalCtx { params: &params, now_micros: 0 };
+                // Ok or Err are both fine; reaching this line means nothing panicked.
+                match eval(&e, &row, &ctx) {
+                    Ok(_) => {}
+                    Err(err) => prop_assert_eq!(err.sqlstate().len(), 5),
+                }
+            }
+        }
     }
 }

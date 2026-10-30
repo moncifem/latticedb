@@ -8,13 +8,21 @@
 //! `BEGIN`, `COMMIT`, `ROLLBACK`, `SET` and `SHOW` are handled by the session.
 //!
 //! ```
+//! use std::rc::Rc;
+//! use lattice_core::Config;
 //! use lattice_exec::{Database, ExecSession};
-//! # use lattice_core::Config;
-//! # use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
-//! # use std::cell::RefCell;
-//! # use std::rc::Rc;
-//! # #[derive(Clone)] struct Io(Rc<RefCell<SimIo>>);
-//! # fn main() {}
+//! use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
+//! use lattice_testkit::scenario::{SharedClock, SharedIo};
+//!
+//! let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
+//! let clock = SharedClock(Rc::new(SimClock::new(1_000)));
+//! let mut db = Database::open(disk, clock, SeededRng::new(1), &Config::default()).unwrap();
+//! let mut session = ExecSession::allow_all();
+//! session.execute(&mut db, "CREATE TABLE notes (id INT PRIMARY KEY, title TEXT)").unwrap();
+//! let r = session.execute(&mut db, "INSERT INTO notes VALUES (1, 'a'), (2, 'b') RETURNING id").unwrap();
+//! assert_eq!(r.tag, "INSERT 0 2");
+//! let r = session.execute(&mut db, "SELECT title FROM notes WHERE id > 1").unwrap();
+//! assert_eq!(r.text_rows(), vec![vec![Some("b".to_string())]]);
 //! ```
 //!
 //! Every statement is bounded by [`ExecLimits`]: a deadline on the database clock, a memory budget

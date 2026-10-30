@@ -264,10 +264,10 @@ impl ExecSession {
                 Ok(ExecResult::command("BEGIN"))
             }
             Statement::Commit => {
-                if let Some(state) = self.txn.take() {
-                    if state.has_writes() {
-                        db.store.commit(state.tx)?;
-                    }
+                if let Some(state) = self.txn.take()
+                    && state.has_writes()
+                {
+                    db.store.commit(state.tx)?;
                 }
                 Ok(ExecResult::command("COMMIT"))
             }

@@ -223,8 +223,16 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
         match plan {
             LogicalPlan::Scan {
                 table_id, as_of, ..
-            } => self.scan(*table_id, as_of.as_ref()),
+            } => self.scan(*table_id, as_of.as_ref(), None),
             LogicalPlan::Filter { input, predicate } => {
+                // A filter straight over a scan runs inside it, so rows it rejects are never kept
+                // and do not count against the memory budget.
+                if let LogicalPlan::Scan {
+                    table_id, as_of, ..
+                } = &**input
+                {
+                    return self.scan(*table_id, as_of.as_ref(), Some(predicate));
+                }
                 let rows = self.rel(input)?;
                 let mut out = Vec::new();
                 for t in rows {
@@ -405,7 +413,12 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
         }
     }
 
-    fn scan(&mut self, table_id: u64, as_of: Option<&AsOfPlan>) -> Result<Vec<Tuple>, ExecError> {
+    fn scan(
+        &mut self,
+        table_id: u64,
+        as_of: Option<&AsOfPlan>,
+        predicate: Option<&TypedExpr>,
+    ) -> Result<Vec<Tuple>, ExecError> {
         let def = self.table(table_id)?;
         let snapshot = self.snapshot_for(as_of)?;
         let stored = self.store().scan_at(snapshot, def.id, .., self.policy)?;
@@ -417,6 +430,11 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 continue;
             }
             let vals = def.decode_row(value)?;
+            if let Some(p) = predicate
+                && !truthy(&eval(p, &vals, &self.ctx())?)
+            {
+                continue;
+            }
             self.gov.charge(row_cost(&vals) + key.len() as u64)?;
             out.push(Tuple {
                 key: Some(key.to_vec()),
@@ -439,6 +457,11 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                     continue;
                 }
                 let vals = def.decode_row(value)?;
+                if let Some(p) = predicate
+                    && !truthy(&eval(p, &vals, &self.ctx())?)
+                {
+                    continue;
+                }
                 self.gov.charge(row_cost(&vals) + key.len() as u64)?;
                 out.push(Tuple {
                     key: Some(key.clone()),
