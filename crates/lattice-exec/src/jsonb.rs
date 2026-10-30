@@ -336,3 +336,110 @@ fn write_string(s: &str, out: &mut String) {
     }
     out.push('"');
 }
+
+fn parse(s: &str) -> Option<Node> {
+    let mut r = Reader {
+        b: s.as_bytes(),
+        i: 0,
+    };
+    r.ws();
+    let node = r.value()?;
+    r.ws();
+    (r.i == r.b.len()).then_some(node)
+}
+
+/// Which member of a document `->` and `->>` ask for.
+pub(crate) enum Step<'a> {
+    Key(&'a str),
+    Index(i64),
+}
+
+/// `doc -> step` (`as_text` false: the member's canonical text) or `doc ->> step` (`as_text` true: a
+/// string member without its quotes, a JSON `null` as SQL `NULL`, any other member as its canonical
+/// text). The outer `None` means `doc` is not JSON; the inner `None` is SQL `NULL`.
+///
+/// Like PostgreSQL, a negative index counts from the end of an array, a key on an array or an index on
+/// an object finds nothing, and a scalar reads as an array of one element.
+pub(crate) fn get(doc: &str, step: &Step<'_>, as_text: bool) -> Option<Option<String>> {
+    let root = parse(doc)?;
+    let found: Option<&Node> = match (&root, step) {
+        (Node::Object(members), Step::Key(key)) => {
+            members.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+        }
+        (Node::Array(items), Step::Index(i)) => nth(items, *i),
+        (Node::Object(_) | Node::Array(_), _) => None,
+        (scalar, Step::Index(i)) if *i == 0 || *i == -1 => Some(scalar),
+        _ => None,
+    };
+    Some(found.and_then(|node| {
+        if as_text {
+            match node {
+                Node::Null => None,
+                Node::Text(s) => Some(s.clone()),
+                other => {
+                    let mut out = String::new();
+                    write(other, &mut out);
+                    Some(out)
+                }
+            }
+        } else {
+            let mut out = String::new();
+            write(node, &mut out);
+            Some(out)
+        }
+    }))
+}
+
+fn nth(items: &[Node], i: i64) -> Option<&Node> {
+    let at = if i < 0 {
+        i64::try_from(items.len()).ok()?.checked_add(i)?
+    } else {
+        i
+    };
+    items.get(usize::try_from(at).ok()?)
+}
+
+/// `left @> right`: whether `left` contains `right`. The outer `None` means a side is not JSON.
+pub(crate) fn contains(left: &str, right: &str) -> Option<bool> {
+    Some(node_contains(&parse(left)?, &parse(right)?))
+}
+
+fn node_contains(left: &Node, right: &Node) -> bool {
+    match (left, right) {
+        (Node::Object(l), Node::Object(r)) => r.iter().all(|(k, rv)| {
+            l.iter()
+                .find(|(lk, _)| lk == k)
+                .is_some_and(|(_, lv)| node_contains(lv, rv))
+        }),
+        (Node::Array(l), Node::Array(r)) => r
+            .iter()
+            .all(|rv| l.iter().any(|lv| element_contains(lv, rv))),
+        // An array contains a bare scalar that is one of its elements.
+        (
+            Node::Array(l),
+            scalar @ (Node::Null | Node::Bool(_) | Node::Number(_) | Node::Text(_)),
+        ) => l.iter().any(|lv| same_scalar(lv, scalar)),
+        (l, r) => same_scalar(l, r),
+    }
+}
+
+/// An element of an array contains an element of another array: scalars by equality, containers
+/// recursively, and never across kinds.
+fn element_contains(left: &Node, right: &Node) -> bool {
+    match (left, right) {
+        (Node::Object(_), Node::Object(_)) | (Node::Array(_), Node::Array(_)) => {
+            node_contains(left, right)
+        }
+        _ => same_scalar(left, right),
+    }
+}
+
+fn same_scalar(a: &Node, b: &Node) -> bool {
+    match (a, b) {
+        (Node::Null, Node::Null) => true,
+        (Node::Bool(x), Node::Bool(y)) => x == y,
+        (Node::Number(x), Node::Number(y)) => x == y,
+        (Node::Text(x), Node::Text(y)) => x == y,
+        _ => false,
+    }
+}

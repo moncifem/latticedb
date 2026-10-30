@@ -175,8 +175,7 @@ needs only the session itself; `WHERE`, `LIMIT` and `OFFSET` apply to that one r
 ## Not run
 
 Joins, `GROUP BY`, aggregates, `DISTINCT` and subqueries (refused by the binder with `0A000`);
-`ALTER TABLE`, `CREATE INDEX`, `DROP INDEX` (`0A000`); the `jsonb` operators `->`, `->>`, `@>` (bound,
-`0A000` at run time); `numeric(p)` and `numeric(p, s)` columns (`0A000`: the plan carries no type
+`ALTER TABLE`, `CREATE INDEX`, `DROP INDEX` (`0A000`); `numeric(p)` and `numeric(p, s)` columns (`0A000`: the plan carries no type
 modifiers, so the declaration could not be enforced); `round` with negative digits; `DDL` inside a transaction block (`25001`); keys on
 `numeric` or `jsonb` columns; more than 15 `UNIQUE` constraints on a table. Every scan reads the whole
 table unless the rules in **Access paths** above apply. See `docs/gates/phase-2.md` for the sqllogictest records that fail for these

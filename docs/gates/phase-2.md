@@ -431,7 +431,7 @@ budget only up to 4 KiB per nesting level. `LIKE` stays O(text x pattern); no
 `repeat`/`lpad` functions exist.
 
 **What does not run.** Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, `ALTER TABLE`, indexes
-(`CREATE INDEX`, and no scan uses an index), the `jsonb` operators, and DDL inside a transaction block.
+(`CREATE INDEX`, and no scan uses an index), and DDL inside a transaction block.
 Column definitions are recovered after a restart from the definition `CREATE TABLE` stores with the table
 (RFC 0012 / ADR 0028, issue 573; see "SQL definitions in the executor" below); `ALTER TABLE` and column names
 with ASCII capitals are not supported, and the stored row layout is not a frozen format.
