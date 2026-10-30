@@ -8,8 +8,10 @@ use std::fmt;
 
 /// Largest scale kept.
 pub(crate) const MAX_SCALE: u32 = 38;
-/// Fractional digits of a division result.
-const DIV_SCALE: u32 = 20;
+/// Significant digits PostgreSQL aims for in a quotient (`NUMERIC_MIN_SIG_DIGITS`).
+const MIN_SIG_DIGITS: i64 = 16;
+/// Decimal digits per base-10000 digit group, PostgreSQL's storage unit.
+const GROUP_DIGITS: i64 = 4;
 
 /// Why a decimal operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -224,12 +226,51 @@ impl Decimal {
         Ok(d)
     }
 
-    /// Division with up to 20 fractional digits (PostgreSQL picks the scale differently).
+    /// Weight of the first base-10000 digit group and that group's value, as PostgreSQL stores them
+    /// (a group counts the four decimal places at its weight, zero padded): `7.5` has weight 0 and
+    /// first group 7, `100` weight 0 and group 100, `0.1` weight -1 and group 1000, `0.0012` weight -1
+    /// and group 12, `12345` weight 1 and group 1. Zero has weight 0 and group 0.
+    fn weight_and_first_group(self) -> (i64, i128) {
+        if self.mantissa == 0 {
+            return (0, 0);
+        }
+        let magnitude = self.mantissa.unsigned_abs();
+        let digits = i64::from(magnitude.ilog10()) + 1;
+        // Exponent of the leading decimal digit: 7.5 -> 0, 0.0012 -> -3, 100 -> 2.
+        let lead = digits - 1 - i64::from(self.scale);
+        let weight = lead.div_euclid(GROUP_DIGITS);
+        // The group is the value divided by 10^(4 * weight), truncated.
+        let t = i64::from(self.scale) + GROUP_DIGITS * weight;
+        let group = if t >= 0 {
+            magnitude / 10u128.pow(u32::try_from(t).unwrap_or(0))
+        } else {
+            magnitude.saturating_mul(10u128.pow(u32::try_from(-t).unwrap_or(0)))
+        };
+        (weight, i128::try_from(group).unwrap_or(0))
+    }
+
+    /// The scale of a quotient, chosen as PostgreSQL does (`select_div_scale`): about 16 significant
+    /// digits, never fewer fractional digits than either operand, at most 38 here.
+    fn division_scale(self, o: Self) -> u32 {
+        let (w1, g1) = self.weight_and_first_group();
+        let (w2, g2) = o.weight_and_first_group();
+        let mut qweight = w1 - w2;
+        if g1 <= g2 {
+            qweight -= 1;
+        }
+        let wanted = (MIN_SIG_DIGITS - qweight * GROUP_DIGITS)
+            .max(i64::from(self.scale))
+            .max(i64::from(o.scale))
+            .clamp(0, i64::from(MAX_SCALE));
+        u32::try_from(wanted).unwrap_or(MAX_SCALE)
+    }
+
+    /// Division with the result scale PostgreSQL would choose, limited to 38 fractional digits.
     pub(crate) fn div(self, o: Self) -> Result<Self, NumError> {
         if o.mantissa == 0 {
             return Err(NumError::DivisionByZero);
         }
-        let mut r = DIV_SCALE.max(self.scale);
+        let mut r = self.division_scale(o);
         loop {
             // quotient = a / 10^sa / (b / 10^sb) = a * 10^(r + sb - sa) / b / 10^r
             let e = i64::from(r) + i64::from(o.scale) - i64::from(self.scale);
