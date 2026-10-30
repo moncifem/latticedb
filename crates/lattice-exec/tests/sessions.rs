@@ -982,6 +982,27 @@ fn attaching_a_table_above_the_largest_id_is_refused() {
 }
 
 #[test]
+fn a_host_can_fail_the_open_block_so_commit_rolls_back() {
+    let (mut f, mut s) = accounts();
+    // Outside a block it does nothing.
+    s.abort_transaction();
+    assert_eq!(s.status(), TxStatus::Idle);
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "INSERT INTO acct VALUES (3, 1, 'c')");
+    s.abort_transaction();
+    assert_eq!(s.status(), TxStatus::Failed);
+    assert_eq!(
+        err(&mut f.db, &mut s, "SELECT id FROM acct").sqlstate(),
+        "25P02"
+    );
+    assert_eq!(ok(&mut f.db, &mut s, "COMMIT").tag, "ROLLBACK");
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT id FROM acct WHERE id = 3"),
+        Vec::<Vec<String>>::new()
+    );
+}
+
+#[test]
 fn an_actor_that_hides_the_catalog_gets_undefined_table_for_an_existing_table() {
     let (mut f, _admin) = accounts();
     let hidden = ActorPolicy::new(Rc::new(DenyAll)).hiding_catalog();

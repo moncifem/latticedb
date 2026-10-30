@@ -431,9 +431,12 @@ definitions are not (#379), so a recovered table cannot be addressed by SQL: `SE
 crash" from issue 345 is therefore **not met**: the data survives, SQL cannot read it back.
 
 **Limits.** One database thread runs statements serially; a connection waits at most the statement
-ceiling plus 5 s and then gets `57014` (the statement is cancelled and skipped if not started), but a
-client that disconnects mid-statement does not stop it before the ceiling, and the backlog of abandoned
-work can reach `max-connections x ceiling`; a dead database thread is detected (`57P01`, non-zero exit);
+ceiling plus 5 s and then gets `57014` (the statement is cancelled and skipped if not started, and an open
+transaction block is failed on the database side so a later `COMMIT` answers `ROLLBACK`; two unit tests
+stall the thread to show it, and fail without the fix), but a client that disconnects mid-statement does
+not stop it, `COMMIT`, DDL and an autocommit statement's commit are not cancelled once dequeued, so a
+`57014` after the ceiling means the outcome is unknown (an autocommit statement may have committed), and
+the backlog of abandoned work can reach `max-connections x ceiling`; a dead database thread is detected (`57P01`, non-zero exit);
 the SIGKILL test shows the row's bytes reached the log files, not that they were `fsync`ed; a statement cannot be interrupted inside the
 engine's scan materialisation or a sort comparison (see the `lattice-exec` README). Row policy has two
 grants, `allow-all` and `deny-all`. Binary result formats are not exercised. No driver conformance is claimed.
