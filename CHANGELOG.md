@@ -180,16 +180,6 @@ between minor versions; format changes are called out explicitly.
   with stable error codes; fuzz target `mcp_message` (not yet in a scheduled matrix). No transport,
   resources, prompts or authentication; see `docs/mcp-v0.md`.
 
-- `lattice-sql` logical plan IR (`plan`) and binder (`binder`) for single-table `SELECT`, `INSERT`,
-  `UPDATE` and `DELETE` (WP27, #119, P2-10 foundation): names and types resolve through an abstract
-  `CatalogView`, `$n` placeholders get types, bind errors carry PostgreSQL SQLSTATEs (`42P01`, `42703`,
-  `42804`, `22003`, `23502`). Joins, aggregates and DDL are refused with `0A000`. Plans carry table ids and the
-  catalog version. No execution.
-
-- ADR 0025 (accepted by the tech lead under the owner's delegation): build the SQL planner in house, with
-  a scope freeze, the differential harness as semantics authority and a numeric reopen trigger. ADR 0013
-  stays proposed.
-
 ### Changed
 
 - **Breaking (core API):** `Kernel::open` and `Log::open` no longer return every record. Recovery now holds
