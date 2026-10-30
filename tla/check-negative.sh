@@ -23,5 +23,6 @@ while read -r name model inv; do
 done <<EOF
 TreeMoveNoCycleCheck TreeMove Acyclic
 TreeMoveNoUndoRedo TreeMove Convergent
+TreeMoveNoDepthCheck TreeMove DepthBounded
 EOF
 exit "$status"

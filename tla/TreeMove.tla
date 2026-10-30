@@ -3,7 +3,8 @@
 \* lattice-core/src/crdt_tree.rs. Two replicas. Every change is a move of a node under a parent,
 \* stamped with a unique timestamp that is also its position in one total order. A delete is a move
 \* under the tombstone root Trash. A move whose parent is unknown, or that would make the node its
-\* own ancestor, is recorded but does nothing, identically on every replica.
+\* own ancestor, or that would put the node or anything below it deeper than MaxDepth (the depth cap
+\* of lattice-core, G-08), is recorded but does nothing, identically on every replica.
 \*
 \* Delivery: an operation is broadcast when created and each replica integrates it whenever it likes,
 \* so delivery is delayed, reordered and (the Deliver action also fires for operations already
@@ -16,21 +17,24 @@
 \* the operation set while the model runs, so the properties below are about the integrate rule:
 \*
 \*   Acyclic       no node is its own ancestor, at every replica, in every state
+\*   DepthBounded  no node is deeper than MaxDepth (Root and Trash are depth 0)
 \*   Rooted        every node reaches Root or Trash (no dangling parent, so deleted subtrees stay
 \*                 whole under Trash and a move into one lands in the trash too)
 \*   Convergent    replicas that logged the same operations hold the same tree
 \*   MatchesSerial a replica's tree equals a fresh replay of its own log in timestamp order, so the
 \*                 tree depends on the operation set and not on delivery order
 \*
-\* CheckCycles and Reorder switch the two protections off. tla/negative/*.cfg do that, and
-\* tla/check-negative.sh requires TLC to report the matching violation: without the cycle check
-\* Acyclic fails, without undo/redo Convergent fails.
+\* CheckCycles, Reorder and CheckDepth switch the three protections off. tla/negative/*.cfg do that,
+\* and tla/check-negative.sh requires TLC to report the matching violation: without the cycle check
+\* Acyclic fails, without undo/redo Convergent fails, without the depth rule DepthBounded fails.
+\* The Rust code keeps the height of each subtree instead of walking it; the model checks every node's
+\* depth after the move, which is the same condition.
 \*
 \* LIMITS: sibling positions are not modelled (they do not affect parentage); timestamps are plain
 \* integers, not hybrid clocks; no crash, no snapshot, no log compaction; two replicas, three nodes
 \* and four operations in the checked configuration.
 EXTENDS Naturals, FiniteSets, TLC
-CONSTANTS Nodes, Root, Trash, None, MaxTs, CheckCycles, Reorder
+CONSTANTS Nodes, Root, Trash, None, MaxTs, MaxDepth, CheckCycles, CheckDepth, Reorder
 VARIABLES tree, log, sent, used
 vars == <<tree, log, sent, used>>
 
@@ -61,11 +65,23 @@ ReachesTop(tr, from, k) ==
   ELSE IF tr[from] = None THEN FALSE
   ELSE ReachesTop(tr, tr[from], k - 1)
 
+\* Number of steps from `x` up to Root or Trash, bounded by fuel k.
+RECURSIVE Depth(_, _, _)
+Depth(tr, x, k) ==
+  IF x \in {Root, Trash} THEN 0
+  ELSE IF k = 0 \/ tr[x] = None THEN 0
+  ELSE 1 + Depth(tr, tr[x], k - 1)
+
+\* Would every node stay within MaxDepth after the move?
+Fits(tr, m) ==
+  LET t2 == [tr EXCEPT ![m.node] = m.parent]
+  IN \A x \in Nodes : t2[x] = None \/ Depth(t2, x, K) <= MaxDepth
+
 \* Decide one move against `tr` and perform it if valid. Returns the new tree and the log entry.
 Perform(tr, m) ==
   LET known == m.parent \in {Root, Trash} \/ tr[m.parent] # None
       cycle == CheckCycles /\ Reaches(tr, m.parent, m.node, K)
-      ok    == known /\ ~cycle
+      ok    == known /\ ~cycle /\ (~CheckDepth \/ Fits(tr, m))
   IN [tree  |-> IF ok THEN [tr EXCEPT ![m.node] = m.parent] ELSE tr,
       entry |-> [ts |-> m.ts, node |-> m.node, parent |-> m.parent, old |-> tr[m.node], ok |-> ok]]
 
@@ -143,6 +159,9 @@ TypeOK == /\ tree \in [Replicas -> [Nodes -> Targets \cup {None}]]
 
 Acyclic == \A r \in Replicas, n \in Nodes :
              tree[r][n] = None \/ ~Reaches(tree[r], tree[r][n], n, K)
+
+DepthBounded == \A r \in Replicas, n \in Nodes :
+                  tree[r][n] = None \/ Depth(tree[r], n, K) <= MaxDepth
 
 Rooted == \A r \in Replicas, n \in Nodes :
             tree[r][n] = None \/ ReachesTop(tree[r], tree[r][n], K)

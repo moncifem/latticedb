@@ -717,6 +717,7 @@ pub fn lattice_core::crdt_tree::Tree::op_count(&self) -> usize
 pub fn lattice_core::crdt_tree::Tree::parent(&self, lattice_core::crdt_tree::NodeId) -> core::option::Option<lattice_core::crdt_tree::NodeId>
 pub fn lattice_core::crdt_tree::Tree::snapshot(&self) -> lattice_core::crdt_tree::Snapshot
 pub fn lattice_core::crdt_tree::Tree::stable_frontier(&self) -> core::option::Option<lattice_abi::hlc::Hlc>
+pub fn lattice_core::crdt_tree::Tree::with_max_depth(self, usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_node_limit(self, usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_op_limit(usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_op_limit_and_reserve(usize, usize) -> Self

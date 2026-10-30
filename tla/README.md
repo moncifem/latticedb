@@ -12,14 +12,16 @@ TLA+ models checked by TLC. Each header states what the model covers and what it
 
 `TreeMove` keeps a materialised tree per replica and updates it with the undo, perform, redo rule of
 `lattice-core/src/crdt_tree.rs`; `Convergent` compares two replicas and `MatchesSerial` compares each
-replica with a fresh replay of its own log. Its checked bounds are 2 replicas, 3 nodes and 4 operations.
+replica with a fresh replay of its own log. Its checked bounds are 2 replicas, 3 nodes, 4 operations and a depth cap of 2 (`MaxDepth`, the model of
+`MAX_TREE_DEPTH`; `DepthBounded` is the invariant).
 The model keeps the whole log. Op-log compaction (`Tree::compact` in `crdt_tree.rs`) is not modelled in TLA+;
 it is covered by a property test against an uncompacted oracle and rests on the causal-stability contract
 stated in that module's docs.
 
 Negative tests: each config in `negative/` removes one protection from a model, and
 `check-negative.sh` requires TLC to fail with the named invariant. `TreeMoveNoCycleCheck` must violate
-`Acyclic` and `TreeMoveNoUndoRedo` must violate `Convergent`. A negative run that passes, or fails with
+`Acyclic`, `TreeMoveNoUndoRedo` must violate `Convergent` and `TreeMoveNoDepthCheck` must violate
+`DepthBounded`. A negative run that passes, or fails with
 a different invariant, fails `check-all.sh`.
 
 Run one with `tla/run-tlc.sh tla/<Model>.tla`, or all (models, then the negative tests) with `tla/check-all.sh`. Both need `java` and

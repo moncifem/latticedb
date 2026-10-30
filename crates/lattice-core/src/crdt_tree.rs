@@ -71,15 +71,23 @@
 //!   is [`TreeError::NodeLimitReached`] and, like an op-log refusal, is lost unless sent again.
 //! - **Depth**: a node, and everything below it, may not sit deeper than [`MAX_TREE_DEPTH`]. A move
 //!   that would is a no-op everywhere ([`Outcome::Skipped`]), decided at the move's place in the
-//!   total order like the cycle rule, so every delivery order agrees. Checking it walks the moved
-//!   subtree (as deep as the limit allows), which adds to the cost of replaying a late operation.
-//!   The TLA+ model in `tla/TreeMove.tla` does not include this rule.
-//! - **Share per origin**: through [`Tree::apply`] one origin node may hold at most
-//!   [`DEFAULT_ORIGIN_OP_LIMIT`] live ops (a quarter of the default log); see
-//!   [`Tree::with_origin_quota`]. Trees built with [`Tree::with_op_limit`] have no share until one is
-//!   set. The origin is the id's node, so the share binds a peer only when [`Tree::apply_from`]
-//!   (which also checks the node binding and the drift bound) is used. Several hostile origins can
-//!   still fill the log together.
+//!   total order like the cycle rule, so every delivery order agrees. The tree keeps the height of
+//!   every node's subtree (updated along the ancestor chain whenever a node moves), so the check
+//!   costs O(depth) however wide the moved subtree is. `tla/TreeMove.tla` models the rule
+//!   (`MaxDepth`, `CheckDepth`) and `tla/negative/TreeMoveNoDepthCheck.cfg` must violate
+//!   `DepthBounded`. [`Tree::with_max_depth`] lowers the limit.
+//! - **Share per origin**: a tree has no per-origin share for [`Tree::apply`] (a trusted bulk load
+//!   may use the whole log) until [`Tree::with_origin_quota`] sets one. [`Tree::apply_from`] always
+//!   enforces one, [`DEFAULT_ORIGIN_OP_LIMIT`] (a quarter of the default log) unless set. The origin
+//!   is the id's node, so the share binds a peer only through `apply_from`, which also checks the
+//!   node binding and the drift bound. Several hostile origins can still fill the log together.
+//! - **Relaying**: `apply_from` requires the id to carry the peer's own node, so it cannot forward
+//!   another replica's operations (hub or gossip topologies). A relay uses the trusting
+//!   [`Tree::apply`] after its own admission policy, or a future relay entry point; quotas are per
+//!   direct peer and so differ between replicas.
+//! - **Permanent divergence**: a refusal by the op, node or origin cap is local. The refused
+//!   operation is lost on this replica unless it is sent again, so replicas whose caps differ, or
+//!   that received operations in a different mix, can differ for good until a resync.
 //!
 //! # Operation encoding (version 1, little endian, 41 bytes)
 //!
@@ -206,9 +214,9 @@ pub const DEFAULT_NODE_LIMIT: usize = 1 << 20;
 /// Deepest position a node may hold, counting the roots as depth 0. A move that would put the node,
 /// or anything in its subtree, deeper is a no-op everywhere ([`Outcome::Skipped`]), like a cycle.
 pub const MAX_TREE_DEPTH: usize = 256;
-/// Default share of the live op log one origin node may fill through [`Tree::apply`]: a quarter of
-/// [`DEFAULT_OP_LIMIT`]. Trees built with [`Tree::with_op_limit`] have no per-origin share until
-/// [`Tree::with_origin_quota`] sets one.
+/// Share of the live op log one origin node may fill through [`Tree::apply_from`] when no share was
+/// set with [`Tree::with_origin_quota`]: a quarter of [`DEFAULT_OP_LIMIT`]. [`Tree::apply`] has no
+/// share unless one was set.
 pub const DEFAULT_ORIGIN_OP_LIMIT: usize = DEFAULT_OP_LIMIT / 4;
 
 impl Op {
@@ -313,8 +321,17 @@ pub struct Tree {
     reserve: usize,
     /// Cap on `parents.len()`; `0` means [`DEFAULT_NODE_LIMIT`].
     node_limit: usize,
-    /// Cap on live ops per origin node for remote ops; `0` means [`DEFAULT_ORIGIN_OP_LIMIT`].
+    /// Cap on live ops per origin node; `0` means none for [`Tree::apply`] and
+    /// [`DEFAULT_ORIGIN_OP_LIMIT`] for [`Tree::apply_from`].
     origin_limit: usize,
+    /// Deepest position allowed; `0` means [`MAX_TREE_DEPTH`].
+    max_depth: usize,
+    /// Height of each node's subtree (0 for a leaf, absent for a leaf), kept in step with
+    /// `parents` by `set`.
+    heights: BTreeMap<NodeId, usize>,
+    /// `(parent, height of the child's subtree, child)`: the tallest child of a parent is the last
+    /// entry in its range.
+    by_height: BTreeSet<(NodeId, usize, NodeId)>,
     /// Live ops in `log` per origin node (the id's node).
     origin_ops: BTreeMap<u32, usize>,
     /// Arrivals at or below the frontier.
@@ -347,7 +364,6 @@ impl Tree {
         Self {
             limit,
             reserve: reserve.min(limit - 1),
-            origin_limit: limit,
             ..Self::default()
         }
     }
@@ -360,9 +376,27 @@ impl Tree {
         self
     }
 
-    /// Caps the live ops one origin node may hold in the log through [`Tree::apply`] (at least 1);
-    /// local ops are not counted against it. The origin is the id's node, so the cap only binds
-    /// a peer when the transport binds node ids ([`Tree::apply_from`] does).
+    /// Lowers the deepest position a node may hold (at least 1; values above [`MAX_TREE_DEPTH`]
+    /// are clamped to it). Every replica of a document must use the same value, or they disagree
+    /// about which moves are no-ops.
+    #[must_use]
+    pub fn with_max_depth(mut self, depth: usize) -> Self {
+        self.max_depth = depth.clamp(1, MAX_TREE_DEPTH);
+        self
+    }
+
+    fn depth_cap(&self) -> usize {
+        if self.max_depth == 0 {
+            MAX_TREE_DEPTH
+        } else {
+            self.max_depth
+        }
+    }
+
+    /// Caps the live ops one origin node may hold in the log (at least 1), for remote ops through
+    /// [`Tree::apply`] and [`Tree::apply_from`]; local ops are never refused by it. The origin is
+    /// the id's node, so the cap only binds a peer when the transport binds node ids
+    /// ([`Tree::apply_from`] does).
     #[must_use]
     pub fn with_origin_quota(mut self, limit: usize) -> Self {
         self.origin_limit = limit.max(1);
@@ -377,7 +411,8 @@ impl Tree {
         }
     }
 
-    fn origin_cap(&self) -> usize {
+    /// The share for `apply_from`: the configured one, else the default.
+    fn peer_origin_cap(&self) -> usize {
         if self.origin_limit == 0 {
             DEFAULT_ORIGIN_OP_LIMIT
         } else {
@@ -449,16 +484,20 @@ impl Tree {
     /// Refused with [`TreeError::OpLimitReached`] once the log is within the local reserve of the cap.
     pub fn apply(&mut self, op: Op) -> Result<Outcome, TreeError> {
         let room = self.cap().saturating_sub(self.reserved());
-        self.apply_within(op, room.max(1), true)
+        let share = (self.origin_limit != 0).then_some(self.origin_limit);
+        self.apply_within(op, room.max(1), share)
     }
 
     /// Applies an operation from an authenticated peer. The id must carry the node bound to the
     /// peer ([`PeerError::ForgedNode`]) and be no further ahead of the caller's clock than the
     /// drift bound ([`PeerError::DriftTooLarge`]); a refusal changes nothing. Past that this is
-    /// [`Tree::apply`], including the per-origin quota, which the node binding makes meaningful.
+    /// [`Tree::apply`] with the per-origin share always enforced, which the node binding makes
+    /// meaningful. It cannot relay another replica's operations (see the module docs).
     pub fn apply_from(&mut self, peer: &PeerContext, op: Op) -> Result<Outcome, TreeError> {
         peer.admit(op.id).map_err(TreeError::Peer)?;
-        self.apply(op)
+        let room = self.cap().saturating_sub(self.reserved());
+        let share = Some(self.peer_origin_cap());
+        self.apply_within(op, room.max(1), share)
     }
 
     /// Applies a batch from an authenticated peer. The batch length
@@ -481,7 +520,7 @@ impl Tree {
         }
         let mut out = Vec::with_capacity(ops.len());
         for op in ops {
-            match self.apply(*op) {
+            match self.apply_from(peer, *op) {
                 Ok(o) => out.push(o),
                 Err(error) => {
                     return Err(BatchError {
@@ -501,10 +540,15 @@ impl Tree {
 
     /// Applies an operation issued by this replica; may use the headroom reserved for local ops.
     pub fn apply_local(&mut self, op: Op) -> Result<Outcome, TreeError> {
-        self.apply_within(op, self.cap(), false)
+        self.apply_within(op, self.cap(), None)
     }
 
-    fn apply_within(&mut self, op: Op, room: usize, remote: bool) -> Result<Outcome, TreeError> {
+    fn apply_within(
+        &mut self,
+        op: Op,
+        room: usize,
+        share: Option<usize>,
+    ) -> Result<Outcome, TreeError> {
         if op.node.is_reserved() {
             return Err(TreeError::ReservedNode);
         }
@@ -523,13 +567,13 @@ impl Tree {
         if self.log.len() >= room {
             return Err(TreeError::OpLimitReached { limit: self.cap() });
         }
-        if remote
-            && self.origin_ops.get(&op.id.node).copied().unwrap_or(0) >= self.origin_cap()
+        if let Some(limit) = share
+            && self.origin_ops.get(&op.id.node).copied().unwrap_or(0) >= limit
             && !bugs::active(Bug::TreeOriginQuotaSkipped)
         {
             return Err(TreeError::OriginQuota {
                 node: op.id.node,
-                limit: self.origin_cap(),
+                limit,
             });
         }
         if !self.parents.contains_key(&op.node)
@@ -598,10 +642,10 @@ impl Tree {
         }
     }
 
-    /// Depth of `node` (roots are 0), or `None` when it is deeper than [`MAX_TREE_DEPTH`].
+    /// Depth of `node` (roots are 0), or `None` when it is deeper than the depth cap.
     fn depth_of(&self, node: NodeId) -> Option<usize> {
         let mut cur = node;
-        for depth in 0..=MAX_TREE_DEPTH {
+        for depth in 0..=self.depth_cap() {
             match self.parents.get(&cur) {
                 Some((p, _)) => cur = *p,
                 None => return Some(depth),
@@ -610,28 +654,73 @@ impl Tree {
         None
     }
 
-    /// Whether moving `node` under `parent` keeps `node` and everything below it within
-    /// [`MAX_TREE_DEPTH`]. Visits the moved subtree only as deep as the limit allows.
+    fn height(&self, node: NodeId) -> usize {
+        self.heights.get(&node).copied().unwrap_or(0)
+    }
+
+    /// Whether moving `node` under `parent` keeps `node` and everything below it within the depth
+    /// cap. O(depth): the subtree height is kept, not walked.
     fn fits_depth(&self, node: NodeId, parent: NodeId) -> bool {
-        let Some(base) = self.depth_of(parent).map(|d| d + 1) else {
-            return false;
-        };
-        if base > MAX_TREE_DEPTH {
-            return false;
-        }
-        let mut stack: Vec<(NodeId, usize)> = vec![(node, base)];
-        while let Some((n, depth)) = stack.pop() {
-            for (_, _, child) in self
-                .kids
-                .range((n, 0, NodeId(0))..=(n, u64::MAX, NodeId(u64::MAX)))
-            {
-                if depth + 1 > MAX_TREE_DEPTH {
-                    return false;
-                }
-                stack.push((*child, depth + 1));
+        self.depth_of(parent)
+            .is_some_and(|d| d + 1 + self.height(node) <= self.depth_cap())
+    }
+
+    /// Recomputes the height of `start` from its tallest child and carries a change up the
+    /// ancestor chain. Stops at the first unchanged height, at a root, or after one step per node
+    /// (which only a planted cycle defect can reach).
+    fn refresh_heights(&mut self, start: NodeId) {
+        let mut cur = start;
+        for _ in 0..=self.parents.len() {
+            let tallest = self
+                .by_height
+                .range((cur, 0, NodeId(0))..=(cur, usize::MAX, NodeId(u64::MAX)))
+                .next_back()
+                .map(|(_, h, _)| *h);
+            let new_h = tallest.map_or(0, |h| h + 1);
+            let old_h = self.height(cur);
+            if new_h == old_h {
+                return;
+            }
+            let parent = self.parents.get(&cur).map(|(p, _)| *p);
+            if let Some(p) = parent {
+                self.by_height.remove(&(p, old_h, cur));
+                self.by_height.insert((p, new_h, cur));
+            }
+            if new_h == 0 {
+                self.heights.remove(&cur);
+            } else {
+                self.heights.insert(cur, new_h);
+            }
+            match parent {
+                Some(p) => cur = p,
+                None => return,
             }
         }
-        true
+    }
+
+    /// Checks `heights` and `by_height` against the parent map, recomputed from scratch.
+    #[cfg(test)]
+    pub(crate) fn heights_are_consistent(&self) -> bool {
+        let mut want: BTreeMap<NodeId, usize> = BTreeMap::new();
+        for start in self.parents.keys() {
+            let mut cur = *start;
+            let mut h = 0;
+            while let Some((p, _)) = self.parents.get(&cur) {
+                h += 1;
+                let e = want.entry(*p).or_insert(0);
+                *e = (*e).max(h);
+                cur = *p;
+                if h > self.parents.len() {
+                    return false;
+                }
+            }
+        }
+        let have: BTreeMap<NodeId, usize> = self.heights.clone();
+        let entries_ok = self.by_height.len() == self.parents.len()
+            && self.by_height.iter().all(|(p, h, c)| {
+                self.parents.get(c).map(|x| x.0) == Some(*p) && *h == self.height(*c)
+            });
+        want == have && entries_ok
     }
 
     /// Whether `node` is `parent` or an ancestor of it.
@@ -652,10 +741,16 @@ impl Tree {
     fn set(&mut self, node: NodeId, to: Option<(NodeId, u64)>) {
         if let Some((p, pos)) = self.parents.remove(&node) {
             self.kids.remove(&(p, pos, node));
+            let h = self.height(node);
+            self.by_height.remove(&(p, h, node));
+            self.refresh_heights(p);
         }
         if let Some((p, pos)) = to {
             self.parents.insert(node, (p, pos));
             self.kids.insert((p, pos, node));
+            let h = self.height(node);
+            self.by_height.insert((p, h, node));
+            self.refresh_heights(p);
         }
     }
 

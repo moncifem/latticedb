@@ -666,3 +666,106 @@ proptest! {
         prop_assert!(t.op_count() <= 64);
     }
 }
+
+// ---- depth rule: convergence, subtree height, origin share defaults --------------------------
+
+fn depth_in(snapshot: &tree::Snapshot, node: NodeId) -> usize {
+    let mut cur = node;
+    let mut depth = 0;
+    while let Some((_, p, _)) = snapshot.entries.iter().find(|(n, _, _)| *n == cur) {
+        depth += 1;
+        cur = *p;
+        assert!(depth <= snapshot.entries.len() + 1, "cycle");
+    }
+    depth
+}
+
+proptest! {
+    /// With a small depth limit the rule fires often; every delivery order must agree on the tree,
+    /// the tree must respect the limit, and the cached subtree heights must match a recount.
+    #[test]
+    fn the_depth_rule_converges_under_any_delivery_order(
+        moves in prop::collection::vec((2u64..8, 0u64..8, 0u64..3), 2..24),
+        orders in prop::collection::vec(prop::collection::vec(any::<u32>(), 24), 5),
+    ) {
+        const CAP: usize = 3;
+        let ops: Vec<tree::Op> = moves
+            .iter()
+            .enumerate()
+            .map(|(i, (n, p, pos))| {
+                tree::Op::new(h(10 + i as u64, (i % 3) as u32), NodeId(*n), NodeId(*p), *pos)
+            })
+            .collect();
+        let run = |order: &[usize]| {
+            let mut t = tree::Tree::new().with_max_depth(CAP);
+            for i in order {
+                t.apply(ops[*i]).unwrap();
+            }
+            t
+        };
+        let natural: Vec<usize> = (0..ops.len()).collect();
+        let reference = run(&natural);
+        let snap = reference.snapshot();
+        prop_assert!(reference.is_acyclic());
+        prop_assert!(reference.heights_are_consistent());
+        for (n, _, _) in &snap.entries {
+            prop_assert!(depth_in(&snap, *n) <= CAP);
+        }
+        for keys in &orders {
+            let mut order = natural.clone();
+            order.sort_by_key(|i| keys[*i]);
+            let t = run(&order);
+            prop_assert!(t.heights_are_consistent());
+            prop_assert_eq!(t.snapshot(), snap.clone());
+        }
+    }
+}
+
+#[test]
+fn moving_a_very_wide_subtree_checks_depth_by_height_not_by_walking() {
+    let mut t = tree::Tree::new();
+    for i in 1..=255u64 {
+        let parent = if i == 1 { 0 } else { link(i - 1) };
+        t.apply(mv(i, 1, link(i), parent)).unwrap();
+    }
+    // A hub with many leaf children: height 1, however many children it has.
+    t.apply(mv(300, 2, 9000, 0)).unwrap();
+    for c in 0..3000u64 {
+        t.apply(mv(301 + c, 2, 10_000 + c, 9000)).unwrap();
+    }
+    assert!(t.heights_are_consistent());
+    // Under the node at depth 254 the hub sits at 255 and its children at 256: allowed.
+    assert_eq!(
+        t.apply(mv(5000, 3, 9000, link(254))),
+        Ok(tree::Outcome::Applied)
+    );
+    // Moving it under the node at depth 255 would put its children at 257: a no-op.
+    assert_eq!(
+        t.apply(mv(5001, 3, 9000, link(255))),
+        Ok(tree::Outcome::Skipped)
+    );
+    assert_eq!(t.parent(NodeId(9000)), Some(NodeId(link(254))));
+    assert!(t.heights_are_consistent());
+    // Moving it away and back keeps the cached heights right.
+    t.apply(mv(5002, 3, 9000, 0)).unwrap();
+    assert!(t.heights_are_consistent());
+}
+
+#[test]
+fn trusted_apply_has_no_origin_share_until_one_is_set() {
+    let mut t = tree::Tree::with_op_limit(100);
+    for w in 1..=50u64 {
+        assert!(t.apply(mv(w, 1, 10 + w, 0)).is_ok());
+    }
+    let mut capped = tree::Tree::with_op_limit(100).with_origin_quota(3);
+    for w in 1..=3u64 {
+        capped.apply(mv(w, 1, 10 + w, 0)).unwrap();
+    }
+    assert_eq!(
+        capped.apply(mv(4, 1, 20, 0)),
+        Err(TreeError::OriginQuota { node: 1, limit: 3 })
+    );
+    // A peer entry point always has a share, the default one when none was set.
+    let mut peer = tree::Tree::with_op_limit(100);
+    assert!(peer.apply_from(&ctx(1), mv(1, 1, 10, 0)).is_ok());
+}

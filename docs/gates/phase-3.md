@@ -27,14 +27,19 @@ G-08). `lattice-core::crdt_peer` defines `PeerContext` and the limits `MAX_BATCH
 changes. `crdt_peer_tests.rs` holds a scenario per limit, three property tests with generated hostile peers
 (refused input changes nothing, a flood cannot starve an honest peer, a hostile tree peer stays inside its share)
 and eight planted bugs (`Bug::CRDT_PEER`) that the scenarios catch. Not done: nothing in the repository calls these
-entry points yet (no sync layer), the compaction frontier is still trusted, and the depth rule is not in
-`tla/TreeMove.tla`.
+entry points yet (no sync layer) and the compaction frontier is still trusted. The depth rule is in
+`tla/TreeMove.tla` (`MaxDepth = 2`, invariant `DepthBounded`) with `tla/negative/TreeMoveNoDepthCheck.cfg`,
+which must violate it. One local run of the negative config reported the violation in about 1 s. TLC 2.19 was
+used for these runs, not the version pinned for CI.
 
 Verification evidence, not an exit criterion: `tla/TreeMove.tla` (WP43, issue #245) models the tree CRDT
-move rule with 2 replicas, 3 nodes and 4 operations. One local run with a single worker explored
-6,635,881 states (751,243 distinct) in 45 to 48 s (two runs) with no violation of `Acyclic`, `Rooted`, `Convergent` or
-`MatchesSerial`. With the cycle check removed TLC reports `Acyclic` violated, and with undo and redo of
-later-ordered operations removed it reports `Convergent` violated (`tla/check-negative.sh`). Not run
+move rule and the depth cap (`MaxDepth = 2`) with 2 replicas, 3 nodes and 4 operations. The first local run
+(before the depth rule was added) used a single worker and explored 6,635,881 states (751,243 distinct) in 45 to
+48 s (two runs); a run with the depth rule on (TLC 2.19, one worker, 1 min 15 s) explored the same counts, as
+expected because the entry flag is a function of the operations, with no violation of `Acyclic`, `DepthBounded`,
+`Rooted`, `Convergent` or `MatchesSerial`. With the cycle check removed TLC reports `Acyclic` violated, with undo and
+redo of later-ordered operations removed it reports `Convergent` violated, and with the depth rule removed it
+reports `DepthBounded` violated (`tla/check-negative.sh`; all three were re-run one by one after this change; the cycle config also turns the depth rule off, because that rule refuses a cycle too). Not run
 on CI yet; simulation, row integration and op-log growth measurement of WP43 are still open.
 
 Network hardening of the `latticed` listener (issue #347, no exit criterion): separate idle timeout, absolute
