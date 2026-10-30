@@ -66,3 +66,47 @@ fn recorded_scenario_runs_reproduce_exactly() {
         );
     }
 }
+
+/// profile, summed trace hash, recoveries, acked, power cuts, no-space events, cut short, incomplete
+type Sweep = (&'static str, u64, u64, u64, u64, u64, u64, u64);
+
+#[rustfmt::skip]
+const SWEEPS: [Sweep; 5] = [
+    ("clean", 0x3d94c0bd2ba11bfa, 5095, 33447, 3208, 0, 0, 0),
+    ("crash-heavy", 0x9fa8509780408a86, 5043, 33855, 3130, 0, 0, 0),
+    ("disk-faulty", 0xf7b6d5c8c136b433, 11376, 20275, 4383, 7449, 24, 0),
+    ("hostile", 0xe0fafa7ae739b57d, 4685, 28221, 3167, 0, 65, 0),
+    ("everything", 0x477819ae27ca25b0, 9961, 12226, 3178, 7701, 0, 64),
+];
+
+#[test]
+fn recorded_scenario_sweeps_reproduce_exactly() {
+    // 100 seeds per profile, 250 steps, small segments: far more rotations, recoveries and rare error
+    // paths than the single runs above, summed so one line per profile pins all of them.
+    for (name, hash, recoveries, acked, power_cuts, no_space, cut_short, incomplete) in SWEEPS {
+        let profile = profiles().iter().find(|(n, _)| *n == name).unwrap().1;
+        let mut got = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+        for seed in 100..200u64 {
+            let o = run(seed, profile, 250, 1024);
+            assert!(
+                o.violations.is_empty(),
+                "{name} seed {seed}: {:?}",
+                o.violations
+            );
+            got.0 = got.0.wrapping_add(o.trace_hash);
+            got.1 += u64::from(o.recoveries);
+            got.2 += o.acked as u64;
+            got.3 += o.power_cuts;
+            got.4 += o.no_space;
+            got.5 += u64::from(o.cut_short);
+            got.6 += u64::from(o.incomplete);
+        }
+        assert_eq!(
+            got,
+            (
+                hash, recoveries, acked, power_cuts, no_space, cut_short, incomplete
+            ),
+            "{name}"
+        );
+    }
+}
