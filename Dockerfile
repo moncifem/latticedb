@@ -1,7 +1,7 @@
 # Runtime image for latticed and the lattice CLI. The release workflow builds the binaries once per
 # architecture and copies them in, so the image holds exactly what the release archives hold.
 # Build context layout: bin/amd64/{latticed,lattice} and bin/arm64/{latticed,lattice}.
-FROM ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
 
 ARG TARGETARCH
 RUN useradd --system --uid 10001 --home-dir /var/lib/lattice --create-home lattice
