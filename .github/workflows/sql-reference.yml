@@ -1,8 +1,11 @@
 name: sql-reference
 
-# Checks the sqllogictest scripts against PostgreSQL 17 before a change merges. The same check runs
-# every night in nightly.yml (the job is duplicated here; it could become a reusable workflow).
+# Checks the sqllogictest scripts against PostgreSQL 17. This file is the only definition: it runs
+# on pull requests that touch the scripts or the checker, by hand, and every night as a reusable
+# workflow called from nightly.yml, so the pinned PostgreSQL digest, the service setup and the
+# report artifact live in one place.
 on:
+  workflow_call:
   pull_request:
     paths:
       - crates/lattice-testkit/tests/slt/**
@@ -15,8 +18,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: sql-reference-${{ github.ref }}
-  cancel-in-progress: true
+  # In a called workflow github.workflow is the caller's name, so a nightly call never shares a
+  # group with a pull request run; only a superseded pull request run is cancelled.
+  group: sql-reference-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sql-reference:

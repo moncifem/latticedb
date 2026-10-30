@@ -1,6 +1,6 @@
 # fuzz
 
-`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire`, `sql_parse`, `wal_record`, `row_ops`, `catalog_decode`, `typed_row_decode` and `feed_decode`.
+`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire`, `sql_parse`, `wal_record`, `row_ops`, `catalog_decode`, `typed_row_decode`, `feed_decode`, `sync_frame`, `plugin_jsonl`, `mcp_message`, `outbox_decode`, `crdt_text_decode`, `crdt_tree_decode` and `conflict_decode`.
 
 ```sh
 cd fuzz
@@ -10,7 +10,7 @@ cargo +nightly fuzz run wal_record corpus/wal_record seeds/wal_record
 
 - `seeds/<target>/` holds small, valid and near-valid inputs committed to the repository. The scheduled runs read them next to the generated, uncommitted `corpus/<target>/`.
 - Every fixed crash adds its minimized input to `seeds/<target>/` and a regression test beside the code it broke.
-- The nightly matrix gives each target ten minutes; the weekly and manual `fuzz-24h` workflows have their own budgets. All three list every target here except `trivial`, and `python3 tools/check_fuzz_matrices.py` (run by the pull request gate) fails when a target is missing from any of them. The same gate runs `cargo check --manifest-path fuzz/Cargo.toml --bins --locked`.
+- The nightly matrix gives each target ten minutes; the weekly and manual `fuzz-24h` workflows have their own budgets. All three list every target here except `trivial`, and `python3 tools/check_fuzz_matrices.py` (run by the pull request gate) fails when a target is missing from any of them or when `seeds/<target>/` holds no file. The same gate runs `cargo check --manifest-path fuzz/Cargo.toml --bins --locked`.
 - Scheduled fuzz jobs use the pinned toolchain `nightly-2026-10-27` and `cargo-fuzz@0.13.2`.
 
 ## Plugin JSONL target
@@ -79,3 +79,21 @@ re-encode to exactly the same bytes (one canonical form), restore again to the s
 sparse counters, a bad checksum, truncation, a wrong version and magic, a trailing byte, unsorted counters, a
 counter beyond the next one, an item on a fenced turn, an unknown kind and invalid UTF-8. The target is registered
 in the nightly, weekly and manual 24-hour matrices.
+
+## CRDT operation and conflict decode targets
+
+- `crdt_text_decode` decodes a text CRDT operation (`lattice_core::crdt_text::Op`).
+- `crdt_tree_decode` decodes a tree move (`lattice_core::crdt_tree::Op`, exactly 41 bytes).
+- `conflict_decode` decodes a workflow conflict entity (`lattice_core::workflow::ConflictEntity`).
+
+Each decoder accepts only canonical bytes, so an input that decodes must re-encode to exactly the input;
+`conflict_decode` also decodes the input a second time and expects an equal value. Seeds in
+`seeds/crdt_text_decode/`, `seeds/crdt_tree_decode/` and `seeds/conflict_decode/` are written by
+`seeds/generate_crdt_workflow_seeds.py` from the documented byte layouts, with `struct` and not the Rust
+encoders (`python3 seeds/generate_crdt_workflow_seeds.py --check` verifies them). They cover each valid
+operation kind, the extremes of the tree position, a resolved and an open conflict, and refusals: wrong
+version, unknown kind or flag, empty or invalid UTF-8 text, a non-causal anchor, an offset past the chunk, a zero
+id, reserved tree nodes, wrong lengths, a trailing byte, truncation, a zero ordinal, a single proposal,
+unsorted proposals, options that do not match the proposals and a resolution that is not an option. The
+targets are registered in the nightly, weekly and manual 24-hour matrices; registration is not evidence that
+those runs have completed.

@@ -85,7 +85,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, sql_parse, wal_record, row_ops, catalog_decode, typed_row_decode, sync_frame, plugin_jsonl, feed_decode, mcp_message, outbox_decode]
+        target: [changeset_decode, id_parse, log_open, lsl_parse, pgwire, sql_parse, wal_record, row_ops, catalog_decode, typed_row_decode, sync_frame, plugin_jsonl, feed_decode, mcp_message, outbox_decode, crdt_text_decode, crdt_tree_decode, conflict_decode]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -266,26 +266,8 @@ jobs:
           retention-days: 90
   sql-reference:
     # The subset scripts state what PostgreSQL answers; this keeps the expected values honest until
-    # an engine runs them.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:17@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
-        env: { POSTGRES_PASSWORD: ci }
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      PGHOST: localhost
-      PGUSER: postgres
-      PGPASSWORD: ci
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: check the sqllogictest scripts against PostgreSQL 17
-        run: python3 tools/slt_reference.py crates/lattice-testkit/tests/slt/*.test
+    # an engine runs them. Defined once in sql-reference.yml, which pull requests also use.
+    uses: ./.github/workflows/sql-reference.yml
   cancel-loom:
     uses: ./.github/workflows/cancel-loom.yml
 

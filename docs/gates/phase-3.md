@@ -128,3 +128,9 @@ in the codecs, five in the client; for example a loosened text length bound, a s
 cursor order without length first, resume from the delivered instead of the acknowledged cursor, ping and ack-batch off by one) and each
 made the tests fail; ten of the eleven codec defects were caught by the conformance vectors alone (a `bool` accepted as a number, which no vector contains, by the unit tests). The workflow `clients-python.yml` has not run on CI yet.
 The Go client, a generator and the agent plugin contract in Python are not done, and no client talks to a server, because none exists.
+
+Verification evidence, not an exit criterion: the text CRDT operation, tree move and workflow conflict decoders
+have fuzz targets `crdt_text_decode`, `crdt_tree_decode` and `conflict_decode` (34 checked-in seeds), registered
+in the nightly, weekly and manual 24-hour matrices; `tools/check_fuzz_matrices.py` now also requires seeds for
+every target. A one-off local read of each seed through its decoder gave the intended accept or refusal; no
+scheduled or manual fuzz run of the three targets has been observed, so no fuzz duration is claimed.

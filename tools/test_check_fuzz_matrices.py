@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import check_fuzz_matrices as check
 
@@ -43,10 +45,33 @@ class CheckFuzzMatrices(unittest.TestCase):
         with self.assertRaises(ValueError):
             check.problems(CARGO, {'a.yml': workflow('alpha, alpha, beta')})
 
-    def test_repository_matrices_are_complete(self):
+    def test_target_without_seeds_is_reported(self):
+        flows = {'a.yml': workflow('alpha, beta')}
+        self.assertEqual(check.problems(CARGO, flows, {'alpha'}),
+                         ['fuzz/seeds/beta: no seed files for fuzz target `beta`'])
+
+    def test_seeded_targets_pass_and_trivial_needs_no_seeds(self):
+        flows = {'a.yml': workflow('alpha, beta')}
+        self.assertEqual(check.problems(CARGO, flows, {'alpha', 'beta'}), [])
+
+    def test_seeds_are_not_checked_unless_given(self):
+        self.assertEqual(check.problems(CARGO, {'a.yml': workflow('alpha, beta')}), [])
+
+    def test_seeded_targets_ignores_empty_directories_and_stray_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'full').mkdir()
+            (root / 'full' / 'seed').write_bytes(b'x')
+            (root / 'empty').mkdir()
+            (root / 'nested').mkdir()
+            (root / 'nested' / 'inner').mkdir()
+            (root / 'stray.py').write_text('')
+            self.assertEqual(check.seeded_targets(root), {'full'})
+
+    def test_repository_matrices_are_complete_and_seeded(self):
         cargo = (check.ROOT / 'fuzz/Cargo.toml').read_text()
         flows = {n: (check.ROOT / '.github/workflows' / n).read_text() for n in check.MATRICES}
-        self.assertEqual(check.problems(cargo, flows), [])
+        self.assertEqual(check.problems(cargo, flows, check.seeded_targets(check.ROOT / 'fuzz/seeds')), [])
 
 
 if __name__ == '__main__':

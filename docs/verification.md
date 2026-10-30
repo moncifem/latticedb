@@ -107,3 +107,22 @@ cargo kani -p lattice-core --harness move_into_own_subtree_is_a_no_op   # expect
 A second variant for the cursor proofs: change `to_be_bytes` to `to_le_bytes` for the lsn in
 `Cursor::to_bytes`; `cursor_order_matches_lsn_index_and_bytes` must fail, and
 `cursor_round_trips` too, because the decoder reads big endian.
+
+## Scheduled fuzz targets and the SQL reference check
+
+These two checks are not Kani proofs; they are recorded here because the same files guard them.
+
+- **Fuzz matrix.** Every bin in `fuzz/Cargo.toml` except `trivial` is listed in the nightly, weekly and
+  manual 24-hour matrices, and `tools/check_fuzz_matrices.py` (run by the pull request gate) also
+  fails when `fuzz/seeds/<target>/` has no file, because the scheduled jobs pass that directory to
+  cargo-fuzz. The checker covers 18 targets. Three were added with the Phase 3 decoders:
+  `crdt_text_decode`, `crdt_tree_decode` and `conflict_decode`; each requires that an input that decodes
+  re-encodes to the exact input bytes. Their 34 seeds come from `fuzz/seeds/generate_crdt_workflow_seeds.py`
+  (Python `struct`, not the Rust encoders; `--check` verifies the tracked bytes). A one-off local read of
+  every seed through the three decoders gave the intended accept or refusal for each. Registering a target
+  is not evidence of a completed fuzz run: no scheduled run of the three new targets has been observed yet.
+- **SQL reference check.** `.github/workflows/sql-reference.yml` is the single definition of the check of
+  the sqllogictest scripts against PostgreSQL 17 (pinned by digest). Pull requests that touch the scripts
+  or `tools/slt_reference.py` run it, and `nightly.yml` calls it as a reusable workflow, so the digest, the
+  service setup and the `sql-reference-report` artifact are no longer duplicated. The nightly run now
+  uploads that report too. The first nightly run through the reusable workflow has not been observed.

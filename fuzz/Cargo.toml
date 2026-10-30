@@ -133,3 +133,24 @@ path = "fuzz_targets/outbox_decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "crdt_text_decode"
+path = "fuzz_targets/crdt_text_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "conflict_decode"
+path = "fuzz_targets/conflict_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crdt_tree_decode"
+path = "fuzz_targets/crdt_tree_decode.rs"
+test = false
+doc = false
+bench = false
