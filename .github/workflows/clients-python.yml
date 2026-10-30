@@ -1,0 +1,50 @@
+name: clients-python
+# Tests the Python client against the vectors the Rust side wrote. The Rust side of the same check
+# (the vector file must match the Rust codecs) runs in the `pr` workflow. The client has no
+# dependencies, so nothing is installed.
+on:
+  pull_request:
+    paths:
+      - 'clients/python/**'
+      - 'conformance/**'
+      - '.github/workflows/clients-python.yml'
+permissions:
+  contents: read
+concurrency:
+  group: clients-python-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  python:
+    name: python (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Standard library only
+        run: |
+          python -c '
+          import sys
+          before = set(sys.modules)
+          import lattice_client
+          added = {m.split(".")[0] for m in set(sys.modules) - before}
+          extra = sorted(added - set(sys.stdlib_module_names) - {"lattice_client"})
+          if extra:
+              sys.exit("the client must import only the standard library, found: " + ", ".join(extra))
+          '
+      - name: Test
+        env:
+          LATTICE_PY_CASES: "20000"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -W error -m unittest discover -v
