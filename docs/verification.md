@@ -155,6 +155,12 @@ These two checks are not Kani proofs; they are recorded here because the same fi
   (Python `struct`, not the Rust encoders; `--check` verifies the tracked bytes). A one-off local read of
   every seed through the three decoders gave the intended accept or refusal for each. Registering a target
   is not evidence of a completed fuzz run: no scheduled run of the three new targets has been observed yet.
+- **SQL reference check.** `.github/workflows/sql-reference.yml` is the single definition of the check of
+  the sqllogictest scripts against PostgreSQL 17 (pinned by digest). Pull requests that touch the scripts
+  or `tools/slt_reference.py` run it, and `nightly.yml` calls it as a reusable workflow, so the digest, the
+  service setup and the `sql-reference-report` artifact are no longer duplicated. The nightly run now
+  uploads that report too. The first nightly run through the reusable workflow has not been observed.
+
 - **Fuzz limits and corpus.** Until this change no scheduled run set `-timeout` or `-max_len`, so
   libFuzzer used 1200 s per input (longer than the 600 s nightly run) and 4096 bytes (below the 1 MiB
   limits of the SQL, pgwire, sync, WebSocket and plugin decoders), and the nightly job started from
@@ -164,9 +170,5 @@ These two checks are not Kani proofs; they are recorded here because the same fi
   from `actions/cache`, merges it with `-merge=1` after the run and saves it only from the scheduled
   run on the default branch. None of this has run on a schedule yet: the timeout and size values are
   choices, no hang has been reproduced through the nightly job, and the cache hit rate and corpus
-  growth are unobserved.
-- **SQL reference check.** `.github/workflows/sql-reference.yml` is the single definition of the check of
-  the sqllogictest scripts against PostgreSQL 17 (pinned by digest). Pull requests that touch the scripts
-  or `tools/slt_reference.py` run it, and `nightly.yml` calls it as a reusable workflow, so the digest, the
-  service setup and the `sql-reference-report` artifact are no longer duplicated. The nightly run now
-  uploads that report too. The first nightly run through the reusable workflow has not been observed.
+  growth are unobserved. The nightly fuzz job now has a 60-minute limit; that figure is a guess,
+  because no run has timed its cold build (the job has no rust-cache) or the merge.

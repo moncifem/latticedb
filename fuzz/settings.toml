@@ -55,7 +55,7 @@ basis = "no byte cap in the codec; counts are bounded by the input length"
 
 [targets.catalog_decode]
 max_len = 65536
-basis = "names are capped at 255 bytes and index operations at 4096; 64 KiB holds a full catalog payload"
+basis = "names are capped at 255 bytes and index operations at 4096 (lattice-engines catalog); no byte cap and no measured largest payload, 64 KiB is a choice that reaches many entries"
 
 [targets.typed_row_decode]
 max_len = 65536

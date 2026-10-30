@@ -77,8 +77,14 @@ def command_after(text, start):
     return ' '.join(joined)
 
 
+def without_comments(text):
+    """Drop whole-line and trailing ` #` comments, so a mention of $FUZZ_FLAGS in a comment proves nothing."""
+    return '\n'.join(re.sub(r'(^|\s)#.*$', '', line) for line in text.split('\n'))
+
+
 def workflow_flag_problems(label, text):
     """Every `fuzz run` command must pass $FUZZ_FLAGS, and the workflow must build it from the settings."""
+    text = without_comments(text)
     runs = [m.start() for m in FUZZ_RUN.finditer(text)]
     if not runs:
         return []
@@ -99,7 +105,7 @@ def flags_for(settings, target):
     return f"-timeout={defaults['timeout_secs']} -rss_limit_mb={defaults['rss_limit_mb']} -max_len={entry['max_len']}"
 
 
-def problems(cargo_text, workflows, seeded=None, settings=None):
+def problems(cargo_text, workflows, seeded=None, settings=None, other_workflows=None):
     """Return one message per mismatch; `workflows` maps a label to the workflow file text.
 
     `seeded` is the set of target names whose `fuzz/seeds/<target>/` directory holds at least one
@@ -121,6 +127,10 @@ def problems(cargo_text, workflows, seeded=None, settings=None):
             found.append(f'{label}: matrix lists `{name}`, which is not a bin in fuzz/Cargo.toml')
         if settings is not None:
             found.extend(workflow_flag_problems(label, text))
+    if settings is not None:
+        for label, text in (other_workflows or {}).items():
+            if label not in workflows:
+                found.extend(workflow_flag_problems(label, text))
     return found
 
 
@@ -147,7 +157,9 @@ def main(argv=None):
         return 0
     cargo = (ROOT / 'fuzz/Cargo.toml').read_text()
     workflows = {name: (ROOT / '.github/workflows' / name).read_text() for name in MATRICES}
-    found = problems(cargo, workflows, seeded_targets(ROOT / 'fuzz/seeds'), load_settings())
+    others = {p.name: p.read_text() for p in sorted((ROOT / '.github/workflows').glob('*.yml'))
+              if FUZZ_RUN.search(without_comments(p.read_text()))}
+    found = problems(cargo, workflows, seeded_targets(ROOT / 'fuzz/seeds'), load_settings(), others)
     for message in found:
         print(message, file=sys.stderr)
     if found:

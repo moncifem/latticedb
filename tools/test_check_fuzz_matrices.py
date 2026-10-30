@@ -185,6 +185,38 @@ class CheckFuzzSettings(unittest.TestCase):
     def test_workflow_without_fuzz_run_needs_no_flags(self):
         self.assertEqual(self.run_problems(text=''), [])
 
+    def test_flags_variable_only_in_a_comment_does_not_count(self):
+        for text in (
+            '      - run: |\n          F=$(python3 ../tools/check_fuzz_matrices.py flags "$T")\n'
+            '          # cargo fuzz run x c -- $FUZZ_FLAGS\n          cargo fuzz run x c -- -max_total_time=1\n',
+            '      - run: |\n          F=$(python3 ../tools/check_fuzz_matrices.py flags "$T")\n'
+            '          cargo fuzz run x c -- -max_total_time=1 # $FUZZ_FLAGS\n',
+            '      - run: |\n          F=$(python3 ../tools/check_fuzz_matrices.py flags "$T")\n'
+            '          cargo fuzz run x c -- \\\n            # $FUZZ_FLAGS\n            -max_total_time=1\n',
+        ):
+            found = self.run_problems(text=text)
+            self.assertTrue(any('does not pass $FUZZ_FLAGS' in m for m in found), text)
+
+    def test_fuzz_run_mentioned_only_in_a_comment_is_ignored(self):
+        self.assertEqual(self.run_problems(text='      # cargo fuzz run x c\n'), [])
+
+    def test_other_workflow_with_fuzz_run_is_checked(self):
+        flows = {'a.yml': workflow('alpha, beta') + RUN_OK}
+        other = {'extra.yml': '      - run: cargo fuzz run x c -- -max_total_time=1\n'}
+        found = check.problems(CARGO, flows, None, SETTINGS, other)
+        self.assertEqual(len(found), 2)
+        self.assertTrue(all(m.startswith('extra.yml') for m in found))
+
+    def test_other_workflow_that_passes_the_flags_is_fine(self):
+        flows = {'a.yml': workflow('alpha, beta')}
+        self.assertEqual(check.problems(CARGO, flows, None, SETTINGS, {'extra.yml': RUN_OK}), [])
+
+    def test_every_repository_workflow_with_fuzz_run_passes_the_flags(self):
+        for path in sorted((check.ROOT / '.github/workflows').glob('*.yml')):
+            text = path.read_text()
+            if check.FUZZ_RUN.search(check.without_comments(text)):
+                self.assertEqual(check.workflow_flag_problems(path.name, text), [], path.name)
+
     def test_flags_command_prints_the_repository_settings(self):
         settings = check.load_settings()
         self.assertEqual(check.main(['flags', 'pgwire']), 0)

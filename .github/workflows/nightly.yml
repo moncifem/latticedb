@@ -83,6 +83,7 @@ jobs:
           PROPTEST_CASES: "1000000"
   fuzz:
     # 600 s of fuzzing plus the build and the corpus merge; a hung build must not hold a runner for six hours.
+    # 60 minutes is a guess: no run has timed the cold build (this job has no rust-cache) or the merge.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -116,6 +117,7 @@ jobs:
           # shellcheck disable=SC2086 # FUZZ_FLAGS is several arguments on purpose
           mkdir -p "corpus/$TARGET" && cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- $FUZZ_FLAGS -max_total_time=600 2>&1 | tee fuzz.log
       - name: keep the corpus small (merge by coverage, then cap the size)
+        id: merge
         # Runs after a clean or a failed fuzz step so a night that found a crash still keeps its
         # coverage. -merge=1 copies only inputs that add coverage, from the grown corpus and the seeds.
         if: ${{ !cancelled() }}
@@ -127,14 +129,17 @@ jobs:
           FUZZ_FLAGS=$(python3 ../tools/check_fuzz_matrices.py flags "$TARGET")
           rm -rf "corpus-merged/$TARGET" && mkdir -p "corpus-merged/$TARGET" "corpus/$TARGET"
           # shellcheck disable=SC2086 # FUZZ_FLAGS is several arguments on purpose
-          cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu "$TARGET" "corpus-merged/$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- $FUZZ_FLAGS -merge=1 2>&1 | tail -n 5
+          cargo +nightly-2026-10-27 fuzz run --target x86_64-unknown-linux-gnu "$TARGET" "corpus-merged/$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- $FUZZ_FLAGS -merge=1 2>&1 | tee merge.log | tail -n 5
           # Cap at 16 MiB per target by dropping the largest inputs first.
           find "corpus-merged/$TARGET" -type f -printf '%s %p\n' | sort -n | awk -v limit=16777216 '{ total += $1; if (total > limit) print $2 }' | xargs -r rm -f --
+          # An empty result means the merge did not work; fail here and keep the corpus restored from the cache.
+          test -n "$(ls -A "corpus-merged/$TARGET")" || { echo "::error::merged corpus for $TARGET is empty; keeping the restored corpus"; exit 1; }
           rm -rf "corpus/$TARGET" && mv "corpus-merged/$TARGET" "corpus/$TARGET"
           echo "corpus for $TARGET: $(find "corpus/$TARGET" -type f | wc -l) files, $(du -sk "corpus/$TARGET" | cut -f1) KiB"
       - name: save the corpus for the next night
-        # Only the scheduled run on the default branch writes the shared corpus.
-        if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        # Only the scheduled run on the default branch writes the shared corpus, and only a merged and
+        # capped one: a failed merge step must not save the grown, unmerged directory.
+        if: ${{ !cancelled() && steps.merge.outcome == 'success' && github.event_name == 'schedule' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: fuzz/corpus/${{ matrix.target }}
@@ -144,7 +149,9 @@ jobs:
         with:
           overwrite: true
           name: evidence-fuzz-${{ matrix.target }}
-          path: fuzz/fuzz.log
+          path: |
+            fuzz/fuzz.log
+            fuzz/merge.log
           if-no-files-found: warn
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
