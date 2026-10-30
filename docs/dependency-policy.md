@@ -144,3 +144,21 @@ Dependabot opens weekly pull requests for Cargo and for workflow actions. A rout
 outside the set is merged when the gate is green and `cargo deny check` is clean. Remove a dependency
 as soon as the last use goes; `cargo tree -i <crate>` shows who still needs it. A yanked version or a
 new advisory is fixed in the next pull request, not at the next scheduled update.
+
+## npm projects (`clients/typescript`)
+
+The TypeScript client has no runtime dependencies, and CI fails if one appears. Its development tools
+(`typescript`, `@types/node`) follow these rules instead of the crate checklist above:
+
+- Versions in `package.json` are exact (no `^` or `~`), and `package-lock.json` is committed.
+- Installs use `npm ci --ignore-scripts`, so no dependency runs an install script.
+- The `clients-typescript` workflow runs `npm audit signatures` to verify registry signatures and
+  provenance of the locked packages.
+- Dependabot opens weekly pull requests for the `npm` ecosystem in `/clients/typescript`.
+- A new package needs a reason in the pull request, a licence the project can ship (Apache-2.0, MIT,
+  BSD, ISC) and no install scripts. Advisories are checked with `npm audit` when the lockfile changes.
+
+Gap: `clients/typescript/package.json` and `package-lock.json` are not code-owner paths and not a
+`dependencies` risk area in `tools/pr_governance.py` (which lists only the root Rust files), so a change to
+them does not fail `risk-gate`. The reviewer has to read them. Adding them means changing the classifier,
+its tests, `docs/review-policy.md` and `.github/CODEOWNERS` together; that is not done here.

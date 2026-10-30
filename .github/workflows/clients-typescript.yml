@@ -39,6 +39,8 @@ jobs:
           '
       - name: Install the pinned toolchain
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify registry signatures and provenance
+        run: npm audit signatures
       - name: Compile (strict)
         run: npx --no-install tsc -p tsconfig.json
       - name: Test
