@@ -5,8 +5,10 @@ With strict up-to-date merging, every merge makes the other open branches stale.
 this tool, in a private worktree under $TMPDIR:
 
   1. fetches the branch and the base and rebases the branch onto the base;
-  2. on a conflict, resolves ONLY prose list files (docs/gates/*.md, README.md, fuzz/README.md) by
-     keeping both sides (base lines first, then the pull request's lines); a conflict in any other file
+  2. on a conflict, resolves ONLY prose list files (docs/gates/*.md, README.md, fuzz/README.md) and
+     ONLY hunks where both sides purely added lines (the diff3 base section is empty), by keeping both
+     sides (base branch lines first, then the pull request's lines); a hunk where either side edits an
+     existing line, or a result that repeats a table row or list item, is refused. A conflict in any other file
      (code, workflows, lock files, CHANGELOG.md, formats) aborts the rebase and is reported, nothing is
      pushed. Generated api-snapshots/*.txt conflicts are allowed only when tools/check_public_api.sh
      exists, because the snapshots are regenerated afterwards;
@@ -24,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -80,49 +83,80 @@ def classify_conflicts(entries, has_api_script):
     return prose, generated, refused
 
 
-def resolve_union(text):
-    """Keep both sides of every conflict block: the base side first, then the pull request's side.
+ITEM_RE = re.compile(r"\s*(?:\|.*\||[-*+]\s|\d+[.)]\s)")
+SEPARATOR_RE = re.compile(r"\s*\|[\s:|-]+\|\s*\Z")
 
-    Handles the diff3 style (a `|||||||` base section is dropped). A side repeated verbatim on both
-    sides is kept once. Returns None when the markers are malformed, so the caller refuses the file.
+
+def is_item_line(line):
+    """A Markdown table row (not its separator) or a list item."""
+    line = line.rstrip("\r\n")
+    return bool(ITEM_RE.match(line)) and not SEPARATOR_RE.match(line)
+
+
+def resolve_additions(text):
+    """Keep both sides of every conflict block, base side first, but only for pure additions.
+
+    A block is resolved only when the diff3 base section is empty: both sides inserted lines at the
+    same spot and neither edited or deleted an existing line. A block where an existing line was
+    edited or removed on either side, a block without a base section, malformed markers, or a table
+    row or list item that ends up twice in the file raises ValueError (the caller refuses the file).
+    A side repeated verbatim on both sides is kept once. Line endings are preserved.
     """
-    out, ours, theirs = [], [], []
+    out, ours, base, theirs, hunk = [], [], [], [], []
     state = "text"
+    has_base = False
     for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
         if state == "text":
             if line.startswith("<<<<<<< "):
-                state, ours, theirs = "ours", [], []
+                state, ours, base, theirs, has_base = "ours", [], [], [], False
             else:
                 out.append(line)
         elif state == "ours":
             if line.startswith("|||||||"):
-                state = "base"
-            elif line.rstrip("\n") == "=======":
+                state, has_base = "base", True
+            elif body == "=======":
                 state = "theirs"
             elif line.startswith(("<<<<<<< ", ">>>>>>> ")):
-                return None
+                raise ValueError("malformed conflict markers")
             else:
                 ours.append(line)
         elif state == "base":
-            if line.rstrip("\n") == "=======":
+            if body == "=======":
                 state = "theirs"
             elif line.startswith(("<<<<<<< ", ">>>>>>> ")):
-                return None
-        elif state == "theirs":
+                raise ValueError("malformed conflict markers")
+            else:
+                base.append(line)
+        else:
             if line.startswith(">>>>>>> "):
+                if not has_base:
+                    raise ValueError("conflict block without a base section")
+                if base:
+                    raise ValueError("both sides edit existing lines")
                 out.extend(ours)
+                hunk.extend(ours)
                 if theirs != ours:
                     if ours and not ours[-1].endswith("\n"):
                         out[-1] += "\n"
                     out.extend(theirs)
+                    hunk.extend(theirs)
                 state = "text"
-            elif line.startswith(("<<<<<<< ", "|||||||")) or line.rstrip("\n") == "=======":
-                return None
+            elif line.startswith(("<<<<<<< ", "|||||||")) or body == "=======":
+                raise ValueError("malformed conflict markers")
             else:
                 theirs.append(line)
     if state != "text":
-        return None
-    return "".join(out)
+        raise ValueError("unterminated conflict block")
+    merged = "".join(out)
+    counts = {}
+    for line in merged.splitlines():
+        if is_item_line(line):
+            counts[line.strip()] = counts.get(line.strip(), 0) + 1
+    twice = sorted({h.strip() for h in hunk if is_item_line(h) and counts.get(h.strip(), 0) > 1})
+    if twice:
+        raise ValueError("a table row or list item would appear twice: " + "; ".join(twice)[:200])
+    return merged
 
 
 def has_markers(text):
@@ -151,6 +185,10 @@ class Failure(Exception):
     """A step that stops this pull request; the message is the report."""
 
 
+class Refusal(Failure):
+    """The tool declines to resolve something; the branch is left as it was."""
+
+
 def run(cmd, cwd, env=None, check=True):
     full_env = dict(os.environ)
     full_env["GIT_EDITOR"] = "true"
@@ -177,6 +215,15 @@ class Repo:
         self.push = push
         self.keep = keep
         self.root = Path(os.environ.get("TMPDIR") or tempfile.gettempdir()) / "lattice-rebase-pr"
+
+    def private_root(self):
+        """Create the worktree root (mode 0700) or accept an existing one that is ours and not a link."""
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        st = os.lstat(self.root)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            raise Failure(f"{self.root} is not a directory owned by you (symlink or foreign owner)")
+        if st.st_mode & 0o077:
+            os.chmod(self.root, 0o700)
 
     def git(self, *args, cwd=None, check=True, env=None):
         return run(["git", *args], cwd or self.dir, env=env, check=check)
@@ -210,14 +257,19 @@ def resolve_conflicts(repo, wt, report):
     has_script = os.path.exists(os.path.join(wt, API_SCRIPT))
     prose, generated, refused = classify_conflicts(entries, has_script)
     if refused:
-        raise Failure("conflict in files this tool does not resolve: " + ", ".join(sorted(refused)))
+        raise Refusal("conflict in files this tool does not resolve: " + ", ".join(sorted(refused)))
     for path in prose:
         full = os.path.join(wt, path)
-        with open(full, encoding="utf-8") as fh:
-            merged = resolve_union(fh.read())
-        if merged is None or has_markers(merged):
-            raise Failure(f"conflict markers in {path} are malformed; resolve it by hand")
-        with open(full, "w", encoding="utf-8") as fh:
+        with open(full, encoding="utf-8", newline="") as fh:
+            original = fh.read()
+        try:
+            merged = resolve_additions(original)
+        except ValueError as exc:
+            raise Refusal(f"conflict in {path} is not a pure addition on both sides ({exc}); "
+                          "resolve it by hand")
+        if has_markers(merged):
+            raise Refusal(f"conflict markers remain in {path}; resolve it by hand")
+        with open(full, "w", encoding="utf-8", newline="") as fh:
             fh.write(merged)
         repo.git("add", "--", path, cwd=wt)
         report["resolved"].append(path)
@@ -228,8 +280,22 @@ def resolve_conflicts(repo, wt, report):
         report["resolved"].append(path + " (regenerated)")
 
 
+def skip_empty_commit(repo, wt, report):
+    """`git rebase --skip`, but only for a commit that really became empty."""
+    staged = repo.git("diff", "--cached", "--quiet", cwd=wt, check=False).returncode
+    unstaged = repo.git("diff", "--quiet", cwd=wt, check=False).returncode
+    if staged or unstaged:
+        raise Failure("git rebase stopped without conflicts but the commit still has changes (a commit hook "
+                      "failed?); not skipping it, nothing pushed")
+    label = repo.git("log", "-1", "--format=%h %s", "REBASE_HEAD", cwd=wt, check=False).stdout.strip()
+    report["skipped"].append(label or "an unidentified commit")
+    return repo.git("rebase", "--skip", cwd=wt, check=False)
+
+
 def rebase(repo, wt, report):
-    r = repo.git("rebase", f"{repo.remote}/{repo.base}", cwd=wt, check=False)
+    # diff3 markers carry the base section, which resolve_additions needs to prove "pure addition".
+    style = ["-c", "merge.conflictStyle=diff3"]
+    r = repo.git(*style, "rebase", f"{repo.remote}/{repo.base}", cwd=wt, check=False)
     steps = 0
     while r.returncode != 0:
         steps += 1
@@ -238,10 +304,9 @@ def rebase(repo, wt, report):
         unmerged = parse_unmerged(repo.git("status", "--porcelain", cwd=wt).stdout)
         if unmerged:
             resolve_conflicts(repo, wt, report)
-            r = repo.git("rebase", "--continue", cwd=wt, check=False)
+            r = repo.git(*style, "rebase", "--continue", cwd=wt, check=False)
         else:
-            # A commit that became empty once its conflicts were resolved.
-            r = repo.git("rebase", "--skip", cwd=wt, check=False)
+            r = skip_empty_commit(repo, wt, report)
 
 
 def check_rust(repo, wt, changed, report):
@@ -267,8 +332,9 @@ def check_rust(repo, wt, changed, report):
         raise Failure(f"{API_SCRIPT} --update failed (nothing pushed): " + (upd.stderr or upd.stdout).strip()[-300:])
     if repo.git("status", "--porcelain", "--", "api-snapshots", cwd=wt).stdout.strip():
         repo.git("add", "--", "api-snapshots", cwd=wt)
-        msg = os.path.join(str(repo.root), f"snapshot-msg-{os.getpid()}")
-        Path(msg).write_text(SNAPSHOT_COMMIT_MESSAGE, encoding="utf-8")
+        fd, msg = tempfile.mkstemp(dir=str(repo.root), prefix="snapshot-msg-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(SNAPSHOT_COMMIT_MESSAGE)
         try:
             repo.git("commit", "-q", "-F", msg, "--", "api-snapshots", cwd=wt)
         finally:
@@ -281,15 +347,16 @@ def check_rust(repo, wt, changed, report):
 def process(repo, n):
     """Rebase one pull request. Returns a report dict; status is one of
     rebased, up-to-date, refused, failed, skipped."""
-    report = {"pr": n, "status": "failed", "resolved": [], "notes": [], "message": ""}
+    report = {"pr": n, "status": "failed", "resolved": [], "skipped": [], "notes": [], "message": ""}
     wt = None
     try:
         info = repo.pr_info(n)
         if info["state"] != "OPEN":
             report.update(status="skipped", message=f"pull request is {info['state'].lower()}")
             return report
-        if info.get("isCrossRepository"):
-            report.update(status="skipped", message="head is in a fork; this tool cannot push there")
+        if info.get("isCrossRepository") is not False:
+            report.update(status="skipped", message="head is in a fork or the repository is unknown; "
+                                                     "this tool cannot push there")
             return report
         if info.get("baseRefName", repo.base) != repo.base:
             report.update(status="skipped", message=f"base is {info['baseRefName']}, not {repo.base}")
@@ -302,11 +369,14 @@ def process(repo, n):
         if repo.git("merge-base", "--is-ancestor", f"{repo.remote}/{repo.base}", old_head, check=False).returncode == 0:
             report.update(status="up-to-date", message="already contains the base branch; nothing to do")
             return report
-        repo.root.mkdir(parents=True, exist_ok=True)
+        repo.private_root()
         wt = tempfile.mkdtemp(prefix=f"pr-{n}-", dir=str(repo.root))
         repo.git("worktree", "add", "-q", "--detach", wt, old_head)
         rebase(repo, wt, report)
         base_ref = f"{repo.remote}/{repo.base}"
+        if repo.git("rev-parse", "HEAD", cwd=wt).stdout.strip() == repo.git("rev-parse", base_ref).stdout.strip():
+            raise Failure("after the rebase the branch is identical to the base branch (every commit was "
+                          "dropped); nothing pushed")
         changed = repo.git("diff", "--name-only", f"{base_ref}...HEAD", cwd=wt).stdout.split()
         check_rust(repo, wt, changed, report)
         new_head = repo.git("rev-parse", "HEAD", cwd=wt).stdout.strip()
@@ -318,21 +388,24 @@ def process(repo, n):
         report.update(status="rebased", message=f"pushed {new_head[:10]} (was {old_head[:10]})")
     except Failure as exc:
         text = str(exc)
-        refused = text.startswith("conflict in files")
-        report.update(status="refused" if refused else "failed", message=text)
+        report.update(status="refused" if isinstance(exc, Refusal) else "failed", message=text)
     finally:
         if wt:
-            if rebase_in_progress(repo, wt):
-                repo.git("rebase", "--abort", cwd=wt, check=False)
-            if not repo.keep:
-                repo.git("worktree", "remove", "--force", wt, check=False)
-                shutil.rmtree(wt, ignore_errors=True)
+            try:
+                if rebase_in_progress(repo, wt):
+                    repo.git("rebase", "--abort", cwd=wt, check=False)
+                if not repo.keep:
+                    repo.git("worktree", "remove", "--force", wt, check=False)
+                    shutil.rmtree(wt, ignore_errors=True)
+            except Exception as exc:  # cleanup must not hide the real result
+                report["notes"].append(f"cleanup failed, remove {wt} by hand: {exc}")
     return report
 
 
 def format_report(report):
     line = f"PR {report['pr']}: {report['status'].upper()}: {report['message']}".rstrip(": ")
     extra = [f"  resolved (kept both sides): {p}" for p in report["resolved"]]
+    extra += [f"  skipped (became empty after the rebase): {c}" for c in report["skipped"]]
     extra += [f"  {note}" for note in report["notes"]]
     return "\n".join([line, *extra])
 

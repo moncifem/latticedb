@@ -381,6 +381,109 @@ class SafetyTests(RepoCase):
         self.assertNotIn('"--force", repo.remote', text)
 
 
+class HardeningTests(RepoCase):
+    def test_both_sides_editing_the_same_line_is_refused(self):
+        self.make_branch("feat/a", {README: "# Lattice\n\n- one (pr)\n"})
+        self.open_pr(11, "feat/a")
+        self.advance_main({README: "# Lattice\n\n- one (main)\n"})
+        before = self.origin_rev("feat/a")
+        (report,) = self.run_tool(11)
+        self.assertEqual(report["status"], "refused", report)
+        self.assertIn(README, report["message"])
+        self.assertIn("pure addition", report["message"])
+        self.assertEqual(self.origin_rev("feat/a"), before)
+
+    def test_a_row_added_on_both_sides_is_refused_not_duplicated(self):
+        row = "| b | open |\n"
+        self.make_branch("feat/a", {GATE: "# Phase 2\n\n| row | state |\n|---|---|\n| a | open |\n" + row + "| c | open |\n"})
+        self.open_pr(11, "feat/a")
+        self.advance_main({GATE: "# Phase 2\n\n| row | state |\n|---|---|\n| a | open |\n" + row})
+        before = self.origin_rev("feat/a")
+        (report,) = self.run_tool(11)
+        self.assertEqual(report["status"], "refused", report)
+        self.assertEqual(self.origin_rev("feat/a"), before)
+
+    def test_a_failing_commit_step_is_not_mistaken_for_an_empty_commit(self):
+        # git skips the pre-commit hook during a rebase, so the commit step is made to fail the other
+        # way a real run can: an empty committer name. The conflict is resolved, the commit is refused,
+        # and the tool must not --skip (drop) the commit.
+        self.make_branch("feat/a", {README: "# Lattice\n\n- one\n- from the pr\n"}, "docs: pr change")
+        self.open_pr(11, "feat/a")
+        self.advance_main({README: "# Lattice\n\n- one\n- from main\n"})
+        before = self.origin_rev("feat/a")
+        os.environ["GIT_COMMITTER_NAME"] = ""
+        (report,) = self.run_tool(11)
+        self.assertEqual(report["status"], "failed", report)
+        self.assertIn("not skipping", report["message"])
+        self.assertEqual(report["skipped"], [])
+        self.assertEqual(self.origin_rev("feat/a"), before)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_commit_already_applied_upstream_is_dropped(self):
+        self.make_branch("feat/a", {"docs/a.md": "a\n"}, "docs: add a")
+        self.git("checkout", "-q", "feat/a", cwd=self.seed)
+        self.commit(self.seed, {"docs/b.md": "b\n"}, "docs: add b")
+        self.git("push", "-q", "origin", "feat/a", cwd=self.seed)
+        self.open_pr(11, "feat/a")
+        # main gets the same docs/b.md change as the second commit, so that commit has nothing left.
+        self.advance_main({"docs/b.md": "b\n", "docs/z.md": "z\n"}, "docs: add b upstream")
+        (report,) = self.run_tool(11)
+        self.assertEqual(report["status"], "rebased", report)
+        self.assertEqual(self.git("log", "--format=%s", "main..feat/a", cwd=self.origin), "docs: add a")
+
+    def test_branch_identical_to_base_after_the_rebase_is_not_pushed(self):
+        self.make_branch("feat/a", {"docs/a.md": "a\n"}, "docs: add a")
+        self.open_pr(11, "feat/a")
+        self.advance_main({"docs/a.md": "a\n", "docs/z.md": "z\n"}, "docs: add a upstream")
+        before = self.origin_rev("feat/a")
+        (report,) = self.run_tool(11)
+        self.assertEqual(report["status"], "failed", report)
+        self.assertIn("identical to the base", report["message"])
+        self.assertEqual(self.origin_rev("feat/a"), before)
+
+    def test_unknown_cross_repository_flag_is_skipped(self):
+        self.make_branch("feat/a", {"docs/a.md": "a\n"})
+        data = {"11": {"state": "OPEN", "headRefName": "feat/a", "baseRefName": "main"}}
+        self.set_prs(data)
+        self.advance_main({"docs/other.md": "x\n"})
+        before = self.origin_rev("feat/a")
+        (report,) = self.run_tool(11)
+        self.assertEqual(report["status"], "skipped")
+        self.assertEqual(self.origin_rev("feat/a"), before)
+
+    def test_crlf_files_keep_their_line_endings(self):
+        base = b"# Lattice\r\n\r\n- one\r\n"
+        (self.seed / README).write_bytes(base)
+        self.git("add", README, cwd=self.seed)
+        self.git("commit", "-q", "-m", "docs: crlf readme", cwd=self.seed)
+        self.git("push", "-q", "origin", "HEAD:main", cwd=self.seed)
+        self.make_branch("feat/a", {"docs/a.md": "a\n"})
+        self.git("checkout", "-q", "feat/a", cwd=self.seed)
+        (self.seed / README).write_bytes(base + b"- from the pr\r\n")
+        self.git("commit", "-q", "-am", "docs: pr line", cwd=self.seed)
+        self.git("push", "-q", "-f", "origin", "feat/a", cwd=self.seed)
+        self.git("checkout", "-q", "main", cwd=self.seed)
+        (self.seed / README).write_bytes(base + b"- from main\r\n")
+        self.git("commit", "-q", "-am", "docs: main line", cwd=self.seed)
+        self.git("push", "-q", "origin", "main", cwd=self.seed)
+        self.open_pr(11, "feat/a")
+        (report,) = self.run_tool(11)
+        self.assertEqual(report["status"], "rebased", report)
+        blob = subprocess.run(["git", "show", f"feat/a:{README}"], cwd=self.origin, capture_output=True).stdout
+        self.assertEqual(blob, base + b"- from main\r\n- from the pr\r\n")
+
+    def test_worktree_root_is_private_and_not_a_symlink(self):
+        repo = rp.Repo(str(self.coord))
+        repo.private_root()
+        self.assertEqual(repo.root.stat().st_mode & 0o777, 0o700)
+        repo.root.rmdir()
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        repo.root.symlink_to(elsewhere)
+        with self.assertRaises(rp.Failure):
+            repo.private_root()
+
+
 class PureTests(unittest.TestCase):
     def test_prose_and_generated_classification(self):
         for path in ("docs/gates/phase-1.md", "docs/gates/phase-2.md", "README.md", "fuzz/README.md"):
@@ -403,21 +506,46 @@ class PureTests(unittest.TestCase):
         porcelain = "UU a.md\n M b.md\nAA c.md\nDU d.md\n?? e\nA  f\n"
         self.assertEqual(rp.parse_unmerged(porcelain), [("UU", "a.md"), ("AA", "c.md"), ("DU", "d.md")])
 
-    def test_resolve_union(self):
-        text = "head\n<<<<<<< a\nmain\n=======\npr\n>>>>>>> b\ntail\n"
-        self.assertEqual(rp.resolve_union(text), "head\nmain\npr\ntail\n")
-        diff3 = "<<<<<<< a\nmain\n||||||| base\nold\n=======\npr\n>>>>>>> b\n"
-        self.assertEqual(rp.resolve_union(diff3), "main\npr\n")
-        same = "<<<<<<< a\nsame\n=======\nsame\n>>>>>>> b\n"
-        self.assertEqual(rp.resolve_union(same), "same\n")
-        two = "<<<<<<< a\n1\n=======\n2\n>>>>>>> b\nmid\n<<<<<<< a\n3\n=======\n4\n>>>>>>> b\n"
-        self.assertEqual(rp.resolve_union(two), "1\n2\nmid\n3\n4\n")
-        self.assertEqual(rp.resolve_union("Title\n=======\nbody\n"), "Title\n=======\nbody\n")
-        self.assertEqual(rp.resolve_union("<<<<<<< a\nmain\n=======\nno newline at end\n>>>>>>> b\n"),
-                         "main\nno newline at end\n")
-        self.assertEqual(rp.resolve_union("<<<<<<< a\nx\n=======\ny\n"), None)
-        self.assertEqual(rp.resolve_union("<<<<<<< a\n<<<<<<< b\n=======\ny\n>>>>>>> c\n"), None)
-        self.assertEqual(rp.resolve_union("<<<<<<< a\nx\ny\n>>>>>>> b\n"), None)
+    def test_resolve_additions(self):
+        def block(ours, theirs, base=""):
+            return f"<<<<<<< a\n{ours}||||||| base\n{base}=======\n{theirs}>>>>>>> b\n"
+        self.assertEqual(rp.resolve_additions("head\n" + block("- main\n", "- pr\n") + "tail\n"),
+                         "head\n- main\n- pr\ntail\n")
+        two = block("1\n", "2\n") + "mid\n" + block("3\n", "4\n")
+        self.assertEqual(rp.resolve_additions(two), "1\n2\nmid\n3\n4\n")
+        self.assertEqual(rp.resolve_additions(block("same\n", "same\n")), "same\n")
+        self.assertEqual(rp.resolve_additions("Title\n=======\nbody\n"), "Title\n=======\nbody\n")
+        # CRLF files stay CRLF.
+        self.assertEqual(rp.resolve_additions("<<<<<<< a\r\n- m\r\n||||||| b\r\n=======\r\n- p\r\n>>>>>>> c\r\n"),
+                         "- m\r\n- p\r\n")
+
+    def test_resolve_additions_refuses_what_it_cannot_prove_is_an_addition(self):
+        def block(ours, theirs, base=""):
+            return f"<<<<<<< a\n{ours}||||||| base\n{base}=======\n{theirs}>>>>>>> b\n"
+        for name, text in {
+            "both edit the same line": block("- row (main)\n", "- row (pr)\n", base="- row\n"),
+            "one side deleted a line": block("", "- row (pr)\n", base="- row\n"),
+            "no base section": "<<<<<<< a\nmain\n=======\npr\n>>>>>>> b\n",
+            "no end marker": "<<<<<<< a\nx\n||||||| b\n=======\ny\n",
+            "nested": "<<<<<<< a\n<<<<<<< b\n=======\ny\n>>>>>>> c\n",
+            "no separator": "<<<<<<< a\nx\ny\n>>>>>>> b\n",
+        }.items():
+            with self.assertRaises(ValueError, msg=name):
+                rp.resolve_additions(text)
+
+    def test_duplicate_rows_and_items_are_refused(self):
+        def block(ours, theirs):
+            return f"<<<<<<< a\n{ours}||||||| base\n=======\n{theirs}>>>>>>> b\n"
+        with self.assertRaises(ValueError):
+            rp.resolve_additions("| a | 1 |\n" + block("| b | 2 |\n", "| a | 1 |\n"))
+        with self.assertRaises(ValueError):
+            rp.resolve_additions(block("- same item\n- x\n", "- same item\n"))
+        # Prose that happens to repeat, and table separators, are not items.
+        self.assertEqual(rp.resolve_additions("|---|---|\n" + block("|---|---|\n", "text\n")), "|---|---|\n|---|---|\ntext\n")
+        self.assertTrue(rp.is_item_line("| a | b |"))
+        self.assertTrue(rp.is_item_line("1. first"))
+        self.assertFalse(rp.is_item_line("|---|:--:|"))
+        self.assertFalse(rp.is_item_line("plain text"))
 
     def test_rust_detection_and_affected_crates(self):
         self.assertTrue(rp.rust_changed(["docs/a.md", "crates/x/src/lib.rs"]))
