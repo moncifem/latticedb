@@ -108,3 +108,14 @@ tests against deliberate defects in the compiled client (a byte order mark dropp
 bound, a skipped LSN 0 check) made the conformance tests fail each time. The workflow `clients-typescript.yml` has not run
 on CI yet. The Go and Python clients, a generator and the agent plugin contract in TypeScript are not done, and no client
 talks to a server, because none exists.
+`cargo run --release -p lattice-bench --example phase3_bench` covers tree CRDT apply (in order, late, and
+late before and after `Tree::compact`), `Tree::compact` itself, the text CRDT (replay of a fixed-seed
+random edit log and `Doc::compact` with and without retained revert points; 10 000 visible characters at
+the default scale), sequence CRDT insert, set merge, register merge (real updates, plus the no-change
+path), change-feed cursor and event codec, sync frame codec, fan-out through the real
+`lattice_api::backpressure::Hub` to 1, 100 and 10,000 subscribers with every tenth stalled, and a
+reconnect storm of clients resuming from cursors against `SubscriptionHost`. The benchmark metadata
+records the CPU model (best effort). The manual `bench-baseline` workflow also runs it to produce a CI
+baseline artifact; that workflow has not been run for it, no comparison runs on a schedule and no
+numbers are recorded here. Not covered: real sockets or TLS, the reconnect storm
+with stalled clients, persisted state, multi-threaded writers. E3-4 stays open.

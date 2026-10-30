@@ -1,6 +1,7 @@
 name: bench-baseline
 # Records the reference benchmark baseline for the `ci-ubuntu` profile on a GitHub-hosted runner.
-# Run it by hand, download the artifact and commit it under benches/baselines/ci-ubuntu/.
+# Run it by hand, download the artifact and commit it under benches/baselines/ci-ubuntu/. The Phase 3 benchmark
+# (phase3_bench) records its own artifact, with the CPU model of the runner in the report.
 on:
   workflow_dispatch:
 permissions:
@@ -20,3 +21,11 @@ jobs:
         with:
           name: bench-baseline-ci-ubuntu
           path: benches/baselines/ci-ubuntu/baseline.json
+      - run: mkdir -p benches/baselines/local && cargo run -q --release -p lattice-bench --example phase3_bench -- --profile ci-ubuntu --write-baseline > benches/baselines/local/phase3-ci-ubuntu-report.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: phase3-bench-baseline-ci-ubuntu
+          path: |
+            benches/baselines/local/phase3-ci-ubuntu.json
+            benches/baselines/local/phase3-ci-ubuntu-metadata.json
+            benches/baselines/local/phase3-ci-ubuntu-report.json

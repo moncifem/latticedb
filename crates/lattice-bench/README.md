@@ -67,10 +67,24 @@ and one JSON report (`metadata` plus `cases` with `ns_per_op`, `ops_per_s` and `
 The baseline is `benches/baselines/local/phase3-<profile>.json` in the usual name-to-ns format.
 Long runs belong on CI or a controlled host; a tiny smoke test runs in `cargo test -p lattice-bench --example phase3_bench`.
 
-Cases: tree CRDT apply in order and late (undo and redo); sequence CRDT insert (`Rga`); set and
-register merge; change-feed cursor and event encode and decode; sync frame encode and decode (a
-32-event frame and an ack); fan-out of one event to 1, 100 and 10,000 bounded subscriber queues where
-every tenth subscriber never drains (the run asserts the writer finished and only those subscribers
-lagged). Not covered yet: tree compaction, the text CRDT with compaction and the backpressure module
-(not on main when this was written); fan-out uses a minimal local queue. Reconnect storms and the CI
-baseline workflow are follow-ups.
+Cases: tree CRDT apply in order and late (undo and redo), late ops before and after `Tree::compact`
+(compaction at the middle of the log; both trees must agree) and `tree_compact` per dropped op; the
+text CRDT (`text_crdt_apply` replays a fixed-seed edit log, 40 percent deletes, 1250 visible
+characters per unit of scale so 10,000 at the default scale as in ADR 0010; `text_crdt_compact` and
+`text_crdt_compact_retained` with three revert points, per stored element); sequence CRDT insert
+(`Rga`); set merge; register merge (`lww_register_merge` replaces the value on every merge,
+`lww_register_merge_noop` is the no-change path); change-feed cursor and event encode and decode; sync
+frame encode and decode (a 32-event frame and an ack); fan-out of one event through the real
+`lattice_api::backpressure::Hub` to 1, 100 and 10,000 subscribers where every tenth subscriber never
+drains (the run asserts every publish reached every subscriber and only those subscribers overflowed);
+and `reconnect_storm_client`, one whole reconnect (hello, subscribe with a cursor, catch up with acks)
+against `SubscriptionHost` and an in-memory 512-event log, with clients at the head, at the beginning
+and at random cursors.
+
+Metadata schema 2 records the CPU model (`sysctl` on macOS, `/proc/cpuinfo` on Linux, `unknown`
+otherwise); it is reported but not compared, so a baseline from another CPU model still compares. Schema
+2 changed two existing cases, so a schema 1 baseline is refused and must be re-recorded:
+`fanout_offer_*` now measures `Hub::publish_shared` instead of a local queue, and `lww_register_merge`
+now measures merges that change the register. Not covered: real sockets, TLS or threads, a reconnect
+storm with stalled clients, persisted state. The manual `bench-baseline` workflow runs this program and
+uploads its baseline as an artifact; no baseline is recorded and no scheduled comparison exists.
