@@ -720,6 +720,7 @@ pub fn lattice_sdk::outbox::Outbox::connection_lost(&mut self)
 pub fn lattice_sdk::outbox::Outbox::enqueue(&mut self, u64, lattice_sdk::contract::Kind, &str) -> core::result::Result<alloc::string::String, lattice_sdk::outbox::OutboxError>
 pub fn lattice_sdk::outbox::Outbox::fenced_turns(&self) -> impl core::iter::traits::iterator::Iterator<Item = u64> + '_
 pub fn lattice_sdk::outbox::Outbox::from_bytes(&[u8], lattice_sdk::outbox::OutboxConfig) -> core::result::Result<Self, lattice_sdk::outbox::DecodeError>
+pub fn lattice_sdk::outbox::Outbox::from_bytes_lossless(&[u8], lattice_sdk::outbox::OutboxConfig) -> core::result::Result<(Self, alloc::vec::Vec<lattice_sdk::outbox::Pending>), lattice_sdk::outbox::DecodeError>
 pub fn lattice_sdk::outbox::Outbox::is_empty(&self) -> bool
 pub fn lattice_sdk::outbox::Outbox::len(&self) -> usize
 pub fn lattice_sdk::outbox::Outbox::mark_persisted(&mut self, &lattice_sdk::outbox::Snapshot)
