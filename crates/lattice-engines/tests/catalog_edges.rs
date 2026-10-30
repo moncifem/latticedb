@@ -177,3 +177,51 @@ fn records_of_other_kinds_in_the_shared_log_are_skipped_when_the_catalog_is_rebu
     assert!(store.catalog().current().is_empty());
     assert!(store.commit(vec![create(1, "a")]).is_ok());
 }
+
+#[test]
+fn the_next_table_id_follows_the_largest_id_ever_created_not_the_live_ones() {
+    let mut c = Catalog::new();
+    assert_eq!(c.next_table_id(), Some(1));
+    c.apply(1, &[create(5, "a"), create(9, "b")]).unwrap();
+    assert_eq!(c.next_table_id(), Some(10));
+    // Dropping the highest id does not hand it out again, and dropping everything keeps the floor.
+    c.apply(2, &[CatalogOp::Drop { table: 9 }]).unwrap();
+    assert_eq!(c.next_table_id(), Some(10));
+    c.apply(3, &[CatalogOp::Drop { table: 5 }]).unwrap();
+    assert!(c.current().is_empty());
+    assert_eq!(c.next_table_id(), Some(10));
+    // The id it names is free, and the largest u32 leaves none.
+    c.apply(4, &[create(10, "c")]).unwrap();
+    assert_eq!(c.next_table_id(), Some(11));
+    c.apply(5, &[create(u32::MAX, "d")]).unwrap();
+    assert_eq!(c.next_table_id(), None);
+}
+
+#[test]
+fn the_next_table_id_survives_a_restart_after_every_table_was_dropped() {
+    let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
+    let clock = Rc::new(SimClock::new(1_000));
+    let open = |seed: u64| {
+        clock.advance(1);
+        CatalogStore::open(
+            disk.clone(),
+            SharedClock(clock.clone()),
+            SeededRng::new(seed),
+            &config(),
+        )
+        .unwrap()
+    };
+    let mut store = open(1);
+    store.commit(vec![create(1, "a"), create(2, "b")]).unwrap();
+    store
+        .commit(vec![
+            CatalogOp::Drop { table: 1 },
+            CatalogOp::Drop { table: 2 },
+        ])
+        .unwrap();
+    assert_eq!(store.catalog().next_table_id(), Some(3));
+    drop(store);
+    let store = open(2);
+    assert!(store.catalog().current().is_empty());
+    assert_eq!(store.catalog().next_table_id(), Some(3));
+}

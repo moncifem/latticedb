@@ -455,6 +455,14 @@ impl Catalog {
             .unwrap_or_default()
     }
 
+    /// The id a new table should take: one more than the largest id ever created, live or dropped
+    /// (1 for an empty history). Ids are never reused, so this is stable across drops and restarts,
+    /// where "largest live id plus one" is not. `None` when `u32::MAX` has been used. A host that
+    /// serves fewer ids than `u32` compares the result with its own bound.
+    pub fn next_table_id(&self) -> Option<u32> {
+        self.used.last().map_or(Some(1), |max| max.checked_add(1))
+    }
+
     /// The tables as of `lsn`: what the catalog said after the last change at or before it.
     pub fn as_of(&self, lsn: u64) -> Tables {
         let end = self.versions.partition_point(|(l, _)| *l <= lsn);

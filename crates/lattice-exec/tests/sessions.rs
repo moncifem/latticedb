@@ -1115,3 +1115,92 @@ fn a_key_the_store_cannot_carry_is_a_statement_error_not_an_internal_one() {
     );
     assert_eq!(s.status(), TxStatus::Idle);
 }
+
+#[test]
+fn create_and_drop_can_repeat_far_past_any_retry_bound_and_across_a_restart() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    for i in 0..130 {
+        ok(&mut f.db, &mut s, "CREATE TABLE tmp (a INT)");
+        ok(&mut f.db, &mut s, &format!("INSERT INTO tmp VALUES ({i})"));
+        assert_eq!(
+            rows(&mut f.db, &mut s, "SELECT a FROM tmp"),
+            strs(&[&[&i.to_string()]])
+        );
+        ok(&mut f.db, &mut s, "DROP TABLE tmp");
+    }
+    // Ids are never reused: 130 cycles used ids 1..=130, so the next table is 131 even though no
+    // table is live, and the same holds after a restart.
+    ok(&mut f.db, &mut s, "CREATE TABLE keep (a INT)");
+    assert_eq!(f.db.schema().table("keep").unwrap().id, 131);
+    ok(&mut f.db, &mut s, "DROP TABLE keep");
+    drop(f.db);
+    f.disk.restart_process();
+    let mut db: Db = Database::open(
+        f.disk.clone(),
+        lattice_testkit::scenario::SharedClock(f.clock.clone()),
+        SeededRng::new(99),
+        &common::config(),
+    )
+    .unwrap();
+    let mut s = common::admin();
+    ok(&mut db, &mut s, "CREATE TABLE after (a INT)");
+    assert_eq!(db.schema().table("after").unwrap().id, 132);
+}
+
+#[test]
+fn create_table_after_dropping_the_highest_id_takes_a_fresh_one() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    for name in ["a", "b", "c"] {
+        ok(&mut f.db, &mut s, &format!("CREATE TABLE {name} (x INT)"));
+    }
+    ok(&mut f.db, &mut s, "DROP TABLE c");
+    ok(&mut f.db, &mut s, "CREATE TABLE d (x INT)");
+    assert_eq!(f.db.schema().table("d").unwrap().id, 4);
+}
+
+#[test]
+fn create_table_with_every_served_id_used_is_a_clear_limit_error() {
+    use lattice_engines::catalog::CatalogOp;
+    use lattice_engines::store::RowStore;
+    let disk = SharedIo::new(lattice_sim::SimIo::new(
+        7,
+        lattice_sim::FaultProfile::clean(),
+    ));
+    let clock = Rc::new(lattice_sim::SimClock::new(1_000));
+    {
+        let mut store = RowStore::open(
+            disk.clone(),
+            lattice_testkit::scenario::SharedClock(clock.clone()),
+            SeededRng::new(3),
+            &common::config(),
+        )
+        .unwrap();
+        let top = lattice_exec::schema::MAX_TABLE_ID;
+        store
+            .commit_catalog(
+                vec![CatalogOp::Create {
+                    table: top,
+                    name: "last".into(),
+                }],
+                vec![],
+            )
+            .unwrap();
+        store
+            .commit_catalog(vec![CatalogOp::Drop { table: top }], vec![])
+            .unwrap();
+    }
+    clock.advance(1);
+    let mut db: Db = Database::open(
+        disk,
+        lattice_testkit::scenario::SharedClock(clock),
+        SeededRng::new(4),
+        &common::config(),
+    )
+    .unwrap();
+    let mut s = common::admin();
+    let e = err(&mut db, &mut s, "CREATE TABLE t (a INT)");
+    assert_eq!(e.sqlstate(), "53400");
+    assert_eq!(e.kind(), ErrorKind::Limit);
+}

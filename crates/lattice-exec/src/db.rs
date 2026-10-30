@@ -5,9 +5,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use lattice_core::Config;
-use lattice_engines::catalog::{CatalogError, CatalogOp, DdlRef};
+use lattice_engines::catalog::{CatalogOp, DdlRef};
 use lattice_engines::limits::{AllowAll, PolicyEvaluator};
-use lattice_engines::store::{RowError, RowStore};
+use lattice_engines::store::RowStore;
 use lattice_seams::{Clock, Io, Rng};
 use lattice_sql::ast::CreateTable;
 
@@ -137,33 +137,35 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
                 ),
             ));
         }
-        let mut id = current
-            .keys()
-            .copied()
-            .max()
-            .map_or(1, |m| m.saturating_add(1));
-        // Ids are never reused, including dropped ones the live catalog no longer lists.
-        for _ in 0..64 {
-            let def = TableDef::from_create(id, ct)?;
-            let tx = self.store.begin_with_policy(policy.clone());
-            match self.store.commit_with_catalog(
-                tx,
-                vec![CatalogOp::Create {
-                    table: id,
-                    name: name.clone(),
-                }],
-                Vec::new(),
-            ) {
-                Ok(_) => {
-                    self.fingerprints.insert(def.id, fingerprint(&def));
-                    self.schema.insert(def);
-                    return Ok(true);
-                }
-                Err(RowError::InvalidCatalog(CatalogError::IdUsed(_))) => id = id.saturating_add(1),
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Err(ExecError::internal("could not allocate a table id"))
+        // The engine catalog remembers every id ever created, live or dropped, so the next one is
+        // free after any number of drops. Ids are never reused.
+        let id = self
+            .store
+            .catalog()
+            .next_table_id()
+            .filter(|id| *id <= MAX_TABLE_ID)
+            .ok_or_else(|| {
+                ExecError::new(
+                    ErrorKind::Limit,
+                    "53400",
+                    "too many tables: every table id the executor serves has been used",
+                )
+            })?;
+        let def = TableDef::from_create(id, ct)?;
+        // `IdUsed` cannot happen here: `&mut self` is the only writer and `id` is above every used
+        // id. If it ever did, it would be an internal error (XX000), not something to retry.
+        let tx = self.store.begin_with_policy(policy.clone());
+        self.store.commit_with_catalog(
+            tx,
+            vec![CatalogOp::Create {
+                table: id,
+                name: name.clone(),
+            }],
+            Vec::new(),
+        )?;
+        self.fingerprints.insert(def.id, fingerprint(&def));
+        self.schema.insert(def);
+        Ok(true)
     }
 
     /// Registers the columns of a table that already exists in the engine catalog, for example after

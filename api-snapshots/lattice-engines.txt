@@ -86,6 +86,7 @@ pub fn lattice_engines::catalog::Catalog::id_of(&self, u64, &str) -> core::optio
 pub fn lattice_engines::catalog::Catalog::indexes(&self) -> lattice_engines::index::ManagedIndexes
 pub fn lattice_engines::catalog::Catalog::indexes_as_of(&self, u64) -> lattice_engines::index::ManagedIndexes
 pub fn lattice_engines::catalog::Catalog::new() -> Self
+pub fn lattice_engines::catalog::Catalog::next_table_id(&self) -> core::option::Option<u32>
 pub fn lattice_engines::catalog::Catalog::vacuum_index_versions(&mut self, u64) -> usize
 impl core::clone::Clone for lattice_engines::catalog::Catalog
 pub fn lattice_engines::catalog::Catalog::clone(&self) -> Self

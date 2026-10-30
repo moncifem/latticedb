@@ -451,6 +451,16 @@ check-layers`. Not run locally: the workspace tests, Miri, sanitizers, mutation 
 case counts, benchmarks and the simulator workloads; those are left to CI. No Phase 2 exit criterion is
 claimed, and P2-10, P2-13, P2-17 and P2-18 remain open.
 
+## Table id allocation (issue 445)
+
+`CREATE TABLE` took the largest live id plus one and retried 64 times on a used id, so after 64
+create/drop cycles every later `CREATE TABLE` failed with an internal error, also after a restart.
+`Catalog::next_table_id` now answers from the catalog's record of every id ever created (live or dropped,
+rebuilt from the log), and the executor uses it. When no id up to `MAX_TABLE_ID` is left the statement fails
+with SQLSTATE `53400`. Tests run 130 create/drop cycles with a reopen, a create after dropping the highest
+id, and the exhausted case. Not changed: managed index ids and the in-memory row id counter for tables
+without a primary key (`alloc_rowid`), which can still reuse the id of a deleted newest row after a restart.
+
 ## SQL served by `latticed` from a data directory (P2-17, P2-18, issue 345)
 
 PR [412](https://github.com/moncifem/latticedb/pull/412): `latticed --data-dir DIR` opens a write-ahead log in `DIR`, replays it, and serves the `lattice-exec`
