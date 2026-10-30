@@ -1,5 +1,10 @@
 # Mutants that cannot change behaviour. Each entry says why.
 exclude_re = [
+    # `read_prefix` loops while `used < max`; with `<=` the extra pass reads into an empty slice, which
+    # returns zero and ends the loop, so the result is the same. The `Interrupted` retry cannot be
+    # provoked on a regular file, so no test can reach the arm those variants change.
+    "real\\.rs:\\d+:\\d+: replace < with <= in <impl Io for StdIo>::read_prefix",
+    "real\\.rs:\\d+:\\d+: replace (match guard e\\.kind\\(\\) == std::io::ErrorKind::Interrupted with (true|false)|== with !=) in <impl Io for StdIo>::read_prefix",
     # A buffer shorter than a record header always fails the field reads below the guard, so the
     # guard is redundant with them.
     "replace match guard e <= buf.len\\(\\) with true in decode_record",
