@@ -29,6 +29,8 @@ zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 [dev-dependencies]
 lattice-sim = { path = "../lattice-sim" }
 lattice-testkit = { path = "../lattice-testkit" }
+# Enables the planted-defect switches that the principal-binding witness flips.
+lattice-core = { path = "../lattice-core", features = ["planted-bugs"] }
 proptest = "1.12.0"
 
 [lints]

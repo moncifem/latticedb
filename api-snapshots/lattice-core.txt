@@ -83,6 +83,7 @@ pub lattice_core::bugs::Bug::RowScanUpperBoundIncluded
 pub lattice_core::bugs::Bug::RowTombstoneSkipped
 pub lattice_core::bugs::Bug::SkipFsync
 pub lattice_core::bugs::Bug::SkipRecoverySync
+pub lattice_core::bugs::Bug::SubscribePrincipalDropped
 pub lattice_core::bugs::Bug::TreeCycleCheckSkipped
 pub lattice_core::bugs::Bug::VacuumDropsVisibleVersion
 impl lattice_core::bugs::Bug
@@ -93,6 +94,7 @@ pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::POLICY: [lattice_core::bugs::Bug; 2]
+pub const lattice_core::bugs::Bug::PRINCIPAL: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::ROW: [lattice_core::bugs::Bug; 4]
 pub const lattice_core::bugs::Bug::STORAGE: [lattice_core::bugs::Bug; 10]
 pub const lattice_core::bugs::Bug::VACUUM: [lattice_core::bugs::Bug; 1]

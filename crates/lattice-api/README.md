@@ -21,3 +21,9 @@ Debug and zeroized on drop. Reuse the same secret across account reloads/restart
 remain stable independently of fresh nonce RNG. Rotation changes unknown-account salts and can reveal
 account existence across that event; no unobservable-rotation or measured timing-safety claim is made.
 See [RFC 0007](../../docs/rfc/0007-pgwire-scram-tls-integration.md), still draft pending review.
+
+The sync `subscribe::SubscriptionHost` is built with the connection's authenticated `Principal`
+(`SubscriptionHost::new`; `local_development` is the loopback stand-in) and passes it to every
+`EventSource::read_after`, so the source applies scope and row policy for that identity. The `Hello`
+`agent` text is a label, never an identity. A transport that authenticates and supplies the principal
+does not exist yet (threat model G-03).

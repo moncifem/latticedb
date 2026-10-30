@@ -18,6 +18,7 @@
 
 use lattice_abi::Hlc;
 use lattice_api::backpressure::{Hub, Limits, State};
+use lattice_api::principal::Principal;
 use lattice_api::subscribe::{EventSource, HostConfig, Output, SourceError, SubscriptionHost};
 use lattice_api::sync::{self, Event, Message};
 use lattice_bench::{compare, parse_results, render_results};
@@ -707,6 +708,7 @@ impl LogSource {
 impl EventSource for LogSource {
     fn read_after(
         &self,
+        _principal: &Principal,
         scope: &str,
         after: &[u8],
         limit: usize,
@@ -748,8 +750,8 @@ fn bench_storm(o: &Options, samples: &mut Samples) -> Result<(), String> {
         let mut delivered = 0u64;
         let start = Instant::now();
         for (i, cursor) in resume_at.iter().enumerate() {
-            let mut host =
-                SubscriptionHost::new(HostConfig::new("lattice-bench"), 0).map_err(|e| e.0)?;
+            let mut host = SubscriptionHost::local_development(HostConfig::new("lattice-bench"), 0)
+                .map_err(|e| e.0)?;
             let hello = Message::Hello {
                 min_version: 1,
                 max_version: 1,

@@ -605,15 +605,17 @@ impl lattice_api::subscribe::SubscriptionHost
 pub fn lattice_api::subscribe::SubscriptionHost::confirmed(&self, u32) -> core::option::Option<&[u8]>
 pub fn lattice_api::subscribe::SubscriptionHost::handle<S: lattice_api::subscribe::EventSource>(&mut self, lattice_api::sync::Message, u64, &S) -> alloc::vec::Vec<lattice_api::subscribe::Output>
 pub fn lattice_api::subscribe::SubscriptionHost::is_closed(&self) -> bool
-pub fn lattice_api::subscribe::SubscriptionHost::new(lattice_api::subscribe::HostConfig, u64) -> core::result::Result<Self, lattice_api::subscribe::ConfigError>
+pub fn lattice_api::subscribe::SubscriptionHost::local_development(lattice_api::subscribe::HostConfig, u64) -> core::result::Result<Self, lattice_api::subscribe::ConfigError>
+pub fn lattice_api::subscribe::SubscriptionHost::new(lattice_api::subscribe::HostConfig, u64, lattice_api::principal::Principal) -> core::result::Result<Self, lattice_api::subscribe::ConfigError>
 pub fn lattice_api::subscribe::SubscriptionHost::poll<S: lattice_api::subscribe::EventSource>(&mut self, u64, &S) -> alloc::vec::Vec<lattice_api::subscribe::Output>
+pub fn lattice_api::subscribe::SubscriptionHost::principal(&self) -> &lattice_api::principal::Principal
 pub fn lattice_api::subscribe::SubscriptionHost::sent(&self, u32) -> core::option::Option<&[u8]>
 pub fn lattice_api::subscribe::SubscriptionHost::subscriptions(&self) -> alloc::vec::Vec<u32>
 pub fn lattice_api::subscribe::SubscriptionHost::version(&self) -> core::option::Option<u16>
 impl core::fmt::Debug for lattice_api::subscribe::SubscriptionHost
 pub fn lattice_api::subscribe::SubscriptionHost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub trait lattice_api::subscribe::EventSource
-pub fn lattice_api::subscribe::EventSource::read_after(&self, &str, &[u8], usize) -> core::result::Result<alloc::vec::Vec<lattice_api::sync::Event>, lattice_api::subscribe::SourceError>
+pub fn lattice_api::subscribe::EventSource::read_after(&self, &lattice_api::principal::Principal, &str, &[u8], usize) -> core::result::Result<alloc::vec::Vec<lattice_api::sync::Event>, lattice_api::subscribe::SourceError>
 pub mod lattice_api::sync
 pub enum lattice_api::sync::ErrorCode
 pub lattice_api::sync::ErrorCode::Internal

@@ -64,6 +64,15 @@ acknowledged write and an acyclic tree. Seven planted defects in harness wrapper
 lost local write, lost remote operation, missing duplicate detection, skipped cycle check, for the three
 families) were each detected within the same 200 seeds. The 100,000-seed volume test is `#[ignore]` and was not
 run locally. Not wired into the nightly shards, ledger or scorecard yet.
+Verification evidence, not an exit criterion: principal binding of the sync subscription host (threat model G-03,
+issue #359, sync part only). `SubscriptionHost::new` now takes the authenticated `Principal` and
+`EventSource::read_after` receives it on every read, so a source can refuse a scope per principal; the free-text
+`Hello.agent` is not an identity. Five unit tests in `lattice-api::subscribe` (`cargo test -p lattice-api --lib subscribe`,
+28 tests, passing locally) cover the principal seen by the source, a `Hello` that names another account, a denied scope
+answered like an unserved one, live polls, and the planted bug `SubscribePrincipalDropped`. This is an API change
+(`SubscriptionHost::new` gained a parameter, `SubscriptionHost::local_development` is the loopback stand-in,
+`EventSource::read_after` gained one). No transport supplies a principal yet, the plugin sessions and the MCP caller
+are not bound, and no kernel-backed `EventSource` exists, so no end-to-end authorization claim is made.
 Verification evidence, not an exit criterion: `lattice-engines::feed_emit` (WP36, issue #238) emits the change feed
 from the row store's retained committed versions. One local run of `cargo test -p lattice-engines --lib feed_emit`
 (6 tests, default settings): the feed from every cursor of 12 seeded 14-commit histories equals an independently

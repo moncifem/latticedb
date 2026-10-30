@@ -1,0 +1,1 @@
+Sync subscription host: `SubscriptionHost::new` takes the authenticated `Principal` and `EventSource::read_after` receives it on every read, so a source can refuse a scope per principal (threat model G-03, sync part). Adds the planted bug `SubscribePrincipalDropped`.

@@ -91,6 +91,9 @@ pub enum Bug {
     GuardRewriteUnstaged,
     /// A catalog or managed-index change commits without asking the actor policy (authorization).
     DdlPolicySkipped,
+    /// The sync subscription host reads events for a fixed development identity instead of the
+    /// principal its connection authenticated as (authorization).
+    SubscribePrincipalDropped,
 }
 
 impl Bug {
@@ -134,6 +137,9 @@ impl Bug {
 
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
+
+    /// Principal-binding defects, detected by the subscription host witness in `lattice-api`.
+    pub const PRINCIPAL: [Bug; 1] = [Bug::SubscribePrincipalDropped];
     /// Guarded-WAL admission defects, exercised by independent context witnesses.
     pub const ADMISSION: [Bug; 2] = [Bug::RequiredGuardOmitted, Bug::GuardRewriteUnstaged];
 
@@ -218,6 +224,7 @@ mod tests {
             .chain(Bug::VACUUM)
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
+            .chain(Bug::PRINCIPAL)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
@@ -232,12 +239,13 @@ mod tests {
             .chain(Bug::VACUUM)
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
+            .chain(Bug::PRINCIPAL)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
             .chain(Bug::FENCE_ORDER)
             .collect();
-        assert_eq!(all.len(), 41);
+        assert_eq!(all.len(), 42);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

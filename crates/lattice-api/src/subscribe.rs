@@ -37,10 +37,12 @@
 //! [`HostConfig::batch_events`] events for each subscription. Flow control beyond `Ack` is out of
 //! scope for protocol v1.
 
+use crate::principal::Principal;
 use crate::sync::{
     ErrorCode, Event, MAX_CURSOR_LEN, MAX_ERROR_MESSAGE_LEN, MAX_EVENTS_PER_FRAME, MAX_NAME_LEN,
     MAX_PAYLOAD, MAX_SCOPE_LEN, MIN_NEGOTIATED_PAYLOAD, Message, negotiate,
 };
+use lattice_core::bugs::{self, Bug};
 use std::collections::BTreeMap;
 
 /// Why an [`EventSource`] could not answer a read.
@@ -60,9 +62,13 @@ pub enum SourceError {
 ///
 /// The contract, which the host checks and answers with `internal` when broken:
 ///
-/// * `read_after(scope, after, limit)` returns at most `limit` events of `scope`, in delivery order,
+/// * `read_after(principal, scope, after, limit)` returns at most `limit` events of `scope`, in delivery order,
 ///   whose cursors are all strictly greater than `after` (compared by length, then byte by byte, as
 ///   the client does), each cursor `1..=64` bytes and strictly increasing.
+/// * `principal` is the identity the connection authenticated as, never the `agent` name of the
+///   `Hello`. The source decides whether that principal may read `scope`, and applies its row policy
+///   to the events it returns; a scope the principal may not read is answered exactly like a scope the
+///   source does not serve ([`SourceError::UnknownScope`]), so a probe cannot tell the two apart.
 /// * An empty `after` means "from the beginning"; a source that no longer holds the beginning answers
 ///   [`SourceError::TooOld`].
 /// * It is a pure read: the same arguments give a prefix-consistent answer, and an event once returned
@@ -71,6 +77,7 @@ pub trait EventSource {
     /// The events of `scope` strictly after `after`, at most `limit` of them.
     fn read_after(
         &self,
+        principal: &Principal,
         scope: &str,
         after: &[u8],
         limit: usize,
@@ -215,6 +222,8 @@ fn events_payload_len<'a>(events: impl Iterator<Item = &'a Event>) -> usize {
 #[derive(Debug)]
 pub struct SubscriptionHost {
     cfg: HostConfig,
+    /// Fixed for the life of the connection. Passed to every source read.
+    principal: Principal,
     phase: Phase,
     version: Option<u16>,
     subs: BTreeMap<u32, Sub>,
@@ -225,10 +234,15 @@ pub struct SubscriptionHost {
 
 impl SubscriptionHost {
     /// A host for one new connection, waiting for `Hello`. `now` is the logical time of the accept.
-    pub fn new(cfg: HostConfig, now: u64) -> Result<Self, ConfigError> {
+    ///
+    /// `principal` is the identity the transport authenticated (for example
+    /// [`Session::principal`](crate::session::Session::principal)). The host never derives one from
+    /// the `Hello`: its `agent` field is a free-text label and grants nothing.
+    pub fn new(cfg: HostConfig, now: u64, principal: Principal) -> Result<Self, ConfigError> {
         cfg.validate().map_err(ConfigError)?;
         Ok(SubscriptionHost {
             cfg,
+            principal,
             phase: Phase::AwaitHello,
             version: None,
             subs: BTreeMap::new(),
@@ -236,6 +250,19 @@ impl SubscriptionHost {
             ping: None,
             next_nonce: 1,
         })
+    }
+
+    /// A host for a loopback development connection with the fixed
+    /// [`LOCAL_DEVELOPMENT_NAME`](crate::principal::LOCAL_DEVELOPMENT_NAME) principal, which stands
+    /// for "a local developer" and proves nothing about who is connected. For tests and benchmarks;
+    /// a network transport must call [`SubscriptionHost::new`] with the authenticated principal.
+    pub fn local_development(cfg: HostConfig, now: u64) -> Result<Self, ConfigError> {
+        Self::new(cfg, now, Principal::local_development())
+    }
+
+    /// The principal every source read of this connection is made for.
+    pub fn principal(&self) -> &Principal {
+        &self.principal
     }
 
     /// The negotiated version, once `Welcome` was sent.
@@ -367,7 +394,7 @@ impl SubscriptionHost {
             confirmed: cursor,
         };
         let mut out = Vec::new();
-        match pump(sub, &mut state, src, &self.cfg, &mut out) {
+        match pump(sub, &mut state, src, &self.principal, &self.cfg, &mut out) {
             Ok(()) => {
                 self.subs.insert(sub, state);
             }
@@ -414,7 +441,7 @@ impl SubscriptionHost {
         let ids: Vec<u32> = self.subs.keys().copied().collect();
         for id in ids {
             let res = match self.subs.get_mut(&id) {
-                Some(s) => pump(id, s, src, &self.cfg, &mut out),
+                Some(s) => pump(id, s, src, &self.principal, &self.cfg, &mut out),
                 None => continue,
             };
             if let Err(e) = res {
@@ -449,11 +476,20 @@ fn pump<S: EventSource>(
     sub: u32,
     st: &mut Sub,
     src: &S,
+    principal: &Principal,
     cfg: &HostConfig,
     out: &mut Vec<Output>,
 ) -> Result<(), Output> {
+    // Planted defect: the read is made for a different identity than the connection's.
+    let dev;
+    let principal = if bugs::active(Bug::SubscribePrincipalDropped) {
+        dev = Principal::local_development();
+        &dev
+    } else {
+        principal
+    };
     for _ in 0..cfg.max_frames_per_pump {
-        let events = match src.read_after(&st.scope, &st.sent, cfg.batch_events) {
+        let events = match src.read_after(principal, &st.scope, &st.sent, cfg.batch_events) {
             Ok(e) => e,
             Err(SourceError::UnknownScope) => {
                 return Err(error(ErrorCode::InvalidScope, sub, "scope not served"));
@@ -553,6 +589,7 @@ mod tests {
     impl EventSource for Log {
         fn read_after(
             &self,
+            _: &Principal,
             scope: &str,
             after: &[u8],
             limit: usize,
@@ -590,7 +627,7 @@ mod tests {
     }
 
     fn host() -> SubscriptionHost {
-        SubscriptionHost::new(HostConfig::new("lattice"), 0).unwrap()
+        SubscriptionHost::local_development(HostConfig::new("lattice"), 0).unwrap()
     }
 
     fn hello(min: u16, max: u16) -> Message {
@@ -852,7 +889,7 @@ mod tests {
         let log = Log::default();
         let mut cfg = HostConfig::new("lattice");
         cfg.max_subscriptions = 2;
-        let mut h = SubscriptionHost::new(cfg, 0).unwrap();
+        let mut h = SubscriptionHost::local_development(cfg, 0).unwrap();
         ready(&mut h, &log);
         h.handle(sub(1, "ws/a", vec![]), 1, &log);
         h.handle(sub(2, "ws/a", vec![]), 1, &log);
@@ -891,7 +928,7 @@ mod tests {
         let mut cfg = HostConfig::new("lattice");
         cfg.batch_events = 100;
         cfg.max_frames_per_pump = 3;
-        let mut h = SubscriptionHost::new(cfg, 0).unwrap();
+        let mut h = SubscriptionHost::local_development(cfg, 0).unwrap();
         ready(&mut h, &log);
         let out = h.handle(sub(1, "ws/a", vec![]), 1, &log);
         assert_eq!(out.len(), 3);
@@ -907,7 +944,13 @@ mod tests {
     fn oversized_event_ends_the_subscription_not_the_connection() {
         struct Big;
         impl EventSource for Big {
-            fn read_after(&self, _: &str, _: &[u8], _: usize) -> Result<Vec<Event>, SourceError> {
+            fn read_after(
+                &self,
+                _: &Principal,
+                _: &str,
+                _: &[u8],
+                _: usize,
+            ) -> Result<Vec<Event>, SourceError> {
                 Ok(vec![Event {
                     cursor: cur(1),
                     data: vec![0; MAX_PAYLOAD],
@@ -925,7 +968,13 @@ mod tests {
     fn frames_are_split_to_fit_the_payload_limit() {
         struct Fat;
         impl EventSource for Fat {
-            fn read_after(&self, _: &str, a: &[u8], l: usize) -> Result<Vec<Event>, SourceError> {
+            fn read_after(
+                &self,
+                _: &Principal,
+                _: &str,
+                a: &[u8],
+                l: usize,
+            ) -> Result<Vec<Event>, SourceError> {
                 let from = a.try_into().map(u64::from_be_bytes).unwrap_or(0);
                 Ok((from + 1..=6)
                     .take(l)
@@ -982,27 +1031,35 @@ mod tests {
     fn config_is_validated() {
         let mut c = HostConfig::new("");
         assert_eq!(
-            SubscriptionHost::new(c.clone(), 0).unwrap_err().0,
+            SubscriptionHost::local_development(c.clone(), 0)
+                .unwrap_err()
+                .0,
             "server name"
         );
         c.server = "s".into();
         c.batch_events = 257;
-        assert!(SubscriptionHost::new(c.clone(), 0).is_err());
+        assert!(SubscriptionHost::local_development(c.clone(), 0).is_err());
         c.batch_events = 1;
         c.max_payload = 10;
-        assert!(SubscriptionHost::new(c.clone(), 0).is_err());
+        assert!(SubscriptionHost::local_development(c.clone(), 0).is_err());
         c.max_payload = 2048;
         c.max_subscriptions = 0;
-        assert!(SubscriptionHost::new(c.clone(), 0).is_err());
+        assert!(SubscriptionHost::local_development(c.clone(), 0).is_err());
         c.max_subscriptions = 1;
-        assert!(SubscriptionHost::new(c, 0).is_ok());
+        assert!(SubscriptionHost::local_development(c, 0).is_ok());
     }
 
     #[test]
     fn broken_sources_are_caught() {
         struct Dup;
         impl EventSource for Dup {
-            fn read_after(&self, _: &str, a: &[u8], _: usize) -> Result<Vec<Event>, SourceError> {
+            fn read_after(
+                &self,
+                _: &Principal,
+                _: &str,
+                a: &[u8],
+                _: usize,
+            ) -> Result<Vec<Event>, SourceError> {
                 // Inclusive of the cursor: the classic off-by-one.
                 let n = a.try_into().map(u64::from_be_bytes).unwrap_or(1).max(1);
                 Ok(vec![Event {
@@ -1160,7 +1217,8 @@ mod tests {
             self.up.clear();
             self.down.clear();
             self.now += 1;
-            self.host = SubscriptionHost::new(HostConfig::new("lattice"), self.now).unwrap();
+            self.host =
+                SubscriptionHost::local_development(HostConfig::new("lattice"), self.now).unwrap();
             self.up.push_back(self.client.on_connect());
             self.flush();
         }
@@ -1268,8 +1326,14 @@ mod tests {
     /// A source with an off-by-one on resume: it skips the event right after the cursor.
     struct SkipsFirst(Log);
     impl EventSource for SkipsFirst {
-        fn read_after(&self, s: &str, a: &[u8], l: usize) -> Result<Vec<Event>, SourceError> {
-            let mut v = self.0.read_after(s, a, l.saturating_add(1))?;
+        fn read_after(
+            &self,
+            p: &Principal,
+            s: &str,
+            a: &[u8],
+            l: usize,
+        ) -> Result<Vec<Event>, SourceError> {
+            let mut v = self.0.read_after(p, s, a, l.saturating_add(1))?;
             if !a.is_empty() && !v.is_empty() {
                 v.remove(0);
             }
@@ -1281,11 +1345,17 @@ mod tests {
     /// A source that reads from the cursor itself instead of strictly after it.
     struct Inclusive(Log);
     impl EventSource for Inclusive {
-        fn read_after(&self, s: &str, a: &[u8], l: usize) -> Result<Vec<Event>, SourceError> {
+        fn read_after(
+            &self,
+            p: &Principal,
+            s: &str,
+            a: &[u8],
+            l: usize,
+        ) -> Result<Vec<Event>, SourceError> {
             // Starts at the cursor itself instead of strictly after it.
             let b: Option<[u8; 8]> = a.try_into().ok();
             let from = b.map_or(0, |b| u64::from_be_bytes(b).saturating_sub(1));
-            self.0.read_after(s, &cur(from), l)
+            self.0.read_after(p, s, &cur(from), l)
         }
     }
 
@@ -1319,5 +1389,133 @@ mod tests {
             let mut w = World::new(Log::default());
             assert_eq!(run(&mut w, &ops, append_log), Ok(()), "{ops:?}");
         }
+    }
+
+    // ----- principal binding (threat model G-03): reads are made for the authenticated identity ----
+
+    use std::cell::RefCell;
+
+    /// Serves `ws/shared` to everyone and `ws/private` to the account `alice` only, and records the
+    /// principal of every read. The expectations are written down here, not taken from the host.
+    struct Acl {
+        log: Log,
+        seen: RefCell<Vec<String>>,
+    }
+
+    impl EventSource for Acl {
+        fn read_after(
+            &self,
+            principal: &Principal,
+            scope: &str,
+            after: &[u8],
+            limit: usize,
+        ) -> Result<Vec<Event>, SourceError> {
+            self.seen.borrow_mut().push(principal.to_string());
+            if scope == "ws/private" && principal.to_string() != "account:alice" {
+                return Err(SourceError::UnknownScope);
+            }
+            self.log.read_after(principal, scope, after, limit)
+        }
+    }
+
+    fn acl() -> Acl {
+        let mut log = Log::default();
+        log.append("ws/private");
+        log.append("ws/shared");
+        Acl {
+            log,
+            seen: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn host_for(name: &str) -> SubscriptionHost {
+        SubscriptionHost::new(HostConfig::new("lattice"), 0, Principal::account(name)).unwrap()
+    }
+
+    /// Runs the private-scope subscription for `name` and reports what the connection saw: the
+    /// principals the source was asked for, and whether the private scope was delivered.
+    fn private_probe(name: &str, agent: &str) -> (Vec<String>, bool) {
+        let src = acl();
+        let mut h = host_for(name);
+        let hi = Message::Hello {
+            min_version: 1,
+            max_version: 1,
+            agent: agent.into(),
+        };
+        h.handle(hi, 0, &src);
+        let out = h.handle(sub(1, "ws/private", Vec::new()), 0, &src);
+        let delivered = out
+            .iter()
+            .any(|o| matches!(o, Output::Send(Message::Events { .. })));
+        (src.seen.take(), delivered)
+    }
+
+    #[test]
+    fn the_source_is_asked_for_the_connections_authenticated_principal() {
+        let (seen, delivered) = private_probe("alice", "anything");
+        assert_eq!(seen, vec!["account:alice".to_string()]);
+        assert!(delivered);
+        // A Hello that names another account changes nothing.
+        let (seen, delivered) = private_probe("bob", "alice");
+        assert_eq!(seen, vec!["account:bob".to_string()]);
+        assert!(!delivered);
+    }
+
+    #[test]
+    fn a_denied_scope_is_answered_like_a_scope_that_does_not_exist() {
+        let src = acl();
+        let mut h = host_for("bob");
+        ready(&mut h, &src.log);
+        let denied = h.handle(sub(1, "ws/private", Vec::new()), 0, &src);
+        let missing = h.handle(sub(2, "elsewhere", Vec::new()), 0, &src);
+        let code = |o: &[Output]| match o {
+            [Output::Send(Message::Error { code, .. })] => Some(*code),
+            _ => None,
+        };
+        assert_eq!(code(&denied), Some(ErrorCode::InvalidScope));
+        assert_eq!(code(&denied), code(&missing));
+        // The refused subscription holds no state and the connection stays usable.
+        assert!(h.subscriptions().is_empty());
+        let shared = h.handle(sub(3, "ws/shared", Vec::new()), 0, &src);
+        assert_eq!(seqs(&shared, 3), vec![2]);
+    }
+
+    #[test]
+    fn live_polls_use_the_same_principal_as_the_first_read() {
+        let src = acl();
+        let mut h = host_for("alice");
+        ready(&mut h, &src.log);
+        h.handle(sub(1, "ws/shared", Vec::new()), 0, &src);
+        h.poll(1, &src);
+        let seen = src.seen.take();
+        assert!(seen.len() >= 2, "{seen:?}");
+        assert!(seen.iter().all(|p| p == "account:alice"), "{seen:?}");
+        assert_eq!(h.principal().to_string(), "account:alice");
+    }
+
+    #[test]
+    fn the_development_constructor_is_labelled_as_such() {
+        let h = SubscriptionHost::local_development(HostConfig::new("lattice"), 0).unwrap();
+        assert_eq!(h.principal().to_string(), "local-development");
+    }
+
+    #[test]
+    fn a_dropped_principal_is_caught_by_the_witness() {
+        use lattice_core::bugs;
+        // Both hosts are read for their own identity, and bob never sees alice's scope.
+        let witness = || {
+            let (a, a_delivered) = private_probe("alice", "x");
+            let (b, b_delivered) = private_probe("bob", "x");
+            a == ["account:alice"] && a_delivered && b == ["account:bob"] && !b_delivered
+        };
+        bugs::clear();
+        assert!(witness(), "clean build must satisfy the witness");
+        bugs::enable(Bug::SubscribePrincipalDropped);
+        let caught = !witness();
+        bugs::clear();
+        assert!(
+            caught,
+            "a host that drops the principal must fail the witness"
+        );
     }
 }
