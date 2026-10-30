@@ -167,3 +167,41 @@ fn counters_match_recorded_runs() {
         ]
     );
 }
+
+#[test]
+fn a_profile_where_more_than_half_the_runs_are_unverified_fails() {
+    // Under the `everything` profile seed 6 is incomplete (the run could not be verified).
+    let all = run(&["--seed", "6", "--steps", "150", "--profile", "everything"]);
+    assert_eq!(all.code, 1);
+    assert_eq!(
+        all.stdout,
+        vec![
+            "profile everything: more than half of the runs were not verified".to_string(),
+            "profile everything: 1 seeds, 1 failing, 0 cut short (still verified), 1 incomplete (not verified)".to_string(),
+            "total: 1 runs, 1 failing, 0 cut short, 1 incomplete; 39 recoveries, 21 power cuts inside durability protocols".to_string(),
+        ]
+    );
+    // Exactly half unverified (seeds 5 and 6) is not more than half.
+    let half = run(&[
+        "--from",
+        "5",
+        "--seeds",
+        "2",
+        "--steps",
+        "150",
+        "--profile",
+        "everything",
+    ]);
+    assert_eq!(half.code, 0, "{:?}", half.stdout);
+    assert!(
+        half.stdout[0].contains("2 seeds, 0 failing,") && half.stdout[0].contains("1 incomplete")
+    );
+    // A profile's failures add up across profiles into the total.
+    let several = run(&["--seed", "6", "--steps", "150"]);
+    assert!(
+        several.stdout.last().unwrap().contains(", 1 failing,"),
+        "{:?}",
+        several.stdout
+    );
+    assert_eq!(several.code, 1);
+}
