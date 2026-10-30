@@ -26,8 +26,8 @@ pub struct Principal {
 }
 
 impl Principal {
-    /// The fixed principal of loopback trust mode. Crate-private: only `Session::local_trust` hands
-    /// it out, and it carries no proof of who is connected.
+    /// The fixed principal of loopback trust mode. Crate-private: only `Session::local_trust` and
+    /// `SubscriptionHost::local_development` hand it out, and it carries no proof of who is connected.
     pub(crate) fn local_development() -> Self {
         Self {
             kind: PrincipalKind::LocalDevelopment,

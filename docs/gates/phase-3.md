@@ -69,7 +69,7 @@ issue #359, sync part only). `SubscriptionHost::new` now takes the authenticated
 `EventSource::read_after` receives it on every read, so a source can refuse a scope per principal; the free-text
 `Hello.agent` is not an identity. Five unit tests in `lattice-api::subscribe` (`cargo test -p lattice-api --lib subscribe`,
 28 tests, passing locally) cover the principal seen by the source, a `Hello` that names another account, a denied scope
-answered like an unserved one, live polls, and the planted bug `SubscribePrincipalDropped`. This is an API change
+answered like an unserved one (the host maps only `SourceError::UnknownScope` to `invalid_scope`, so a source must return `UnknownScope` for a denied scope; `TooOld`, `BadCursor` or `Unavailable` would leak existence, and that is a contract on the source until a kernel-backed one exists), live polls, and the planted bug `SubscribePrincipalDropped`. This is an API change
 (`SubscriptionHost::new` gained a parameter, `SubscriptionHost::local_development` is the loopback stand-in,
 `EventSource::read_after` gained one). No transport supplies a principal yet, the plugin sessions and the MCP caller
 are not bound, and no kernel-backed `EventSource` exists, so no end-to-end authorization claim is made.
