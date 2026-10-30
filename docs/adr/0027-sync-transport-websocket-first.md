@@ -50,6 +50,11 @@ and the SDK surface do not change.
 
 ## Consequences
 
+`parse_upgrade` is stateless, so the host must time the upgrade handshake itself (a client that
+trickles the request head would otherwise hold a connection open) and bound the number of connections
+in that phase. The default frame cap equals the message cap, so a maximal sync frame is accepted as one
+unfragmented message.
+
 The first slice is only the codec; there is no listener, no TLS or authentication wiring and no
 integration test over a real socket yet, so issue #242 stays open. Per-frame and per-message bounds are
 in the codec; connection counts, aggregate memory and queue bounds remain host policy. WebSocket runs on

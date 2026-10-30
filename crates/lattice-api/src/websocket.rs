@@ -70,8 +70,9 @@ pub const MAX_CONTROL_PAYLOAD: usize = 125;
 pub const MAX_HEADERS: usize = 64;
 /// Default cap on the upgrade request head.
 pub const DEFAULT_MAX_HEAD: usize = 8 * 1024;
-/// Default cap on the payload of one frame.
-pub const DEFAULT_MAX_FRAME_PAYLOAD: usize = 1 << 20;
+/// Default cap on the payload of one frame: one maximal sync frame (header and payload), so a client
+/// that sends it as a single unfragmented message is accepted.
+pub const DEFAULT_MAX_FRAME_PAYLOAD: usize = sync::HEADER_LEN + sync::MAX_PAYLOAD;
 /// Default cap on a reassembled message: one maximal sync frame (header and payload).
 pub const DEFAULT_MAX_MESSAGE: usize = sync::HEADER_LEN + sync::MAX_PAYLOAD;
 /// Largest close reason: a close payload is at most 125 bytes and two are the status code.
@@ -268,6 +269,9 @@ pub fn parse_upgrade(
 
 /// Parse an HTTP/1.1 WebSocket upgrade request from the start of `input`.
 ///
+/// The parser is stateless and has no clock: the host must time the handshake (a client that
+/// trickles the head byte by byte is otherwise never cut off) and limit connections in this phase.
+///
 /// Returns `Ok(None)` while the head is incomplete and `Ok(Some((upgrade, used)))` once it is whole;
 /// `used` is the length of the head, and any bytes after it already belong to the WebSocket stream.
 /// `origin_ok` is the origin hook: it gets the `Origin` header value (or `None`) and returns whether
@@ -451,8 +455,11 @@ fn parse_head(
     if !origin_ok(origin) {
         return Err(HandshakeError::new(403, "this origin is not allowed"));
     }
-    let subprotocol =
-        has_token(values(&headers, "sec-websocket-protocol"), SUBPROTOCOL).then_some(SUBPROTOCOL);
+    // Subprotocol names are case-sensitive (RFC 6455 section 4.1), unlike the Upgrade and Connection tokens.
+    let subprotocol = values(&headers, "sec-websocket-protocol")
+        .flat_map(|v| v.split(','))
+        .any(|t| t.trim() == SUBPROTOCOL)
+        .then_some(SUBPROTOCOL);
     if subprotocol.is_none() && cfg.require_subprotocol {
         return Err(HandshakeError::bad(
             "the subprotocol lattice.sync.v1 must be offered",
@@ -762,7 +769,9 @@ pub fn encode_client_frame(
 }
 
 /// Whether a peer may put `code` in a close frame (RFC 6455 section 7.4): the registered codes and
-/// the private range, but not 1004, 1005, 1006, 1015, nor anything below 1000.
+/// the private range, but not 1004, 1005, 1006, 1015, nor anything below 1000. Codes 1012 to 1014 are
+/// accepted because IANA registers them, although old Autobahn versions (cases 7.9.7 to 7.9.9) treat
+/// them as invalid.
 #[must_use]
 pub const fn is_valid_close_code(code: u16) -> bool {
     matches!(code, 1000..=1003 | 1007..=1014 | 3000..=4999)
@@ -1139,6 +1148,10 @@ impl Connection {
     }
 
     /// Append the queued control frames (pong, ping, close) to `out` and clear the queue.
+    ///
+    /// The order is pong, ping, close. Data frames written by `send_text` and `send_binary` go
+    /// straight to the caller's buffer, so call this after writing them if a close must follow the
+    /// data. The ping deadline starts when `tick` queues the ping, not when it is written.
     pub fn drain_output(&mut self, out: &mut Vec<u8>) {
         let control = |out: &mut Vec<u8>, op: Opcode, payload: &[u8]| {
             let payload = payload.get(..MAX_CONTROL_PAYLOAD).unwrap_or(payload);
@@ -2126,6 +2139,48 @@ mod tests {
     }
 
     #[test]
+    fn subprotocol_match_is_case_sensitive() {
+        let upper = request("").replace("lattice.sync.v1", "Lattice.Sync.V1");
+        assert_eq!(status(&upper), 400);
+    }
+
+    #[test]
+    fn masked_frame_of_exactly_126_bytes_uses_the_16_bit_form() {
+        let f = masked(0x82, &[1; 126], KEY);
+        assert_eq!(f[1], 0x80 | 126);
+        let (frame, used) = decode_client_frame(&f, 1 << 20).unwrap().unwrap();
+        assert_eq!((frame.payload.len(), used), (126, f.len()));
+    }
+
+    #[test]
+    fn delivery_split_at_any_point_equals_whole_delivery() {
+        let mut stream = masked(0x01, &[0x48, 0x65], KEY);
+        stream.extend(masked(0x89, b"p", [1, 2, 3, 4]));
+        stream.extend(masked(0x80, b"y", [5, 6, 7, 8]));
+        stream.extend(masked(0x88, &1000u16.to_be_bytes(), KEY));
+        let whole = drive(&mut open(), &stream, 1);
+        assert_eq!(whole.len(), 2);
+        for split in 0..=stream.len() {
+            let mut c = open();
+            let mut pending: Vec<u8> = Vec::new();
+            let mut events = Vec::new();
+            for chunk in [&stream[..split], &stream[split..]] {
+                pending.extend_from_slice(chunk);
+                loop {
+                    let step = c.receive(&pending, 1);
+                    pending.drain(..step.consumed);
+                    let idle = step.consumed == 0 && step.event.is_none();
+                    events.extend(step.event);
+                    if idle {
+                        break;
+                    }
+                }
+            }
+            assert_eq!(events, whole, "split {split}");
+        }
+    }
+
+    #[test]
     fn subprotocol_is_negotiated() {
         let none = request("").replace("Sec-WebSocket-Protocol: lattice.sync.v1\r\n", "");
         assert_eq!(status(&none), 400);
@@ -2218,12 +2273,10 @@ mod tests {
     fn a_maximal_sync_frame_fits_the_default_limits() {
         let cfg = Config::default();
         assert_eq!(cfg.max_message, sync::HEADER_LEN + sync::MAX_PAYLOAD);
-        assert_eq!(cfg.max_frame_payload, 1 << 20);
-        let sync_frame = sync::HEADER_LEN + sync::MAX_PAYLOAD;
-        // One frame cannot hold it (the frame cap is 1 MiB), two fragments can.
-        let data = vec![5u8; sync_frame];
-        let mut input = masked(0x02, &data[..1 << 20], KEY);
-        input.extend(masked(0x80, &data[1 << 20..], KEY));
+        assert!(cfg.max_frame_payload >= cfg.max_message);
+        // The largest legal sync frame as one unfragmented message, as browsers send it.
+        let data = vec![5u8; sync::HEADER_LEN + sync::MAX_PAYLOAD];
+        let input = masked(0x82, &data, KEY);
         let mut c = Connection::new(cfg, 0);
         assert_eq!(
             drive(&mut c, &input, 1),
