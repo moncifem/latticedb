@@ -74,6 +74,9 @@ exclude_re = [
     "cancel\\.rs:\\d+:\\d+: replace tests::<impl lattice_seams::Rng for Constant>::next_u64",
     # Simulator front end: the failing-seed counter only moves when a run reports a violation, which a
     # correct build never does; the planted-bug tests cover violations through the scenario runner.
+    # WebSocket frame header: the FIN bit (0x80) and the opcode nibble (0x0 to 0xF), and the mask bit (0x80)
+    # and a length or the 126/127 marker (7 bits), never share a bit, so `|` and `^` give the same byte.
+    "websocket\\.rs:7(14|17|19):\\d+: replace \\| with \\^ in push_header",
     "sim_cli\\.rs:96:\\d+: replace \\+= with (-=|\\*=) in execute_with",
     # The binary only wires `execute_with` to stdout, stderr and the ledger file; the testkit may not
     # spawn a process, so its exit-code plumbing is exercised by `cargo xtask sim` in the nightly.
