@@ -154,3 +154,12 @@ fn a_running_handle_is_not_finished_and_reports_its_port() {
     assert_eq!(handle.open_connections(), 0);
     handle.shutdown().unwrap();
 }
+
+#[test]
+fn a_stopped_listener_no_longer_accepts_connections() {
+    let handle = start(base()).unwrap();
+    let address = handle.local_addr();
+    std::net::TcpStream::connect(address).unwrap();
+    handle.shutdown().unwrap();
+    assert!(std::net::TcpStream::connect(address).is_err());
+}

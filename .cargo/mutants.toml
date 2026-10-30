@@ -1,5 +1,9 @@
 # Mutants that cannot change behaviour. Each entry says why.
 exclude_re = [
+    # `ServerHandle::shutdown` only calls `stop_and_join`, and `Drop` calls the same function, so a body
+    # of `Ok(())` still stops and joins the listener when the handle is dropped. Only the returned
+    # error differs, and the acceptor never returns one in a way a test can provoke.
+    "lib\\.rs:\\d+:\\d+: replace ServerHandle::shutdown -> io::Result<\\(\\)> with Ok\\(\\(\\)\\)",
     # `read_prefix` loops while `used < max`; with `<=` the extra pass reads into an empty slice, which
     # returns zero and ends the loop, so the result is the same. The `Interrupted` retry cannot be
     # provoked on a regular file, so no test can reach the arm those variants change.
