@@ -653,3 +653,14 @@ fn fatal_error_reply_is_followed_by_close_notify() {
     assert_eq!(client.read(&mut byte).unwrap(), 0);
     server.shutdown().unwrap();
 }
+
+#[test]
+fn startup_timeout_over_tls_still_ends_with_close_notify() {
+    let (config, client_config) = fixture(Duration::from_millis(500));
+    let server = ServerHandle::start(config).unwrap();
+    let mut client = tls(server.local_addr(), client_config);
+    // Say nothing: the startup budget expires while the server waits for the startup packet.
+    let mut byte = [0];
+    assert_eq!(client.read(&mut byte).unwrap(), 0);
+    server.shutdown().unwrap();
+}

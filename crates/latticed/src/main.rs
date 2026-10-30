@@ -168,7 +168,23 @@ fn run() -> Result<(), String> {
     server.shutdown().map_err(|e| e.to_string())
 }
 
+/// Stat before open so a configured FIFO or device cannot block startup. This is a check, not an
+/// atomic guarantee: a local attacker who can replace the path between the stat and the open can
+/// still block startup (the handle check then rejects the file). Std offers no portable
+/// `O_NONBLOCK | O_NOFOLLOW` open, and this crate takes no libc dependency for it.
+fn require_regular(path: &str) -> Result<(), String> {
+    let metadata = std::fs::metadata(path).map_err(|_| "cannot open configured security file")?;
+    if metadata.is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{path}: configured security path is not a regular file"
+        ))
+    }
+}
+
 fn bounded_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {
+    require_regular(path)?;
     let file = std::fs::File::open(path).map_err(|_| "cannot open configured security file")?;
     read_bounded(file, limit)
 }
@@ -176,11 +192,7 @@ fn bounded_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> 
 /// Like `bounded_file` for key material: the open handle is checked, so the mode that was verified
 /// is the mode of the bytes that are read.
 fn bounded_secret_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {
-    // Stat first so opening a FIFO or device cannot block startup; the handle is checked again below.
-    let metadata = std::fs::metadata(path).map_err(|_| "cannot open configured security file")?;
-    if !metadata.is_file() {
-        return Err(format!("{path}: secret path is not a regular file"));
-    }
+    require_regular(path)?;
     let file = std::fs::File::open(path).map_err(|_| "cannot open configured security file")?;
     require_private_file(&file).map_err(|e| format!("{path}: {e}"))?;
     read_bounded(file, limit)

@@ -9,7 +9,7 @@
 //! `write_timeout` bounds each socket write and `response_timeout` is an absolute budget for one
 //! whole response, so a peer that drains a few bytes per interval cannot hold a worker. A TLS
 //! connection is closed with a best-effort `close_notify` on every exit that still can write (orderly
-//! end, fatal error replies, timeouts), bounded by a short absolute deadline. CancelRequests are
+//! end, fatal error replies, timeouts including the startup budget, panics), bounded by a short absolute deadline. CancelRequests are
 //! rate limited per client address and globally; an excess request is dropped without a reply, like
 //! an unknown key. Wrong keys consume that budget, so the limit can be used to starve cancels (see
 //! the README).
@@ -731,10 +731,10 @@ impl HandshakeLimiter {
 }
 
 /// Runs one connection and always ends it through `Transport::shutdown`, so every exit (orderly,
-/// fatal error reply, protocol error, timeout or write failure) sends TLS `close_notify` when the
+/// fatal error reply, protocol error, timeout, write failure or panic) sends TLS `close_notify` when the
 /// connection is TLS and the send can still complete within `CLOSE_TIMEOUT`.
 fn connection<H, F>(
-    mut socket: Transport,
+    socket: Transport,
     config: ServerConfig,
     registry: Registry,
     factory: Arc<F>,
@@ -745,9 +745,28 @@ where
     H: QueryHandler + 'static,
     F: Fn() -> H + Send + Sync + 'static,
 {
-    let result = serve_connection(&mut socket, config, registry, factory, limits, peer);
-    let _ = socket.shutdown();
-    result
+    // The guard closes on unwind too, so a panicking handler still gets the orderly close.
+    let mut socket = Closing(socket);
+    serve_connection(&mut socket, config, registry, factory, limits, peer)
+}
+
+/// Owns the transport and shuts it down when dropped, on every exit including a panic.
+struct Closing(Transport);
+impl std::ops::Deref for Closing {
+    type Target = Transport;
+    fn deref(&self) -> &Transport {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Closing {
+    fn deref_mut(&mut self) -> &mut Transport {
+        &mut self.0
+    }
+}
+impl Drop for Closing {
+    fn drop(&mut self) {
+        let _ = self.0.shutdown();
+    }
 }
 
 /// Applies the CancelRequest budget, then signals the matching query. Over budget the request is

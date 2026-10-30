@@ -553,7 +553,13 @@ fn reset_and_abandoned_connections_never_stop_the_listener() {
 fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
     let server = server(2, Duration::from_secs(3));
     for _ in 0..300 {
-        let mut client = connect(server.local_addr());
+        // With the accept backlog full, macOS resets the connect itself; that flood attempt is
+        // simply lost, which is what a flood does.
+        let Ok(mut client) =
+            TcpStream::connect_timeout(&server.local_addr(), Duration::from_secs(2))
+        else {
+            continue;
+        };
         let _ = client.write_all(&startup());
         drop(client);
     }
@@ -566,7 +572,12 @@ fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
     }
     loop {
         assert!(Instant::now() < until, "slots were never released");
-        let mut next = connect(server.local_addr());
+        let Ok(mut next) = TcpStream::connect_timeout(&server.local_addr(), Duration::from_secs(2))
+        else {
+            std::thread::sleep(Duration::from_millis(1));
+            continue;
+        };
+        let _ = next.set_read_timeout(Some(Duration::from_secs(3)));
         let _ = next.write_all(&startup());
         // A refusal at capacity is FATAL 53300 (or, if the peer raced the close, a reset); retry.
         match try_message(&mut next) {

@@ -145,6 +145,8 @@ impl Transport {
     /// interval cannot hold the worker. The socket is always shut down afterwards.
     pub(super) fn shutdown(&mut self) -> io::Result<()> {
         if let Self::Tls(stream) = self {
+            // The startup budget may be what ended the connection; the close has its own cap.
+            stream.sock.startup_deadline = None;
             stream.sock.response_deadline = Instant::now().checked_add(CLOSE_TIMEOUT);
             stream.conn.send_close_notify();
             while stream.conn.wants_write() {
@@ -262,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn close_flush_is_bounded_even_when_the_peer_never_reads() {
+    fn plaintext_shutdown_is_immediate_and_sends_nothing() {
         let (server, _client) = pair();
         let far = Instant::now() + Duration::from_secs(600);
         let mut transport = Transport::new(server, far, Duration::from_secs(60));

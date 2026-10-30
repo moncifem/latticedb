@@ -103,15 +103,19 @@ fix rereview are complete; the owner accepted the integration and waived its com
   budget for one whole response, so a peer that drains a few bytes per interval cannot hold a worker.
   A response that exceeds it ends the connection.
 - Every connection ends through one close path. A TLS connection gets a best-effort `close_notify`
-  there: after an orderly end, after a FATAL error reply (failed authentication, protocol error) and
-  after read, idle, response or write errors. It only writes, never reads, and is capped at 2 s
-  absolute, so a slow peer cannot hold the worker. It is skipped when the write cannot complete
-  (the startup deadline has already expired, or the peer is gone), and a plaintext connection has
+  there: after an orderly end, after a FATAL error reply (failed authentication, protocol error),
+  after read, idle, response, write and startup-budget timeouts, and when a handler panics (the
+  close runs from a drop guard). It only writes, never reads, ignores the expired startup budget,
+  and is capped at 2 s absolute, so a slow peer cannot hold the worker. It is skipped only when
+  the peer is gone or does not accept the bytes within the cap, and a plaintext connection has
   nothing to send.
 - Each socket write is capped at 16 KiB so the response deadline is rechecked while a peer drains.
 - `--tls-key` and `--scram-decoy-secret` files must be regular files with no group or other
-  permission bits (mode 0600 or 0400, unix only). The path is checked with a stat before it is
-  opened, so a FIFO cannot block startup, and the open handle is checked again before reading.
+  permission bits (mode 0600 or 0400, unix only). All configured security files (including the certificate chain and
+  verifiers) are stat-checked to be regular files before opening, and the key and decoy handles are
+  checked again before reading. The stat and the open are two steps: a local attacker who can replace
+  the path in between can still block startup with a FIFO, and symlinks are followed. A dependency-free
+  atomic open is not available in std.
   Limits: only the mode bits are checked, not the owner; the verifiers file is not checked; and
   secret mounts at 0440 or 0444 (common for orchestrator-mounted secrets) are refused until
   their mode is tightened.
