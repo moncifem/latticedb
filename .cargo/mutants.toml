@@ -43,6 +43,10 @@ exclude_re = [
     # `last_lsn > 0` guards the `LsnReusedAfterRecovery` planted bug, which cannot be on in a clean
     # build, so the comparison is never evaluated there; the planted-bug test covers it with the feature.
     "log\\.rs:\\d+:77: replace > with (==|>=) in recover",
+    # `validate_full_read` only reaches its `staged` guard when the full read decodes as invalid, which
+    # needs bytes that differ from the admitted prefix; the prefix check just before it already refuses
+    # those, and identical bytes decode identically, so the guard cannot change the outcome.
+    "log\\.rs:\\d+:45: replace match guard self\\.staged with true in PreflightHeader::validate_full_read",
     # SQL lexer: a comment is lexed before an operator can start with `--` or `/*`, so the position
     # check `self.pos > start` can never see a comment start at the first character, and a
     # one-character run never enters the sign-splitting loop whose guard is `run.len() > 1`.

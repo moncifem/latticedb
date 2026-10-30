@@ -547,3 +547,108 @@ fn changing_views_never_reuse_or_repair_unadmitted_segment_bytes() {
         assert_eq!(disk.manifest(), before);
     }
 }
+
+/// A view that breaks exactly one half of the exact prefix-read contract, or pads a full read.
+#[derive(Clone)]
+struct ContractView {
+    disk: Disk,
+    /// 1: prefix read one byte short; 2: second `len` call differs; 3: full read has a trailing byte.
+    fault: u8,
+    len_calls: Rc<Cell<u32>>,
+    armed: Rc<Cell<bool>>,
+}
+impl Io for ContractView {
+    fn exists(&self, p: &str) -> bool {
+        self.disk.exists(p)
+    }
+    fn len(&self, p: &str) -> Result<u64, IoError> {
+        let n = self.disk.len(p)?;
+        if self.fault == 2 && p == FIRST {
+            let calls = self.len_calls.get();
+            self.len_calls.set(calls + 1);
+            if calls == 1 {
+                return Ok(n + 1);
+            }
+        }
+        Ok(n)
+    }
+    fn read(&self, p: &str) -> Result<Vec<u8>, IoError> {
+        let mut bytes = self.disk.read(p)?;
+        if self.fault == 3 && p == FIRST && self.armed.get() {
+            bytes.push(0);
+        }
+        Ok(bytes)
+    }
+    fn read_prefix(&self, p: &str, n: usize) -> Result<Vec<u8>, IoError> {
+        let mut bytes = self.disk.read_prefix(p, n)?;
+        if self.fault == 1 && p == FIRST {
+            bytes.pop();
+        }
+        Ok(bytes)
+    }
+    fn append(&mut self, p: &str, b: &[u8]) -> Result<(), IoError> {
+        self.disk.append(p, b)
+    }
+    fn truncate(&mut self, p: &str, n: u64) -> Result<(), IoError> {
+        self.disk.truncate(p, n)
+    }
+    fn sync(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.sync(p)
+    }
+    fn sync_dir(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.sync_dir(p)
+    }
+    fn list(&self, p: &str) -> Result<Vec<String>, IoError> {
+        self.disk.list(p)
+    }
+    fn remove(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.remove(p)
+    }
+    fn create_dir_all(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.create_dir_all(p)
+    }
+    fn lock(&mut self, p: &str) -> Result<(), IoError> {
+        self.disk.lock(p)
+    }
+    fn unlock(&mut self, p: &str) {
+        self.disk.unlock(p)
+    }
+}
+
+fn contract_view(fault: u8) -> (ContractView, Disk) {
+    let mut disk = Disk::new();
+    let mut bytes = LEGACY.to_vec();
+    bytes.extend(record::encode_record(1, 42, &[7; 32]));
+    plant(&mut disk, FIRST, &bytes);
+    let view = ContractView {
+        disk: disk.clone(),
+        fault,
+        len_calls: Rc::new(Cell::new(0)),
+        armed: Rc::new(Cell::new(false)),
+    };
+    (view, disk)
+}
+
+#[test]
+fn each_half_of_the_prefix_read_contract_is_enforced_on_its_own() {
+    for fault in [1, 2] {
+        let (view, disk) = contract_view(fault);
+        let before = disk.manifest();
+        assert!(
+            matches!(Log::open(view, "wal", 1000), Err(LogError::Corrupt(_))),
+            "fault {fault} breaks one half of the contract and must refuse"
+        );
+        assert_eq!(disk.manifest(), before, "refusal must not repair");
+    }
+}
+
+#[test]
+fn a_full_read_longer_than_the_admitted_length_is_refused_even_with_the_same_prefix() {
+    let (view, _disk) = contract_view(3);
+    let (log, _) = Log::open(view.clone(), "wal", 1000).unwrap();
+    view.armed.set(true);
+    assert!(matches!(
+        log.read_from_with_context(1, 1),
+        Err(LogError::Corrupt(_))
+    ));
+}
