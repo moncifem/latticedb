@@ -79,10 +79,14 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
   comparison pass is not interruptible. Write amplification (staged copies of rows and entries) is not
   charged. `LIKE` polls the deadline and cancellation every 1,024 characters it steps through (its
   worst case is still O(text x pattern), as in PostgreSQL, but a timeout or cancel stops it), and
-  admits its token and character copies against the budget first. `||` on text or bytea and
-  `lower`/`upper` check the result size before building it: a value over 16 MiB is `54000`, and one
-  that does not fit the remaining statement budget is `53200`. The check is transient (the bytes are
-  not held), so an intermediate value does not count against later rows. A snapshot that was vacuumed away is `72000` with its own `ErrorKind::SnapshotTooOld`.
+  admits its token and character copies against the budget first. `||` on text or bytea,
+  `lower`/`upper` (admitted at three times the input) and a bytea-to-text cast (two hex characters per
+  byte) check the result size before building it: a value over 16 MiB is `54000`, and one that does
+  not fit the remaining statement budget is `53200`. The check is transient (the bytes are not
+  kept), so an intermediate value does not count against later rows. A text or bytea left operand of
+  `||` of 4 KiB or more is reserved while its right subtree runs and released before the
+  concatenation, so the two are bounded together; smaller operands are not held (at most 4 KiB per
+  nesting level goes unreserved). A snapshot that was vacuumed away is `72000` with its own `ErrorKind::SnapshotTooOld`.
 
 ## Access paths
 

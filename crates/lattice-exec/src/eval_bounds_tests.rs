@@ -20,6 +20,7 @@ struct Limited {
     cancel_at: u32,
     budget: u64,
     largest: Cell<u64>,
+    held: Cell<u64>,
 }
 
 impl Limited {
@@ -29,7 +30,28 @@ impl Limited {
             cancel_at,
             budget,
             largest: Cell::new(0),
+            held: Cell::new(0),
         }
+    }
+
+    fn exceeded(&self, requested: u64) -> ExecError {
+        LimitError::MemoryExceeded {
+            requested,
+            used: self.held.get(),
+            limit: self.budget,
+        }
+        .into()
+    }
+}
+
+/// Releases what `Limited::hold` reserved.
+struct Guard<'a>(&'a Cell<u64>, u64);
+
+impl Held for Guard<'_> {}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - self.1);
     }
 }
 
@@ -43,15 +65,17 @@ impl Bounds for Limited {
     }
     fn admit(&self, bytes: u64) -> Result<(), ExecError> {
         self.largest.set(self.largest.get().max(bytes));
-        if bytes > self.budget {
-            return Err(LimitError::MemoryExceeded {
-                requested: bytes,
-                used: 0,
-                limit: self.budget,
-            }
-            .into());
+        if bytes + self.held.get() > self.budget {
+            return Err(self.exceeded(bytes));
         }
         Ok(())
+    }
+    fn hold(&self, bytes: u64) -> Result<Box<dyn Held + '_>, ExecError> {
+        if bytes + self.held.get() > self.budget {
+            return Err(self.exceeded(bytes));
+        }
+        self.held.set(self.held.get() + bytes);
+        Ok(Box::new(Guard(&self.held, bytes)))
     }
 }
 
@@ -200,11 +224,90 @@ fn case_mapping_is_admitted_before_it_runs() {
         },
         ty: SqlType::Text,
     };
-    let row = [Datum::Text("ß".repeat(1000))];
-    let small = run(&e, &row, &Limited::new(u32::MAX, 100)).unwrap_err();
-    assert_eq!(small.sqlstate(), "53200");
+    // U+0390 is 2 bytes and uppercases to 3 characters of 2 bytes each: 6 bytes, three times its size.
+    let row = [Datum::Text("\u{390}".repeat(1000))];
+    let want = Datum::Text("\u{399}\u{308}\u{301}".repeat(1000));
+    let half_again = run(&e, &row, &Limited::new(u32::MAX, 3000)).unwrap_err();
     assert_eq!(
-        run(&e, &row, &Unbounded).unwrap(),
-        Datum::Text("SS".repeat(1000))
+        half_again.sqlstate(),
+        "53200",
+        "1.5x the input is not enough"
     );
+    assert_eq!(run(&e, &row, &Limited::new(u32::MAX, 6000)).unwrap(), want);
+    assert_eq!(run(&e, &row, &Unbounded).unwrap(), want);
+}
+
+#[test]
+fn case_mapping_and_bytea_text_casts_obey_the_value_cap() {
+    let upper = TypedExpr {
+        kind: ExprNode::Function {
+            name: "upper".into(),
+            args: vec![leaf()],
+        },
+        ty: SqlType::Text,
+    };
+    // 6 MiB would be admitted at 3x = 18 MiB, over the 16 MiB cap, before anything is built.
+    let big = [Datum::Text("a".repeat(6 << 20))];
+    assert_eq!(
+        run(&upper, &big, &Unbounded).unwrap_err().sqlstate(),
+        "54000"
+    );
+    let cast = TypedExpr {
+        kind: ExprNode::Cast {
+            expr: Box::new(leaf()),
+        },
+        ty: SqlType::Text,
+    };
+    // 9 MiB of bytea prints as 18 MiB of hex.
+    let bytes = [Datum::Bytes(vec![0; 9 << 20])];
+    assert_eq!(
+        run(&cast, &bytes, &Unbounded).unwrap_err().sqlstate(),
+        "54000"
+    );
+    let small = [Datum::Bytes(vec![0xab; 4])];
+    assert_eq!(
+        run(&cast, &small, &Unbounded).unwrap(),
+        Datum::Text("\\xabababab".into())
+    );
+}
+
+#[test]
+fn a_held_left_operand_counts_while_the_right_subtree_runs() {
+    let lower = TypedExpr {
+        kind: ExprNode::Function {
+            name: "lower".into(),
+            args: vec![TypedExpr {
+                kind: ExprNode::Column {
+                    index: 1,
+                    name: "y".into(),
+                },
+                ty: SqlType::Text,
+            }],
+        },
+        ty: SqlType::Text,
+    };
+    // x || lower(y): x is 20 KiB, lower(y) is admitted at 3 x 8 KiB = 24 KiB.
+    let e = TypedExpr {
+        kind: ExprNode::Binary {
+            op: BinaryOp::Concat,
+            left: Box::new(leaf()),
+            right: Box::new(lower),
+        },
+        ty: SqlType::Text,
+    };
+    let row = [
+        Datum::Text("x".repeat(20 << 10)),
+        Datum::Text("y".repeat(8 << 10)),
+    ];
+    // Alone each step fits 40 KiB (24 KiB, then 28 KiB); together with the held x the lower does not.
+    let tight = Limited::new(u32::MAX, 40 << 10);
+    assert_eq!(run(&e, &row, &tight).unwrap_err().sqlstate(), "53200");
+    assert_eq!(tight.held.get(), 0, "the hold is released on the way out");
+    let roomy = Limited::new(u32::MAX, 64 << 10);
+    let got = run(&e, &row, &roomy).unwrap();
+    assert_eq!(
+        got,
+        Datum::Text(format!("{}{}", "x".repeat(20 << 10), "y".repeat(8 << 10)))
+    );
+    assert_eq!(roomy.held.get(), 0);
 }

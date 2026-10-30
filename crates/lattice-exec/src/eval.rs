@@ -39,7 +39,19 @@ pub(crate) trait Bounds {
     /// Fails with `53200` unless `bytes` more would fit in the statement's memory budget now. The
     /// bytes are not kept: an intermediate value is freed when the expression finishes with it.
     fn admit(&self, bytes: u64) -> Result<(), ExecError>;
+    /// Reserves `bytes` until the returned guard is dropped, failing with `53200` if they do not fit.
+    /// Holds a finished operand while its sibling subtree runs, so the two are bounded together.
+    fn hold(&self, bytes: u64) -> Result<Box<dyn Held + '_>, ExecError>;
 }
+
+/// A reservation made by [`Bounds::hold`]; dropping it releases the bytes.
+pub(crate) trait Held {}
+
+impl Held for () {}
+
+/// Operands smaller than this are not held while the sibling runs: the reservation costs a clock
+/// read, and the uncharged total is at most this size times the nesting depth.
+const HOLD_MIN_BYTES: u64 = 4096;
 
 /// No limits, for tests that exercise values rather than governance.
 #[cfg(test)]
@@ -53,18 +65,25 @@ impl Bounds for Unbounded {
     fn admit(&self, _bytes: u64) -> Result<(), ExecError> {
         Ok(())
     }
+    fn hold(&self, _bytes: u64) -> Result<Box<dyn Held + '_>, ExecError> {
+        Ok(Box::new(()))
+    }
 }
 
 /// Refuses a value over [`MAX_VALUE_BYTES`] or over the memory budget, before it is built.
 fn admit_value(bounds: &dyn Bounds, bytes: u64) -> Result<(), ExecError> {
     if bytes > MAX_VALUE_BYTES {
-        return Err(ExecError::new(
-            crate::error::ErrorKind::Limit,
-            "54000",
-            format!("value of {bytes} bytes exceeds the limit of {MAX_VALUE_BYTES} bytes"),
-        ));
+        return Err(value_too_large(bytes));
     }
     bounds.admit(bytes)
+}
+
+fn value_too_large(bytes: u64) -> ExecError {
+    ExecError::new(
+        crate::error::ErrorKind::Limit,
+        "54000",
+        format!("value of {bytes} bytes exceeds the limit of {MAX_VALUE_BYTES} bytes"),
+    )
 }
 
 /// What an expression may read besides the row.
@@ -147,7 +166,19 @@ fn go(e: &TypedExpr, row: &[Datum], ctx: &EvalCtx<'_>, depth: usize) -> Result<D
             }
             _ => {
                 let l = sub(left)?;
+                // A big text or bytea left operand stays alive while the right subtree runs, so
+                // reserve it until then; both operands are then bounded by the budget together.
+                let held = match (op, &l) {
+                    (BinaryOp::Concat, Datum::Text(s)) if s.len() as u64 >= HOLD_MIN_BYTES => {
+                        Some(ctx.bounds.hold(s.len() as u64)?)
+                    }
+                    (BinaryOp::Concat, Datum::Bytes(b)) if b.len() as u64 >= HOLD_MIN_BYTES => {
+                        Some(ctx.bounds.hold(b.len() as u64)?)
+                    }
+                    _ => None,
+                };
                 let r = sub(right)?;
+                drop(held);
                 binary(*op, l, r, e.ty, ctx.bounds)
             }
         },
@@ -217,6 +248,13 @@ fn go(e: &TypedExpr, row: &[Datum], ctx: &EvalCtx<'_>, depth: usize) -> Result<D
         }
         ExprNode::Cast { expr } => {
             let v = sub(expr)?;
+            // bytea prints as hex: two characters per byte plus the `\x` prefix.
+            if let (Datum::Bytes(b), SqlType::Text) = (&v, e.ty) {
+                admit_value(
+                    ctx.bounds,
+                    (b.len() as u64).saturating_mul(2).saturating_add(2),
+                )?;
+            }
             cast(v, e.ty)
         }
         ExprNode::Function { name, args } => {
@@ -584,12 +622,16 @@ fn function(name: &str, a: &[Datum], ty: SqlType, ctx: &EvalCtx<'_>) -> Result<D
         // Case mapping can lengthen a string (some characters expand), so admit three times its size.
         "lower" | "upper" => {
             let s = text_arg(arg(0)?)?;
-            ctx.bounds.admit((s.len() as u64).saturating_mul(3))?;
-            Ok(Datum::Text(if name == "lower" {
+            admit_value(ctx.bounds, (s.len() as u64).saturating_mul(3))?;
+            let mapped = if name == "lower" {
                 s.to_lowercase()
             } else {
                 s.to_uppercase()
-            }))
+            };
+            if mapped.len() as u64 > MAX_VALUE_BYTES {
+                return Err(value_too_large(mapped.len() as u64));
+            }
+            Ok(Datum::Text(mapped))
         }
         "length" => match arg(0)? {
             Datum::Text(s) => Ok(Datum::Int(

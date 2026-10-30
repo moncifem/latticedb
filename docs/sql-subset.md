@@ -93,9 +93,11 @@ Arithmetic and comparison operators, `||` for text, `coalesce`, `nullif`, `lower
 `substring`, `position`, `trim`, `abs`, `round`, `now()`, `date_trunc` (`second` to `year`),
 `extract`, `cast` / `::`. Anything else is `0A000`.
 
-Limits on what an expression may build: a text or bytea value (from `||`, `lower`, `upper`) over 16 MiB
-is `54000`, and one that does not fit the statement's memory budget is `53200`, in both cases before it
-is allocated. `LIKE` polls statement timeout and cancellation (`57014`) while it matches.
+Limits on what an expression may build: a text or bytea value (from `||`, `lower`, `upper`, or a
+bytea-to-text cast, which doubles the size) over 16 MiB is `54000`, and one that does not fit the
+statement's memory budget is `53200`, in both cases before it is allocated (`lower` and `upper` are
+checked at three times their input, the most case mapping can produce). A left operand of `||` of
+4 KiB or more is reserved while the right operand is evaluated. `LIKE` polls statement timeout and cancellation (`57014`) while it matches.
 
 ## Errors
 

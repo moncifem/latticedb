@@ -176,7 +176,13 @@ impl<C: Clock> crate::eval::Bounds for Gov<'_, C> {
         drop(self.limits.reserve(self.clock, bytes)?);
         self.check()
     }
+
+    fn hold(&self, bytes: u64) -> Result<Box<dyn crate::eval::Held + '_>, ExecError> {
+        Ok(Box::new(self.limits.reserve(self.clock, bytes)?))
+    }
 }
+
+impl crate::eval::Held for MemoryReservation<'_> {}
 
 /// One row on its way through the plan. `key` is the storage key while the row comes straight from
 /// a scan (and so can be updated or deleted).

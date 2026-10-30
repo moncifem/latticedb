@@ -384,7 +384,11 @@ memory budget. Expression evaluation is bounded (#461, #462): `LIKE` polls the d
 cancellation every 1,024 steps (a test cancels a 40,000 x 20,000 pattern at the third poll, and a
 session test times one out on the tick clock), and `||`/`lower`/`upper` refuse a result over 16 MiB
 (`54000`) or over the remaining statement budget (`53200`) before building it (a 2^16-leaf balanced
-tree over a 1 KiB value fails at the first oversized node). `LIKE` stays O(text x pattern); no
+tree over a 1 KiB value fails at the first oversized node). `lower`/`upper` are admitted at 3x their
+input (tested with U+0390, which uppercases to 6 bytes from 2) and a bytea-to-text cast at 2x. A left
+`||` operand of 4 KiB or more is held while the right subtree runs (a test shows `x || lower(y)`
+failing `53200` where each step alone fits); smaller ones are not, so peak memory is bounded by the
+budget only up to 4 KiB per nesting level. `LIKE` stays O(text x pattern); no
 `repeat`/`lpad` functions exist.
 
 **What does not run.** Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, `ALTER TABLE`, indexes
