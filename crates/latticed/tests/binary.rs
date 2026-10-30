@@ -36,11 +36,18 @@ fn refused(args: &[&str], message: &str) {
     assert_eq!(stderr(&o), format!("latticed: {message}\n"), "{args:?}");
 }
 
-fn file(name: &str, bytes: &[u8]) -> String {
+/// Writes a file with the given unix mode. Key and decoy files must be private (0600).
+fn file_with_mode(name: &str, bytes: &[u8], mode: u32) -> String {
+    use std::os::unix::fs::PermissionsExt;
     let path: PathBuf =
         std::env::temp_dir().join(format!("latticed-bin-{name}-{}", std::process::id()));
     std::fs::write(&path, bytes).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
     path.to_string_lossy().into_owned()
+}
+
+fn file(name: &str, bytes: &[u8]) -> String {
+    file_with_mode(name, bytes, 0o600)
 }
 
 #[test]
@@ -131,6 +138,17 @@ fn security_files_are_read_within_exact_bounds() {
         "latticed: cannot open configured security file\n"
     );
     refused(&["--auth", "scram-tls"], "--scram-decoy-secret required");
+    // The same valid bytes in a group- or world-accessible file are refused before they are read.
+    for (name, mode) in [("open644", 0o644), ("open640", 0o640), ("open604", 0o604)] {
+        let open = file_with_mode(name, &[7u8; 32], mode);
+        assert_eq!(
+            stderr(&scram(&open)),
+            format!(
+                "latticed: {open}: secret file is accessible to group or others (use mode 0600)\n"
+            ),
+            "{mode:o}"
+        );
+    }
 }
 
 #[test]
