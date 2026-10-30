@@ -5,13 +5,16 @@ pub lattice_sim::FaultProfile::bit_rot_ppm: u32
 pub lattice_sim::FaultProfile::disk_full_after: core::option::Option<usize>
 pub lattice_sim::FaultProfile::garbage_tail: bool
 pub lattice_sim::FaultProfile::lose_unsynced_dirs: bool
+pub lattice_sim::FaultProfile::reorder_pages: bool
 pub lattice_sim::FaultProfile::sync_error_ppm: u32
 pub lattice_sim::FaultProfile::torn_writes: bool
+pub lattice_sim::FaultProfile::zero_fill_tails: bool
 impl lattice_sim::FaultProfile
 pub fn lattice_sim::FaultProfile::clean() -> Self
 pub fn lattice_sim::FaultProfile::crash_heavy() -> Self
 pub fn lattice_sim::FaultProfile::disk_faulty() -> Self
 pub fn lattice_sim::FaultProfile::everything() -> Self
+pub fn lattice_sim::FaultProfile::non_prefix() -> Self
 pub fn lattice_sim::FaultProfile::without_transient_faults(self) -> Self
 impl core::clone::Clone for lattice_sim::FaultProfile
 pub fn lattice_sim::FaultProfile::clone(&self) -> Self
@@ -57,6 +60,7 @@ pub fn lattice_sim::SimIo::profile(&self) -> lattice_sim::FaultProfile
 pub fn lattice_sim::SimIo::restart_process(&mut self)
 pub fn lattice_sim::SimIo::rot_events(&self) -> u64
 pub fn lattice_sim::SimIo::set_profile(&mut self, lattice_sim::FaultProfile)
+pub fn lattice_sim::SimIo::shape_events(&self) -> u64
 pub fn lattice_sim::SimIo::trace_hash(&self) -> u64
 pub fn lattice_sim::SimIo::used_bytes(&self) -> usize
 impl core::fmt::Debug for lattice_sim::SimIo
@@ -98,3 +102,4 @@ impl core::fmt::Debug for lattice_sim::TraceHash
 pub fn lattice_sim::TraceHash::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for lattice_sim::TraceHash
 pub const lattice_sim::LAYER: u8
+pub const lattice_sim::SIM_PAGE_BYTES: usize
