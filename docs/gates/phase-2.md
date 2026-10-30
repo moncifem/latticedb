@@ -403,12 +403,19 @@ whose id has bit 31 set; evaluators must follow the owning table (`lattice_exec:
 test covers a restrictive policy that does. `RETURNING` does not re-check the read policy. A scan is not
 polled while the engine materialises row references. Staged writes are not charged to the statement
 budget but are capped per transaction (#463): `ExecLimits::transaction_bytes`, 256 MiB by default,
-counts both copies of every staged key and value across the statements of a block, and the crossing
-write is `53200` and fails the block (tests: a block of single-row inserts stops after a few rows
-under an 8 KiB cap, 200 rewrites of one row stay under 4 KiB, one 100-row autocommit insert under a
-2 KiB cap fails). The 256 MiB default is a chosen ceiling, not a measured one. `SET timezone`,
-`client_encoding` and `datestyle` accept only UTC, UTF8 and ISO and answer `22023` otherwise (#464);
-the wire startup packet applies the same rule, so a driver that sends another `TimeZone` is refused. Expression evaluation is bounded (#461, #462): `LIKE` polls the deadline and
+counts two copies of every staged key and value plus 96 bytes of bookkeeping each (unit tests pin the
+factor, the overhead, the delete charge and the rewrite replacement), across the statements of a
+block, and the crossing write is `53200` and fails the block. It excludes the record encoded at
+`COMMIT` and the engine's version copies, so peak memory at commit can exceed the cap. Other tests: a
+block of single-row inserts stops after a few rows under an 8 KiB cap, 200 rewrites of one row stay
+under 4 KiB, a 100-row autocommit insert under a 2 KiB cap fails, and a cap lowered mid-block applies to
+what the block already staged. The 256 MiB default (`latticed --transaction-bytes`) is a chosen
+ceiling, not a measured one. `SET timezone`, `client_encoding` and `datestyle` accept only UTC, UTF8 and
+`ISO, MDY` and answer `22023` otherwise (#464). On the wire, a startup `TimeZone` or `DateStyle` is
+ignored and the effective value reported in `ParameterStatus` (with `server_encoding`,
+`integer_datetimes` and `standard_conforming_strings`); a startup `client_encoding` other than UTF8 is
+a `FATAL 22023` before authentication. `SET TIME ZONE` to non-UTC after connect still fails (a documented
+difference that affects, for example, Django with a non-UTC `TIME_ZONE`). No driver was run against this. Expression evaluation is bounded (#461, #462): `LIKE` polls the deadline and
 cancellation every 1,024 steps (a test cancels a 40,000 x 20,000 pattern at the third poll, and a
 session test times one out on the tick clock), and `||`/`lower`/`upper` refuse a result over 16 MiB
 (`54000`) or over the remaining statement budget (`53200`) before building it (a 2^16-leaf balanced

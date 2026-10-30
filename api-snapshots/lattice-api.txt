@@ -274,6 +274,7 @@ pub lattice_api::exec_host::HostLimits::max_timeout_ms: core::option::Option<u64
 pub lattice_api::exec_host::HostLimits::memory_bytes: u64
 pub lattice_api::exec_host::HostLimits::queue_depth: usize
 pub lattice_api::exec_host::HostLimits::shutdown_grace_ms: u64
+pub lattice_api::exec_host::HostLimits::transaction_bytes: u64
 pub lattice_api::exec_host::HostLimits::wait_slack_ms: u64
 impl core::clone::Clone for lattice_api::exec_host::HostLimits
 pub fn lattice_api::exec_host::HostLimits::clone(&self) -> Self

@@ -1254,6 +1254,53 @@ fn staged_writes_are_capped_across_the_statements_of_a_block() {
 }
 
 #[test]
+fn the_transaction_cap_is_read_at_each_statement_of_a_block() {
+    let (mut f, mut s) = accounts();
+    ok(&mut f.db, &mut s, "BEGIN");
+    for i in 0..5 {
+        ok(
+            &mut f.db,
+            &mut s,
+            &format!("INSERT INTO acct VALUES ({}, 1, 't{i}')", 100 + i),
+        );
+    }
+    // Lowering the cap mid-block applies to what the block already staged: five rows plus their
+    // unique entries are over 1 KiB (each entry is at least 192 bytes), so the next write fails.
+    s.set_limits(ExecLimits {
+        transaction_bytes: 1024,
+        ..ExecLimits::default()
+    });
+    let e = err(&mut f.db, &mut s, "INSERT INTO acct VALUES (200, 1, 'x')");
+    assert_eq!(e.sqlstate(), "53200");
+    assert_eq!(s.status(), TxStatus::Failed);
+    ok(&mut f.db, &mut s, "ROLLBACK");
+    // Raising it again lets a fresh block through.
+    s.set_limits(ExecLimits::default());
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "INSERT INTO acct VALUES (200, 1, 'x')");
+    ok(&mut f.db, &mut s, "COMMIT");
+}
+
+#[test]
+fn a_delete_in_a_block_is_charged_too() {
+    let (mut f, mut s) = accounts();
+    let values: Vec<String> = (10..60).map(|i| format!("({i}, 1, NULL)")).collect();
+    ok(
+        &mut f.db,
+        &mut s,
+        &format!("INSERT INTO acct VALUES {}", values.join(", ")),
+    );
+    // Deleting 50 rows stages 50 tombstones of at least 192 bytes each, over a 4 KiB cap.
+    s.set_limits(ExecLimits {
+        transaction_bytes: 4 * 1024,
+        ..ExecLimits::default()
+    });
+    ok(&mut f.db, &mut s, "BEGIN");
+    let e = err(&mut f.db, &mut s, "DELETE FROM acct WHERE id >= 10");
+    assert_eq!(e.sqlstate(), "53200");
+}
+
+#[test]
 fn rewriting_one_row_in_a_block_does_not_grow_the_staged_count() {
     let (mut f, mut s) = accounts();
     s.set_limits(ExecLimits {
@@ -1306,6 +1353,9 @@ fn settings_that_change_behaviour_are_accepted_only_for_the_supported_value() {
         "SET client_encoding = 'UTF-8'",
         "SET datestyle = 'ISO, MDY'",
         "SET datestyle = 'ISO'",
+        "SET datestyle = 'iso mdy'",
+        "SET datestyle = DEFAULT",
+        "SET client_encoding = 'UNICODE'",
         "SET application_name = 'psql'",
         "SET extra_float_digits = 3",
     ] {
@@ -1319,6 +1369,9 @@ fn settings_that_change_behaviour_are_accepted_only_for_the_supported_value() {
         "SET client_encoding = 'SQL_ASCII'",
         "SET datestyle = 'SQL, DMY'",
         "SET datestyle = 'German'",
+        "SET datestyle = 'ISO, DMY'",
+        "SET datestyle = 'ISO, YMD'",
+        "SET client_encoding = 'LATIN1'",
     ] {
         let e = err(&mut f.db, &mut s, sql);
         assert_eq!(

@@ -163,30 +163,22 @@ const IGNORED_SETTINGS: &[&str] = &["application_name", "extra_float_digits"];
 
 /// Whether `value` is one this executor honours for a setting that changes behaviour. Time zone is
 /// UTC only (every timestamp is stored and shown in UTC), `client_encoding` is UTF8 only (replies are
-/// always UTF-8) and `datestyle` is ISO output only (input in other styles is refused anyway). Any
+/// always UTF-8) and `datestyle` is `ISO, MDY` only (the output style, and the order is not
+/// switchable). Any
 /// other setting name answers `true`: a name this does not know is not its call.
 pub fn setting_value_supported(name: &str, value: &str) -> bool {
     let v = value.trim().to_ascii_lowercase();
     match name.to_ascii_lowercase().as_str() {
         "timezone" => matches!(
             v.as_str(),
-            "utc"
-                | "etc/utc"
-                | "gmt"
-                | "etc/gmt"
-                | "+00"
-                | "+00:00"
-                | "-00"
-                | "0"
-                | "default"
-                | "local"
+            "utc" | "etc/utc" | "gmt" | "etc/gmt" | "+00" | "+00:00" | "0" | "default" | "local"
         ),
-        "client_encoding" => matches!(v.as_str(), "utf8" | "utf-8" | "default"),
+        "client_encoding" => matches!(v.as_str(), "utf8" | "utf-8" | "unicode" | "default"),
+        // Only ISO output with month-day-year ordering is effective, and that is what SHOW reports.
         "datestyle" => {
-            let mut parts = v.split(',').map(str::trim);
-            v == "default"
-                || (parts.next() == Some("iso")
-                    && parts.all(|p| matches!(p, "mdy" | "dmy" | "ymd")))
+            let spaced = v.replace(',', " ");
+            let words: Vec<&str> = spaced.split_whitespace().collect();
+            matches!(words.as_slice(), ["default"] | ["iso"] | ["iso", "mdy"])
         }
         _ => true,
     }
@@ -485,7 +477,7 @@ impl ExecSession {
                         match name {
                             "timezone" => "UTC",
                             "client_encoding" => "UTF8",
-                            _ => "ISO",
+                            _ => "ISO, MDY",
                         }
                     ),
                 ));

@@ -158,7 +158,8 @@ grants exist until the Phase 4 policy language lands.
 database (`lattice_api::exec_host`) and each connection forwards its statements to it; a connection has
 at most one request in flight. Statements therefore run one at a time. `--statement-timeout-max-ms`
 (default 30000) is both the default statement timeout and the ceiling a client's `SET statement_timeout`
-cannot lift; `--statement-memory-bytes` (default 64 MiB) bounds the rows one statement holds.
+cannot lift; `--statement-memory-bytes` (default 64 MiB) bounds the rows one statement holds; `--transaction-bytes` (default 256 MiB) caps the writes one
+transaction stages (the write that crosses it is `53200` and fails the block).
 
 A connection waits for its answer at most the ceiling plus 5 seconds, then gets `57014` and its statement
 is cancelled: the database thread skips it if it has not started and stops it at the next row if it has.

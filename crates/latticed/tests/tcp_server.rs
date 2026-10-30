@@ -58,8 +58,11 @@ fn message(stream: &mut TcpStream) -> (u8, Vec<u8>) {
 }
 fn ready(stream: &mut TcpStream) {
     assert_eq!(message(stream), (b'R', vec![0, 0, 0, 0]));
-    assert_eq!(message(stream).0, b'S');
-    assert_eq!(message(stream).0, b'S');
+    // Seven ParameterStatus messages: server_version, client_encoding, TimeZone, DateStyle,
+    // server_encoding, integer_datetimes and standard_conforming_strings.
+    for _ in 0..7 {
+        assert_eq!(message(stream).0, b'S');
+    }
     let (tag, key) = message(stream);
     assert_eq!(tag, b'K');
     assert_eq!(key.len(), 8);
@@ -321,8 +324,11 @@ fn cancellable_server(max_connections: usize) -> (ServerHandle, std::sync::mpsc:
 fn registered(stream: &mut TcpStream) -> (i32, i32) {
     stream.write_all(&startup()).unwrap();
     assert_eq!(message(stream), (b'R', vec![0; 4]));
-    assert_eq!(message(stream).0, b'S');
-    assert_eq!(message(stream).0, b'S');
+    // Seven ParameterStatus messages: server_version, client_encoding, TimeZone, DateStyle,
+    // server_encoding, integer_datetimes and standard_conforming_strings.
+    for _ in 0..7 {
+        assert_eq!(message(stream).0, b'S');
+    }
     let (tag, fields) = message(stream);
     assert_eq!(tag, b'K');
     assert_eq!(fields.len(), 8);
@@ -631,8 +637,11 @@ fn connections_beyond_worker_capacity_get_fatal_53300_not_a_silent_close() {
     server.shutdown().unwrap();
 }
 fn ready_after_auth(stream: &mut TcpStream) {
-    assert_eq!(message(stream).0, b'S');
-    assert_eq!(message(stream).0, b'S');
+    // Seven ParameterStatus messages: server_version, client_encoding, TimeZone, DateStyle,
+    // server_encoding, integer_datetimes and standard_conforming_strings.
+    for _ in 0..7 {
+        assert_eq!(message(stream).0, b'S');
+    }
     let (tag, key) = message(stream);
     assert_eq!(tag, b'K');
     assert!(i32::from_be_bytes(key[..4].try_into().unwrap()) > 0);

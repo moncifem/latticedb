@@ -180,6 +180,8 @@ pub struct HostLimits {
     pub max_timeout_ms: Option<u64>,
     /// Bytes one statement may hold in result and working rows.
     pub memory_bytes: u64,
+    /// Bytes the writes staged by one transaction may hold (`ExecLimits::transaction_bytes`).
+    pub transaction_bytes: u64,
     /// Requests that may wait for the database thread; memory held by the queue is bounded by it.
     /// A connection keeps at most one live request queued, but a request that timed out stays queued
     /// until the thread takes it, even after its connection closed, so while the thread is stuck
@@ -199,6 +201,7 @@ impl Default for HostLimits {
         HostLimits {
             max_timeout_ms: Some(30_000),
             memory_bytes: 64 << 20,
+            transaction_bytes: ExecLimits::default().transaction_bytes,
             queue_depth: 256,
             wait_slack_ms: 5_000,
             shutdown_grace_ms: 10_000,
@@ -211,7 +214,7 @@ impl HostLimits {
         ExecLimits {
             timeout_ms: self.max_timeout_ms,
             memory_bytes: self.memory_bytes,
-            transaction_bytes: ExecLimits::default().transaction_bytes,
+            transaction_bytes: self.transaction_bytes,
             max_timeout_ms: self.max_timeout_ms,
         }
     }

@@ -100,6 +100,15 @@ fn staged_cost(key: &[u8], value: Option<&[u8]>) -> u64 {
     2 * (bytes + STAGED_ENTRY_OVERHEAD)
 }
 
+/// The staged total after writing `new` (`None` is a delete) under `key`, which held `old` (outer
+/// `None`: nothing staged) before: a rewrite replaces the earlier count, it does not add to it.
+fn staged_after(staged: u64, key: &[u8], old: Option<Option<&[u8]>>, new: Option<&[u8]>) -> u64 {
+    let replaced = old.map_or(0, |v| staged_cost(key, v));
+    staged
+        .saturating_sub(replaced)
+        .saturating_add(staged_cost(key, new))
+}
+
 impl TxState {
     pub(crate) fn begin<I: Io, C: Clock + Clone, R: Rng>(
         db: &Database<I, C, R>,
@@ -121,14 +130,11 @@ impl TxState {
         key: &[u8],
         value: Option<&[u8]>,
     ) -> Result<(), ExecError> {
-        let replaced = self
+        let old = self
             .overlay
             .get(&(table, key.to_vec()))
-            .map_or(0, |old| staged_cost(key, old.as_deref()));
-        let total = self
-            .staged
-            .saturating_sub(replaced)
-            .saturating_add(staged_cost(key, value));
+            .map(Option::as_deref);
+        let total = staged_after(self.staged, key, old, value);
         if total > self.cap {
             return Err(ExecError::new(
                 ErrorKind::Limit,
@@ -921,4 +927,34 @@ fn duplicate(constraint: &str) -> ExecError {
         "23505",
         format!("duplicate key value violates unique constraint \"{constraint}\""),
     )
+}
+
+#[cfg(test)]
+mod staged_tests {
+    use super::{staged_after, staged_cost};
+
+    #[test]
+    fn a_staged_entry_counts_two_copies_and_96_bytes_each() {
+        // Derived by hand: (10 key + 20 value + 96) bytes, held twice.
+        assert_eq!(staged_cost(&[0; 10], Some(&[0; 20])), 252);
+        // A delete stages the key only, and is charged the same overhead.
+        assert_eq!(staged_cost(&[0; 10], None), 212);
+        assert_eq!(staged_cost(&[], Some(&[])), 192);
+    }
+
+    #[test]
+    fn a_rewrite_replaces_the_earlier_count_and_a_delete_replaces_a_put() {
+        let key = [0; 10];
+        // First write adds in full.
+        assert_eq!(staged_after(1000, &key, None, Some(&[0; 20])), 1252);
+        // Rewriting with a longer value adds only the difference.
+        assert_eq!(
+            staged_after(1252, &key, Some(Some(&[0; 20])), Some(&[0; 30])),
+            1272
+        );
+        // Deleting a staged put gives back the value bytes.
+        assert_eq!(staged_after(1272, &key, Some(Some(&[0; 30])), None), 1212);
+        // Putting over a staged delete.
+        assert_eq!(staged_after(1212, &key, Some(None), Some(&[0; 5])), 1222);
+    }
 }

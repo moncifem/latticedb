@@ -9,8 +9,10 @@
 //! What it does:
 //! - startup: leaves host encryption to the caller and offers development trust or an explicit
 //!   configured SCRAM exchange before successful startup
-//!   (`AuthenticationOk`, `ParameterStatus` for `server_version` and `client_encoding`,
-//!   `BackendKeyData`, `ReadyForQuery`);
+//!   (`AuthenticationOk`, `ParameterStatus` for `server_version`, `client_encoding`, `TimeZone`,
+//!   `DateStyle`, `server_encoding`, `integer_datetimes` and `standard_conforming_strings`,
+//!   `BackendKeyData`, `ReadyForQuery`); a requested `TimeZone` or `DateStyle` is ignored and the
+//!   effective value reported, a requested `client_encoding` other than UTF8 is `FATAL 22023`;
 //! - simple query: one `Q` message runs through a [`QueryHandler`] and ends with `ReadyForQuery`;
 //! - extended query: named statements and portals, `Parse`/`Bind`/`Describe`/`Execute`/`Close`,
 //!   a row limit on `Execute` with `PortalSuspended`, and the rule that after an error every message
@@ -390,11 +392,15 @@ impl<H: QueryHandler> Session<H> {
                         )
                     };
                 }
-                // A startup parameter that changes behaviour is refused when the executor cannot honour
-                // it, as `SET` refuses it, instead of being accepted and ignored. The answer depends
-                // on the parameter alone, so it does not tell known accounts from unknown ones.
+                // A requested `client_encoding` other than UTF8 is refused: it changes how the client
+                // encodes the bytes it sends, so ignoring it would corrupt non-ASCII input. A
+                // requested `TimeZone` or `DateStyle` is ignored and the effective value is reported
+                // in the ParameterStatus messages. The answer depends on the parameter alone, so it
+                // does not tell known accounts from unknown ones.
                 for (key, value) in &params {
-                    if !lattice_exec::setting_value_supported(key, value) {
+                    if key.eq_ignore_ascii_case("client_encoding")
+                        && !lattice_exec::setting_value_supported(key, value)
+                    {
                         return self.fatal(
                             "22023",
                             format!("invalid value for parameter \"{key}\": \"{value}\""),
@@ -440,6 +446,26 @@ impl<H: QueryHandler> Session<H> {
                 Backend::ParameterStatus {
                     name: "client_encoding".into(),
                     value: "UTF8".into(),
+                },
+                Backend::ParameterStatus {
+                    name: "TimeZone".into(),
+                    value: "UTC".into(),
+                },
+                Backend::ParameterStatus {
+                    name: "DateStyle".into(),
+                    value: "ISO, MDY".into(),
+                },
+                Backend::ParameterStatus {
+                    name: "server_encoding".into(),
+                    value: "UTF8".into(),
+                },
+                Backend::ParameterStatus {
+                    name: "integer_datetimes".into(),
+                    value: "on".into(),
+                },
+                Backend::ParameterStatus {
+                    name: "standard_conforming_strings".into(),
+                    value: "on".into(),
                 },
                 Backend::BackendKeyData {
                     pid: self.pid,
@@ -1118,6 +1144,16 @@ mod tests {
         expected.extend_from_slice(b"server_version\x0016.0\0");
         expected.extend_from_slice(&[b'S', 0, 0, 0, 25]);
         expected.extend_from_slice(b"client_encoding\0UTF8\0");
+        expected.extend_from_slice(&[b'S', 0, 0, 0, 17]);
+        expected.extend_from_slice(b"TimeZone\0UTC\0");
+        expected.extend_from_slice(&[b'S', 0, 0, 0, 23]);
+        expected.extend_from_slice(b"DateStyle\0ISO, MDY\0");
+        expected.extend_from_slice(&[b'S', 0, 0, 0, 25]);
+        expected.extend_from_slice(b"server_encoding\0UTF8\0");
+        expected.extend_from_slice(&[b'S', 0, 0, 0, 25]);
+        expected.extend_from_slice(b"integer_datetimes\0on\0");
+        expected.extend_from_slice(&[b'S', 0, 0, 0, 35]);
+        expected.extend_from_slice(b"standard_conforming_strings\0on\0");
         expected.extend_from_slice(&[b'K', 0, 0, 0, 12, 0, 0, 0, 1, 0, 0, 0, 2]);
         expected.extend_from_slice(&[b'Z', 0, 0, 0, 5, b'I']);
         assert_eq!(wire(&out), expected);
@@ -1133,34 +1169,50 @@ mod tests {
     }
 
     #[test]
-    fn startup_parameters_the_executor_cannot_honour_are_refused() {
-        let params = |extra: (&str, &str)| {
-            Startup::Params(vec![
-                ("user".into(), "u".into()),
-                (extra.0.into(), extra.1.into()),
-            ])
+    fn a_requested_time_zone_or_date_style_is_ignored_and_the_effective_one_reported() {
+        let status = |name: &str, value: &str| Backend::ParameterStatus {
+            name: name.into(),
+            value: value.into(),
         };
-        for ok in [
+        let effective = [
+            status("server_version", SERVER_VERSION),
+            status("client_encoding", "UTF8"),
+            status("TimeZone", "UTC"),
+            status("DateStyle", "ISO, MDY"),
+            status("server_encoding", "UTF8"),
+            status("integer_datetimes", "on"),
+            status("standard_conforming_strings", "on"),
+        ];
+        for requested in [
+            ("TimeZone", "America/New_York"),
             ("TimeZone", "UTC"),
-            ("TimeZone", "Etc/UTC"),
+            ("DateStyle", "SQL, DMY"),
             ("client_encoding", "UTF8"),
-            ("DateStyle", "ISO, MDY"),
+            ("client_encoding", "UNICODE"),
             ("application_name", "psql"),
             ("extra_float_digits", "3"),
             ("database", "d"),
         ] {
             let mut s = Session::local_trust(Fake::default(), 1, 2);
-            let out = s.on_startup(params(ok));
-            assert!(!out.close && !s.is_closed(), "{ok:?} should connect");
+            let out = s.on_startup(Startup::Params(vec![
+                ("user".into(), "u".into()),
+                (requested.0.into(), requested.1.into()),
+            ]));
+            assert!(!out.close && !s.is_closed(), "{requested:?} should connect");
+            assert_eq!(out.messages[0], Backend::AuthenticationOk);
+            assert_eq!(out.messages[1..8], effective, "{requested:?}");
         }
-        for bad in [
-            ("TimeZone", "America/New_York"),
-            ("client_encoding", "LATIN1"),
-            ("DateStyle", "SQL, DMY"),
-        ] {
+    }
+
+    #[test]
+    fn a_client_encoding_other_than_utf8_is_refused_at_startup() {
+        for bad in ["LATIN1", "SQL_ASCII", "WIN1252"] {
             let mut s = Session::local_trust(Fake::default(), 1, 2);
-            let out = s.on_startup(params(bad));
-            assert_eq!(err_code(&out.messages[0]), "22023", "{bad:?}");
+            let out = s.on_startup(Startup::Params(vec![
+                ("user".into(), "u".into()),
+                ("client_encoding".into(), bad.into()),
+            ]));
+            assert_eq!(err_code(&out.messages[0]), "22023", "{bad}");
             assert!(out.close && s.is_closed());
         }
     }
@@ -1915,6 +1967,35 @@ mod tests {
     fn scram_final() -> Frontend {
         Frontend::SaslResponse(b"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=".to_vec())
     }
+    #[test]
+    fn a_refused_client_encoding_is_the_same_before_authentication_for_any_account() {
+        let mut answers = Vec::new();
+        for known in [true, false] {
+            let mut session = scram_session(known);
+            let out = session.on_startup(Startup::Params(vec![
+                ("user".into(), "user".into()),
+                ("client_encoding".into(), "LATIN1".into()),
+            ]));
+            assert!(out.close && session.is_closed());
+            answers.push(out.messages);
+        }
+        assert_eq!(err_code(&answers[0][0]), "22023");
+        assert_eq!(
+            answers[0], answers[1],
+            "the answer does not depend on the account"
+        );
+        // A requested time zone does not stop the exchange from starting.
+        let mut session = scram_session(true);
+        let offer = session.on_startup(Startup::Params(vec![
+            ("user".into(), "user".into()),
+            ("TimeZone".into(), "Asia/Tokyo".into()),
+        ]));
+        assert_eq!(
+            offer.messages,
+            [Backend::AuthenticationSasl(vec!["SCRAM-SHA-256".into()])]
+        );
+    }
+
     #[test]
     fn scram_success_orders_final_before_startup_and_gates_query_handler() {
         let mut session = scram_session(true);

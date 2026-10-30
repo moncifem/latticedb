@@ -186,8 +186,11 @@ fn verified_tls_scram_completes_before_query_and_never_accepts_password_again() 
     final_body.extend(signature);
     assert_eq!(message(&mut client), (b'R', final_body));
     assert_eq!(message(&mut client), (b'R', vec![0, 0, 0, 0]));
-    assert_eq!(message(&mut client).0, b'S');
-    assert_eq!(message(&mut client).0, b'S');
+    // server_version, client_encoding, TimeZone, DateStyle, server_encoding, integer_datetimes and
+    // standard_conforming_strings.
+    for _ in 0..7 {
+        assert_eq!(message(&mut client).0, b'S');
+    }
     let (tag, key) = message(&mut client);
     assert_eq!(tag, b'K');
     assert_eq!(key.len(), 8);

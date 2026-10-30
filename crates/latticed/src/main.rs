@@ -39,7 +39,7 @@ fn run() -> Result<(), String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows and table names survive a restart; column definitions do not yet (#379). SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows and table names survive a restart; column definitions do not yet (#379). SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
             );
             return Ok(());
         }
@@ -70,6 +70,14 @@ fn run() -> Result<(), String> {
                     .map_err(|e| format!("invalid statement memory budget: {e}"))?;
                 if limits.memory_bytes == 0 {
                     return Err("invalid statement memory budget: must be positive".into());
+                }
+            }
+            "--transaction-bytes" => {
+                limits.transaction_bytes = value
+                    .parse()
+                    .map_err(|e| format!("invalid transaction budget: {e}"))?;
+                if limits.transaction_bytes == 0 {
+                    return Err("invalid transaction budget: must be positive".into());
                 }
             }
             "--startup-timeout-ms" => {
