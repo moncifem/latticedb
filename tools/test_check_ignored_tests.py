@@ -15,8 +15,9 @@ fn ns2() {}
 PATH = 'crates/x/tests/sweeps.rs'
 
 
-def flow(command):
-    return {'nightly.yml': f'jobs:\n  a:\n    steps:\n      - run: {command}\n'}
+def flow(command, head='on:\n  schedule: [{ cron: "0 2 * * *" }]\n', job_if=''):
+    cond = f'    if: {job_if}\n' if job_if else ''
+    return {'nightly.yml': f'{head}jobs:\n  a:\n{cond}    steps:\n      - run: {command}\n'}
 
 
 class IgnoredTests(unittest.TestCase):
@@ -40,7 +41,12 @@ class IgnoredTests(unittest.TestCase):
 
     def test_pending_specification_needs_nothing(self):
         tests = check.ignored_tests(PENDING, PATH)
-        self.assertEqual(check.problems(tests, {}, []), [])
+        self.assertEqual(check.problems(tests, {}, [], (7,)), [])
+
+    def test_pending_phase_that_is_not_listed_is_reported(self):
+        found = check.problems(check.ignored_tests(PENDING, PATH), {}, [], (3, 8))
+        self.assertEqual(len(found), 1)
+        self.assertIn('phase 7', found[0])
 
     def test_unrun_test_is_reported_with_the_fix(self):
         found = check.problems(check.ignored_tests(VOLUME, PATH), {}, [])
@@ -91,7 +97,7 @@ class IgnoredTests(unittest.TestCase):
 
     def test_stale_allow_entry_is_reported(self):
         allow = [{'path': PATH, 'name': 'gone', 'reason': 'why'}]
-        found = check.problems([], {}, allow)
+        found = check.problems(check.ignored_tests(PENDING, PATH), {}, allow, (7,))
         self.assertEqual(found, [f'tools/ignored-tests.toml: {PATH}::gone matches no ignored test'])
 
     def test_allow_entry_for_a_test_a_workflow_runs_is_reported(self):
@@ -112,11 +118,65 @@ class IgnoredTests(unittest.TestCase):
         found = check.problems(other, {}, allow)
         self.assertEqual(len(found), 2)
 
+    def test_zero_ignored_tests_is_an_error(self):
+        self.assertEqual(check.problems([], {}, []), ['no ignored test found under crates/ and xtask/; the scan is broken'])
+
+    def test_cfg_attr_ignore_is_found(self):
+        text = '#[test]\n#[cfg_attr(not(feature = "x"), ignore = "volume: slow")]\nfn slow() {}\n'
+        self.assertEqual(check.ignored_tests(text, PATH), [(PATH, 'slow', 'volume: slow')])
+
+    def test_cfg_attr_ignore_without_reason_is_found(self):
+        text = '#[cfg_attr(unix, ignore)]\nfn slow() {}\n'
+        self.assertEqual(check.ignored_tests(text, PATH), [(PATH, 'slow', '')])
+
+    def test_multi_line_attribute_is_found(self):
+        text = '#[test]\n#[ignore =\n    "volume: slow"\n]\nfn slow() {}\n'
+        self.assertEqual(check.ignored_tests(text, PATH), [(PATH, 'slow', 'volume: slow')])
+
+    def test_raw_string_reason_with_brackets_is_found(self):
+        text = '#[ignore = r#"volume: "quoted" ] and #[x]"#]\n#[test]\nfn slow() {}\n'
+        self.assertEqual(check.ignored_tests(text, PATH), [(PATH, 'slow', 'volume: "quoted" ] and #[x]')])
+
+    def test_word_ignore_inside_a_reason_or_name_is_not_an_attribute_hit(self):
+        text = '#[doc = "ignore this"]\nfn a() {}\n#[test_ignored]\nfn b() {}\n#[allow(clippy::ignore_x)]\nfn c() {}\n'
+        self.assertEqual(check.ignored_tests(text, PATH), [])
+
+    def test_unclassifiable_attribute_mentioning_ignore_fails(self):
+        with self.assertRaises(ValueError):
+            check.ignored_tests('#[allow(ignore)]\nfn a() {}\n', PATH)
+
+    def test_attribute_text_inside_a_string_or_comment_is_not_scanned(self):
+        text = 'let s = "#[ignore = \\"phase 1\\"]";\n// #[ignore]\n/// #[ignore]\nfn a() {}\n'
+        self.assertEqual(check.ignored_tests(text, PATH), [])
+
+    def test_function_far_below_the_attribute_is_found(self):
+        text = '#[ignore = "volume: x"]\n' + '// note\n' * 20 + 'fn far() {}\n'
+        self.assertEqual(check.ignored_tests(text, PATH), [(PATH, 'far', 'volume: x')])
+
+    def test_workflow_that_is_only_manual_does_not_count(self):
+        wf = flow('cargo test -- --ignored big_sweep', head='on:\n  workflow_dispatch:\n')
+        self.assertEqual(len(check.problems(check.ignored_tests(VOLUME, PATH), wf, [])), 1)
+
+    def test_commented_trigger_does_not_count(self):
+        wf = flow('cargo test -- --ignored big_sweep', head='on:\n  # schedule: nightly\n  workflow_dispatch:\n')
+        self.assertEqual(len(check.problems(check.ignored_tests(VOLUME, PATH), wf, [])), 1)
+
+    def test_disabled_or_manual_input_job_does_not_count(self):
+        for cond in ('false', '${{ false }}', 'inputs.sql_proptest == true', '${{ inputs.x }}'):
+            wf = flow('cargo test -- --ignored big_sweep', job_if=cond)
+            self.assertEqual(len(check.problems(check.ignored_tests(VOLUME, PATH), wf, [])), 1, cond)
+
+    def test_job_with_an_ordinary_condition_counts(self):
+        wf = flow('cargo test -- --ignored big_sweep', job_if="github.event_name == 'schedule'")
+        self.assertEqual(check.problems(check.ignored_tests(VOLUME, PATH), wf, []), [])
+
     def test_repository_ignored_tests_are_accounted_for(self):
         import tomllib
         workflows = {p.name: p.read_text() for p in (check.ROOT / '.github/workflows').glob('*.yml')}
-        allow = tomllib.loads((check.ROOT / 'tools/ignored-tests.toml').read_text()).get('allow', [])
-        self.assertEqual(check.problems(check.collect(check.ROOT), workflows, allow), [])
+        config = tomllib.loads((check.ROOT / 'tools/ignored-tests.toml').read_text())
+        tests = check.collect(check.ROOT)
+        self.assertGreaterEqual(len(tests), 15)
+        self.assertEqual(check.problems(tests, workflows, config.get('allow', []), config.get('pending_phases', [])), [])
 
     def test_the_two_volume_tests_of_issue_455_are_found_and_run(self):
         tests = {(p, n) for p, n, _ in check.collect(check.ROOT)}

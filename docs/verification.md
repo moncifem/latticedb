@@ -162,10 +162,14 @@ These two checks are not Kani proofs; they are recorded here because the same fi
   `volume-fencing`; 240-minute limit, listed in `report-failure`), with `--ignored` and the test name,
   and uploads the log as `volume-*`. Their run time on a hosted runner has not been measured, so a
   timeout on the first nights is possible, and they use fixed seeds, so every night repeats the same
-  100,000. `tools/check_ignored_tests.py` (pull request gate) fails when an `#[ignore]` test is not a
-  pending `phase N:` specification, is not started with `--ignored` by a workflow (by name, or by
-  `--test <file>`) and has no reasoned entry in `tools/ignored-tests.toml`; the row fault volume tests
-  are listed there because nightly covers them through the `row_fault_runner` example.
+  100,000. `tools/check_ignored_tests.py` (pull request gate) finds every attribute that contains
+  `ignore` (`#[ignore]`, `cfg_attr`, multi-line, raw-string reasons) and fails when such a test is not
+  a `phase N:` specification for a phase still listed in `pending_phases`, is not started with
+  `--ignored` by a workflow that runs unattended (schedule, push or pull request trigger; the job is
+  not `if: false` or gated on a manual input), and has no reasoned entry in `tools/ignored-tests.toml`.
+  It also fails when it finds no ignored test, or an attribute it cannot classify. It does not follow
+  `needs`, matrices or reusable workflows. The row fault volume tests are listed because nightly covers
+  them through the `row_fault_runner` example.
 - **SQL reference check.** `.github/workflows/sql-reference.yml` is the single definition of the check of
   the sqllogictest scripts against PostgreSQL 17 (pinned by digest). Pull requests that touch the scripts
   or `tools/slt_reference.py` run it, and `nightly.yml` calls it as a reusable workflow, so the digest, the

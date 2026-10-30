@@ -1,7 +1,10 @@
 # Ignored tests that no workflow starts with `--ignored`, each with the reason. The pull request
 # gate (tools/check_ignored_tests.py) fails for an ignored test that is neither run by a workflow nor
 # listed here, and for an entry here that matches no ignored test or whose test a workflow now runs.
-# Pending specifications (`#[ignore = "phase N: ..."]`) need no entry.
+# Pending specifications (`#[ignore = "phase N: ..."]`) need no entry while N is listed here; take a
+# phase out of the list when that phase starts, so its ignored specifications must then run or be explained.
+
+pending_phases = [3, 6, 7, 8, 9]
 
 [[allow]]
 path = "crates/lattice-engines/tests/row_faults.rs"
