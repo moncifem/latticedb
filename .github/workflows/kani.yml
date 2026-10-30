@@ -43,6 +43,10 @@ jobs:
       - name: install kani-verifier ${{ env.KANI_VERSION }}
         if: steps.kani-cache.outputs.cache-hit != 'true'
         run: cargo install --locked kani-verifier --version "${KANI_VERSION}"
+      - name: check the Kani version
+        run: |
+          cargo kani --version
+          cargo kani --version | grep -Fq "Kani Rust Verifier ${KANI_VERSION} "
       - name: set up Kani
         run: cargo kani setup
       # Kani's nightly may report a rustc older than the workspace rust-version (1.99.1), which cargo
@@ -111,6 +115,10 @@ jobs:
       - name: install kani-verifier ${{ env.KANI_VERSION }}
         if: steps.kani-cache.outputs.cache-hit != 'true'
         run: cargo install --locked kani-verifier --version "${KANI_VERSION}"
+      - name: check the Kani version
+        run: |
+          cargo kani --version
+          cargo kani --version | grep -Fq "Kani Rust Verifier ${KANI_VERSION} "
       - name: set up Kani
         run: cargo kani setup
       # Kani's nightly may report a rustc older than the workspace rust-version (1.99.1), which cargo
@@ -131,6 +139,7 @@ jobs:
           mkdir -p kani-results
           cargo kani -Z unstable-options -p "${PACKAGE}" --harness-timeout 20m 2>&1 | tee "kani-results/${PACKAGE}.log"
           grep -q 'VERIFICATION:- SUCCESSFUL' "kani-results/${PACKAGE}.log"
+          ! grep -q 'VERIFICATION:- FAILED' "kani-results/${PACKAGE}.log"
       # The log is the only record of which harness passed, failed or timed out; keep it even when the
       # proof step fails. A proof counts as passing only when this log says VERIFICATION:- SUCCESSFUL.
       - name: summarise the result

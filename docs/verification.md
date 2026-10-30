@@ -37,19 +37,21 @@ cargo kani -p lattice-core --harness cursor_round_trips
 | --- | --- | --- | --- | --- |
 | `cursor_round_trips` | `lattice-core/src/feed.rs` | all `u64` lsn, all `u32` index | 14 | `Cursor::new` then `to_bytes` then `from_bytes` returns the same cursor for every nonzero lsn; the origin round trips; lsn 0 is refused by `new`. |
 | `cursor_order_matches_lsn_index_and_bytes` | `lattice-core/src/feed.rs` | all pairs of nonzero cursors | 14 | Cursor order equals `(lsn, index)` order, and equals the order of the encoded 12 bytes compared as unsigned strings. |
-| `cursor_decode_never_panics` | `lattice-core/src/feed.rs` | slices of 0 to 7 bytes | 9 | `Cursor::from_bytes` never panics; it accepts only 12 byte inputs and re-encodes what it accepts to the same bytes. |
+| `cursor_decode_never_panics` | `lattice-core/src/feed.rs` | slices of 0 to 14 bytes | 16 | `Cursor::from_bytes` never panics; it accepts only 12 byte inputs and re-encodes what it accepts to the same bytes. |
 | `event_decode_never_panics` | `lattice-core/src/feed.rs` | slices of 0 to 80 bytes | 82 | `ChangeEvent::decode` never panics, including past the fixed header into the key and operation tag. |
-| `frame_decode_never_panics` | `lattice-api/src/sync.rs` | slices of 0 to 7 bytes | 9 | `sync::decode` never panics, and a returned frame length is within the input and at least the header. |
-| `frame_decode_with_limit_never_panics` | `lattice-api/src/sync.rs` | 0 to 7 bytes, any payload limit | 9 | The same for `decode_with_limit`, and the payload length never exceeds the limit or `MAX_PAYLOAD`. |
-| `framer_bounds_hold` | `lattice-sdk/src/contract.rs` | 3 bytes in two arbitrary pushes | 5 | `Framer::push` never panics, yields one result per newline, returns no line holding a newline or longer than its input, and never buffers more than `MAX_LINE_BYTES`. |
-| `framer_finish_resets` | `lattice-sdk/src/contract.rs` | 0 to 3 bytes | 5 | `Framer::finish` never panics and leaves the framer empty and not skipping. |
-| `move_into_own_subtree_is_a_no_op` | `lattice-core/src/crdt_tree.rs` | two-node chain, one later move, any position | 8 | A move of a node under itself or its descendant is `Skipped`, leaves the snapshot unchanged and the tree acyclic. |
-| `would_cycle_matches_ancestry` | `lattice-core/src/crdt_tree.rs` | the same chain, all node pairs 0 to 3 | 8 | `would_cycle(node, parent)` is true exactly when `node` is `parent` or an ancestor of it. |
+| `frame_decode_never_panics` | `lattice-api/src/sync.rs` | slices of 0 to 7 bytes | 9 | `sync::decode` never panics, and a returned frame length is within the input and at least the header. At 7 bytes no complete frame fits (the smallest, a ping, is 13), so this covers the header and refusal paths only and the length claim holds vacuously. Not proven, see #425. |
+| `frame_decode_with_limit_never_panics` | `lattice-api/src/sync.rs` | 0 to 7 bytes, any payload limit | 9 | The same for `decode_with_limit`, and the payload length never exceeds the limit or `MAX_PAYLOAD`. Same 7 byte limit: header and refusal paths only, the length claims hold vacuously. Not proven, see #425. |
+| `framer_bounds_hold` | `lattice-sdk/src/contract.rs` | 3 bytes in two arbitrary pushes | 5 | `Framer::push` never panics, yields one result per newline, returns no line holding a newline or longer than its input, and never buffers more than `MAX_LINE_BYTES`. Not proven, see #425. |
+| `framer_finish_resets` | `lattice-sdk/src/contract.rs` | 0 to 3 bytes | 5 | `Framer::finish` never panics and leaves the framer empty and not skipping. Not proven, see #425. |
+| `move_into_own_subtree_is_a_no_op` | `lattice-core/src/crdt_tree.rs` | two-node chain, one later move, any position | 8 | A move of a node under itself or its descendant is `Skipped`, leaves the snapshot unchanged and the tree acyclic. Not proven, see #424. |
+| `would_cycle_matches_ancestry` | `lattice-core/src/crdt_tree.rs` | the same chain, all node pairs 0 to 3 | 8 | `would_cycle(node, parent)` is true exactly when `node` is `parent` or an ancestor of it. Not proven, see #424. |
 
 ## What these do not establish
 
-- Larger inputs. The decoders are proved up to 3 to 80 bytes. Maximum-size keys, values, texts and
-  event lists are beyond the bound; they stay with the property tests and the fuzz targets.
+- Larger inputs. Of the verified harnesses, the cursor decoder is proved for inputs of up to 14 bytes
+  and the change event decoder for up to 80 bytes. Maximum-size keys, values, texts and event lists
+  are beyond the bound; they stay with the property tests and the fuzz targets. The sync frame
+  decoder is not proven at any size (#425).
 - The line splitter's over-long-line branch. `MAX_LINE_BYTES` is 1 MiB, far beyond any bound Kani can
   unroll, so `framer_bounds_hold` shows the invariants on short inputs only; the limit itself is
   covered by unit tests.
@@ -83,7 +85,7 @@ The cause of the kills is not established. The solver stage was reached with a s
 of `assume(false)` lines from `alloc` `raw_vec`, which points at the `Vec` and `BTreeMap` code paths
 of the code under test. Redesigning the tree harnesses over fixed arrays was considered and not done:
 it would prove a model of the algorithm, not `Tree`. These harnesses need a different approach (for
-example stubbing the allocator-heavy parts or splitting the harness) and are tracked in issues.
+example stubbing the allocator-heavy parts or splitting the harness) and are tracked in #424 (tree) and #425 (sync frame and framer).
 
 The workflow follows from this. Job `verified` runs only the 4 verified harnesses (weekly and on
 demand), fails unless it sees exactly 4 `SUCCESSFUL` and no `FAILED`, so a green run means those

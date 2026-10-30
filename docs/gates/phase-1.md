@@ -78,7 +78,7 @@ tree CRDT cycle check are merged (PR 296) and run only through the `kani` workfl
 demand, results uploaded as artifacts). Bounded proofs: 4 of 10 harnesses verified on CI (the `lattice-core` feed cursor and event decoder
 proofs, four consecutive runs); 6 not proven (the tree cycle check timed out, the `lattice-api`
 sync frame and `lattice-sdk` framer harnesses were killed on the hosted runner; no counterexample was
-found). The broken-variant demonstration has not been run. Details, bounds and run links are in
+found). Tracked in #424 and #425. The broken-variant demonstration has not been run. Details, bounds and run links are in
 [docs/verification.md](../verification.md).
 
 ## Not built
