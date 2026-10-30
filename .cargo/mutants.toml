@@ -90,6 +90,9 @@ exclude_re = [
     # Sync client `clip` shortens a protocol-violation rule to the error-message limit, but every rule passed
     # to it is a short ASCII literal, so the loop that backs up to a character boundary never runs.
     "client\\.rs:306:\\d+: replace -= with (\\+=|/=) in clip",
+    # MCP JSON parser: a lone low surrogate (U+DC00 to U+DFFF) is refused by the arm that names it, and
+    # would be refused by `char::from_u32` anyway because surrogates are not characters.
+    "mcp\\.rs:264:\\d+: delete match arm 0xDC00..= 0xDFFF in Parser<'_>::unicode_escape",
     "sim_cli\\.rs:96:\\d+: replace \\+= with (-=|\\*=) in execute_with",
     # The binary only wires `execute_with` to stdout, stderr and the ledger file; the testkit may not
     # spawn a process, so its exit-code plumbing is exercised by `cargo xtask sim` in the nightly.
@@ -125,4 +128,6 @@ exclude_globs = [
     # Kani proof harnesses: compiled only under `cfg(kani)`, run by the Kani workflow, never by `cargo test`,
     # so a mutant in them cannot be observed by tests; the proofs are checked by their own workflow.
     "**/sync/proofs.rs",
+    # Kani proof harnesses: compiled only under `cfg(kani)`, run by the Kani workflow, never by `cargo test`.
+    "**/contract/proofs.rs",
 ]
