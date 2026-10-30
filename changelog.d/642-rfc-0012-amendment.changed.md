@@ -1,0 +1,1 @@
+RFC 0012 amendment: the SQL definition format now caps a varchar limit at 10,485,760 characters, rejects a unique constraint whose column set equals the primary key or another unique, and states that identifiers have no byte A-Z with other UTF-8 kept as written. Tech-lead proposals flagged to the owner during the comment period (ends 2026-11-06); documents only.
