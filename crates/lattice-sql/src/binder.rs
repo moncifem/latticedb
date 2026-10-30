@@ -21,8 +21,8 @@ use crate::ast::{
 };
 use crate::error::Span;
 use crate::plan::{
-    AsOfPlan, BoundStatement, CatalogView, ColumnInfo, ExprNode, InsertSource, LogicalPlan,
-    OutputColumn, SortKey, SqlType, TableInfo, TypedExpr, Value,
+    AggCall, AggFunc, AsOfPlan, BoundStatement, CatalogView, ColumnInfo, ExprNode, InsertSource,
+    LogicalPlan, OutputColumn, SortKey, SqlType, TableInfo, TypedExpr, Value,
 };
 
 /// The class of a binding failure.
@@ -58,6 +58,8 @@ pub enum BindErrorKind {
     NegativeLimit,
     /// `OFFSET` below zero (`2201X`).
     NegativeOffset,
+    /// A column outside an aggregate in a query that aggregates (`42803`).
+    Grouping,
     /// A cast between types with no conversion (`42846`).
     CannotCoerce,
     /// A function called with arguments it does not take (`42883`).
@@ -124,6 +126,7 @@ impl BindError {
             BindErrorKind::UndefinedParameter => "42P02",
             BindErrorKind::NegativeLimit => "2201W",
             BindErrorKind::NegativeOffset => "2201X",
+            BindErrorKind::Grouping => "42803",
             BindErrorKind::CannotCoerce => "42846",
             BindErrorKind::UndefinedFunction => "42883",
             BindErrorKind::InvalidParameterValue => "22023",
@@ -253,6 +256,11 @@ fn int_range(ty: SqlType) -> Option<(i128, i128)> {
         SqlType::BigInt => Some((i128::from(i64::MIN), i128::from(i64::MAX))),
         _ => None,
     }
+}
+
+/// Whether `e` is a call of `count`, `sum`, `min`, `max` or `avg`.
+fn is_aggregate_call(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Function(f) if matches!(f.name.as_str(), "count" | "sum" | "min" | "max" | "avg"))
 }
 
 fn is_integer(ty: SqlType) -> bool {
@@ -1104,6 +1112,13 @@ impl Binder<'_> {
             };
         }
 
+        if q.projection.iter().any(|item| match item {
+            SelectItem::Expr { expr, .. } => is_aggregate_call(expr),
+            _ => false,
+        }) {
+            return self.aggregate_query(q, plan, &scope, targets);
+        }
+
         let mut columns = self.select_list(&q.projection, &scope)?;
         if let Some(targets) = targets {
             for (c, t) in columns.iter_mut().zip(targets) {
@@ -1152,6 +1167,178 @@ impl Binder<'_> {
             };
         }
         Ok(plan)
+    }
+
+    /// A `SELECT` whose items are aggregate calls over the rows of `input`: one row out, so
+    /// `ORDER BY` has nothing to order (its keys are still checked) and `LIMIT`/`OFFSET` apply to it.
+    fn aggregate_query(
+        &mut self,
+        q: &Query,
+        input: LogicalPlan,
+        scope: &Scope,
+        targets: Option<&[ColumnInfo]>,
+    ) -> R<LogicalPlan> {
+        let mut calls = Vec::with_capacity(q.projection.len());
+        let mut columns = Vec::with_capacity(q.projection.len());
+        for item in &q.projection {
+            let SelectItem::Expr { expr, alias } = item else {
+                return err(
+                    BindErrorKind::Grouping,
+                    "a query that aggregates cannot select every column",
+                    Span::default(),
+                );
+            };
+            let ExprKind::Function(f) = &expr.kind else {
+                columns.push(self.constant_item(expr, alias.as_ref())?);
+                continue;
+            };
+            if !is_aggregate_call(expr) {
+                columns.push(self.constant_item(expr, alias.as_ref())?);
+                continue;
+            }
+            let call = self.aggregate_call(f, scope, expr.span)?;
+            let name = alias
+                .as_ref()
+                .map_or_else(|| f.name.clone(), |a| a.value.clone());
+            let ty = call.ty;
+            columns.push(OutputColumn {
+                expr: typed(
+                    ExprNode::Column {
+                        index: calls.len(),
+                        name: name.clone(),
+                    },
+                    ty,
+                ),
+                name,
+            });
+            calls.push(call);
+        }
+        if let Some(targets) = targets {
+            for (c, t) in columns.iter_mut().zip(targets) {
+                let e = std::mem::replace(&mut c.expr, konst(Value::Null, SqlType::Unknown));
+                c.expr = self.assign(e, t, Span::default())?;
+            }
+        }
+        for item in &q.order_by {
+            let key = self.order_key(&item.expr, &columns, &Scope::empty())?;
+            self.finish(key, item.expr.span)?;
+        }
+        let mut plan = LogicalPlan::Project {
+            input: Box::new(LogicalPlan::Aggregate {
+                input: Box::new(input),
+                calls,
+            }),
+            columns,
+        };
+        if q.limit.is_some() || q.offset.is_some() {
+            let limit = match &q.limit {
+                Some(e) => Some(self.row_count(e, BindErrorKind::NegativeLimit)?),
+                None => None,
+            };
+            let offset = match &q.offset {
+                Some(e) => Some(self.row_count(e, BindErrorKind::NegativeOffset)?),
+                None => None,
+            };
+            plan = LogicalPlan::Limit {
+                input: Box::new(plan),
+                limit,
+                offset,
+            };
+        }
+        Ok(plan)
+    }
+
+    /// A select item next to aggregates that mentions no column (`SELECT 1, count(*)`); a column
+    /// outside an aggregate is a grouping error, as in PostgreSQL.
+    fn constant_item(&mut self, expr: &Expr, alias: Option<&ast::Ident>) -> R<OutputColumn> {
+        let bound = match self.expr(expr, &Scope::empty()) {
+            Ok(b) => b,
+            Err(e) if e.kind() == BindErrorKind::UndefinedColumn => {
+                return err(
+                    BindErrorKind::Grouping,
+                    "a column must be used in an aggregate function when the query aggregates",
+                    expr.span,
+                );
+            }
+            Err(e) => return Err(e),
+        };
+        let bound = self.finish(bound, expr.span)?;
+        let name = alias.map_or_else(|| output_name(expr), |a| a.value.clone());
+        Ok(OutputColumn { expr: bound, name })
+    }
+
+    /// Binds one aggregate call and types its result as PostgreSQL does: `count` is `bigint`; `sum`
+    /// of `smallint` or `integer` is `bigint`, of `bigint` or `numeric` is `numeric`, of `double
+    /// precision` is `double precision`; `avg` is `numeric` for integers and `numeric`, `double
+    /// precision` for floats; `min` and `max` keep the argument's type.
+    fn aggregate_call(&mut self, f: &ast::Function, scope: &Scope, span: Span) -> R<AggCall> {
+        if f.distinct {
+            return unsupported("DISTINCT in an aggregate", span);
+        }
+        let func = match (f.name.as_str(), &f.args) {
+            ("count", FunctionArgs::Star) => {
+                return Ok(AggCall {
+                    func: AggFunc::CountStar,
+                    arg: None,
+                    ty: SqlType::BigInt,
+                });
+            }
+            (_, FunctionArgs::Star) => {
+                return err(
+                    BindErrorKind::UndefinedFunction,
+                    format!("{}(*) does not exist, only count(*) takes *", f.name),
+                    span,
+                );
+            }
+            ("count", _) => AggFunc::Count,
+            ("sum", _) => AggFunc::Sum,
+            ("avg", _) => AggFunc::Avg,
+            ("min", _) => AggFunc::Min,
+            _ => AggFunc::Max,
+        };
+        let FunctionArgs::List(list) = &f.args else {
+            return unsupported("aggregate arguments", span);
+        };
+        let [arg] = list.as_slice() else {
+            return err(
+                BindErrorKind::UndefinedFunction,
+                format!("function {} takes one argument, not {}", f.name, list.len()),
+                span,
+            );
+        };
+        let a = self.expr(arg, scope)?;
+        let a = self.finish(a, arg.span)?;
+        let ty = match (func, a.ty) {
+            (AggFunc::Count, _) => SqlType::BigInt,
+            (AggFunc::Sum, SqlType::SmallInt | SqlType::Integer) => SqlType::BigInt,
+            (AggFunc::Sum, SqlType::BigInt | SqlType::Numeric) => SqlType::Numeric,
+            (AggFunc::Sum, SqlType::DoublePrecision) => SqlType::DoublePrecision,
+            (AggFunc::Avg, SqlType::DoublePrecision) => SqlType::DoublePrecision,
+            (AggFunc::Avg, t) if t.is_numeric() => SqlType::Numeric,
+            (
+                AggFunc::Min | AggFunc::Max,
+                t @ (SqlType::SmallInt
+                | SqlType::Integer
+                | SqlType::BigInt
+                | SqlType::Numeric
+                | SqlType::DoublePrecision
+                | SqlType::Text
+                | SqlType::Date
+                | SqlType::Timestamptz),
+            ) => t,
+            (_, t) => {
+                return err(
+                    BindErrorKind::UndefinedFunction,
+                    format!("function {}({t}) does not exist", f.name),
+                    span,
+                );
+            }
+        };
+        Ok(AggCall {
+            func,
+            arg: Some(a),
+            ty,
+        })
     }
 
     fn row_count(&mut self, e: &Expr, negative: BindErrorKind) -> R<TypedExpr> {

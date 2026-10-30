@@ -33,7 +33,8 @@ use lattice_engines::rowops::{MAX_KEY_BYTES, RowKey};
 use lattice_engines::store::{RowStore, RowTx};
 use lattice_seams::{Clock, Io, Rng};
 use lattice_sql::plan::{
-    AsOfPlan, InsertSource, LogicalPlan, OutputColumn, SortKey, SqlType, TypedExpr,
+    AggCall, AggFunc, AsOfPlan, InsertSource, LogicalPlan, OutputColumn, SortKey, SqlType,
+    TypedExpr,
 };
 
 use crate::access::{self, Access};
@@ -41,7 +42,7 @@ use crate::db::Database;
 use crate::error::{ErrorKind, ExecError};
 use crate::eval::{EvalCtx, cast, eval, truthy};
 use crate::schema::{ColumnDef, TableDef, owning_table};
-use crate::value::{Datum, total_order};
+use crate::value::{Datum, compare, total_order};
 
 /// The policy a transaction is bound to: the actor's row policy, shared by the session.
 ///
@@ -148,6 +149,7 @@ impl ActorPolicy {
                 LogicalPlan::Filter { input, .. }
                 | LogicalPlan::Project { input, .. }
                 | LogicalPlan::Sort { input, .. }
+                | LogicalPlan::Aggregate { input, .. }
                 | LogicalPlan::Limit { input, .. } => stack.push(input),
                 LogicalPlan::Insert {
                     table,
@@ -517,6 +519,11 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 let rows = self.rel(input)?;
                 self.sort(rows, keys)
             }
+            LogicalPlan::Aggregate { input, calls } => {
+                let rows = self.rel(input)?;
+                let vals = self.aggregate(&rows, calls)?;
+                Ok(vec![Tuple { key: None, vals }])
+            }
             LogicalPlan::Limit {
                 input,
                 limit,
@@ -542,6 +549,26 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 Err(ExecError::internal("a write operator inside a query"))
             }
         }
+    }
+
+    /// The aggregates of `calls` over `rows`: one value each. `NULL` arguments are skipped, an empty
+    /// input gives `0` for `count` and `NULL` for the rest, and a result outside its type is `22003`.
+    fn aggregate(&mut self, rows: &[Tuple], calls: &[AggCall]) -> Result<Vec<Datum>, ExecError> {
+        let mut out = Vec::with_capacity(calls.len());
+        for call in calls {
+            let mut args: Vec<Datum> = Vec::with_capacity(rows.len());
+            if let Some(arg) = &call.arg {
+                for t in rows {
+                    self.gov.check()?;
+                    let v = eval(arg, &t.vals, &self.ctx())?;
+                    if !v.is_null() {
+                        args.push(v);
+                    }
+                }
+            }
+            out.push(fold_aggregate(call, rows.len(), &args)?);
+        }
+        Ok(out)
     }
 
     fn bounds(
@@ -1090,6 +1117,78 @@ fn duplicate(constraint: &str) -> ExecError {
         "23505",
         format!("duplicate key value violates unique constraint \"{constraint}\""),
     )
+}
+
+/// One aggregate over its non-`NULL` arguments (`rows` is the input row count, for `count(*)`).
+fn fold_aggregate(call: &AggCall, rows: usize, args: &[Datum]) -> Result<Datum, ExecError> {
+    use crate::decimal::Decimal;
+    let count = i64::try_from(args.len()).unwrap_or(i64::MAX);
+    let too_big = || ExecError::eval("22003", "value out of range: overflow");
+    Ok(match call.func {
+        AggFunc::CountStar => Datum::Int(i64::try_from(rows).unwrap_or(i64::MAX)),
+        AggFunc::Count => Datum::Int(count),
+        _ if args.is_empty() => Datum::Null,
+        AggFunc::Min | AggFunc::Max => {
+            let want = if call.func == AggFunc::Min {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+            let mut values = args.iter();
+            let Some(mut best) = values.next() else {
+                return Ok(Datum::Null);
+            };
+            for v in values {
+                if compare(v, best) == Some(want) {
+                    best = v;
+                }
+            }
+            best.clone()
+        }
+        AggFunc::Sum | AggFunc::Avg => match call.ty {
+            SqlType::BigInt => {
+                let mut sum: i128 = 0;
+                for v in args {
+                    if let Datum::Int(i) = v {
+                        sum += i128::from(*i);
+                    }
+                }
+                Datum::Int(crate::value::check_int(sum, SqlType::BigInt)?)
+            }
+            SqlType::DoublePrecision => {
+                let mut sum = 0.0_f64;
+                let mut finite = true;
+                for v in args {
+                    if let Datum::Float(f) = v {
+                        finite &= f.is_finite();
+                        sum += f;
+                    }
+                }
+                if sum.is_infinite() && finite {
+                    return Err(too_big());
+                }
+                if call.func == AggFunc::Avg {
+                    Datum::Float(sum / count as f64)
+                } else {
+                    Datum::Float(sum)
+                }
+            }
+            _ => {
+                let mut sum = Decimal::from_i64(0);
+                for v in args {
+                    sum = sum.add(match v {
+                        Datum::Int(i) => Decimal::from_i64(*i),
+                        Datum::Numeric(n) => *n,
+                        _ => return Err(ExecError::bind_type("sum needs numbers")),
+                    })?;
+                }
+                if call.func == AggFunc::Avg {
+                    sum = sum.div(Decimal::from_i64(count))?;
+                }
+                Datum::Numeric(sum)
+            }
+        },
+    })
 }
 
 #[cfg(test)]
