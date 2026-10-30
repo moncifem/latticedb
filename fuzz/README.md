@@ -77,5 +77,5 @@ registered in the nightly, weekly and manual 24-hour matrices.
 re-encode to exactly the same bytes (one canonical form), restore again to the same queue, and drain through
 `poll` and `on_receipts`. Seeds in `seeds/outbox_decode/` cover an empty queue, each record kind, fenced turns,
 sparse counters, a bad checksum, truncation, a wrong version and magic, a trailing byte, unsorted counters, a
-counter beyond the next one, an item on a fenced turn, an unknown kind and invalid UTF-8. The target is not yet
-in the nightly, weekly or 24-hour matrices.
+counter beyond the next one, an item on a fenced turn, an unknown kind and invalid UTF-8. The target is registered
+in the nightly, weekly and manual 24-hour matrices.
