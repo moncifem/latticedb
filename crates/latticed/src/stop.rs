@@ -160,11 +160,11 @@ pub fn stop_within(
 
 /// Installs the SIGTERM and SIGINT counters. A no-op where there are no unix signals.
 pub fn install_stop_signal_handlers() -> io::Result<()> {
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         lattice_sys::signals::install_stop_handlers()
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Ok(())
     }
@@ -173,11 +173,11 @@ pub fn install_stop_signal_handlers() -> io::Result<()> {
 /// How many stop signals have arrived since [`install_stop_signal_handlers`].
 #[must_use]
 pub fn stop_signals_received() -> u32 {
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         lattice_sys::signals::stop_signals_received()
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         0
     }

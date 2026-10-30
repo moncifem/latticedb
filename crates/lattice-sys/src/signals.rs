@@ -10,6 +10,8 @@
 //! library on every unix target, so this adds no dependency and no lockfile entry. `signal(2)` is used
 //! rather than `sigaction(2)` because its signature is identical on Linux (glibc and musl) and macOS,
 //! while the `sigaction` struct layout is not; on those targets it installs a persistent handler.
+//! The module is built only for Linux and macOS: System V `signal()` semantics (illumos) reset the
+//! handler after the first delivery, which would break the second-signal rule.
 
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};

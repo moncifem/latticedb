@@ -71,7 +71,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=lattice
+DynamicUser=yes
 StateDirectory=lattice
 ExecStart=/usr/local/bin/latticed --listen 127.0.0.1:5432 --data-dir /var/lib/lattice \
   --development-policy allow-all --stdin-control off --stop-timeout-ms 30000
@@ -107,12 +107,12 @@ launchd (`~/Library/LaunchAgents/dev.lattice.latticed.plist`; launchd sends SIGT
 </plist>
 ```
 
-Containers: pass `--stdin-control off` after the image name (the image entrypoint is `latticed`), and
-give `docker stop` more time than `--stop-timeout-ms` (`docker stop -t 40`, or lower the flag below
-Docker's default of 10 seconds). A process running as PID 1 only receives signals it has a handler
-for, and `latticed` installs one for SIGTERM and SIGINT. Trust mode
-refuses a non-loopback bind, so a container that publishes the port needs `--auth scram-tls`. The
-container image itself is tracked separately (#587).
+Containers: when the image exists (#587), its entrypoint passes `--stdin-control off`; with any other
+way of running `latticed` in a container, pass it yourself. Give `docker stop` more time than
+`--stop-timeout-ms` (`docker stop -t 40`, or lower the flag below Docker's default of 10 seconds).
+A process running as PID 1 only receives signals it has a handler for, and `latticed` installs one
+for SIGTERM and SIGINT. Trust mode refuses a non-loopback bind, so a container that publishes the
+port needs `--auth scram-tls`.
 
 ## Cooperative cancellation
 

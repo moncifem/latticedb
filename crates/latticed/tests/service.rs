@@ -5,7 +5,7 @@
 //! The forced-stop paths (second signal, stop timeout) need a worker that never returns from
 //! shutdown, which the real server does not have; they are covered with an injected stuck shutdown
 //! in the unit tests of `latticed::stop`.
-#![cfg(unix)]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -68,10 +68,22 @@ fn start(stdin: Stdin, args: &[&str]) -> Server {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let mut banner = String::new();
-    BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut banner)
-        .unwrap();
+    // Read on a thread so a child that never prints cannot hang the test until the CI job limit.
+    let stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut banner = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut banner);
+        let _ = sender.send(banner);
+    });
+    let banner = match receiver.recv_timeout(Duration::from_secs(30)) {
+        Ok(banner) => banner,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("latticed printed no startup line within 30 s");
+        }
+    };
     assert!(banner.starts_with("latticed listening on "), "{banner:?}");
     let address = banner.split_whitespace().nth(3).unwrap().parse().unwrap();
     let stdin = child.stdin.take();
