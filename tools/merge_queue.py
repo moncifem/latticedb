@@ -39,6 +39,11 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_REQUIRED_FILE = HERE / "branch-protection.json"
 DEFAULT_BASE = "main"
 DEFAULT_HOLD_LABEL = "hold"
+# The owner's label after an independent review. The queue refuses a pull request without it, whatever
+# paths it touches, because the risk-gate path list can miss a risky change (PR 412). Dependency updates
+# are exempt; `--allow-unreviewed` switches the rule off.
+DEFAULT_REVIEWED_LABEL = "reviewed"
+DEPENDENCY_TITLE_RE = re.compile(r"\A(?:build|chore)\(deps(?:-dev)?\)[:!]")
 # Required by the queue itself even if branch protection does not list it: a red or missing risk gate
 # (the owner's `reviewed` label on risky paths) must never be merged over.
 DEFAULT_ALSO_REQUIRE = ("risk-gate",)
@@ -101,8 +106,16 @@ def is_bot_author(info):
     return bool(author.get("is_bot")) or "dependabot" in login or login.endswith("[bot]")
 
 
-def readiness(info, base=DEFAULT_BASE, hold_label=DEFAULT_HOLD_LABEL, listed=False):
-    """Return (kind, reason). kind is "ready", "closed" (nothing left to do) or "skip"."""
+def is_dependency_update(info):
+    """A bot-authored pull request titled like Dependabot's `build(deps): ...` / `chore(deps): ...`."""
+    return is_bot_author(info) and bool(DEPENDENCY_TITLE_RE.match(str(info.get("title") or "")))
+
+
+def readiness(info, base=DEFAULT_BASE, hold_label=DEFAULT_HOLD_LABEL, listed=False,
+              reviewed_label=DEFAULT_REVIEWED_LABEL):
+    """Return (kind, reason). kind is "ready", "closed" (nothing left to do) or "skip".
+
+    An empty `reviewed_label` turns the review requirement off."""
     if info["state"] != "OPEN":
         return "closed", info["state"].lower()
     if info["baseRefName"] != base:
@@ -113,6 +126,8 @@ def readiness(info, base=DEFAULT_BASE, hold_label=DEFAULT_HOLD_LABEL, listed=Fal
         return "skip", "conflicts with the base branch"
     if hold_label and hold_label in label_names(info):
         return "skip", f"has the {hold_label} label"
+    if reviewed_label and reviewed_label not in label_names(info) and not is_dependency_update(info):
+        return "skip", f"no {reviewed_label} label (not a dependency update)"
     if is_bot_author(info) and not listed:
         return "skip", "bot pull request not listed by number"
     return "ready", ""
@@ -272,6 +287,7 @@ class Options:
     def __init__(self, **kw):
         self.base = DEFAULT_BASE
         self.hold_label = DEFAULT_HOLD_LABEL
+        self.reviewed_label = DEFAULT_REVIEWED_LABEL
         self.include_bots = False
         self.also_require = DEFAULT_ALSO_REQUIRE
         self.dry_run = False
@@ -390,7 +406,7 @@ class Queue:
                 self.log(f"PR {n}: API answer unknown, asking again")
                 self.sleep(self.opts.poll)
                 continue
-            kind, reason = readiness(info, self.opts.base, self.opts.hold_label, listed)
+            kind, reason = readiness(info, self.opts.base, self.opts.hold_label, listed, self.opts.reviewed_label)
             if kind == "closed":
                 self.record(n, "closed", reason)
                 return "closed"
@@ -476,7 +492,7 @@ class Queue:
         if info is None or info["headRefOid"] != head:
             self.log(f"PR {n}: head changed before the merge, starting over")
             return None
-        kind, reason = readiness(info, self.opts.base, self.opts.hold_label, True)
+        kind, reason = readiness(info, self.opts.base, self.opts.hold_label, True, self.opts.reviewed_label)
         if kind == "closed":
             self.record(n, "closed", reason)
             return "closed"
@@ -587,6 +603,8 @@ def build_parser():
                    "required file (repeatable; default risk-gate)")
     p.add_argument("--base", default=DEFAULT_BASE, help="base branch (default main)")
     p.add_argument("--hold-label", default=DEFAULT_HOLD_LABEL, help="label that keeps a pull request out (default hold)")
+    p.add_argument("--allow-unreviewed", action="store_true", help="merge pull requests without the reviewed label "
+                   "(default: refuse them unless they are dependency updates)")
     p.add_argument("--include-bots", action="store_true", help="also queue Dependabot pull requests when discovering")
     p.add_argument("--repo", help="OWNER/NAME (default: the current checkout)")
     p.add_argument("--required-file", default=str(DEFAULT_REQUIRED_FILE), help="branch protection JSON listing the required checks")
@@ -616,7 +634,8 @@ def main(argv=None):
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    opts = Options(base=args.base, hold_label=args.hold_label, include_bots=args.include_bots,
+    opts = Options(base=args.base, hold_label=args.hold_label,
+                   reviewed_label="" if args.allow_unreviewed else DEFAULT_REVIEWED_LABEL, include_bots=args.include_bots,
                    also_require=tuple(args.also_require) if args.also_require else DEFAULT_ALSO_REQUIRE,
                    dry_run=args.dry_run, per_pr_timeout=args.timeout * 60, poll=args.poll,
                    settle=args.settle, rerun_grace=args.rerun_grace, rounds=max(1, args.rounds),

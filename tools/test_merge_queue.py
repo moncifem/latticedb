@@ -75,9 +75,9 @@ reply("", 99, "fake gh: unexpected " + " ".join(args))
 '''
 
 
-def view(head=H1, state="OPEN", draft=False, merge="CLEAN", base="main", labels=(), bot=False):
+def view(head=H1, state="OPEN", draft=False, merge="CLEAN", base="main", labels=("reviewed",), bot=False, title="t"):
     return {"state": state, "isDraft": draft, "mergeStateStatus": merge, "headRefOid": head,
-            "headRefName": "feature", "baseRefName": base, "title": "t",
+            "headRefName": "feature", "baseRefName": base, "title": title,
             "labels": [{"name": name} for name in labels],
             "author": {"login": "app/dependabot" if bot else "someone", "is_bot": bot}}
 
@@ -338,9 +338,28 @@ class ReadinessTests(QueueCase):
         self.assertEqual(mq.readiness(view())[0], "ready")
         self.assertEqual(mq.readiness(view(state="CLOSED")), ("closed", "closed"))
         self.assertEqual(mq.readiness(view(labels=["x", "hold"]))[0], "skip")
-        self.assertEqual(mq.readiness(view(labels=["hold"]), hold_label="")[0], "ready")
+        self.assertEqual(mq.readiness(view(labels=["hold", "reviewed"]), hold_label="")[0], "ready")
         self.assertEqual(mq.readiness(view(merge="BEHIND"))[0], "ready")
         self.assertEqual(mq.readiness(view(merge="DIRTY"))[0], "skip")
+
+    def test_unreviewed_pr_is_refused_unless_a_dependency_update(self):
+        kind, reason = mq.readiness(view(labels=[]))
+        self.assertEqual(kind, "skip")
+        self.assertIn("reviewed", reason)
+        self.assertEqual(mq.readiness(view(labels=["type: ci"]))[0], "skip")
+        self.assertEqual(mq.readiness(view(labels=["reviewed"]))[0], "ready")
+        for title in ("build(deps): bump x from 1 to 2", "chore(deps): bump y", "build(deps-dev): bump z"):
+            with self.subTest(title=title):
+                self.assertEqual(mq.readiness(view(labels=[], bot=True, title=title), listed=True)[0], "ready")
+        # A human cannot pass as a dependency update by naming the title, nor a bot by another title.
+        self.assertEqual(mq.readiness(view(labels=[], title="build(deps): bump x"))[0], "skip")
+        self.assertEqual(mq.readiness(view(labels=[], bot=True, title="feat: x"), listed=True)[0], "skip")
+
+    def test_allow_unreviewed_switches_the_rule_off(self):
+        self.assertEqual(mq.readiness(view(labels=[]), reviewed_label="")[0], "ready")
+        self.assertTrue(mq.build_parser().parse_args(["--allow-unreviewed"]).allow_unreviewed)
+        self.assertFalse(mq.build_parser().parse_args([]).allow_unreviewed)
+        self.assertEqual(mq.Options().reviewed_label, "reviewed")
 
     def test_parse_pr_view_rejects_incomplete_snapshots(self):
         good = json.dumps(view())

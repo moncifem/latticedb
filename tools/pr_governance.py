@@ -36,6 +36,33 @@ RISK_RULES = (
             "crates/lattice-api/**/scram*",
         ),
     ),
+    # The network server: listener, TLS, startup options, credential and policy file loading, the
+    # database thread. PR 412 changed all of this and the gate saw nothing.
+    ("server", ("crates/latticed/**",)),
+    # Where an authenticated principal becomes an authorization policy and a statement runs under
+    # it: the executor, its host and handler, the session state machine, the subscription host and
+    # the wire codec. The policy file parser (PolicyTable) lives in exec_host.rs.
+    (
+        "sql-host",
+        (
+            "crates/lattice-exec/**",
+            "crates/lattice-api/src/exec_host.rs",
+            "crates/lattice-api/src/exec_handler.rs",
+            "crates/lattice-api/src/principal.rs",
+            "crates/lattice-api/src/session.rs",
+            "crates/lattice-api/src/subscribe.rs",
+            "crates/lattice-api/src/pgwire.rs",
+            "crates/lattice-api/tests/**",
+        ),
+    ),
+    # The row-policy trait and its enforcement tests in the row store.
+    (
+        "policy",
+        (
+            "crates/lattice-engines/src/limits.rs",
+            "crates/lattice-engines/src/store_policy_tests.rs",
+        ),
+    ),
     ("layers", ("layers.toml",)),
     ("workflows", (".github/**",)),
     (
@@ -46,9 +73,17 @@ RISK_RULES = (
             "tools/test_pr_governance.py",
             "tools/changelog.py",
             "tools/test_changelog.py",
+            # The tools that decide what merges and whether the label is required.
+            "tools/merge_queue.py",
+            "tools/test_merge_queue.py",
+            "tools/merge_pr.py",
+            "tools/test_merge_pr.py",
+            "tools/merge-pr.sh",
+            "tools/test_merge_pr.sh",
         ),
     ),
     ("rfc-adr", ("docs/rfc/**", "docs/adr/**")),
+    ("security-docs", ("docs/threat-model.md", "docs/security-test-plan.md")),
     # Root manifest, lockfile and cargo-deny policy: where dependencies and their licences are
     # decided (docs/dependency-policy.md). Exact names, so crate manifests are not matched here.
     ("dependencies", ("Cargo.toml", "Cargo.lock", "deny.toml")),

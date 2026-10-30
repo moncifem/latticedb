@@ -56,10 +56,16 @@ Safety rules (each has a test in `tools/test_merge_queue.py`):
   branches). The only branch change it makes is `gh pr update-branch --rebase`, which GitHub performs.
 - `risk-gate` is one of the checks: a PR on a risky path stays parked until the owner adds the `reviewed`
   label. The queue does not review anything and does not decide owner-gated questions.
+- **The `reviewed` label is required for every PR, by default**, not only on risky paths, because the
+  risk-gate path list can miss a risky change (PR 412 merged without a review that way). A PR without
+  the label is skipped with the reason "no reviewed label"; it is not parked or merged. The only
+  exception is a dependency update: a bot-authored PR titled `build(deps...)` or `chore(deps...)`.
+  `--allow-unreviewed` turns the rule off for a run; use it only when the owner has said so in chat.
+  `tools/merge-pr.sh` does not apply this rule; it is for PRs the owner has already cleared.
 
 Options: `--once` (single pass), `--rounds N` and `--round-sleep S` (loop mode, defaults 6 and 120),
 `--timeout MINUTES` per PR (default 40), `--poll` and `--settle` seconds, `--hold-label`, `--base`,
-`--repo OWNER/NAME`, `--required-file`, `--also-require CHECK`, `--status-file`, `--log-file`. Exit status is 0 when nothing is
+`--allow-unreviewed`, `--repo OWNER/NAME`, `--required-file`, `--also-require CHECK`, `--status-file`, `--log-file`. Exit status is 0 when nothing is
 left unmerged (or with `--dry-run`), 1 when PRs remain parked or skipped, 2 on a usage error.
 
 **Status and log.** After every decision it rewrites a JSON status file atomically and appends to a

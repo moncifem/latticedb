@@ -23,6 +23,10 @@ class ClassifyRisk(unittest.TestCase):
             "protection": "tools/branch-protection.json",
             "rfc-adr": "docs/adr/0019-managed-indexes.md",
             "dependencies": "Cargo.toml",
+            "server": "crates/latticed/src/sql.rs",
+            "sql-host": "crates/lattice-exec/src/session.rs",
+            "policy": "crates/lattice-engines/src/limits.rs",
+            "security-docs": "docs/threat-model.md",
         }
         for area, path in cases.items():
             with self.subTest(area=area):
@@ -30,7 +34,8 @@ class ClassifyRisk(unittest.TestCase):
 
     def test_scram_and_nested_paths(self):
         self.assertEqual(g.classify_risk(["crates/lattice-api/src/scram.rs"]), {"auth"})
-        self.assertEqual(g.classify_risk(["crates/lattice-api/tests/scram_vectors.rs"]), {"auth"})
+        self.assertEqual(g.classify_risk(["crates/lattice-api/tests/scram_vectors.rs"]),
+                         {"auth", "sql-host"})
         self.assertEqual(g.classify_risk(["docs/rfc/0005-x.md"]), {"rfc-adr"})
         self.assertEqual(g.classify_risk([".github/CODEOWNERS"]), {"workflows"})
         self.assertEqual(g.classify_risk(["tools/pr_governance.py"]), {"protection"})
@@ -54,6 +59,56 @@ class ClassifyRisk(unittest.TestCase):
                 self.assertEqual(g.classify_risk([path]), set())
         self.assertEqual(g.classify_risk(["crates/lattice-core/Cargo.toml"]), {"kernel"})
 
+    def test_sql_host_and_server_paths_trigger_the_gate(self):
+        # PR 412 (latticed SQL wiring) merged without the label because none of these were listed.
+        expected = {
+            "crates/latticed/src/main.rs": "server",
+            "crates/latticed/src/lib.rs": "server",
+            "crates/latticed/src/sql.rs": "server",
+            "crates/latticed/src/transport.rs": "server",
+            "crates/latticed/tests/sql_binary.rs": "server",
+            "crates/latticed/Cargo.toml": "server",
+            "crates/lattice-exec/src/exec.rs": "sql-host",
+            "crates/lattice-exec/src/schema.rs": "sql-host",
+            "crates/lattice-exec/tests/planted.rs": "sql-host",
+            "crates/lattice-exec/Cargo.toml": "sql-host",
+            "crates/lattice-api/src/exec_host.rs": "sql-host",
+            "crates/lattice-api/src/exec_handler.rs": "sql-host",
+            "crates/lattice-api/src/principal.rs": "sql-host",
+            "crates/lattice-api/src/session.rs": "sql-host",
+            "crates/lattice-api/src/subscribe.rs": "sql-host",
+            "crates/lattice-api/src/pgwire.rs": "sql-host",
+            "crates/lattice-api/tests/cancel_edges.rs": "sql-host",
+            "crates/lattice-engines/src/limits.rs": "policy",
+            "crates/lattice-engines/src/store_policy_tests.rs": "policy",
+            "docs/security-test-plan.md": "security-docs",
+        }
+        for path, area in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {area})
+        for path in ["crates/lattice-api/src/auth.rs", "crates/lattice-api/src/scram.rs"]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {"auth"})
+
+    def test_merge_tools_are_protection(self):
+        for path in ["tools/merge_queue.py", "tools/test_merge_queue.py", "tools/merge_pr.py",
+                     "tools/test_merge_pr.py", "tools/merge-pr.sh", "tools/test_merge_pr.sh"]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {"protection"})
+
+    def test_readmes_follow_their_directory_rule(self):
+        # A whole-directory rule covers the README too, as it already does for lattice-core.
+        for path in ["crates/latticed/README.md", "crates/lattice-exec/README.md",
+                     "crates/lattice-core/README.md"]:
+            with self.subTest(path=path):
+                self.assertTrue(g.classify_risk([path]))
+        # A README beside individually listed files is not itself listed.
+        self.assertEqual(g.classify_risk(["crates/lattice-api/README.md"]), set())
+        # Docs-only change with the label missing fails; with it, passes.
+        risk = g.classify_risk(["crates/latticed/README.md"])
+        self.assertFalse(g.required_label_ok([], risk))
+        self.assertTrue(g.required_label_ok(["reviewed"], risk))
+
     def test_changelog_tool_is_protection(self):
         # The changelog job runs the pull request's own copy of these files.
         for path in ["tools/changelog.py", "tools/test_changelog.py"]:
@@ -62,9 +117,15 @@ class ClassifyRisk(unittest.TestCase):
 
     def test_not_risky(self):
         for path in [
-            "crates/lattice-api/src/session.rs",
-            "crates/lattice-api/src/pgwire.rs",
+            "crates/lattice-api/src/lib.rs",
+            "crates/lattice-api/src/backpressure.rs",
+            "crates/lattice-api/README.md",
             "crates/lattice-engines/src/lib.rs",
+            "crates/lattice-engines/src/store.rs",
+            "crates/lattice-exec-extras/src/x.rs",
+            "crates/latticed-tools/src/x.rs",
+            "tools/scorecard_metrics.py",
+            "docs/threat-model-notes.md",
             "crates/lattice-core-extras/src/x.rs",
             "tools/scorecard.py",
             "docs/gates/phase-1.md",
@@ -128,14 +189,20 @@ class PastPrs(unittest.TestCase):
          ["crates/lattice-core/src/wal.rs", "formats/wal-admission-v2.md",
           "docs/rfc/0008-wal-admission.md", "docs/adr/0022-wal-admission.md"],
          {"kernel", "format", "rfc-adr"}),
-        ("scram over tls", ["crates/lattice-api/src/scram.rs", "crates/latticed/src/main.rs"], {"auth"}),
+        ("scram over tls", ["crates/lattice-api/src/scram.rs", "crates/latticed/src/main.rs"],
+         {"auth", "server"}),
         ("ci guard for formats", [".github/workflows/pr.yml", "xtask/src/main.rs"], {"workflows"}),
         ("gate docs only", ["docs/gates/phase-2.md", "README.md", "CHANGELOG.md"], set()),
         ("layer rule change", ["layers.toml", "crates/lattice-sdk/Cargo.toml"], {"layers"}),
         ("protection update", ["tools/branch-protection.json", "docs/releasing.md"], {"protection"}),
         ("sql parser", ["crates/lattice-sql/src/parser.rs", "docs/sql-subset.md"], set()),
         ("api session work",
-         ["crates/lattice-api/src/session.rs", "crates/lattice-api/src/pgwire.rs"], set()),
+         ["crates/lattice-api/src/session.rs", "crates/lattice-api/src/pgwire.rs"], {"sql-host"}),
+        ("latticed sql wiring (PR 412)",
+         ["crates/latticed/src/sql.rs", "crates/latticed/src/main.rs",
+          "crates/lattice-api/src/exec_host.rs", "crates/lattice-exec/src/exec.rs",
+          "crates/lattice-engines/src/limits.rs", "CHANGELOG.md"],
+         {"server", "sql-host", "policy"}),
         ("fuzz target",
          ["fuzz/Cargo.toml", "fuzz/fuzz_targets/feed_decode.rs", "fuzz/README.md"], set()),
     ]
@@ -208,6 +275,17 @@ class CodeownersMatchesClassifier(unittest.TestCase):
         "crates/lattice-core/**": "crates/lattice-core/src/wal.rs",
         "crates/lattice-api/**/auth*": "crates/lattice-api/src/auth.rs",
         "crates/lattice-api/**/scram*": "crates/lattice-api/src/scram.rs",
+        "crates/latticed/**": "crates/latticed/src/sql.rs",
+        "crates/lattice-exec/**": "crates/lattice-exec/src/exec.rs",
+        "crates/lattice-api/src/exec_host.rs": "crates/lattice-api/src/exec_host.rs",
+        "crates/lattice-api/src/exec_handler.rs": "crates/lattice-api/src/exec_handler.rs",
+        "crates/lattice-api/src/principal.rs": "crates/lattice-api/src/principal.rs",
+        "crates/lattice-api/src/session.rs": "crates/lattice-api/src/session.rs",
+        "crates/lattice-api/src/subscribe.rs": "crates/lattice-api/src/subscribe.rs",
+        "crates/lattice-api/src/pgwire.rs": "crates/lattice-api/src/pgwire.rs",
+        "crates/lattice-api/tests/**": "crates/lattice-api/tests/cancel_edges.rs",
+        "crates/lattice-engines/src/limits.rs": "crates/lattice-engines/src/limits.rs",
+        "crates/lattice-engines/src/store_policy_tests.rs": "crates/lattice-engines/src/store_policy_tests.rs",
         "layers.toml": "layers.toml",
         ".github/**": ".github/workflows/pr.yml",
         "tools/branch-protection.json": "tools/branch-protection.json",
@@ -215,6 +293,14 @@ class CodeownersMatchesClassifier(unittest.TestCase):
         "tools/test_pr_governance.py": "tools/test_pr_governance.py",
         "tools/changelog.py": "tools/changelog.py",
         "tools/test_changelog.py": "tools/test_changelog.py",
+        "tools/merge_queue.py": "tools/merge_queue.py",
+        "tools/test_merge_queue.py": "tools/test_merge_queue.py",
+        "tools/merge_pr.py": "tools/merge_pr.py",
+        "tools/test_merge_pr.py": "tools/test_merge_pr.py",
+        "tools/merge-pr.sh": "tools/merge-pr.sh",
+        "tools/test_merge_pr.sh": "tools/test_merge_pr.sh",
+        "docs/threat-model.md": "docs/threat-model.md",
+        "docs/security-test-plan.md": "docs/security-test-plan.md",
         "docs/rfc/**": "docs/rfc/0001-x.md",
         "docs/adr/**": "docs/adr/0001-x.md",
         "Cargo.toml": "Cargo.toml",

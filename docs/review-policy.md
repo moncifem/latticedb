@@ -17,10 +17,14 @@ lists the same paths. Keep the three in step.
 | format | `formats/**` |
 | kernel | `crates/lattice-core/**` |
 | auth | `crates/lattice-api/**` files named `auth*` or `scram*` |
+| server | `crates/latticed/**` (listener, TLS, startup options, credential and policy file loading, the database thread) |
+| sql-host | `crates/lattice-exec/**`; in `crates/lattice-api`: `src/exec_host.rs` (also holds the policy file parser and the policy table), `src/exec_handler.rs`, `src/principal.rs`, `src/session.rs`, `src/subscribe.rs`, `src/pgwire.rs` and `tests/**` |
+| policy | `crates/lattice-engines/src/limits.rs` (the row-policy trait), `crates/lattice-engines/src/store_policy_tests.rs` |
 | layers | `layers.toml` |
 | workflows | `.github/**` |
-| protection | `tools/branch-protection.json`, `tools/pr_governance.py`, `tools/test_pr_governance.py`, `tools/changelog.py`, `tools/test_changelog.py` |
+| protection | `tools/branch-protection.json`, `tools/pr_governance.py`, `tools/test_pr_governance.py`, `tools/changelog.py`, `tools/test_changelog.py`, and the merge tools `tools/merge_queue.py`, `tools/merge_pr.py`, `tools/merge-pr.sh` with their tests |
 | rfc-adr | `docs/rfc/**`, `docs/adr/**` |
+| security-docs | `docs/threat-model.md`, `docs/security-test-plan.md` |
 | dependencies | `Cargo.toml`, `Cargo.lock`, `deny.toml` (root files only) |
 
 ## The `reviewed` label
@@ -35,6 +39,11 @@ The `risk-gate` check fails on a pull request that touches any risk area unless 
 - A push after the label does not remove it. If a later push changes behavior in a risk area, the owner
   removes the label until the new commits are reviewed.
 - Pull requests from forks cannot be labeled by the workflow; the `risk-gate` check itself still runs.
+- The path list is a floor, not a judgement. PR 412 (latticed SQL wiring) merged unlabelled because no
+  path was listed. When a pull request touches authentication, authorization, policy or credentials
+  outside the listed paths, the owner or reviewer adds the path to `RISK_RULES` in the same or the next
+  pull request. The merge queue (`tools/merge_queue.py`) independently refuses any pull request without
+  `reviewed`, except dependency updates; see [`docs/merging.md`](merging.md).
 
 ## What a review covers
 
@@ -50,6 +59,12 @@ Every review states the head commit it covered and what it did not check.
 - **auth**: the authentication exchange against its RFC, constant-time comparison and secret handling,
   failure paths that do not reveal which part failed, no secret in logs or errors, and tests with
   known-answer vectors.
+- **server**, **sql-host** and **policy**: every path from a connection's authenticated principal to
+  the policy a statement runs under (no default that allows more than the account's grant, a denied
+  account learns nothing about the catalog), credential and policy files parsed strictly and bounded,
+  file permissions checked, no secret in logs or errors, deadlines and bounded queues on the connection
+  and database threads, and tests for each refusal path.
+- **security-docs**: claims match the code, and no mitigation is described that is not built.
 - **layers**: each new dependency edge is allowed by the layer rules and justified; no rule is relaxed
   to make a build pass.
 - **workflows**: pinned action SHAs, minimal permissions, no `pull_request_target` running pull request
