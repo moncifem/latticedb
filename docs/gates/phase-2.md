@@ -139,8 +139,10 @@ PRs [197](https://github.com/moncifem/latticedb/pull/197),
 - `latticed` drives the existing simple/extended sans-I/O session over bounded TCP workers, with
   complete-frame read deadlines, write timeouts and explicit shutdown. Six independent socket tests
   passed locally; portability testing caught and fixed macOS accepted-socket nonblocking inheritance.
-  The handler only answers `SELECT 1`, uses plaintext/trust authentication and opens no database.
-  Authentication, TLS, cancellation routing, query execution and driver conformance remain open.
+  When PRs 200 and 201 merged, the handler only answered `SELECT 1`, used plaintext/trust authentication
+  and opened no database; authentication, TLS, cancellation routing, query execution and driver
+  conformance were open then. Later sections record the TLS/SCRAM integration and the data-directory
+  SQL listener (PR 412); driver conformance is still open (#413).
 - `lattice-api::cancel` has a bounded RNG-seam credential registry, expiry and one-way per-query
   tokens. Its fixed-capacity arithmetic-mask lookup is not a formal platform timing proof. The
   registry is not connected to the TCP listener or query executor yet.
@@ -344,7 +346,8 @@ This is bounded API evidence, not full SQL conformance or soak-volume evidence.
 `lattice-sql` now binds single-table `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `AS OF`),
 `INSERT`, `UPDATE` and `DELETE` with `RETURNING` into a typed logical plan, against an abstract
 catalog view. Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries and DDL are refused with `0A000`.
-Nothing executes SQL against storage yet, and the listener handler is still `SELECT 1`.
+When this section was written nothing executed SQL against storage and the listener handler was still
+`SELECT 1`; the executor and the data-directory listener are recorded in the two sections below.
 
 The binder tests (table of goldens, error-code table, the five sqllogictest scripts as bind inputs, a
 property test that binding never panics and leaves no untyped expression) were run locally for
@@ -368,8 +371,8 @@ level, first-committer-wins as `40001`, `NOT NULL` and key violations as `23502`
 overflow `22003`, division by zero `22012`. Plans bound at an older catalog version are refused. The
 actor's row policy applies to scans and commits; the statement deadline, memory budget and cancellation
 are polled for every row. `CREATE TABLE` and `DROP TABLE` register tables, with the engine catalog
-persisting ids and names only. A `QueryHandler` adapter exists in `lattice-api` and is **not wired**
-into `latticed`, which still answers `SELECT 1`.
+persisting ids and names only. When this section was written, the `QueryHandler` adapter in `lattice-api`
+was not wired into `latticed`; PR 412 wired it (next section).
 
 **Known side channel and policy rules (interim, revisit with Phase 4).** A duplicate key or `UNIQUE`
 value is `23505` even when a hidden row holds it, as in PostgreSQL row-level security; the message
