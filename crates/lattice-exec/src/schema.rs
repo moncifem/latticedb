@@ -20,6 +20,25 @@ use crate::value::{Datum, parse_text};
 
 /// Most `UNIQUE` constraints on one table (each needs its own marker table).
 pub const MAX_UNIQUES: usize = 15;
+/// Whether a physical table id belongs to an entry table derived from a `UNIQUE` constraint.
+pub fn is_marker_table(physical: u32) -> bool {
+    physical & MARKER_BIT != 0
+}
+
+/// The table a physical table id belongs to. Physical ids with bit 31 set are derived entry tables
+/// (`MARKER_BIT | table_id << 4 | k`); every other id is the table itself. A `PolicyEvaluator` must
+/// decide for a derived table exactly as it decides for its owner, or a restricted actor cannot write
+/// to tables that have `UNIQUE` constraints.
+pub fn owning_table(physical: u32) -> u32 {
+    if is_marker_table(physical) {
+        (physical & !MARKER_BIT) >> 4
+    } else {
+        physical
+    }
+}
+
+const MARKER_BIT: u32 = 0x8000_0000;
+
 /// Largest table id, so marker table ids stay clear of ordinary ones.
 pub const MAX_TABLE_ID: u32 = (1 << 26) - 1;
 
@@ -196,7 +215,7 @@ impl TableDef {
 
     /// The physical table holding the entries of `UNIQUE` constraint `k`.
     pub fn marker_table(&self, k: usize) -> u32 {
-        0x8000_0000 | (self.id << 4) | (k as u32 & 0xF)
+        MARKER_BIT | (self.id << 4) | (k as u32 & 0xF)
     }
 
     /// The binder's view of the table.
@@ -268,10 +287,9 @@ impl TableDef {
 
     /// Decodes a stored row.
     pub fn decode_row(&self, bytes: &[u8]) -> Result<Vec<Datum>, ExecError> {
-        let v = decode_row(&self.layout(), bytes)
-            .map_err(|e| ExecError::internal(format!("stored row is corrupt: {e:?}")))?;
+        let v = decode_row(&self.layout(), bytes).map_err(|_| ExecError::corrupt())?;
         let LslValue::Object(mut map) = v else {
-            return Err(ExecError::internal("stored row is not an object"));
+            return Err(ExecError::corrupt());
         };
         self.columns
             .iter()
@@ -404,7 +422,7 @@ fn to_lsl(d: &Datum, ty: SqlType) -> Result<Option<LslValue>, ExecError> {
 }
 
 fn from_lsl(v: &LslValue, ty: SqlType) -> Result<Datum, ExecError> {
-    let bad = || ExecError::internal(format!("stored value does not fit a {ty} column"));
+    let bad = ExecError::corrupt;
     Ok(match (v, ty) {
         (LslValue::Bool(b), SqlType::Boolean) => Datum::Bool(*b),
         (LslValue::Int(i), SqlType::SmallInt | SqlType::Integer | SqlType::BigInt) => {
@@ -423,8 +441,19 @@ fn from_lsl(v: &LslValue, ty: SqlType) -> Result<Datum, ExecError> {
             let arr: [u8; 16] = b.as_slice().try_into().map_err(|_| bad())?;
             Datum::Uuid(u128::from_be_bytes(arr))
         }
-        (LslValue::Int(i), SqlType::Date) => Datum::Date(i32::try_from(*i).map_err(|_| bad())?),
-        (LslValue::Int(i), SqlType::Timestamptz) => Datum::Timestamp(*i),
+        (LslValue::Int(i), SqlType::Date) => {
+            let d = i32::try_from(*i).map_err(|_| bad())?;
+            if !crate::value::date_in_range(d) {
+                return Err(bad());
+            }
+            Datum::Date(d)
+        }
+        (LslValue::Int(i), SqlType::Timestamptz) => {
+            if !crate::value::timestamp_in_range(*i) {
+                return Err(bad());
+            }
+            Datum::Timestamp(*i)
+        }
         _ => return Err(bad()),
     })
 }

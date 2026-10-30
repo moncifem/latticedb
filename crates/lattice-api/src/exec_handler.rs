@@ -6,6 +6,14 @@
 //! `SELECT 1`. Cancellation is routed from the session's [`CancellationToken`] into the executor's
 //! per-row poll, so a cancelled statement stops between rows and commits nothing.
 //!
+//! **Policy.** The handler is built from an [`ActorPolicy`], never from an allow-all default. The
+//! connection's actor is not known to this crate yet: authentication and the principal live in the
+//! session layer, and the query context that carries them (a principal per connection) is being
+//! designed separately. When it lands, the host derives the policy from the context's principal at
+//! connection setup and passes it here; this constructor is the one place that decision is made, so
+//! no executor call can happen with a policy nobody chose. Until then a host builds the policy
+//! explicitly, and tests use `AllowAll` by name.
+//!
 //! Transaction status is the session's own: the executor reports `BEGIN`, `COMMIT` and `ROLLBACK`
 //! in its command tags, and the session derives `ReadyForQuery` from them. One known difference:
 //! after a failed `COMMIT` (for example `40001`) the executor has ended the block, while the
@@ -15,7 +23,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use lattice_exec::{Database, ExecError, ExecResult, ExecSession, ResultColumn, TxStatus};
+use lattice_exec::{
+    ActorPolicy, Database, ExecError, ExecResult, ExecSession, ResultColumn, TxStatus,
+};
 use lattice_seams::{Clock, Io, Rng};
 
 use crate::cancel::CancellationToken;
@@ -29,9 +39,14 @@ pub struct ExecHandler<I: Io, C: Clock + Clone, R: Rng> {
 }
 
 impl<I: Io, C: Clock + Clone, R: Rng> ExecHandler<I, C, R> {
-    /// A handler for `session` over `db`.
-    pub fn new(db: Rc<RefCell<Database<I, C, R>>>, session: ExecSession) -> Self {
-        ExecHandler { db, session }
+    /// A handler for a connection acting under `policy`. The policy is required: there is no
+    /// default and no allow-all constructor, so a host cannot reach the executor without deciding
+    /// which rows the connection may touch.
+    pub fn new(db: Rc<RefCell<Database<I, C, R>>>, policy: ActorPolicy) -> Self {
+        ExecHandler {
+            db,
+            session: ExecSession::new(policy),
+        }
     }
 
     /// The executor's view of the transaction block.
@@ -133,6 +148,10 @@ mod tests {
 
     type Db = Database<SharedIo, SharedClock, SeededRng>;
 
+    fn admin() -> ActorPolicy {
+        ActorPolicy::new(Rc::new(lattice_engines::limits::AllowAll))
+    }
+
     fn shared_db() -> Rc<RefCell<Db>> {
         let db = Database::open(
             SharedIo::new(SimIo::new(1, FaultProfile::clean())),
@@ -147,7 +166,7 @@ mod tests {
     fn ready_session(
         db: &Rc<RefCell<Db>>,
     ) -> Session<ExecHandler<SharedIo, SharedClock, SeededRng>> {
-        let handler = ExecHandler::new(db.clone(), ExecSession::allow_all());
+        let handler = ExecHandler::new(db.clone(), admin());
         let mut s = Session::new(handler, 1, 2);
         let out = s.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
         assert!(!out.close);
@@ -299,7 +318,7 @@ mod tests {
     #[test]
     fn a_cancelled_token_stops_the_statement_before_it_changes_anything() {
         let db = shared_db();
-        let mut handler = ExecHandler::new(db.clone(), ExecSession::allow_all());
+        let mut handler = ExecHandler::new(db.clone(), admin());
         handler
             .execute("CREATE TABLE t (id INT PRIMARY KEY, v INT)", &[])
             .unwrap();
@@ -330,7 +349,7 @@ mod tests {
     #[test]
     fn describe_reports_columns_without_running_the_statement() {
         let db = shared_db();
-        let mut handler = ExecHandler::new(db, ExecSession::allow_all());
+        let mut handler = ExecHandler::new(db, admin());
         handler
             .execute("CREATE TABLE t (id BIGINT PRIMARY KEY, n NUMERIC)", &[])
             .unwrap();

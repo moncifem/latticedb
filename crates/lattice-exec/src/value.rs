@@ -266,8 +266,25 @@ fn split_offset(s: &str) -> Option<(&str, i64)> {
 }
 
 /// Days of a date as microseconds, for comparing a date with a timestamp.
-pub(crate) fn date_to_micros(d: i32) -> i64 {
-    i64::from(d) * MICROS_PER_DAY
+pub(crate) fn date_to_micros(d: i32) -> Option<i64> {
+    i64::from(d).checked_mul(MICROS_PER_DAY)
+}
+
+/// The day numbers of 0001-01-01 and 9999-12-31, the dates the subset accepts.
+fn day_bounds() -> (i64, i64) {
+    (days_from_civil(1, 1, 1), days_from_civil(9999, 12, 31))
+}
+
+/// Whether a stored day number is a date the subset can produce.
+pub(crate) fn date_in_range(d: i32) -> bool {
+    let (lo, hi) = day_bounds();
+    (lo..=hi).contains(&i64::from(d))
+}
+
+/// Whether stored microseconds are a timestamp the subset can produce.
+pub(crate) fn timestamp_in_range(t: i64) -> bool {
+    let (lo, hi) = day_bounds();
+    (lo..=hi).contains(&t.div_euclid(MICROS_PER_DAY))
 }
 
 pub(crate) fn micros_to_date(t: i64) -> Option<i32> {
@@ -607,10 +624,28 @@ pub(crate) fn compare(a: &Datum, b: &Datum) -> Option<Ordering> {
         (Uuid(x), Uuid(y)) => x.cmp(y),
         (Date(x), Date(y)) => x.cmp(y),
         (Timestamp(x), Timestamp(y)) => x.cmp(y),
-        (Date(x), Timestamp(y)) => date_to_micros(*x).cmp(y),
-        (Timestamp(x), Date(y)) => x.cmp(&date_to_micros(*y)),
+        (Date(x), Timestamp(y)) => date_to_micros(*x).unwrap_or(i64::MAX).cmp(y),
+        (Timestamp(x), Date(y)) => x.cmp(&date_to_micros(*y).unwrap_or(i64::MAX)),
         _ => return None,
     })
+}
+
+/// A total order over any two non-null values, for sorting: [`compare`] where the types compare,
+/// and the kind of value otherwise, so a sort never depends on an inconsistent comparison.
+pub(crate) fn total_order(a: &Datum, b: &Datum) -> Ordering {
+    fn rank(d: &Datum) -> u8 {
+        match d {
+            Datum::Null => 0,
+            Datum::Bool(_) => 1,
+            Datum::Int(_) | Datum::Float(_) | Datum::Numeric(_) => 2,
+            Datum::Text(_) => 3,
+            Datum::Bytes(_) => 4,
+            Datum::Uuid(_) => 5,
+            Datum::Date(_) | Datum::Timestamp(_) => 6,
+            Datum::Json(_) => 7,
+        }
+    }
+    compare(a, b).unwrap_or_else(|| rank(a).cmp(&rank(b)))
 }
 
 /// PostgreSQL orders `NaN` above every number and equal to itself.
@@ -681,6 +716,17 @@ mod tests {
         assert!(parse_text("{\"a\": [1, 2, {\"b\": null}]}", SqlType::Jsonb).is_ok());
         assert!(parse_text("{\"a\": }", SqlType::Jsonb).is_err());
         assert!(parse_text("[1,]", SqlType::Jsonb).is_err());
+    }
+
+    #[test]
+    fn dates_outside_the_subset_do_not_overflow_when_widened() {
+        assert_eq!(date_to_micros(0), Some(0));
+        assert_eq!(date_to_micros(i32::MAX), None);
+        assert_eq!(date_to_micros(i32::MIN), None);
+        assert!(date_in_range(0) && date_in_range(19_782));
+        assert!(!date_in_range(i32::MAX) && !date_in_range(-800_000));
+        assert!(timestamp_in_range(0));
+        assert!(!timestamp_in_range(i64::MAX) && !timestamp_in_range(i64::MIN));
     }
 
     #[test]

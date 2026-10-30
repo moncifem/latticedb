@@ -23,6 +23,8 @@ pub struct Database<I: Io, C: Clock + Clone, R: Rng> {
     pub(crate) clock: C,
     pub(crate) schema: Schema,
     next_rowid: RefCell<BTreeMap<u32, u64>>,
+    /// The definition first registered for each table id in this process (not durable).
+    fingerprints: BTreeMap<u32, String>,
 }
 
 impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
@@ -34,6 +36,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
             clock,
             schema: Schema::new(),
             next_rowid: RefCell::new(BTreeMap::new()),
+            fingerprints: BTreeMap::new(),
         })
     }
 
@@ -101,6 +104,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
                 Vec::new(),
             ) {
                 Ok(_) => {
+                    self.fingerprints.insert(def.id, fingerprint(&def));
                     self.schema.insert(def);
                     return Ok(true);
                 }
@@ -128,8 +132,35 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         if self.schema.table(&def.name).is_some() {
             return Err(relation_exists(&def.name));
         }
+        // Only the id and name are checked against the engine catalog, so a different column list,
+        // key or constraint would be accepted and silently change what is enforced. Within one
+        // process a definition seen before must match. This does not survive a restart (#379).
+        let print = fingerprint(&def);
+        match self.fingerprints.get(&def.id) {
+            Some(first) if *first != print => {
+                return Err(ExecError::new(
+                    ErrorKind::Bind,
+                    "42P17",
+                    format!(
+                        "table {} (id {}) was registered earlier in this process with a different definition",
+                        def.name, def.id
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                self.fingerprints.insert(def.id, print);
+            }
+        }
         self.schema.insert(def);
         Ok(())
+    }
+
+    /// Removes a table's columns from the executor without touching the engine catalog or its rows,
+    /// so the host can attach them again. A later [`Database::attach_table`] must supply the
+    /// definition that was registered first in this process.
+    pub fn detach_table(&mut self, name: &str) -> bool {
+        self.schema.remove(name).is_some()
     }
 
     /// Drops a table; its rows stay in the log. Returns `false` when it did not exist and
@@ -170,6 +201,10 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         ids.insert(table, next.saturating_add(1));
         Ok(next)
     }
+}
+
+fn fingerprint(def: &TableDef) -> String {
+    format!("{def:?}")
 }
 
 fn relation_exists(name: &str) -> ExecError {

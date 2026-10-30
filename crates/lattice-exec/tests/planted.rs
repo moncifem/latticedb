@@ -37,8 +37,8 @@ impl Drop for Planted {
 /// Two blocks update one row; the second to commit must be refused with `40001`.
 fn first_committer_wins() -> Result<(), String> {
     let mut f = fixture();
-    let mut a = ExecSession::allow_all();
-    let mut b = ExecSession::allow_all();
+    let mut a = common::admin();
+    let mut b = common::admin();
     ok(
         &mut f.db,
         &mut a,
@@ -70,7 +70,7 @@ impl PolicyEvaluator for EvenIds {
 
 fn actor_fixture() -> (common::Fixture, ExecSession, ExecSession) {
     let mut f = fixture();
-    let mut admin = ExecSession::allow_all();
+    let mut admin = common::admin();
     ok(
         &mut f.db,
         &mut admin,
@@ -147,7 +147,7 @@ fn a_partial_apply_is_caught_by_the_atomic_commit_check() {
     // applies only the first.
     fn all_or_nothing() -> Result<(), String> {
         let mut f = fixture();
-        let mut s = ExecSession::allow_all();
+        let mut s = common::admin();
         ok(&mut f.db, &mut s, "CREATE TABLE t (id INT PRIMARY KEY)");
         ok(&mut f.db, &mut s, "INSERT INTO t VALUES (1), (2), (3)");
         let n = ok(&mut f.db, &mut s, "SELECT id FROM t").rows.len();

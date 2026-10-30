@@ -371,10 +371,20 @@ are polled for every row. `CREATE TABLE` and `DROP TABLE` register tables, with 
 persisting ids and names only. A `QueryHandler` adapter exists in `lattice-api` and is **not wired**
 into `latticed`, which still answers `SELECT 1`.
 
+**Known side channel and policy rules (interim, revisit with Phase 4).** A duplicate key or `UNIQUE`
+value is `23505` even when a hidden row holds it, as in PostgreSQL row-level security; the message
+carries only the constraint name, and a test pins that. `UNIQUE` entries live in derived physical tables
+whose id has bit 31 set; evaluators must follow the owning table (`lattice_exec::owning_table`), and a
+test covers a restrictive policy that does. `RETURNING` does not re-check the read policy. A scan is not
+polled while the engine materialises row references, and write amplification is not charged against the
+memory budget.
+
 **What does not run.** Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, `ALTER TABLE`, indexes
 (`CREATE INDEX`, and no scan uses an index), the `jsonb` operators, and DDL inside a transaction block.
-Column definitions are in memory and are not recovered after a restart (the host re-attaches them), and
-the stored row layout is not a frozen format.
+Column definitions are in memory and are not recovered after a restart (the host re-attaches them,
+and `attach_table` checks only the id and name, so it can silently stop enforcing a constraint; an
+in-process fingerprint refuses a different re-attach, see #379), and the stored row layout is not a
+frozen format.
 
 **sqllogictest.** The five scripts in `crates/lattice-testkit/tests/slt/` run unchanged through the
 executor. By record: `basics.test` 7 passed and 2 failed, `joins.test` 7 and 4, `aggregates.test` 9 and

@@ -182,7 +182,7 @@ fn outcome(r: &Result<ExecResult, lattice_exec::ExecError>) -> String {
 
 fn run_all(statements: &[String]) -> Vec<String> {
     let f = fixture();
-    let (mut db, mut s) = (f.db, ExecSession::allow_all());
+    let (mut db, mut s) = (f.db, common::admin());
     for sql in SETUP {
         s.execute(&mut db, sql).unwrap();
     }
@@ -230,7 +230,7 @@ fn the_generator_reaches_the_executor_and_its_error_paths() {
     let mut runner = TestRunner::deterministic();
     let generator = statement();
     let f = fixture();
-    let (mut db, mut s) = (f.db, ExecSession::allow_all());
+    let (mut db, mut s) = (f.db, common::admin());
     for sql in SETUP {
         s.execute(&mut db, sql).unwrap();
     }
@@ -260,9 +260,42 @@ fn the_generator_reaches_the_executor_and_its_error_paths() {
 }
 
 #[test]
+fn sort_keys_that_mix_integer_and_numeric_values_order_exactly() {
+    // `coalesce(n, i4)` is numeric but yields an integer where n is NULL: the sort must compare the
+    // two exactly and the same way every time.
+    let f = fixture();
+    let (mut db, mut s) = (f.db, common::admin());
+    for sql in SETUP {
+        s.execute(&mut db, sql).unwrap();
+    }
+    s.execute(&mut db, "UPDATE t SET n = NULL, i4 = 0 WHERE id = 4")
+        .unwrap();
+    s.execute(&mut db, "UPDATE t SET n = NULL, i4 = 7 WHERE id = 5")
+        .unwrap();
+    let r = s
+        .execute(
+            &mut db,
+            "SELECT id FROM t WHERE id <= 5 ORDER BY coalesce(n, i4), id",
+        )
+        .unwrap();
+    // Keys: id1 1.5, id2 0, id3 NULL, id4 0, id5 7.
+    assert_eq!(
+        common::text(&r),
+        vec![vec!["2"], vec!["4"], vec!["1"], vec!["5"], vec!["3"]]
+    );
+    let r = s
+        .execute(
+            &mut db,
+            "SELECT id FROM t WHERE id <= 5 ORDER BY coalesce(f, n, i4) DESC, id",
+        )
+        .unwrap();
+    assert_eq!(r.rows.len(), 5);
+}
+
+#[test]
 fn garbage_text_is_refused_not_executed() {
     let f = fixture();
-    let (mut db, mut s) = (f.db, ExecSession::allow_all());
+    let (mut db, mut s) = (f.db, common::admin());
     for sql in SETUP {
         s.execute(&mut db, sql).unwrap();
     }

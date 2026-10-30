@@ -1,8 +1,18 @@
 //! Plan operators: scan, filter, project, sort, limit and the three writes.
 //!
 //! Every operator materialises its output as a vector of rows. Work is bounded by the statement
-//! limits: cancellation and the deadline are polled for every row and before every sort comparison
-//! batch, and memory is reserved before rows are kept (see [`Gov`]).
+//! limits, with these exact guarantees:
+//!
+//! - `RowStore::scan_at` materialises the whole table's borrowed row references **before** this module
+//!   can poll or charge anything, so a scan is unpolled and uncharged for that step. After it,
+//!   cancellation and the deadline are polled for every row examined, and memory is charged for every
+//!   row kept, after the row is decoded.
+//! - A sort polls once per key evaluation (one per input row), charges the evaluated keys, and then
+//!   sorts without polling: the comparison pass over already-charged keys is not interruptible.
+//! - `RETURNING` evaluates over the row just written or deleted and does **not** consult the read
+//!   policy again; the actor could already read the old row and has just been allowed to write the new
+//!   one (the engine checks every transition at commit). A policy whose write rule is wider than its
+//!   read rule would therefore let `RETURNING` show a row the actor cannot `SELECT`.
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
@@ -26,7 +36,7 @@ use crate::db::Database;
 use crate::error::{ErrorKind, ExecError};
 use crate::eval::{EvalCtx, cast, eval, truthy};
 use crate::schema::{ColumnDef, TableDef};
-use crate::value::{Datum, compare};
+use crate::value::{Datum, total_order};
 
 /// The policy a transaction is bound to: the actor's row policy, shared by the session.
 #[derive(Clone)]
@@ -36,11 +46,6 @@ impl ActorPolicy {
     /// Wraps an evaluator supplied by a trusted host.
     pub fn new(policy: Rc<dyn PolicyEvaluator>) -> Self {
         ActorPolicy(policy)
-    }
-
-    /// The explicit allow-all policy, for hosts that do not restrict rows yet.
-    pub fn allow_all() -> Self {
-        ActorPolicy(Rc::new(AllowAll))
     }
 }
 
@@ -329,7 +334,8 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             self.gov.check()?;
             let mut k = Vec::with_capacity(keys.len());
             for sk in keys {
-                k.push(eval(&sk.expr, &t.vals, &self.ctx())?);
+                let v = eval(&sk.expr, &t.vals, &self.ctx())?;
+                k.push(sort_key(v, sk.expr.ty)?);
             }
             self.gov.charge(row_cost(&k))?;
             keyed.push((k, t));
@@ -355,7 +361,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                         }
                     }
                     (false, false) => {
-                        let o = compare(x, y).unwrap_or(Ordering::Equal);
+                        let o = total_order(x, y);
                         if sk.desc { o.reverse() } else { o }
                     }
                 };
@@ -390,7 +396,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 };
                 self.store().snapshot_as_of_changeset(id).ok_or_else(|| {
                     ExecError::new(
-                        ErrorKind::Storage,
+                        ErrorKind::SnapshotTooOld,
                         "72000",
                         "changeset not found or older than the retained history",
                     )
@@ -399,7 +405,8 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             AsOfPlan::Timestamp(e) => {
                 let micros = match eval(e, &[], &self.ctx())? {
                     Datum::Timestamp(t) => t,
-                    Datum::Date(d) => crate::value::date_to_micros(d),
+                    Datum::Date(d) => crate::value::date_to_micros(d)
+                        .ok_or_else(|| ExecError::eval("22008", "date out of range"))?,
                     _ => return Err(ExecError::eval("22004", "AS OF TIMESTAMP needs a value")),
                 };
                 // The newest commit at or before that millisecond, whatever its counter and node.
@@ -713,6 +720,27 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             tag: format!("DELETE {n}"),
             affected: n,
         })
+    }
+}
+
+/// Brings a sort key to the variant its expression type promises, so keys of one `ORDER BY` column
+/// are always the same kind of number and compare exactly (an expression such as
+/// `coalesce(numeric_col, int_col)` can yield either).
+fn sort_key(d: Datum, ty: SqlType) -> Result<Datum, ExecError> {
+    let fits = matches!(
+        (&d, ty),
+        (Datum::Null, _)
+            | (
+                Datum::Int(_),
+                SqlType::SmallInt | SqlType::Integer | SqlType::BigInt
+            )
+            | (Datum::Numeric(_), SqlType::Numeric)
+            | (Datum::Float(_), SqlType::DoublePrecision)
+    );
+    if fits || !ty.is_numeric() {
+        Ok(d)
+    } else {
+        cast(d, ty)
     }
 }
 

@@ -13,7 +13,7 @@ use lattice_exec::ExecSession;
 
 fn session_with_notes() -> (Db, ExecSession) {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -61,7 +61,7 @@ fn scan_returns_rows_in_primary_key_order_and_tags_the_count() {
 #[test]
 fn negative_integer_keys_sort_before_positive_ones() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(&mut f.db, &mut s, "CREATE TABLE k (id BIGINT PRIMARY KEY)");
     ok(
         &mut f.db,
@@ -77,7 +77,7 @@ fn negative_integer_keys_sort_before_positive_ones() {
 #[test]
 fn an_empty_table_scans_to_no_rows() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(&mut f.db, &mut s, "CREATE TABLE e (id INT PRIMARY KEY)");
     let r = ok(&mut f.db, &mut s, "SELECT * FROM e");
     assert_eq!((r.rows.len(), r.tag.as_str()), (0, "SELECT 0"));
@@ -237,7 +237,7 @@ fn project_evaluates_expressions_with_postgres_types() {
 #[test]
 fn numeric_is_exact_and_double_is_not() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -415,7 +415,7 @@ fn limit_and_offset_apply_after_the_sort() {
 #[test]
 fn limit_does_not_evaluate_rows_it_never_returns() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -456,7 +456,7 @@ fn a_negative_limit_parameter_is_refused_at_run_time() {
 #[test]
 fn insert_fills_defaults_and_returns_columns() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -504,7 +504,7 @@ fn insert_select_copies_rows_with_assignment_casts() {
 #[test]
 fn constraint_violations_use_the_documented_sqlstates() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -588,7 +588,7 @@ fn a_failed_statement_changes_nothing() {
 #[test]
 fn value_length_and_integer_range_are_checked_on_assignment() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -659,7 +659,7 @@ fn update_changes_matching_rows_and_reports_the_count() {
 #[test]
 fn update_of_key_columns_moves_the_row_and_keeps_constraints() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -714,7 +714,7 @@ fn delete_removes_rows_and_frees_their_keys() {
 #[test]
 fn every_column_type_round_trips() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -777,7 +777,7 @@ fn every_column_type_round_trips() {
 #[test]
 fn composite_and_text_keys_order_by_value() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -808,7 +808,7 @@ fn composite_and_text_keys_order_by_value() {
 #[test]
 fn a_table_without_a_key_keeps_duplicate_rows_and_updates_them_individually() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(&mut f.db, &mut s, "CREATE TABLE log (msg TEXT, n INT)");
     ok(
         &mut f.db,
