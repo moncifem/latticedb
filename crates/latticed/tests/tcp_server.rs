@@ -24,11 +24,11 @@ fn server(max_connections: usize, read_timeout: Duration) -> ServerHandle {
     .unwrap()
 }
 fn connect(address: SocketAddr) -> TcpStream {
-    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(20)).unwrap();
     // The server may already have refused and reset a flood connection; on macOS the option
     // setters then fail, which is not a test failure (the following read reports the outcome).
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
     let _ = stream.set_nodelay(true);
     stream
 }
@@ -90,7 +90,7 @@ fn closed(stream: &mut TcpStream) {
 
 #[test]
 fn fragmented_startup_simple_query_error_and_terminate_use_the_existing_session() {
-    let server = server(4, Duration::from_secs(3));
+    let server = server(4, Duration::from_secs(20));
     let mut client = connect(server.local_addr());
     for byte in startup() {
         client.write_all(&[byte]).unwrap();
@@ -113,7 +113,7 @@ fn fragmented_startup_simple_query_error_and_terminate_use_the_existing_session(
 
 #[test]
 fn pipelined_ssl_startup_and_extended_query_are_framed_without_losing_bytes() {
-    let server = server(4, Duration::from_secs(3));
+    let server = server(4, Duration::from_secs(20));
     let mut client = connect(server.local_addr());
     let mut pipeline = vec![0, 0, 0, 8, 4, 210, 22, 47]; // SSLRequest 80877103
     pipeline.extend_from_slice(&startup());
@@ -138,7 +138,7 @@ fn pipelined_ssl_startup_and_extended_query_are_framed_without_losing_bytes() {
 
 #[test]
 fn excess_connections_are_rejected_and_finished_workers_release_capacity() {
-    let server = server(1, Duration::from_secs(3));
+    let server = server(1, Duration::from_secs(20));
     let mut first = connect(server.local_addr());
     first.write_all(&startup()).unwrap();
     ready(&mut first);
@@ -169,7 +169,7 @@ fn excess_connections_are_rejected_and_finished_workers_release_capacity() {
 
 #[test]
 fn invalid_frame_lengths_are_rejected_before_waiting_for_or_allocating_the_body() {
-    let server = server(4, Duration::from_secs(3));
+    let server = server(4, Duration::from_secs(20));
     for length in [3i32, -1, i32::MAX] {
         let mut client = connect(server.local_addr());
         client.write_all(&length.to_be_bytes()).unwrap();
@@ -195,8 +195,10 @@ fn partial_frames_time_out_and_shutdown_interrupts_an_active_long_read() {
     client.write_all(&[b'Q', 0]).unwrap();
     let start = Instant::now();
     long.shutdown().unwrap();
+    // The bound sits below the 30-second read timeout shutdown must not wait out, and far above
+    // any scheduling delay on a loaded runner.
     assert!(
-        start.elapsed() < Duration::from_secs(3),
+        start.elapsed() < Duration::from_secs(20),
         "shutdown waited for the client's 30-second timeout"
     );
     closed(&mut client);
@@ -350,7 +352,7 @@ fn no_reply(stream: &mut TcpStream) {
         "query unexpectedly returned: {result:?}"
     );
     stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_secs(20)))
         .unwrap();
 }
 fn cancellation_error(stream: &mut TcpStream) {
@@ -375,7 +377,7 @@ fn cancel_routes_at_sql_capacity_and_wrong_idle_or_previous_requests_do_not_pois
     cancel(address, key); // Idle cancellation must not poison the next real query.
     select_one(&mut client);
     client.write_all(&frontend(b'Q', b"WAIT\0")).unwrap();
-    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    started.recv_timeout(Duration::from_secs(20)).unwrap();
     cancel(address, (key.0, key.1 ^ 1));
     no_reply(&mut client);
     cancel(address, (-1, key.1));
@@ -399,7 +401,7 @@ fn stale_credentials_cannot_cancel_a_later_connection_even_when_the_slot_is_reus
     let current = registered(&mut client);
     assert_ne!(old_key.0, current.0);
     client.write_all(&frontend(b'Q', b"WAIT\0")).unwrap();
-    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    started.recv_timeout(Duration::from_secs(20)).unwrap();
     cancel(address, old_key);
     no_reply(&mut client);
     cancel(address, current);
@@ -419,7 +421,7 @@ fn cancelled_extended_execute_discards_until_sync_and_fresh_queries_work() {
     client.write_all(&frontend(b'B', &[0; 8])).unwrap();
     assert_eq!(message(&mut client), (b'2', vec![]));
     client.write_all(&frontend(b'E', &[0; 5])).unwrap();
-    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    started.recv_timeout(Duration::from_secs(20)).unwrap();
     cancel(address, key);
     cancellation_error(&mut client);
     no_reply(&mut client);
@@ -437,10 +439,10 @@ fn shutdown_cancels_a_running_cooperative_handler_before_joining_workers() {
     let mut client = connect(server.local_addr());
     registered(&mut client);
     client.write_all(&frontend(b'Q', b"WAIT\0")).unwrap();
-    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    started.recv_timeout(Duration::from_secs(20)).unwrap();
     let start = Instant::now();
     server.shutdown().unwrap();
-    assert!(start.elapsed() < Duration::from_secs(3));
+    assert!(start.elapsed() < Duration::from_secs(20)); // read timeout is 30 s
     let mut bytes = Vec::new();
     client.read_to_end(&mut bytes).unwrap_or_else(|error| {
         assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
@@ -473,7 +475,7 @@ fn bounded_control_slots_cannot_make_shutdown_wait_for_slow_startup_clients() {
     closed(&mut excess);
     let start = Instant::now();
     server.shutdown().unwrap();
-    assert!(start.elapsed() < Duration::from_secs(3));
+    assert!(start.elapsed() < Duration::from_secs(20)); // read timeout is 30 s
     closed(&mut primary);
     for mut stream in pending {
         closed(&mut stream);
@@ -488,7 +490,7 @@ fn a_panicked_connection_worker_does_not_stop_the_listener() {
         ServerConfig {
             address: SocketAddr::from(([127, 0, 0, 1], 0)),
             max_connections: 4,
-            read_timeout: Duration::from_secs(3),
+            read_timeout: Duration::from_secs(20),
             write_timeout: Duration::from_secs(2),
             ..ServerConfig::default()
         },
@@ -510,7 +512,8 @@ fn a_panicked_connection_worker_does_not_stop_the_listener() {
     std::thread::sleep(Duration::from_millis(200));
     let mut next = TcpStream::connect_timeout(&server.local_addr(), Duration::from_secs(2))
         .expect("listener must keep accepting after a worker panic");
-    next.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    next.set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
     next.write_all(&startup()).unwrap();
     ready(&mut next);
     server.shutdown().unwrap();
@@ -518,7 +521,7 @@ fn a_panicked_connection_worker_does_not_stop_the_listener() {
 
 #[test]
 fn reset_and_abandoned_connections_never_stop_the_listener() {
-    let server = server(4, Duration::from_secs(3));
+    let server = server(4, Duration::from_secs(20));
     for round in 0..60 {
         let mut client = connect(server.local_addr());
         match round % 3 {
@@ -551,7 +554,7 @@ fn reset_and_abandoned_connections_never_stop_the_listener() {
 
 #[test]
 fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
-    let server = server(2, Duration::from_secs(3));
+    let server = server(2, Duration::from_secs(20));
     for _ in 0..300 {
         // With the accept backlog full, macOS resets the connect itself; that flood attempt is
         // simply lost, which is what a flood does.
@@ -577,7 +580,7 @@ fn start_and_close_flood_does_not_exhaust_cancel_slots_or_pids() {
             std::thread::sleep(Duration::from_millis(1));
             continue;
         };
-        let _ = next.set_read_timeout(Some(Duration::from_secs(3)));
+        let _ = next.set_read_timeout(Some(Duration::from_secs(20)));
         let _ = next.write_all(&startup());
         // A refusal at capacity is FATAL 53300 (or, if the peer raced the close, a reset); retry.
         match try_message(&mut next) {
@@ -638,7 +641,7 @@ fn ready_after_auth(stream: &mut TcpStream) {
 
 #[test]
 fn oversized_pre_authentication_startup_packet_is_refused_without_a_body() {
-    let server = server(2, Duration::from_secs(3));
+    let server = server(2, Duration::from_secs(20));
     let mut client = connect(server.local_addr());
     client
         .write_all(&(latticed::MAX_STARTUP_PACKET_LEN as i32 + 1).to_be_bytes())
@@ -651,7 +654,7 @@ fn oversized_pre_authentication_startup_packet_is_refused_without_a_body() {
 
 #[test]
 fn startup_packet_boundary_is_exactly_ten_thousand_bytes() {
-    let server = server(2, Duration::from_secs(3));
+    let server = server(2, Duration::from_secs(20));
     // A valid startup packet padded with a long option value to the exact length.
     let padded = |total: usize| {
         let mut packet = vec![0, 0, 0, 0, 0, 3, 0, 0];

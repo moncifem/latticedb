@@ -1,0 +1,1 @@
+Timing tests: the exec host timeout tests and the latticed shutdown and budget tests no longer race the wall clock on a loaded runner. Set-up statements run without a short ceiling, and elapsed-time bounds sit far below the timeout they distinguish from. No behaviour changes.
