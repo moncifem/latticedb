@@ -38,6 +38,12 @@ unexpected LSN:
   is a torn tail and is truncated; otherwise the log is corrupt and recovery refuses to continue;
 * in any other segment the log is corrupt.
 
+The frame at the first bad position counts as evidence too. A frame there that is complete and passes
+its checksum but carries the wrong LSN (a gap, a repeat or a first record that does not match the
+segment name) is not a torn write, which can only leave an incomplete or checksum-failing frame. It
+means acknowledged records were lost or reordered, so recovery **refuses** even when that frame is the
+last one in the file, and never truncates it. `lattice scrub` reports it as mid-log damage.
+
 ### Known ambiguity (fail safe)
 
 The "valid record follows" test inspects raw bytes, so an opaque payload that embeds a valid-looking

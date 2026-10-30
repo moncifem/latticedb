@@ -436,6 +436,17 @@ fn recover<I: Io>(
                     "segment {name} damaged at offset {at} but valid records follow: refusing to truncate"
                 )));
             }
+            // A complete, checksum-valid frame with the wrong LSN is not a torn write: a tear
+            // yields an incomplete or checksum-failing frame. It means acknowledged records were
+            // lost or reordered, so truncating it would compound the loss (issue 441).
+            if !bugs::active(Bug::GapTailTruncated)
+                && let Decoded::Record(r, _) = decode_record(&data, at)
+            {
+                return Err(LogError::Corrupt(format!(
+                    "segment {name} has a valid record with lsn {} where {expected} was expected at offset {at}: refusing to truncate",
+                    r.lsn
+                )));
+            }
             // A torn tail: drop it.
             if bugs::active(Bug::AcceptTornTail) {
                 off = data.len();
@@ -1035,5 +1046,158 @@ mod tests {
             data,
             "valid LSN 2 must survive refusal"
         );
+    }
+
+    // Issue 441. formats/wal-v1.md: LSNs increase by exactly 1, and recovery truncates only a tail
+    // where "no valid record with a higher LSN follows"; otherwise it refuses. A frame that is
+    // complete and checksum-valid but carries the wrong LSN is evidence of lost data, never a torn
+    // write, so it must not be truncated even when it is the last frame in the file.
+
+    const SEG1: &str = "wal/00000000000000000001.seg";
+
+    fn sim_log(files: &[(&str, Vec<u8>)]) -> lattice_sim::SimIo {
+        let mut io = lattice_sim::SimIo::new(1, lattice_sim::FaultProfile::clean());
+        io.create_dir_all("wal").unwrap();
+        for (path, data) in files {
+            io.append(path, data).unwrap();
+            io.sync(path).unwrap();
+        }
+        io.sync_dir("wal").unwrap();
+        io
+    }
+
+    fn segment_of(lsns: &[u64]) -> Vec<u8> {
+        let mut data = segment_header();
+        for lsn in lsns {
+            data.extend_from_slice(&encode_record(*lsn, 1, b"intact"));
+        }
+        data
+    }
+
+    fn assert_refused_untouched(files: &[(&str, Vec<u8>)], needle: &str) {
+        let mut io = sim_log(files);
+        let result = recover(&mut io, "wal", 0, &mut |_, _| {});
+        assert!(
+            matches!(result, Err(LogError::Corrupt(ref why)) if why.contains(needle)),
+            "expected a refusal mentioning {needle:?}"
+        );
+        for (path, data) in files {
+            assert_eq!(
+                &io.read(path).unwrap(),
+                data,
+                "{path} must stay byte-identical"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_refuses_a_last_record_that_skips_an_lsn() {
+        // LSN 2 is missing and LSN 3 is the final, intact frame.
+        assert_refused_untouched(&[(SEG1, segment_of(&[1, 3]))], "lsn 3 where 2 was expected");
+    }
+
+    #[test]
+    fn recovery_refuses_a_repeated_lsn_as_the_last_record() {
+        assert_refused_untouched(
+            &[(SEG1, segment_of(&[1, 2, 2]))],
+            "lsn 2 where 3 was expected",
+        );
+        assert_refused_untouched(
+            &[(SEG1, segment_of(&[1, 2, 1]))],
+            "lsn 1 where 3 was expected",
+        );
+    }
+
+    #[test]
+    fn recovery_refuses_a_first_record_with_the_wrong_lsn() {
+        assert_refused_untouched(&[(SEG1, segment_of(&[2]))], "lsn 2 where 1 was expected");
+    }
+
+    #[test]
+    fn recovery_refuses_a_gap_across_a_segment_boundary_in_the_newest_segment() {
+        // The second segment is named for LSN 3 but its only record is LSN 4.
+        let second = "wal/00000000000000000003.seg";
+        assert_refused_untouched(
+            &[(SEG1, segment_of(&[1, 2])), (second, segment_of(&[4]))],
+            "lsn 4 where 3 was expected",
+        );
+    }
+
+    #[test]
+    fn recovery_refuses_a_skipped_lsn_inside_an_older_segment() {
+        let second = "wal/00000000000000000004.seg";
+        assert_refused_untouched(
+            &[(SEG1, segment_of(&[1, 2, 4])), (second, segment_of(&[4]))],
+            "later segments exist",
+        );
+    }
+
+    #[test]
+    fn recovery_still_repairs_genuine_torn_tails() {
+        // Partial header, partial payload, garbage and a checksum-failing frame are all tears.
+        let whole = encode_record(3, 1, b"intact");
+        let mut bad_crc = whole.clone();
+        bad_crc[4] ^= 0xFF;
+        let mut bad_payload = whole.clone();
+        let last = bad_payload.len() - 1;
+        bad_payload[last] ^= 0xFF;
+        let tails: [Vec<u8>; 5] = [
+            whole[..5].to_vec(),
+            whole[..whole.len() - 2].to_vec(),
+            vec![0xAB; 40],
+            bad_crc,
+            bad_payload,
+        ];
+        for tail in tails {
+            let good = segment_of(&[1, 2]);
+            let mut data = good.clone();
+            data.extend_from_slice(&tail);
+            let mut io = sim_log(&[(SEG1, data)]);
+            let mut seen = Vec::new();
+            let rec = recover(&mut io, "wal", 0, &mut |r, _| seen.push(r.lsn)).unwrap();
+            assert_eq!(seen, [1, 2]);
+            assert_eq!(rec.report.truncated_bytes, tail.len() as u64);
+            assert_eq!(io.read(SEG1).unwrap(), good);
+        }
+    }
+
+    #[test]
+    fn scrub_reports_a_valid_out_of_order_tail_as_damage_not_a_torn_tail() {
+        use crate::scrub::{Issue, scrub};
+        for lsns in [&[1u64, 3][..], &[1, 2, 2][..], &[2][..]] {
+            let io = sim_log(&[(SEG1, segment_of(lsns))]);
+            let report = scrub(&io, "wal").unwrap();
+            assert!(!report.is_clean(), "{lsns:?}: {:?}", report.issues);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|i| matches!(i, Issue::MidLogDamage { .. })),
+                "{lsns:?}: {:?}",
+                report.issues
+            );
+            assert!(
+                !report
+                    .issues
+                    .iter()
+                    .any(|i| matches!(i, Issue::TornTail { .. })),
+                "{lsns:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "planted-bugs")]
+    #[test]
+    fn the_planted_gap_truncation_bug_loses_the_record_the_witnesses_protect() {
+        // With the defect on, [1, 3] "recovers" by deleting acknowledged LSN 3: the refusal
+        // witnesses above are what catch it.
+        bugs::enable(Bug::GapTailTruncated);
+        let mut io = sim_log(&[(SEG1, segment_of(&[1, 3]))]);
+        let mut seen = Vec::new();
+        let result = recover(&mut io, "wal", 0, &mut |r, _| seen.push(r.lsn));
+        bugs::clear();
+        assert!(result.is_ok());
+        assert_eq!(seen, [1]);
+        assert_eq!(io.read(SEG1).unwrap(), segment_of(&[1]));
     }
 }

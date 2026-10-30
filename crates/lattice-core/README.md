@@ -8,6 +8,8 @@ Layer L3.
 
 Allowed workspace dependencies: lattice-abi, lattice-seams, lattice-lsl.
 
+**Recovery.** Only an incomplete or checksum-failing tail of the newest segment is truncated. A complete, checksum-valid record with an unexpected LSN (a gap or a repeat), even as the last frame, makes recovery refuse the log and leaves the files untouched; `scrub` reports it as `MidLogDamage`.
+
 **CRDTs.** `crdt`, `crdt_text` and `crdt_tree` converge on any set of valid operations. For input from an
 untrusted peer use the `*_from` entry points with a `PeerContext` (`crdt_peer`): they check the node id bound to
 the peer, the clock drift bound and the batch length before changing state, and the documents cap inserts per
