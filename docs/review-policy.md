@@ -48,6 +48,11 @@ pull request touching only them can pass `risk-gate` without the label, but the 
 any pull request without `reviewed` except a Dependabot dependency update
 ([`docs/merging.md`](merging.md)), so they still get a review before they merge.
 
+The Dependabot exemption is the queue's only one, and `risk-gate` has no bot carve-out. A Dependabot
+pull request that touches a risky path (`Cargo.toml`, `Cargo.lock`, `.github/**`) still needs the
+`reviewed` label, so the exemption only helps updates under non-risky manifests, such as crate or
+`clients/` manifests.
+
 ## The `reviewed` label
 
 The `risk-gate` check fails on a pull request that touches any risk area unless it carries the label

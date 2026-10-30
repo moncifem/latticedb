@@ -63,6 +63,9 @@ Safety rules (each has a test in `tools/test_merge_queue.py`):
   bot flag set, a head branch starting `dependabot/`, and a title `build(deps...)` or `chore(deps...)`.
   A human named `dependabot-fan` or another bot does not qualify. The exemption is about the label only:
   `risk-gate` is still required, so a Dependabot PR that touches `.github/**` waits for it.
+  `risk-gate` has no bot carve-out: a Dependabot PR that touches a risky path (`Cargo.toml`,
+  `Cargo.lock`, `.github/**`) still needs the `reviewed` label, so the exemption only helps updates
+  under non-risky manifests.
   `--allow-unreviewed` turns the rule off for a run; use it only when the owner has said so in chat.
   `tools/merge-pr.sh` does not apply this rule; it is for PRs the owner has already cleared.
 - **Known gap:** a push after the label keeps the label, and the queue does not notice. A check that

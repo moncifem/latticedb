@@ -44,7 +44,7 @@ DEFAULT_HOLD_LABEL = "hold"
 # are exempt; `--allow-unreviewed` switches the rule off.
 DEFAULT_REVIEWED_LABEL = "reviewed"
 DEPENDABOT_LOGINS = ("app/dependabot", "dependabot[bot]")
-DEPENDENCY_TITLE_RE =re.compile(r"\A(?:build|chore)\(deps(?:-dev)?\)[:!]")
+DEPENDENCY_TITLE_RE = re.compile(r"\A(?:build|chore)\(deps(?:-dev)?\)[:!]")
 # Required by the queue itself even if branch protection does not list it: a red or missing risk gate
 # (the owner's `reviewed` label on risky paths) must never be merged over.
 DEFAULT_ALSO_REQUIRE = ("risk-gate",)
