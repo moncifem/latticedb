@@ -127,10 +127,14 @@ impl core::fmt::Debug for lattice_exec::TxStatus
 pub fn lattice_exec::TxStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for lattice_exec::TxStatus
 impl core::marker::StructuralPartialEq for lattice_exec::TxStatus
-pub struct lattice_exec::ActorPolicy(_, _)
+pub struct lattice_exec::ActorPolicy(_, _, _)
 impl lattice_exec::ActorPolicy
+pub fn lattice_exec::ActorPolicy::bound(&self, &lattice_engines::catalog::Tables) -> lattice_exec::ActorPolicy
+pub fn lattice_exec::ActorPolicy::can_read_table(&self, &str) -> bool
 pub fn lattice_exec::ActorPolicy::hiding_catalog(self) -> Self
 pub fn lattice_exec::ActorPolicy::new(alloc::rcs::rc::Rc<dyn lattice_engines::limits::PolicyEvaluator>) -> Self
+pub fn lattice_exec::ActorPolicy::sees_table(&self, &str) -> bool
+pub fn lattice_exec::ActorPolicy::with_table_grants(lattice_engines::grants::TableGrants) -> Self
 impl core::clone::Clone for lattice_exec::ActorPolicy
 pub fn lattice_exec::ActorPolicy::clone(&self) -> Self
 impl lattice_engines::limits::PolicyEvaluator for lattice_exec::ActorPolicy
@@ -155,7 +159,7 @@ impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: latt
 pub fn lattice_exec::Database<I, C, R>::attach_table(&mut self, lattice_exec::schema::TableDef) -> core::result::Result<(), lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::catalog_version(&self) -> u64
 pub fn lattice_exec::Database<I, C, R>::catalog_view(&self) -> lattice_exec::schema::ExecCatalog<'_>
-pub fn lattice_exec::Database<I, C, R>::catalog_view_for(&self, &lattice_exec::ActorPolicy) -> lattice_exec::schema::ExecCatalog<'_>
+pub fn lattice_exec::Database<I, C, R>::catalog_view_for<'a>(&'a self, &'a lattice_exec::ActorPolicy) -> lattice_exec::schema::ExecCatalog<'a>
 pub fn lattice_exec::Database<I, C, R>::create_table(&mut self, &lattice_sql::ast::CreateTable, &lattice_exec::ActorPolicy) -> core::result::Result<bool, lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::detach_table(&mut self, &str) -> bool
 pub fn lattice_exec::Database<I, C, R>::drop_table(&mut self, &str, bool, &lattice_exec::ActorPolicy) -> core::result::Result<bool, lattice_exec::ExecError>

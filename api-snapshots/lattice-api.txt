@@ -226,9 +226,11 @@ pub mod lattice_api::exec_host
 pub enum lattice_api::exec_host::Grant
 pub lattice_api::exec_host::Grant::AllowAll
 pub lattice_api::exec_host::Grant::DenyAll
+pub lattice_api::exec_host::Grant::Tables(lattice_engines::grants::TableGrants)
 impl lattice_api::exec_host::Grant
-pub fn lattice_api::exec_host::Grant::name(self) -> &'static str
+pub fn lattice_api::exec_host::Grant::name(&self) -> &'static str
 pub fn lattice_api::exec_host::Grant::parse(&str) -> core::option::Option<Self>
+pub fn lattice_api::exec_host::Grant::parse_account(&str) -> core::result::Result<Self, lattice_api::exec_host::GrantParseError>
 impl core::clone::Clone for lattice_api::exec_host::Grant
 pub fn lattice_api::exec_host::Grant::clone(&self) -> Self
 impl core::cmp::Eq for lattice_api::exec_host::Grant
@@ -236,9 +238,25 @@ impl core::cmp::PartialEq for lattice_api::exec_host::Grant
 pub fn lattice_api::exec_host::Grant::eq(&self, &Self) -> bool
 impl core::fmt::Debug for lattice_api::exec_host::Grant
 pub fn lattice_api::exec_host::Grant::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for lattice_api::exec_host::Grant
 impl core::marker::StructuralPartialEq for lattice_api::exec_host::Grant
+pub enum lattice_api::exec_host::GrantParseError
+pub lattice_api::exec_host::GrantParseError::Tables(lattice_engines::grants::GrantSpecError)
+pub lattice_api::exec_host::GrantParseError::Unknown
+impl core::clone::Clone for lattice_api::exec_host::GrantParseError
+pub fn lattice_api::exec_host::GrantParseError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::exec_host::GrantParseError
+impl core::cmp::PartialEq for lattice_api::exec_host::GrantParseError
+pub fn lattice_api::exec_host::GrantParseError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::exec_host::GrantParseError
+pub fn lattice_api::exec_host::GrantParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::exec_host::GrantParseError
+pub fn lattice_api::exec_host::GrantParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::exec_host::GrantParseError
+impl core::marker::StructuralPartialEq for lattice_api::exec_host::GrantParseError
 pub enum lattice_api::exec_host::PolicyFileError
+pub lattice_api::exec_host::PolicyFileError::BadGrant
+pub lattice_api::exec_host::PolicyFileError::BadGrant::line: usize
+pub lattice_api::exec_host::PolicyFileError::BadGrant::reason: lattice_engines::grants::GrantSpecError
 pub lattice_api::exec_host::PolicyFileError::Malformed
 pub lattice_api::exec_host::PolicyFileError::Malformed::line: usize
 pub lattice_api::exec_host::PolicyFileError::OutOfBounds
@@ -308,6 +326,7 @@ pub fn lattice_api::exec_host::PolicyTable::fmt(&self, &mut core::fmt::Formatter
 impl core::marker::StructuralPartialEq for lattice_api::exec_host::PolicyTable
 pub const lattice_api::exec_host::MAX_POLICY_BYTES: usize
 pub const lattice_api::exec_host::MAX_POLICY_ENTRIES: usize
+pub const lattice_api::exec_host::TABLES_PREFIX: &str
 pub mod lattice_api::feed_source
 pub struct lattice_api::feed_source::FeedSource
 impl lattice_api::subscribe::EventSource for lattice_api::feed_source::FeedSource

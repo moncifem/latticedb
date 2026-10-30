@@ -65,6 +65,8 @@ pub lattice_core::bugs::Bug::FenceNotRebuilt
 pub lattice_core::bugs::Bug::FsyncErrorSwallowed
 pub lattice_core::bugs::Bug::FsyncFailureNotPoisoning
 pub lattice_core::bugs::Bug::GapTailTruncated
+pub lattice_core::bugs::Bug::GrantReadOnlyTreatedAsWrite
+pub lattice_core::bugs::Bug::GrantTableMatchByPrefix
 pub lattice_core::bugs::Bug::GuardRewriteUnstaged
 pub lattice_core::bugs::Bug::HlcCounterStuck
 pub lattice_core::bugs::Bug::HlcRegress
@@ -119,6 +121,7 @@ pub const lattice_core::bugs::Bug::PRINCIPAL: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::RECOVERY_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::ROW: [lattice_core::bugs::Bug; 4]
 pub const lattice_core::bugs::Bug::STORAGE: [lattice_core::bugs::Bug; 10]
+pub const lattice_core::bugs::Bug::TABLE_GRANTS: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::VACUUM: [lattice_core::bugs::Bug; 1]
 impl lattice_core::bugs::Bug
 pub const lattice_core::bugs::Bug::VARIANTS: &'static [lattice_core::bugs::Bug]

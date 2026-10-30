@@ -152,6 +152,78 @@ pub fn lattice_engines::feed_emit::FeedReadError::fmt(&self, &mut core::fmt::For
 impl core::fmt::Display for lattice_engines::feed_emit::FeedReadError
 pub fn lattice_engines::feed_emit::FeedReadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_engines::feed_emit::FeedReadError
+pub mod lattice_engines::grants
+pub enum lattice_engines::grants::GrantSpecError
+pub lattice_engines::grants::GrantSpecError::BadBits
+pub lattice_engines::grants::GrantSpecError::BadName
+pub lattice_engines::grants::GrantSpecError::Duplicate
+pub lattice_engines::grants::GrantSpecError::Empty
+pub lattice_engines::grants::GrantSpecError::MissingEquals
+pub lattice_engines::grants::GrantSpecError::TooManyEntries
+impl core::clone::Clone for lattice_engines::grants::GrantSpecError
+pub fn lattice_engines::grants::GrantSpecError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::grants::GrantSpecError
+impl core::cmp::PartialEq for lattice_engines::grants::GrantSpecError
+pub fn lattice_engines::grants::GrantSpecError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_engines::grants::GrantSpecError
+impl core::fmt::Debug for lattice_engines::grants::GrantSpecError
+pub fn lattice_engines::grants::GrantSpecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_engines::grants::GrantSpecError
+pub fn lattice_engines::grants::GrantSpecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::grants::GrantSpecError
+impl core::marker::StructuralPartialEq for lattice_engines::grants::GrantSpecError
+pub struct lattice_engines::grants::TableAccess
+pub lattice_engines::grants::TableAccess::ddl: bool
+pub lattice_engines::grants::TableAccess::read: bool
+pub lattice_engines::grants::TableAccess::write: bool
+impl lattice_engines::grants::TableAccess
+pub const lattice_engines::grants::TableAccess::NONE: lattice_engines::grants::TableAccess
+pub const fn lattice_engines::grants::TableAccess::any(self) -> bool
+pub fn lattice_engines::grants::TableAccess::can_write(self) -> bool
+impl core::clone::Clone for lattice_engines::grants::TableAccess
+pub fn lattice_engines::grants::TableAccess::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::grants::TableAccess
+impl core::cmp::PartialEq for lattice_engines::grants::TableAccess
+pub fn lattice_engines::grants::TableAccess::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_engines::grants::TableAccess
+pub fn lattice_engines::grants::TableAccess::default() -> Self
+impl core::fmt::Debug for lattice_engines::grants::TableAccess
+pub fn lattice_engines::grants::TableAccess::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_engines::grants::TableAccess
+impl core::marker::StructuralPartialEq for lattice_engines::grants::TableAccess
+pub struct lattice_engines::grants::TableGrantPolicy
+impl lattice_engines::grants::TableGrantPolicy
+pub fn lattice_engines::grants::TableGrantPolicy::resolve(&lattice_engines::grants::TableGrants, &lattice_engines::catalog::Tables, fn(u32) -> u32) -> Self
+impl core::clone::Clone for lattice_engines::grants::TableGrantPolicy
+pub fn lattice_engines::grants::TableGrantPolicy::clone(&self) -> Self
+impl core::fmt::Debug for lattice_engines::grants::TableGrantPolicy
+pub fn lattice_engines::grants::TableGrantPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl lattice_engines::limits::PolicyEvaluator for lattice_engines::grants::TableGrantPolicy
+pub fn lattice_engines::grants::TableGrantPolicy::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_engines::grants::TableGrantPolicy::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+pub fn lattice_engines::grants::TableGrantPolicy::authorize_ddl(&self, lattice_engines::catalog::DdlRef<'_>) -> bool
+pub struct lattice_engines::grants::TableGrants
+impl lattice_engines::grants::TableGrants
+pub fn lattice_engines::grants::TableGrants::access(&self, &str) -> lattice_engines::grants::TableAccess
+pub fn lattice_engines::grants::TableGrants::insert(&mut self, &str, lattice_engines::grants::TableAccess) -> core::result::Result<(), lattice_engines::grants::GrantSpecError>
+pub fn lattice_engines::grants::TableGrants::is_empty(&self) -> bool
+pub fn lattice_engines::grants::TableGrants::named(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, lattice_engines::grants::TableAccess)>
+pub fn lattice_engines::grants::TableGrants::parse(&str) -> core::result::Result<Self, lattice_engines::grants::GrantSpecError>
+pub fn lattice_engines::grants::TableGrants::wildcard(&self) -> lattice_engines::grants::TableAccess
+impl core::clone::Clone for lattice_engines::grants::TableGrants
+pub fn lattice_engines::grants::TableGrants::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::grants::TableGrants
+impl core::cmp::PartialEq for lattice_engines::grants::TableGrants
+pub fn lattice_engines::grants::TableGrants::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_engines::grants::TableGrants
+pub fn lattice_engines::grants::TableGrants::default() -> Self
+impl core::fmt::Debug for lattice_engines::grants::TableGrants
+pub fn lattice_engines::grants::TableGrants::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_engines::grants::TableGrants
+pub fn lattice_engines::grants::TableGrants::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::grants::TableGrants
+pub const lattice_engines::grants::MAX_GRANT_ENTRIES: usize
+pub const lattice_engines::grants::WILDCARD: &str
 pub mod lattice_engines::index
 pub enum lattice_engines::index::IndexKey
 pub lattice_engines::index::IndexKey::Slice
@@ -313,6 +385,10 @@ pub trait lattice_engines::limits::PolicyEvaluator
 pub fn lattice_engines::limits::PolicyEvaluator::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
 pub fn lattice_engines::limits::PolicyEvaluator::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
 pub fn lattice_engines::limits::PolicyEvaluator::authorize_ddl(&self, lattice_engines::catalog::DdlRef<'_>) -> bool
+impl lattice_engines::limits::PolicyEvaluator for lattice_engines::grants::TableGrantPolicy
+pub fn lattice_engines::grants::TableGrantPolicy::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_engines::grants::TableGrantPolicy::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+pub fn lattice_engines::grants::TableGrantPolicy::authorize_ddl(&self, lattice_engines::catalog::DdlRef<'_>) -> bool
 impl lattice_engines::limits::PolicyEvaluator for lattice_engines::limits::AllowAll
 pub fn lattice_engines::limits::AllowAll::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
 pub fn lattice_engines::limits::AllowAll::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
