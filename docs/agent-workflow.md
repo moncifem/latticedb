@@ -93,8 +93,9 @@ Builds are heavy and several agents may share one machine. Keep the load low:
   paths), `phase-N` where relevant, and `Part of #N` (or `Closes #N`) in the body. Fill in the
   template: invariants touched, tests added, benchmark deltas, format-change flag.
 - Update in the same pull request: `README.md` if status or how-to-run changes, the relevant row in
-  `docs/gates/phase-N.md` (facts and measurements, never aspirations), a changelog fragment, and
-  crate READMEs when modules change.
+  `docs/gates/phase-N.md` (facts and measurements, never aspirations), a changelog fragment (its text
+  has no leading `- `; `python3 tools/changelog.py check --fix-bullets` strips one), and crate READMEs when
+  modules change.
 - State only what you verified. If you did not run something, say so in the pull request body.
 
 ## Changelog fragments
@@ -103,7 +104,8 @@ Do not edit `CHANGELOG.md` in a pull request. Add one file, `changelog.d/<number
 (kind: `added`, `changed`, `deprecated`, `removed`, `fixed`, `security`), holding the entry text. The
 `changelog` check in `pr-governance` fails a pull request that adds none or more than one, unless the
 owner has applied the `no-changelog` label (Dependabot is exempt). Releases compile the fragments into
-`CHANGELOG.md` with `tools/changelog.py`. Naming, text rules and the release step are in
+`CHANGELOG.md` with `tools/changelog.py`. A fragment must not start with `- `; the check says so and
+`python3 tools/changelog.py check --fix-bullets` removes it in your working tree. Naming, text rules and the release step are in
 [`changelog.d/README.md`](../changelog.d/README.md). The reason is in
 [#315](https://github.com/moncifem/latticedb/issues/315): every pull request used to edit the same
 `[Unreleased]` block, and strict up-to-date merging then needed a manual rebase each time.

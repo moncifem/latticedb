@@ -229,6 +229,50 @@ class FilesTests(unittest.TestCase):
                 f.write("x\n")
             self.assertEqual(c.main(["--dir", d, "check"]), 1)
 
+class LeadingBulletTests(unittest.TestCase):
+    def test_error_names_the_bullet_and_the_fix(self):
+        problems = c.check_text("- Adds a thing.\n")
+        self.assertEqual(len(problems), 1)
+        self.assertIn('starts with "- "', problems[0])
+        self.assertIn('remove the leading "- "', problems[0])
+        self.assertIn("--fix-bullets", problems[0])
+
+    def test_blank_lines_before_the_bullet_still_count(self):
+        self.assertTrue(any('starts with "- "' in p for p in c.check_text("\n- Adds.\n")))
+
+    def test_strip_leading_bullet(self):
+        self.assertEqual(c.strip_leading_bullet("- Adds a thing.\nMore.\n"), "Adds a thing.\nMore.\n")
+        self.assertEqual(c.strip_leading_bullet("Adds - a thing.\n"), "Adds - a thing.\n")
+        self.assertEqual(c.strip_leading_bullet("-Adds.\n"), "-Adds.\n")
+
+    def test_fix_bullets_rewrites_the_file_then_check_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "1-a.added.md")
+            with open(path, "w") as f:
+                f.write("- Adds a thing.\n")
+            self.assertEqual(c.main(["--dir", d, "check"]), 1)
+            self.assertEqual(c.main(["--dir", d, "check", "--fix-bullets"]), 0)
+            with open(path) as f:
+                self.assertEqual(f.read(), "Adds a thing.\n")
+
+    def test_fix_bullets_leaves_other_problems_failing(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "1-a.added.md")
+            with open(path, "w") as f:
+                f.write("- Adds a thing.   \n")
+            self.assertEqual(c.main(["--dir", d, "check", "--fix-bullets"]), 1)
+            with open(path) as f:
+                self.assertEqual(f.read(), "Adds a thing.   \n")
+
+    def test_check_without_the_flag_does_not_modify_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "1-a.added.md")
+            with open(path, "w") as f:
+                f.write("- Adds a thing.\n")
+            c.main(["--dir", d, "check"])
+            with open(path) as f:
+                self.assertEqual(f.read(), "- Adds a thing.\n")
+
 
 if __name__ == "__main__":
     unittest.main()

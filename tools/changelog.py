@@ -10,7 +10,8 @@ Fragment name: `<number>-<slug>.<kind>.md` where `<number>` is the pull request 
 text as Markdown, without a leading bullet.
 
 Commands:
-  check    validate the fragments in the tree and, with --pr, the fragments the PR adds
+  check    validate the fragments in the tree and, with --pr, the fragments the PR adds;
+           --fix-bullets first strips a leading "- " in the working tree
   compile  turn the fragments into a CHANGELOG.md section for a release (dry run by default)
 
 The pure functions have no I/O and are unit tested in test_changelog.py.
@@ -62,7 +63,12 @@ def check_text(text):
     if "\r" in text:
         problems.append("must use LF line endings")
     first = text.lstrip("\n").lstrip()
-    if re.match(r"[-*+] ", first):
+    if first.startswith("- "):
+        problems.append(
+            'starts with "- "; remove the leading "- " (the compiler adds the bullet), '
+            "or run `python3 tools/changelog.py check --fix-bullets`"
+        )
+    elif re.match(r"[*+] ", first):
         problems.append("must not start with a list bullet; the compiler adds it")
     for n, line in enumerate(text.splitlines(), 1):
         if line.startswith("#"):
@@ -74,6 +80,14 @@ def check_text(text):
     if re.search(r"co-authored-by|generated with", text, re.IGNORECASE):
         problems.append("contains an attribution trailer")
     return problems
+
+
+def strip_leading_bullet(text):
+    """Return text without a leading "- " (after any blank lines), or text itself when it has none."""
+    body = text.lstrip("\n")
+    if not body.startswith("- "):
+        return text
+    return body[2:].lstrip(" ")
 
 
 def escape_data(text):
@@ -255,8 +269,26 @@ def pr_changed(repo, number):
     return [(item["status"], item["filename"]) for page in pages for item in page]
 
 
+def fix_bullets(directory, files):
+    """Rewrite fragments that start with "- " in place; return the names changed."""
+    changed = []
+    for name in sorted(files):
+        if name == "README.md" or parse_name(name) is None:
+            continue
+        fixed = strip_leading_bullet(files[name])
+        if fixed != files[name]:
+            with open(os.path.join(directory, name), "w", encoding="utf-8", newline="") as f:
+                f.write(fixed)
+            files[name] = fixed
+            changed.append(name)
+    return changed
+
+
 def cmd_check(args):
     files = read_fragments(args.dir)
+    if args.fix_bullets:
+        for name in fix_bullets(args.dir, files):
+            print(f'removed the leading "- " from {args.dir}/{name}')
     errors = check_fragments(files)
     if args.pr:
         added = fragments_added(pr_changed(args.repo, args.pr))
@@ -305,6 +337,11 @@ def main(argv=None):
     check.add_argument("--pr", type=int)
     check.add_argument("--labels-json", default="[]")
     check.add_argument("--author", default="")
+    check.add_argument(
+        "--fix-bullets",
+        action="store_true",
+        help='strip a leading "- " from fragments in the working tree before checking',
+    )
     check.set_defaults(func=cmd_check)
     comp = sub.add_parser("compile", help="build the release section from fragments")
     comp.add_argument("--version", required=True)

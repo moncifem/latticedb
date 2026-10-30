@@ -16,6 +16,10 @@ The content is the entry as Markdown, one short paragraph, no leading `- `, no h
 spaces, under 2000 characters, and one final newline. State what a user or contributor can now do or
 what changed for them, and what is not done. Do not put an email address or an attribution line in it.
 
+A fragment that starts with `- ` fails the check with `starts with "- "; remove the leading "- "`. Fix
+it by hand, or run `python3 tools/changelog.py check --fix-bullets`, which strips the `- ` from the
+files in your working tree and then checks them. It changes nothing else, so commit the result.
+
 ```text
 changelog.d/315-changelog-fragments.added.md
 ```
@@ -32,6 +36,7 @@ A pull request that needs no entry (a typo, a CI-only tweak nobody downstream se
 
 ```bash
 python3 tools/changelog.py check                                  # validate the files in the tree
+python3 tools/changelog.py check --fix-bullets                    # first strip a leading "- " in the working tree
 python3 tools/changelog.py compile --version 0.1.0-alpha.1        # print the release section, change nothing
 python3 -m unittest discover -s tools -p 'test_changelog.py'
 ```

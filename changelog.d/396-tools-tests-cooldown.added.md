@@ -1,0 +1,1 @@
+CI now runs the Python unit tests under `tools/` on pull requests that touch `tools/` or the workflows and on pushes to `main`, Dependabot waits seven days before proposing a new release for every ecosystem, and the changelog check explains how to remove a leading `- ` from a fragment (`check --fix-bullets` does it in the working tree).
