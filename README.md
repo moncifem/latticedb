@@ -150,7 +150,7 @@ Byte formats live in [`formats/`](formats) with golden files.
 | Crash recovery | Power cut at every storage operation of 100 workloads: 4,729 cut points, every acknowledged change recovered |
 | Fuzzing | 19 targets (WAL records, pgwire, SQL, LSL, sync and WebSocket frames, CRDTs, MCP and more). Six core targets ran 28 h 20 min each with no crash |
 | Formal models | TLA+ for commit, fencing, clocks, set convergence and tree moves. The tree model has variants with a protection removed that must fail |
-| Bounded proofs | Kani harnesses cover decoders, cursors and the tree cycle check. 4 of 10 are proven on a verified CI job (the change-feed harnesses); the other 6 time out or are killed on the runner and are not claimed ([#424](https://github.com/moncifem/latticedb/issues/424), [#425](https://github.com/moncifem/latticedb/issues/425)) |
+| Bounded proofs | Kani harnesses exist for the change-feed cursor and event decoders, the sync frame decoder, the SDK framer and the tree cycle rule. 4 of 10 are proven on a verified CI job: the change-feed cursor and event decoder harnesses. The other 6 (tree cycle, sync frame, framer) time out or are killed on the runner and are not claimed ([#424](https://github.com/moncifem/latticedb/issues/424), [#425](https://github.com/moncifem/latticedb/issues/425)) |
 | Memory and UB | Miri, AddressSanitizer and Loom jobs |
 | Mutation testing | No verified complete score yet. The last campaign lost shard outcomes, so we report no number ([E1-7](docs/gates/phase-1.md)) |
 
