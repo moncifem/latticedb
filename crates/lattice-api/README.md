@@ -10,7 +10,9 @@ Allowed workspace dependencies: lattice-abi, lattice-seams, lattice-core, lattic
 
 
 The proposed host integration adds `auth::Accounts` for bounded pre-provisioned verifier lookup and
-`Session::with_scram` for explicit initial/final SASL phases. Hosts use `sasl_phase()` to select the
+`Session::with_scram` for explicit initial/final SASL phases. The account found by
+`Accounts::exchange` becomes the connection's `Principal` once the proof verifies (trust mode uses the
+fixed `Principal::local_development`), and every `QueryHandler` call receives it in a `QueryContext`. Hosts use `sasl_phase()` to select the
 password decoder, select accounts only from startup, and provide TLS and handshake admission/time
 bounds. A valid known-account proof precedes all successful startup metadata and query execution;
 failed/unknown exchanges close without trust fallback. Uniform public credential profiles and keyed
