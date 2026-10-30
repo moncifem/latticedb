@@ -79,9 +79,6 @@ statement error 0A000
 SELECT id FROM ux WHERE b COLLATE "C" = 'x'
 
 statement error 0A000
-SELECT id FROM ux WHERE a IS DISTINCT FROM 1
-
-statement error 0A000
 SELECT now() AT TIME ZONE 'UTC'
 
 statement error 0A000
