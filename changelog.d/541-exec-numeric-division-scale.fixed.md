@@ -1,0 +1,1 @@
+Numeric division now prints the same number of fractional digits as PostgreSQL (about 16 significant digits, at least the scale of either operand) instead of always 20; for example 7.5 / 2.5 is 3.0000000000000000. Values are still limited to 38 digits.
