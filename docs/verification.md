@@ -187,3 +187,35 @@ These two checks are not Kani proofs; they are recorded here because the same fi
   choices, no hang has been reproduced through the nightly job, and the cache hit rate and corpus
   growth are unobserved. The nightly fuzz job now has a 60-minute limit; that figure is a guess,
   because no run has timed its cold build (the job has no rust-cache) or the merge.
+
+## Property test case counts
+
+Every `proptest!` block takes its case count from the `PROPTEST_CASES` environment variable (256 when it
+is unset). Pull requests run 10,000 (256 on the ARM job) and the nightly runs `lattice-core`,
+`lattice-abi` and `lattice-lsl` at 1,000,000. A block that calls `ProptestConfig::with_cases(N)` ignores
+the variable, so none of those volumes applies to it. Three blocks did that and now use
+`ProptestConfig::default()`: the vacuum-versus-snapshot model in `lattice-engines/src/mvcc.rs` (was 256),
+the definition-history lookups in `lattice-engines/tests/unknown_index.rs` (was 64) and the parser depth
+round trip in `lattice-sql/tests/depth_and_keywords.rs` (was 32). Without the variable they run 256 cases,
+so the two smaller ones run more than before. Do not reintroduce `with_cases` in a test: set the
+volume in the workflow. The deterministic crates may not read the environment themselves
+(`clippy.toml`), which is why the variable is left to proptest rather than read by a helper.
+
+Crates the nightly volume run does not cover yet, with the time one local run of the whole crate test
+suite took at `PROPTEST_CASES=1000` (laptop, test profile, one crate at a time; a measurement of the
+properties plus the unit tests, not a CI figure):
+
+| Crate | Wall time at 1,000 cases | Where the properties are |
+| --- | --- | --- |
+| `lattice-engines` | about 5 s (the fault-injection tests are 3.5 s of it and do not scale) | `model_based` (0.3 s), `row_sim` (0.5 s), `unknown_index`, `mvcc` vacuum model |
+| `lattice-exec` | about 1 s | `model`, `no_panic` |
+| `lattice-api` | about 1.5 s | pgwire and session codecs |
+| `lattice-sdk` | about 1.5 s | outbox and MCP framing |
+| `lattice-sql` | about 0.3 s | print and parse round trips (already behind the manual `proptest-sql` job) |
+
+Cost is not known to scale linearly, because case size varies, so the proposal is a first run at 100,000
+cases with a generous job limit, a recorded duration, and then 1,000,000 once it fits: add
+`lattice-engines`, `lattice-exec`, `lattice-api` and `lattice-sdk` to the nightly volume job (a separate job
+so a timeout there does not hide the core, abi and lsl result), and turn `proptest-sql` from manual to
+nightly once its duration is known. No nightly run of these crates at volume has happened yet, so no
+volume claim holds for them.

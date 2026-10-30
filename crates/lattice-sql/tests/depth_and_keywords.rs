@@ -103,7 +103,8 @@ fn unsupported_postgres_forms_are_named() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
+    // The default reads `PROPTEST_CASES` (256 when unset); `with_cases` would ignore the knob.
+    #![proptest_config(ProptestConfig::default())]
 
     #[test]
     fn unary_and_binary_chains_round_trip(

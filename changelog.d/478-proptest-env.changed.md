@@ -1,0 +1,1 @@
+Property tests: three proptest blocks (the MVCC vacuum model, the unknown-index lookups and the SQL parser depth round trip) now honour PROPTEST_CASES instead of a fixed count, and docs/verification.md proposes which crates join the nightly volume run. No workflow change yet.

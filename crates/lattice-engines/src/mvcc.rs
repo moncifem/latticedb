@@ -708,7 +708,8 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        // The default reads `PROPTEST_CASES` (256 when unset); `with_cases` would ignore the knob.
+        #![proptest_config(ProptestConfig::default())]
 
         /// After a vacuum at `h` (reached in one step or two), every snapshot from `h` on reads and
         /// scans exactly what the model says, and both ways leave identical versions behind.

@@ -183,7 +183,8 @@ fn catalog_index_history_is_bounded_by_the_floor_and_keeps_used_ids() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    // The default reads `PROPTEST_CASES` (256 when unset); `with_cases` would ignore the knob.
+    #![proptest_config(ProptestConfig::default())]
     #[test]
     fn vacuuming_definition_history_changes_no_lookup_at_or_after_the_floor(
         ops in prop::collection::vec((0u8..4, 0u8..3), 1..24),
