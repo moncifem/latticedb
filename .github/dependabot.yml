@@ -4,6 +4,26 @@ updates:
     directory: /
     schedule: { interval: weekly }
     cooldown: { default-days: 7 }
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+  - package-ecosystem: cargo
+    directory: /tools/cancel-loom
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+  - package-ecosystem: cargo
+    directory: /experiments/sql-planner
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+  - package-ecosystem: cargo
+    directory: /experiments/sql-planner/bridge-baseline
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
@@ -13,6 +33,10 @@ updates:
         patterns: ["actions/upload-artifact", "actions/download-artifact"]
   - package-ecosystem: pip
     directory: /.github
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+  - package-ecosystem: pip
+    directory: /tools
     schedule: { interval: weekly }
     cooldown: { default-days: 7 }
   - package-ecosystem: npm
