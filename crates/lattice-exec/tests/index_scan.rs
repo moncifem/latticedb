@@ -603,6 +603,7 @@ fn the_index_loop_polls_cancellation_and_charges_memory() {
     s.set_limits(ExecLimits {
         timeout_ms: None,
         memory_bytes: 8 * 1024,
+        transaction_bytes: u64::MAX,
         max_timeout_ms: None,
     });
     let e = s

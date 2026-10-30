@@ -1069,6 +1069,7 @@ fn like_and_concatenation_obey_the_statement_limits() {
     s.set_limits(ExecLimits {
         timeout_ms: None,
         memory_bytes: 1 << 20,
+        transaction_bytes: u64::MAX,
         max_timeout_ms: None,
     });
     let e = s
