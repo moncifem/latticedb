@@ -79,8 +79,11 @@ LSN does not follow the previous segment's last LSN means a segment is missing: 
 `fsync` is the only ordering barrier, so a power cut may persist the unsynced bytes of a file page by
 page in any order, or persist the file's new size before its data. Every acknowledged record was
 fsynced, so these shapes only ever damage bytes that were never acknowledged. Recovery's behaviour
-for each, derived from the rules above and pinned by the `non-prefix` simulator profile and the tests
-in `crash_shape_tests.rs`:
+for each, pinned by the `non-prefix` simulator profile and the tests in `crash_shape_tests.rs`. The
+torn-tail and torn-creation rows follow from the rules above. The two refusals, and the operator
+procedure for the header case, document **current implementation behaviour that was chosen**, not
+something the rules above force: refusing is the fail-safe the tech lead confirmed keeping, and
+automatic repair is open (issue 475):
 
 | Shape | What the newest segment holds | Recovery |
 |---|---|---|
@@ -91,7 +94,7 @@ in `crash_shape_tests.rs`:
 
 Recovery loses no acknowledged record in any of these. The two refusals leave a log that does not open
 until an operator acts, which is the cost of the fail-safe; an automatic rewrite or a per-batch
-footer is a v2 candidate and is not implemented. The operator procedure above covers the first
+footer is an open design point (a v2 candidate) and is not implemented. The operator procedure above covers the first
 refusal (truncate at the reported offset). For the second, stop every process, copy the directory,
 and remove the named segment file if it holds nothing but its header: the previous segment is
 complete and the next append recreates the segment. Both procedures are exercised by tests, and the

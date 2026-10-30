@@ -99,6 +99,7 @@ pub lattice_core::bugs::Bug::TreeNodeLimitSkipped
 pub lattice_core::bugs::Bug::TreeOriginQuotaSkipped
 pub lattice_core::bugs::Bug::TreeReplayBudgetSkipped
 pub lattice_core::bugs::Bug::VacuumDropsVisibleVersion
+pub lattice_core::bugs::Bug::ZeroFilledTailKept
 impl lattice_core::bugs::Bug
 pub const lattice_core::bugs::Bug::ADMISSION: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::ALL: [lattice_core::bugs::Bug; 21]
@@ -109,6 +110,7 @@ pub const lattice_core::bugs::Bug::EXEC_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::KEY_LIMIT: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::NON_PREFIX: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::POLICY: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::PRINCIPAL: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::RECOVERY_ORDER: [lattice_core::bugs::Bug; 1]

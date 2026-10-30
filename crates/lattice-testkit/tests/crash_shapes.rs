@@ -35,9 +35,9 @@ fn the_clean_build_trips_no_checker_under_non_prefix_power_loss() {
             recoveries += u64::from(out.recoveries);
         }
     }
-    // The profile must reach the refusal path, and a refusal must not censor the run.
+    // The profile must reach the refusal path (36 repairs observed over these seeds, deterministic), and a refusal must not censor the run.
     assert!(
-        repairs > 10,
+        repairs >= 30,
         "refusals repaired by the procedure: {repairs}"
     );
     assert_eq!(incomplete, 0, "runs that could not be verified");

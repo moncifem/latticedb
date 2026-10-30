@@ -299,8 +299,9 @@ fn recover(w: &mut World, disk: &SharedIo, kernel_rng: &mut SeededRng) -> Recove
                     // procedure repairs, and the repaired log must still hold every acknowledged
                     // record: the check after the next successful recovery enforces that.
                     if operator_repair(disk, &why) {
+                        // seen_shape stays: a second refusal from the same crash (another segment)
+                        // is explained by the same shape and is repaired the same way.
                         w.repairs += 1;
-                        w.seen_shape = disk.shape_events();
                         continue;
                     }
                     violation(
