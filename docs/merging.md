@@ -29,16 +29,23 @@ tools/merge_queue.py                           # every ready open PR, lowest num
 ```
 
 For each PR it (1) skips it unless it is ready, (2) brings it up to date with `gh pr update-branch
---rebase` when it is `BEHIND`, (3) waits for **all** checks on the new head, (4) re-runs the failed jobs
+--rebase` when it is behind, (3) waits for **all** checks on the new head, (4) re-runs the failed jobs
 once (flakes and stale runs), (5) merges, or parks the PR with the failing check names and moves on.
 Ready means: open, targets `main`, not a draft, not `DIRTY`, no `hold` label, and not a Dependabot PR
-unless it is named on the command line (or `--include-bots` is used with discovery).
+unless it is named on the command line or `--include-bots` is given.
+
+"Behind" is decided by the compare API (`behind_by` of the base against the head), not by
+`mergeStateStatus`, which GitHub often reports as `UNKNOWN` or `BLOCKED` for a branch that is behind. An
+`UNKNOWN` merge state is asked again (three times) before anything is decided; a failed compare call is
+unknown, so the PR is not merged until it answers. The branch is checked again right before the merge.
 
 Safety rules (each has a test in `tools/test_merge_queue.py`):
 
 - It merges only when no check failed or is pending **and** every context listed in
-  `tools/branch-protection.json` passed on the head it is merging. A required check that never
-  reported is pending, then a park when the per-PR timeout ends. Without that file it refuses to start.
+  `tools/branch-protection.json` passed on the head it is merging, plus every `--also-require` check
+  (default `risk-gate`, repeatable), so a red or missing risk gate never merges even though branch
+  protection does not list it. A required check that never reported is pending, then a park when the
+  per-PR timeout ends. Without the protection file it refuses to start.
 - The merge is `gh pr merge --rebase --match-head-commit <sha>` after a fresh read of the head, the
   merge state and the checks; a push in between makes the server refuse. A merge that exits 0 but is not
   confirmed as merged by a fresh read is retried, not counted.
@@ -52,11 +59,13 @@ Safety rules (each has a test in `tools/test_merge_queue.py`):
 
 Options: `--once` (single pass), `--rounds N` and `--round-sleep S` (loop mode, defaults 6 and 120),
 `--timeout MINUTES` per PR (default 40), `--poll` and `--settle` seconds, `--hold-label`, `--base`,
-`--repo OWNER/NAME`, `--required-file`, `--status-file`, `--log-file`. Exit status is 0 when nothing is
+`--repo OWNER/NAME`, `--required-file`, `--also-require CHECK`, `--status-file`, `--log-file`. Exit status is 0 when nothing is
 left unmerged (or with `--dry-run`), 1 when PRs remain parked or skipped, 2 on a usage error.
 
 **Status and log.** After every decision it rewrites a JSON status file atomically and appends to a
-human log, by default `$TMPDIR/lattice-merge-queue/status.json` and `queue.log`. The status has
+human log, by default `$TMPDIR/lattice-merge-queue/status.json` and `queue.log` (the default directory is
+created mode 0700 and refused if it is a symlink or owned by someone else; the log is opened without
+following links, and a failure to write the log or status never stops the queue, least of all after a merge). The status has
 `updated`, `round`, `current`, `finished`, `left` and, per PR number, `state` (`merged`, `parked`,
 `skipped`, `closed`, `waiting`, `updating`, `dry-run`), `reason`, `head`, `failed_checks` and `at`. Read it
 from another terminal to see where a long batch stands.
@@ -76,8 +85,10 @@ tools/rebase_pr.py --no-push 301      # rebase and check only
 ```
 
 - Conflicts in prose list files (`docs/gates/*.md`, `README.md`, `fuzz/README.md`) are resolved by keeping
-  both sides (the base branch's lines first, then the PR's). Check the result: it also re-adds a line the
-  PR meant to delete.
+  both sides (the base branch's lines first, then the PR's), and only when both sides purely added lines
+  at the same spot (the diff3 base section of the hunk is empty). If either side edited or deleted an
+  existing line, or the result would contain the same table row or list item twice, the file is refused.
+  Line endings (CRLF) are preserved.
 - A conflict in any other file (code, workflows, lock files, `CHANGELOG.md`, formats) aborts the rebase
   and is reported with the file names; nothing is pushed. For `CHANGELOG.md` see "Changelog fragments" in
   [agent-workflow.md](agent-workflow.md): move the entry into a fragment instead.
@@ -85,9 +96,17 @@ tools/rebase_pr.py --no-push 301      # rebase and check only
   changed crates that have one and commits them as `chore: refresh the public API snapshots after a
   rebase`; a conflict in `api-snapshots/*.txt` is then taken from `main` and regenerated. A failing
   script blocks the push. This step needs the pinned nightly and `cargo-public-api` on the machine.
-- When Rust files changed it runs `cargo fmt --all -- --check` and does not push if it fails.
+- When Rust files changed it runs `cargo fmt --all -- --check` and does not push if it fails. Note that
+  `cargo fmt` and `tools/check_public_api.sh` execute the branch's own code (build scripts, proc macros,
+  the script itself): treat them like CI running that branch, and do not point the tool at a branch you do
+  not trust.
+- If a rebase step resolved anything (a conflict or regenerated snapshots), the pushed commits differ from
+  what was reviewed. The owner should re-check the `reviewed` label on risky paths after such a push. The
+  report lists what was resolved. A commit that became empty is skipped only when it truly has no changes
+  left, and is listed in the report; a stop with changes still present (for example a failed commit step)
+  fails the run instead. The tool also fails, and pushes nothing, when the rebased branch equals `main`.
 - It pushes with `--force-with-lease` pinned to the branch tip it fetched, so a push by the author
-  in the meantime makes it fail instead of overwriting. It skips closed PRs, PRs from forks and PRs that
+  in the meantime makes it fail instead of overwriting. It skips closed PRs, PRs from forks (or where GitHub does not say) and PRs that
   do not target `main`, and treats a `gh` error as unknown (nothing changes).
 - Rebasing rewrites the branch and starts its checks again, so rebase a batch just before queueing it,
   not hours earlier.
