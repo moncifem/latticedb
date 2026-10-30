@@ -430,8 +430,8 @@ budget only up to 4 KiB per nesting level. `LIKE` stays O(text x pattern); no
 (`CREATE INDEX`, and no scan uses an index), the `jsonb` operators, and DDL inside a transaction block.
 Column definitions are in memory and are not recovered after a restart (the host re-attaches them,
 and `attach_table` checks only the id and name, so it can silently stop enforcing a constraint; an
-in-process fingerprint refuses a different re-attach, see #379; RFC 0012 / ADR 0028 propose durable
-definitions and are not accepted or implemented), and the stored row layout is not a frozen format.
+in-process fingerprint refuses a different re-attach, see #379; RFC 0012 / ADR 0028 accept durable
+definitions; nothing is implemented yet), and the stored row layout is not a frozen format.
 
 **sqllogictest.** All 21 scripts in `crates/lattice-testkit/tests/slt/` (669 records) run unchanged through
 the executor: **486 pass and 183 fail** (read from a local run of the executor-side test, `cargo test -p

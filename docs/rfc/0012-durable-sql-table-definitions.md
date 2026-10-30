@@ -1,8 +1,21 @@
 # RFC 0012: Durable SQL table definitions
 
-Status: draft
-Comment period ends: 2026-11-06
-Decision ADR: proposed ADR 0028 (not accepted)
+Status: accepted
+Comment period ends: 2026-11-06 (not waived; see Acceptance)
+Decision ADR: ADR 0028
+
+## Acceptance
+
+Accepted by the owner in chat on 2026-10-30: Option A (a definition block in LCIX version 3 behind WAL
+capability bit 3), with the upgrade policy of an explicit "allow format upgrade" setting. The owner also
+said that pre-alpha name-only directories are not promised a migration, so the first implementation slice
+may skip `adopt_table`; it stays a later work package.
+
+The seven-day comment period was not waived. It still runs until 2026-11-06. Code that writes the new
+format may be developed and reviewed on branches before then, but merging it waits for the end of the
+period or an explicit owner waiver. The RFC 0008 `.guard` amendment (issue 307) and the catalog caps and
+read rule (decision 7) have no owner answer yet. This acceptance does not accept a checkpoint format,
+select a release or sign a phase gate.
 
 ## Motivation
 
@@ -517,7 +530,7 @@ the frozen-reader job run on CI.
 
 ## Work packages
 
-Draft issue text is in the pull request description; no issue is created before the owner decides. In
+The work-package issues are linked from the tracking issue "Durable SQL schemas (RFC 0012)". In
 dependency order:
 
 1. Capability bit 3 in `lattice-core::admission`, guard tests and header fixtures.
@@ -559,19 +572,18 @@ struct layout the disk format.
 
 ## Decisions for the owner
 
-1. Accept, amend or reject the format: LCIX version 3, definition version 1, layout rule 1, capability
-   bit 3 (value 8). Choose Option A, B or C. This RFC recommends A.
-2. Confirm that issue 379 does not wait for RFC 0001 / PR 291, that RFC 0001's numbers stay reserved for
-   it, and that this proposal takes bit 3.
-3. Keep or waive the seven-day comment period (ends 2026-11-06).
-4. Upgrade policy for existing directories: explicit "allow format upgrade" setting (recommended) or
-   automatic.
-5. Whether pre-alpha name-only directories are disposable (leave adoption out of the first slice) or
-   must be migrated by verified adoption.
-6. Whether the checkpoint requirements above can be added to RFC 0002's discussion now.
+1. Format and option: ANSWERED 2026-10-30, Option A accepted (LCIX version 3, definition version 1,
+   layout rule 1, capability bit 3, value 8).
+2. Issue 379 does not wait for RFC 0001 / PR 291, RFC 0001's numbers stay reserved for it, and this
+   proposal takes bit 3: ANSWERED by the acceptance of Option A.
+3. Keep or waive the seven-day comment period (ends 2026-11-06): OPEN. Not waived; merging the writing
+   code waits for the end of the period or an explicit waiver.
+4. Upgrade policy for existing directories: ANSWERED, explicit "allow format upgrade" setting.
+5. Pre-alpha name-only directories: ANSWERED, no migration is promised; adoption leaves the first slice.
+6. OPEN: whether the checkpoint requirements above can be added to RFC 0002's discussion now.
 7. The catalog caps (16,384 live defined tables, 64 MiB retained definition bytes) and the read rule:
    definitions are readable metadata like names today, with no per-actor check before Phase 4.
-8. Whether Option B stays the stated fallback if Option A is rejected.
+8. Moot: Option A was accepted, so Option B is not needed as a fallback.
 9. Acceptance of the RFC 0008 `.guard` amendment (issue 307), which this proposal depends on.
 
 An independent review of the final diff is required before merge and is the tech lead's call for the

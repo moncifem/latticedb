@@ -141,8 +141,8 @@ unknown to SQL. `attach_table` checks only the id and the name against the engin
 different column list or constraint set is accepted after a restart and can silently stop enforcing a
 constraint (#379). Within one process it additionally refuses a definition that differs from the first
 one registered for that id (`42P17`); `detach_table` and a later `attach_table` exercise it. This guard is
-not durable. A durable design is proposed in [RFC 0012](../../docs/rfc/0012-durable-sql-table-definitions.md)
-(draft, not accepted, nothing implemented). Rows are encoded with the engine's typed row codec (`numeric` and `jsonb` as text,
+not durable. A durable design is accepted in [RFC 0012](../../docs/rfc/0012-durable-sql-table-definitions.md)
+(accepted 2026-10-30, not yet implemented; merging its code waits for the comment period). Rows are encoded with the engine's typed row codec (`numeric` and `jsonb` as text,
 `double precision` as its bit pattern, `uuid` as 16 bytes, `date` and `timestamptz` as integers).
 Primary keys are order-preserving byte strings; a table without a key gets a process-local row id.
 `UNIQUE` constraints keep their entries in separate physical tables with ids

@@ -1,9 +1,13 @@
 # ADR 0028: Durable SQL table definitions in a guarded compound change
 
-Status: proposed
+Status: accepted
 
 Requirement P2-01, P2-02. Design discussion: [RFC 0012](../rfc/0012-durable-sql-table-definitions.md).
-This ADR is not accepted. The format is the owner's decision; nothing here is implemented.
+Accepted by the owner in chat on 2026-10-30 (Option A, upgrade through an explicit "allow format upgrade"
+setting). The RFC's seven-day comment period (ends 2026-11-06) was not waived: code that writes the new
+format may be developed on branches, but merging it waits for the end of the period or an explicit owner
+waiver. Nothing is implemented yet. Pre-alpha name-only directories are not promised a migration, so
+adoption is a later package.
 
 ## Context
 
@@ -17,7 +21,7 @@ describes LSL entities, and cannot express the SQL types or constraints.
 
 ## Decision
 
-Proposed, not accepted: persist each SQL table definition in a new definition block of the compound
+Persist each SQL table definition in a new definition block of the compound
 envelope (LCIX version 3), in the same change set as the catalog operation that creates the table.
 
 - Capability bit 3 (value 8) is required for any segment that carries a definition; version 3 needs
