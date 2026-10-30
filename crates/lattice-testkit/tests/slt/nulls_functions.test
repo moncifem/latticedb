@@ -170,9 +170,23 @@ NULL
 statement error 22P02
 SELECT coalesce(1, 'x')
 
-# DIFFERS FROM POSTGRESQL BY DESIGN: CASE and greatest() are not in the subset.
-statement error 0A000
-SELECT CASE WHEN a IS NULL THEN 0 ELSE a END FROM tv
+# CASE takes the first true branch; a NULL condition is not true (row sets from PostgreSQL 16).
+query II nosort
+SELECT id, CASE WHEN a IS NULL THEN 0 ELSE a END FROM tv ORDER BY id
+----
+1
+1
+2
+1
+3
+0
+4
+1
+5
+0
+6
+2
 
+# DIFFERS FROM POSTGRESQL BY DESIGN: greatest() is not in the subset.
 statement error 0A000
 SELECT greatest(a, b) FROM tv

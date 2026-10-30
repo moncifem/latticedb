@@ -104,7 +104,6 @@ fn unsupported_expressions_are_named() {
         "ANY, SOME and ALL",
         "ALL",
     );
-    unsupported("SELECT CASE WHEN a THEN 1 END", "CASE expressions", "CASE");
     unsupported("SELECT ARRAY[1]", "arrays", "ARRAY");
     unsupported("SELECT ARRAY(SELECT 1)", "arrays", "ARRAY");
     unsupported("SELECT a[1]", "arrays", "[");
