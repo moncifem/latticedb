@@ -231,8 +231,26 @@ SELECT w FROM cased ORDER BY w COLLATE "C"
 statement error 0A000
 SELECT concat(w, '!') FROM words
 
-statement error 0A000
-SELECT replace(w, 'a', 'b') FROM words
+query T nosort
+SELECT replace(w, 'a', 'b') FROM words ORDER BY id
+----
+bpp
+bpple
+bbnbnb
+cherry
+bpricot
+10
+9
+bpplesbuce
 
-statement error 0A000
-SELECT repeat(w, 2) FROM words
+query T nosort
+SELECT repeat(w, 2) FROM words ORDER BY id
+----
+appapp
+appleapple
+bananabanana
+cherrycherry
+apricotapricot
+1010
+99
+applesauceapplesauce
