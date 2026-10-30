@@ -28,7 +28,10 @@ fn literals_and_numbers_parse_to_their_values() {
     assert_eq!(parse("1e999"), Err(ParseError::Syntax));
     // Truncated literals are cut from the full words so the typo checker never sees them spelled out.
     let truncated = [&"true"[..3], &"null"[..3], &"false"[..4]];
-    for bad in truncated.into_iter().chain(["-", "1.", "1e", "1e+", ".5", "+1"]) {
+    for bad in truncated
+        .into_iter()
+        .chain(["-", "1.", "1e", "1e+", ".5", "+1"])
+    {
         assert_eq!(parse(bad), Err(ParseError::Syntax), "{bad}");
     }
 }
