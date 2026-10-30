@@ -23,7 +23,7 @@ what was not run):
   codecs (encodings not frozen).
 - Shared protocol crate `lattice-proto` (layer 1, issue #356): the sync frame types and codec and the
   sans-I/O WebSocket codec moved out of `lattice-api` (still re-exported as `lattice-api::sync` and
-  `lattice-api::websocket`), and the SDK client uses the same frame types instead of a mirror (ADR 0029,
+  `lattice-api::websocket`), and the SDK client uses the same frame types instead of a mirror (ADR 0030,
   proposed). A code move with no wire change; the conformance vectors are unchanged.
 - Sans-I/O WebSocket codec (`lattice-proto::websocket`) and the principal-bound `SubscriptionHost`
   (`lattice-api::subscribe`); no transport supplies a principal yet.

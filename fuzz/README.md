@@ -25,7 +25,7 @@ stream. The target is registered in the nightly, weekly and manual 24-hour matri
 
 ## Sync frame target
 
-`sync_frame` feeds arbitrary bytes to the sync protocol decoder (`lattice_api::sync`). A frame that
+`sync_frame` feeds arbitrary bytes to the sync protocol decoder (`lattice_api::sync`, which now lives in `lattice-proto`). A frame that
 decodes must re-encode to exactly the bytes it came from, and is incomplete one byte short. The input is
 also decoded as a stream and with a small negotiated payload limit. Seeds in `seeds/sync_frame/` cover
 every message type, a two-frame stream, a trailing byte, an unknown type, an over-long length, a
@@ -102,6 +102,6 @@ those runs have completed.
 
 ## WebSocket frame target
 
-`websocket_frame` feeds arbitrary bytes to the WebSocket codec (`lattice_api::websocket`). A client or server frame that decodes must re-encode to exactly the bytes it came from (shortest length form, mask key read from the frame) and is incomplete one byte short. The input is also run through a `Connection` with small frame and message caps, once as a stream and once byte by byte through a caller-side buffer (the unconsumed buffer stays within 14 bytes plus the frame cap), and through the upgrade request parser. Seeds in `seeds/websocket_frame/` cover the RFC 6455 examples, fragmentation with an interleaved ping, split UTF-8, invalid UTF-8, close payloads, reserved bits and opcodes, non-minimal and oversized lengths, a continuation without a start, a sync Hello inside a binary frame and several upgrade requests. The target is registered in the nightly, weekly and manual 24-hour matrices; registration is not evidence that those runs have completed.
+`websocket_frame` feeds arbitrary bytes to the WebSocket codec (`lattice_api::websocket`, which now lives in `lattice-proto`). A client or server frame that decodes must re-encode to exactly the bytes it came from (shortest length form, mask key read from the frame) and is incomplete one byte short. The input is also run through a `Connection` with small frame and message caps, once as a stream and once byte by byte through a caller-side buffer (the unconsumed buffer stays within 14 bytes plus the frame cap), and through the upgrade request parser. Seeds in `seeds/websocket_frame/` cover the RFC 6455 examples, fragmentation with an interleaved ping, split UTF-8, invalid UTF-8, close payloads, reserved bits and opcodes, non-minimal and oversized lengths, a continuation without a start, a sync Hello inside a binary frame and several upgrade requests. The target is registered in the nightly, weekly and manual 24-hour matrices; registration is not evidence that those runs have completed.
 
 The `upgrade_*` seeds and the codec tests use the public sample `Sec-WebSocket-Key` from RFC 6455 section 1.3. The secret scanner reports it as a generic API key, so `.gitleaks.toml` allows that one exact value and keeps every default rule.

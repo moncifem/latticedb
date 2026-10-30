@@ -1,4 +1,4 @@
-# ADR 0029: A shared protocol crate for the sync wire types
+# ADR 0030: A shared protocol crate for the sync wire types
 
 Status: proposed
 
@@ -37,6 +37,7 @@ clients are not touched.
 
 ## Consequences
 
+- `lattice-sdk` now pulls `base64` and `sha1` transitively, because the WebSocket module lives in the same crate.
 - One definition of the frames: the SDK client and the server codec cannot disagree, and a test in each
   crate decodes the same hand-written bytes to the same value.
 - No behaviour change and no wire change. The bytes, limits and error codes are as before.

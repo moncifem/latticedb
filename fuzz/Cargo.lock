@@ -179,10 +179,10 @@ dependencies = [
  "lattice-identity",
  "lattice-lsl",
  "lattice-packs",
+ "lattice-proto",
  "lattice-seams",
  "lattice-service",
  "pbkdf2",
- "sha1",
  "sha2",
  "subtle",
  "zeroize",
@@ -265,11 +265,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lattice-proto"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "base64",
+ "sha1",
+]
+
+[[package]]
 name = "lattice-sdk"
 version = "0.1.0-alpha.0"
 dependencies = [
  "lattice-abi",
  "lattice-lsl",
+ "lattice-proto",
 ]
 
 [[package]]

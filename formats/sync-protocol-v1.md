@@ -1,5 +1,7 @@
 # Format: Sync protocol v1
 
+The reference codec now lives in `crates/lattice-proto` (`lattice_api::sync` re-exports it).
+
 Status: experimental candidate, unaccepted. Proposed in
 [RFC 0010](../docs/rfc/0010-sync-protocol-framing.md) and
 [ADR 0024](../docs/adr/0024-sync-protocol-framing.md). The owner authorized PR #264 to publish the
