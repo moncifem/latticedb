@@ -200,27 +200,32 @@ fn a_legacy_oversize_key_stops_only_readers_who_can_see_it_and_can_be_skipped() 
         ),
         vec![b"a".to_vec(), b"c".to_vec(), b"d".to_vec()]
     );
-    // A reader who can read it gets a specific error at that event.
+    // A reader who can read it is delivered everything before the blocked event; the read stops
+    // there, so the prefix is not lost.
     let blocked = Cursor::new(2, 1).unwrap();
+    let mut seen = Vec::new();
+    let first = store
+        .events_since_as(Cursor::ORIGIN, &AllowAll)
+        .unwrap()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first.last().map(|e| e.cursor),
+        Some(Cursor::new(2, 0).unwrap())
+    );
+    seen.extend(first.iter().map(|e| e.change.key.clone()));
+    // A read that starts at the blocked event fails with an error naming it.
     let error = FeedReadError::KeyTooLarge {
         cursor: blocked,
         len: MAX_KEY_BYTES + 1,
     };
+    let after_prefix = first.last().unwrap().cursor;
     assert_eq!(
-        store.events_since_as(Cursor::ORIGIN, &AllowAll).err(),
-        Some(error.clone())
-    );
-    assert_eq!(
-        store
-            .events_since_as(Cursor::new(1, 0).unwrap(), &AllowAll)
-            .err(),
+        store.events_since_as(after_prefix, &AllowAll).err(),
         Some(error)
     );
-    // Resuming from the blocked cursor skips exactly that event; the rest still arrives.
-    assert_eq!(
-        keys(store.events_since_as(blocked, &AllowAll).unwrap()),
-        vec![b"d".to_vec()]
-    );
+    // Reading again from the blocked cursor skips exactly that event. The whole sequence is a, c, d.
+    seen.extend(keys(store.events_since_as(blocked, &AllowAll).unwrap()));
+    assert_eq!(seen, vec![b"a".to_vec(), b"c".to_vec(), b"d".to_vec()]);
 
     // The row can still be removed, and a delete of a row that is not there reaches nobody.
     let mut tx = store.begin();

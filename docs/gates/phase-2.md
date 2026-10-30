@@ -129,12 +129,18 @@ both functions and fails against the old behavior.
 
 The row store refuses a put whose key is over 4096 bytes (`RowError::KeyTooLong`, SQLSTATE `54000` through
 `lattice-exec`), the same bound as the change feed, so one oversize key can no longer make
-`events_since_as` fail for every reader. A log written before the rule may still hold one: the feed
-returns `FeedReadError::KeyTooLarge` only to a reader allowed to read that row, and resuming from the
-reported cursor skips it. Deletes are not bounded, so such a row can be removed. Witnessed with
-`Bug::RowOversizeKeyAccepted` (`tests/key_limit.rs`). In SQL the error surfaces at commit for a long text
-or bytea primary key or unique value, not at the statement that built the key. The format note is in
-`formats/rowops-v1.md` and ADR 0023; this limit is format-adjacent and needs independent review.
+`events_since_as` fail for every reader. A log written before the rule may still hold one. A reader who
+may not read that row is unaffected. A reader who may read it is delivered the events before it (the read
+stops there, so a short result is not the end of the feed); a read that starts at the blocked event fails
+with `FeedReadError::KeyTooLarge` naming its cursor, and reading again from that cursor skips exactly that
+event. The test asserts the whole sequence a, c, d with no loss. Deletes are not bounded, so such a row
+can be removed. Witnessed with `Bug::RowOversizeKeyAccepted` (`tests/key_limit.rs`). In SQL, `put_row`
+checks the primary key and each unique entry key, so a long text or bytea value fails at its statement with
+`54000`; the store check is the backstop. The format note is in `formats/rowops-v1.md` and ADR 0023; this
+limit is format-adjacent and needs independent review.
+
+Same class, not fixed here: `FeedError::ValueTooLarge` (a value over 16 MiB) still makes
+`events_since_as` fail for every reader, including those who may not read the row. Tracked in issue 488.
 
 ## Still missing
 

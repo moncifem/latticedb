@@ -27,7 +27,7 @@ use lattice_engines::limits::{
     AllowAll, MemoryReservation, PolicyEvaluator, RowRef, RowWriteRef, StatementLimits,
 };
 use lattice_engines::mvcc::Snapshot;
-use lattice_engines::rowops::RowKey;
+use lattice_engines::rowops::{MAX_KEY_BYTES, RowKey};
 use lattice_engines::store::{RowStore, RowTx};
 use lattice_seams::{Clock, Io, Rng};
 use lattice_sql::plan::{
@@ -613,6 +613,10 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
 
     /// Writes a new row (key, row bytes and unique entries), failing with `23505` on a duplicate.
     fn put_row(&mut self, def: &TableDef, row: &[Datum], key: Vec<u8>) -> Result<(), ExecError> {
+        // The store refuses a longer key at commit; saying so here puts the error on the statement.
+        if key.len() > MAX_KEY_BYTES {
+            return Err(ExecError::key_too_long(MAX_KEY_BYTES));
+        }
         if self.existing(def.id, &key)?.is_some() {
             let name = if def.primary_key.is_empty() {
                 format!("{}_rowid", def.name)
@@ -624,6 +628,9 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
         let mut markers = Vec::new();
         for k in 0..def.uniques.len() {
             if let Some(mk) = def.unique_key(row, k)? {
+                if mk.len() > MAX_KEY_BYTES {
+                    return Err(ExecError::key_too_long(MAX_KEY_BYTES));
+                }
                 let table = def.marker_table(k);
                 if self.existing(table, &mk)?.is_some() {
                     return Err(duplicate(&def.unique_name(k)));

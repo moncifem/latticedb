@@ -33,8 +33,9 @@ itself disambiguate unrelated/restored logs. Bound aggregate memory separately f
 
 The 4096 byte key bound is also enforced where rows are written: the row store refuses a put with a longer
 key (see [rowops-v1](../../formats/rowops-v1.md)), so new history always fits the feed. A log from before
-that rule can hold one; the feed then fails only for a reader allowed to read that row, with an error that
-names its cursor, and that reader resumes from that cursor to skip it. This tightens what the store accepts
+that rule can hold one. A reader who may not read that row is unaffected; one who may read it is given
+the events before it, then an error that names the blocked cursor, and reads again from that cursor to skip
+it, so no other event is lost. This tightens what the store accepts
 and changes no encoded byte; it still needs the independent format review noted above.
 
 Handwritten vectors and synthetic ordering/codec tests exist; actual restart/replay and subscription

@@ -68,6 +68,15 @@ impl ExecError {
         ExecError::new(ErrorKind::Storage, "XX000", message)
     }
 
+    /// A primary key or unique value does not fit the row store's key bound (SQLSTATE 54000).
+    pub(crate) fn key_too_long(max: usize) -> Self {
+        ExecError::new(
+            ErrorKind::Limit,
+            "54000",
+            format!("a primary key or unique value is longer than the {max} byte limit"),
+        )
+    }
+
     /// Stored data failed to decode. The detail stays out of the message a client sees.
     pub(crate) fn corrupt() -> Self {
         ExecError::new(ErrorKind::Storage, "XX001", "stored data is corrupt")
@@ -179,11 +188,7 @@ impl From<RowError> for ExecError {
             RowError::InDoubt(_) => {
                 ExecError::new(ErrorKind::Storage, "40003", "the commit outcome is unknown")
             }
-            RowError::KeyTooLong { max, .. } => ExecError::new(
-                ErrorKind::Limit,
-                "54000",
-                format!("a primary key or unique value is longer than the {max} byte limit"),
-            ),
+            RowError::KeyTooLong { max, .. } => ExecError::key_too_long(max),
             // Engine detail (paths, offsets, record contents) is not for clients.
             RowError::Corrupt(_) => ExecError::corrupt(),
             _ => ExecError::new(ErrorKind::Storage, "XX000", "internal storage error"),

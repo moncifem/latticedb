@@ -24,9 +24,11 @@
 //!   [`FeedReadError::CursorTooOld`]; the consumer must re-snapshot instead of resuming at a different
 //!   position. With no vacuum the floor is 0 and every cursor, including [`Cursor::ORIGIN`], is valid.
 //! * **Key bound.** The store refuses a put whose key is over [`MAX_KEY_BYTES`], so new history never
-//!   holds one. A log from before that rule may. Such a row cannot be an event, so a reader who may
-//!   read it gets [`FeedReadError::KeyTooLarge`] at its cursor and skips it by resuming from that
-//!   cursor; a reader who may not read it, and every cursor past it, are unaffected.
+//!   holds one. A log from before that rule may. Such a row cannot be an event. A reader who may
+//!   read it receives the events before it (the read stops there, so a short result is not the end
+//!   of the feed), and a read that starts at the blocked event fails with
+//!   [`FeedReadError::KeyTooLarge`] naming its cursor. Reading again from that cursor skips exactly
+//!   that event, so nothing else is lost. A reader who may not read it is unaffected.
 //! * **Provenance.** The store commits with no author or turn, so events carry author 0 and no turn.
 //!
 //! Cost: one call reads every retained version at or after the cursor's LSN.
@@ -54,9 +56,10 @@ pub enum FeedReadError {
     },
     /// The change set cannot be expressed as events (a value over the feed's size bound).
     Feed(FeedError),
-    /// The next event this reader may see carries a key over the feed's size bound. Only a log
+    /// The first event this read would deliver carries a key over the feed's size bound. Only a log
     /// written before the store refused such keys can hold one. It blocks only readers allowed to
-    /// read that row; a reader resumes past it by reading again from `cursor`.
+    /// read that row, and only once the events before it were delivered by an earlier read. Reading
+    /// again from `cursor` skips that one event.
     KeyTooLarge {
         /// The cursor of the event that cannot be carried.
         cursor: Cursor,
@@ -157,10 +160,16 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                     continue;
                 }
                 if entry.key.1.len() > MAX_KEY_BYTES {
-                    return Err(FeedReadError::KeyTooLarge {
-                        cursor: event.cursor,
-                        len: entry.key.1.len(),
-                    });
+                    // Everything before the blocked event is delivered first, so skipping it
+                    // loses nothing. The read that starts at the prefix's last cursor then
+                    // reports the block as its error.
+                    if out.is_empty() {
+                        return Err(FeedReadError::KeyTooLarge {
+                            cursor: event.cursor,
+                            len: entry.key.1.len(),
+                        });
+                    }
+                    return Ok(out.into_iter());
                 }
                 out.push(event);
             }

@@ -1098,6 +1098,16 @@ fn a_key_the_store_cannot_carry_is_a_statement_error_not_an_internal_one() {
         assert_eq!(e.sqlstate(), "54000", "{e}");
         assert_eq!(e.kind(), ErrorKind::Limit);
     }
+    // Inside a transaction block the error belongs to the statement, not to COMMIT.
+    ok(&mut f.db, &mut s, "BEGIN");
+    let e = err(
+        &mut f.db,
+        &mut s,
+        &format!("INSERT INTO named VALUES ('{long}', 'three')"),
+    );
+    assert_eq!(e.sqlstate(), "54000");
+    assert_eq!(s.status(), TxStatus::Failed);
+    assert_eq!(ok(&mut f.db, &mut s, "COMMIT").tag, "ROLLBACK");
     // Nothing was written and the session carries on.
     assert_eq!(
         rows(&mut f.db, &mut s, "SELECT u FROM named"),
