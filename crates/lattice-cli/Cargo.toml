@@ -25,7 +25,7 @@ zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 [dev-dependencies]
 # Switches the planted credential-tool defects on in the unit tests of `account`.
 lattice-core = { path = "../lattice-core", features = ["planted-bugs"] }
-base64 = "=0.22.1"
+base64 = "=0.23.1"
 hmac = "=0.13.0"
 sha2 = "=0.11.1"
 pbkdf2 = { version = "=0.13.0", features = ["hmac"] }
