@@ -140,7 +140,7 @@ cargo run -p latticed -- --auth scram-tls --data-dir /var/lib/lattice --account-
 ```
 
 Without `--data-dir` the `SELECT 1` placeholder is unchanged. With it, `latticed` opens the write-ahead
-log in the directory (created with mode 0700 when missing; one server at a time, a second one is
+log in the directory (created with mode 0700 when missing; an existing one is refused if group or others have any access, which is a mode check only: the owner is not checked and symlinks are followed, so it is not a guarantee against a local attacker; one server at a time, a second one is
 refused), replays it, then serves the single-table SQL executor (`lattice-exec`) to every admitted
 connection. Startup fails before binding if the log cannot be recovered or the policy options are
 inconsistent: `--development-policy` is required in trust mode and rejected in SCRAM mode, and
@@ -162,11 +162,23 @@ thread's own backlog is not: a statement queued behind others can time out befor
 whose clients already left. Reasons the bound is not tighter:
 
 - a client that disconnects mid-statement does not stop it (the connection worker is blocked waiting
-  for the answer, so it only notices at the next read); it ends at the ceiling at the latest;
+  for the answer, so it only notices at the next read); a statement that polls ends at the ceiling, but
+  see the uninterruptible steps below;
 - the ceiling is checked between rows. Materialising the table's rows before a scan (`scan_at`) and the
   comparison pass of a sort are not interrupted and not counted, so a very large table can exceed the
   ceiling by the time of those steps;
-- a CancelRequest reaches a running statement at the same between-row points.
+- a CancelRequest reaches a running statement at the same between-row points;
+- after the statement is dequeued, `COMMIT` and `CREATE TABLE` / `DROP TABLE` do not poll for
+  cancellation at all, and an autocommit statement's commit is not interruptible once the last row was
+  produced. So a database thread busy with these runs past the ceiling for as long as they take.
+
+**A `57014` after the ceiling means "outcome unknown".** When a connection gives up waiting, the
+statement may still have run or may run later: an autocommit `INSERT`/`UPDATE`/`DELETE`, a `COMMIT`
+and DDL can have committed even though the client was told `57014`. Treat it like a lost connection:
+read back before retrying. A statement that is skipped because it had not started changed nothing.
+Inside a transaction block the timeout fails the block on the database side too, so a later `COMMIT`
+answers `ROLLBACK` and nothing of the block is committed (a `BEGIN` that times out leaves the connection
+failed until `ROLLBACK`). Other errors need no such care: the executor fails the block itself.
 
 Shutdown stops the listener, which cancels every registered statement, then answers requests still
 queued with `57P01` without running them; it waits for at most the statement that is running (itself
@@ -176,6 +188,9 @@ bounded as above). A connection that drops mid-transaction commits nothing.
 (connections stay up), `SqlServer::is_finished` turns true, and `latticed` exits non-zero with
 `the SQL thread panicked`; the directory lock is released with the thread. The exit code path is tested
 at library level (a planted failure); the process-level exit is the supervisor loop in `main.rs`.
+The planted failure and the stall hooks used by those tests live behind the `test-hooks` feature of
+`lattice-api`, which only `latticed`'s dev-dependencies enable: `cargo tree -p latticed -e normal,features
+-i lattice-api` lists no `test-hooks` (it does with `-e dev`), so a release build does not contain them.
 
 **What survives a restart or a crash.** Every committed statement is on disk when the client sees the
 command tag. Recovery replays the log, so committed rows and table names come back. **Column

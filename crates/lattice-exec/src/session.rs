@@ -185,6 +185,16 @@ impl ExecSession {
         }
     }
 
+    /// Marks the open transaction block as failed, as an error in it would: later statements are
+    /// refused with `25P02` and `COMMIT` rolls back and answers `ROLLBACK`. A host calls it when the
+    /// client was told a statement of the block failed but the executor did not see that (for
+    /// example the statement timed out waiting in a queue). Outside a block it does nothing.
+    pub fn abort_transaction(&mut self) {
+        if self.txn.is_some() {
+            self.failed = true;
+        }
+    }
+
     /// The limits applied to each statement.
     pub fn limits(&self) -> ExecLimits {
         self.limits

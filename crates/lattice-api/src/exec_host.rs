@@ -169,6 +169,8 @@ pub struct HostLimits {
     /// Requests that may wait for the database thread. Size it above the number of connections that
     /// can have a request outstanding (one each, plus one close each); a sender blocks when it is full.
     pub queue_depth: usize,
+    /// Milliseconds a connection waits for its answer beyond the statement ceiling.
+    pub wait_slack_ms: u64,
 }
 
 impl Default for HostLimits {
@@ -177,6 +179,7 @@ impl Default for HostLimits {
             max_timeout_ms: Some(30_000),
             memory_bytes: 64 << 20,
             queue_depth: 256,
+            wait_slack_ms: 5_000,
         }
     }
 }
@@ -199,6 +202,8 @@ enum Request {
         params: Vec<Option<Vec<u8>>>,
         token: CancellationToken,
         reply: SyncSender<Result<QueryOutput, QueryError>>,
+        #[cfg(any(test, feature = "test-hooks"))]
+        hold: Option<Hold>,
     },
     Describe {
         conn: u64,
@@ -208,14 +213,28 @@ enum Request {
         reply: SyncSender<Result<Vec<Column>, QueryError>>,
     },
     Close(u64),
+    /// The client was told a statement failed that the executor did not see fail: fail the open
+    /// transaction block so a later COMMIT rolls back, as after any error in a block.
+    Abort(u64),
     Stop,
+    #[cfg(any(test, feature = "test-hooks"))]
+    Stall {
+        entered: SyncSender<()>,
+        release: Receiver<()>,
+    },
     /// Panics the actor, so tests can observe a dead database thread.
     #[cfg(any(test, feature = "test-hooks"))]
     Crash,
 }
 
-/// How long a connection waits for its answer beyond the statement ceiling.
-const WAIT_SLACK: Duration = Duration::from_secs(5);
+/// A statement held between its dequeue and its run (tests only): the actor reports on `.0`, waits
+/// for `.1` to close or receive, then runs the statement as if no cancel had been seen.
+#[cfg(any(test, feature = "test-hooks"))]
+type Hold = (SyncSender<()>, Receiver<()>);
+
+/// Keeps the database thread busy until dropped (tests only).
+#[cfg(any(test, feature = "test-hooks"))]
+pub struct Stall(#[allow(dead_code)] SyncSender<()>);
 
 /// Marks the actor as gone however its thread ends (normal stop, error or panic).
 struct AliveGuard(Arc<AtomicBool>);
@@ -318,7 +337,7 @@ impl ExecHost {
                 stopping,
                 wait: limits
                     .max_timeout_ms
-                    .map(|ms| Duration::from_millis(ms).saturating_add(WAIT_SLACK)),
+                    .map(|ms| Duration::from_millis(ms.saturating_add(limits.wait_slack_ms))),
             }),
             Ok(Err(e)) => {
                 let _ = thread.join();
@@ -345,6 +364,8 @@ impl ExecHost {
             conn: self.next_connection.fetch_add(1, Ordering::Relaxed),
             used: false,
             wait: self.wait,
+            #[cfg(any(test, feature = "test-hooks"))]
+            hold: None,
         }
     }
 
@@ -352,6 +373,20 @@ impl ExecHost {
     /// should treat an unrequested end as a failed server.
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    /// Blocks the database thread until the returned guard is dropped; returns once it is blocked
+    /// (tests only).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn stall_for_test(&self) -> Stall {
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let _ = self.requests.send(Request::Stall {
+            entered: entered_tx,
+            release: release_rx,
+        });
+        let _ = entered_rx.recv();
+        Stall(release_tx)
     }
 
     /// Panics the database thread (tests only).
@@ -417,12 +452,27 @@ fn serve<I, C, R>(
                 params,
                 token,
                 reply,
+                #[cfg(any(test, feature = "test-hooks"))]
+                hold,
             } => {
+                #[cfg(any(test, feature = "test-hooks"))]
+                let mut token = token;
                 let result = if stopping.load(Ordering::Acquire) {
                     Err(gone())
                 } else if token.is_cancelled() {
+                    // The client is told 57014, so a block it is in must fail here too.
+                    if let Some(handler) = sessions.get_mut(&conn) {
+                        handler.abort_transaction();
+                    }
                     Err(cancelled())
                 } else {
+                    #[cfg(any(test, feature = "test-hooks"))]
+                    if let Some((entered, release)) = hold {
+                        let _ = entered.send(());
+                        let _ = release.recv();
+                        // The statement goes on as if its cancel had not been seen.
+                        token = CancellationToken::default();
+                    }
                     let handler = sessions.entry(conn).or_insert_with(|| make(&db));
                     handler.execute_cancellable(
                         &QueryContext::new(&principal),
@@ -443,6 +493,9 @@ fn serve<I, C, R>(
                 let result = if stopping.load(Ordering::Acquire) {
                     Err(gone())
                 } else if token.is_cancelled() {
+                    if let Some(handler) = sessions.get_mut(&conn) {
+                        handler.abort_transaction();
+                    }
                     Err(cancelled())
                 } else {
                     let handler = sessions.entry(conn).or_insert_with(|| make(&db));
@@ -452,6 +505,16 @@ fn serve<I, C, R>(
             }
             Request::Close(conn) => {
                 sessions.remove(&conn);
+            }
+            Request::Abort(conn) => {
+                if let Some(handler) = sessions.get_mut(&conn) {
+                    handler.abort_transaction();
+                }
+            }
+            #[cfg(any(test, feature = "test-hooks"))]
+            Request::Stall { entered, release } => {
+                let _ = entered.send(());
+                let _ = release.recv();
             }
             Request::Stop => break,
             #[cfg(any(test, feature = "test-hooks"))]
@@ -476,12 +539,21 @@ pub struct ExecProxy {
     conn: u64,
     /// Set once a request was sent, so a connection that never ran SQL costs the actor nothing.
     used: bool,
+    #[cfg(any(test, feature = "test-hooks"))]
+    hold: Option<Hold>,
 }
 
 impl ExecProxy {
     /// Sends a request and waits for its answer, at most the statement ceiling plus slack. On
     /// timeout the statement's token is cancelled: the actor skips the request if it has not started
     /// and stops it at its next row if it has, and this connection gets `57014`.
+    /// Makes this proxy's next statement stop between dequeue and run until `release` closes
+    /// (tests only). `entered` is signalled when it has stopped.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn hold_next_for_test(&mut self, entered: SyncSender<()>, release: Receiver<()>) {
+        self.hold = Some((entered, release));
+    }
+
     fn call<T>(
         &mut self,
         token: &CancellationToken,
@@ -497,6 +569,11 @@ impl ExecProxy {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
                 token.request();
+                // The client is told the statement failed. The database thread may still run it, or
+                // skip it, without knowing that: fail the block there as well (the request queues
+                // behind the statement, so it is applied before the connection's next statement).
+                // Without this a later COMMIT would commit the rest of the block.
+                let _ = self.requests.send(Request::Abort(self.conn));
                 Err(QueryError::new(
                     "57014",
                     "canceling statement: no answer from the database within the statement ceiling",
@@ -530,7 +607,11 @@ impl QueryHandler for ExecProxy {
     ) -> Result<QueryOutput, QueryError> {
         let conn = self.conn;
         let principal = ctx.principal.clone();
+        #[cfg(any(test, feature = "test-hooks"))]
+        let hold = self.hold.take();
         self.call(cancellation, |reply| Request::Execute {
+            #[cfg(any(test, feature = "test-hooks"))]
+            hold,
             conn,
             principal,
             sql: sql.to_string(),
@@ -919,6 +1000,132 @@ reader	allow-all
                 .code,
             "57P01"
         );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// A host whose connections give up after 200 ms, so a stalled thread times a request out fast.
+    fn quick_host(name: &str) -> (ExecHost, PathBuf) {
+        let path = dir(name);
+        let host = ExecHost::start_dir(
+            path.clone(),
+            PolicyTable::new(Grant::AllowAll),
+            HostLimits {
+                max_timeout_ms: Some(200),
+                wait_slack_ms: 0,
+                ..HostLimits::default()
+            },
+        )
+        .unwrap();
+        (host, path)
+    }
+
+    fn rows_of(host: &ExecHost, sql: &str) -> usize {
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        host.handler().execute(&ctx, sql, &[]).unwrap().rows.len()
+    }
+
+    #[test]
+    fn a_statement_that_timed_out_in_the_queue_fails_the_block_so_commit_rolls_back() {
+        let (host, path) = quick_host("timeout-queued");
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        p.execute(&ctx, "BEGIN", &[]).unwrap();
+        p.execute(&ctx, "INSERT INTO t VALUES (1)", &[]).unwrap();
+        // A statement queued behind a stalled thread times out without ever starting.
+        let stall = host.stall_for_test();
+        let error = p
+            .execute(&ctx, "INSERT INTO t VALUES (2)", &[])
+            .unwrap_err();
+        assert_eq!(error.code, "57014");
+        drop(stall);
+        // The client saw an error in its block, so the block is aborted: statements are refused and
+        // COMMIT answers ROLLBACK, as PostgreSQL does.
+        assert_eq!(
+            p.execute(&ctx, "SELECT id FROM t", &[]).unwrap_err().code,
+            "25P02"
+        );
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
+        // Neither insert is visible: the earlier statement of the block was rolled back too.
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        // The connection is usable again.
+        assert_eq!(
+            p.execute(&ctx, "INSERT INTO t VALUES (3)", &[])
+                .unwrap()
+                .tag,
+            "INSERT 0 1"
+        );
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 1);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_statement_that_finishes_after_its_timeout_is_not_committed_by_a_later_commit() {
+        let (host, path) = quick_host("timeout-running");
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        p.execute(&ctx, "BEGIN", &[]).unwrap();
+        p.execute(&ctx, "INSERT INTO t VALUES (1)", &[]).unwrap();
+        // The second insert starts and then outlives the connection's wait; its cancel is not seen.
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
+        p.hold_next_for_test(entered_tx, release_rx);
+        let worker = thread::Builder::new()
+            .spawn(move || {
+                let principal = Principal::local_development();
+                let ctx = QueryContext::new(&principal);
+                let error = p
+                    .execute(&ctx, "INSERT INTO t VALUES (2)", &[])
+                    .unwrap_err();
+                (p, error.code)
+            })
+            .unwrap();
+        entered_rx.recv().unwrap();
+        let (mut p, code) = worker.join().unwrap();
+        assert_eq!(code, "57014");
+        // Now the statement finishes and stages its row; the abort queued behind it then fails the block.
+        drop(release_tx);
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_timeout_outside_a_block_changes_nothing_for_the_next_statement() {
+        let (host, path) = quick_host("timeout-idle");
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        let stall = host.stall_for_test();
+        assert_eq!(
+            p.execute(&ctx, "INSERT INTO t VALUES (1)", &[])
+                .unwrap_err()
+                .code,
+            "57014"
+        );
+        drop(stall);
+        // Autocommit: no block to fail, and the skipped insert never ran.
+        assert_eq!(
+            p.execute(&ctx, "INSERT INTO t VALUES (2)", &[])
+                .unwrap()
+                .tag,
+            "INSERT 0 1"
+        );
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 1);
+        drop(p);
+        drop(host);
         std::fs::remove_dir_all(path).unwrap();
     }
 }

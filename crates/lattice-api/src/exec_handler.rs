@@ -78,6 +78,13 @@ impl<I: Io, C: Clock + Clone, R: Rng> ExecHandler<I, C, R> {
         }
     }
 
+    /// Fails the open transaction block, if any (see `ExecSession::abort_transaction`).
+    pub fn abort_transaction(&mut self) {
+        if let Some((_, session)) = self.bound.as_mut() {
+            session.abort_transaction();
+        }
+    }
+
     /// The executor's view of the transaction block (`Idle` before the first statement).
     pub fn tx_status(&self) -> TxStatus {
         self.bound
