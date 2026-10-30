@@ -537,6 +537,65 @@ mod tests {
     }
 
     #[test]
+    fn the_value_limit_is_16_mib() {
+        assert_eq!(MAX_VALUE_LEN, 16_777_216);
+    }
+
+    #[test]
+    fn events_for_takes_the_largest_key_and_value_and_refuses_one_more() {
+        let cs = ChangeSet::new(ChangeSetId::from_bytes([1; 16]), Vec::new());
+        let upsert = |key: usize, value: usize| {
+            vec![EntityChange {
+                kind: 0,
+                key: vec![1; key],
+                op: ChangeOp::Upsert(vec![2; value]),
+            }]
+        };
+        assert!(events_for(1, &cs, upsert(MAX_KEY_LEN, MAX_VALUE_LEN)).is_ok());
+        assert_eq!(
+            events_for(1, &cs, upsert(MAX_KEY_LEN + 1, 0)),
+            Err(FeedError::KeyTooLarge(MAX_KEY_LEN + 1))
+        );
+        assert_eq!(
+            events_for(1, &cs, upsert(1, MAX_VALUE_LEN + 1)),
+            Err(FeedError::ValueTooLarge(MAX_VALUE_LEN + 1))
+        );
+    }
+
+    #[test]
+    fn decode_bounds_key_and_value_lengths_exactly() {
+        let base = sample_bytes();
+        // The key length field starts after the 70 bytes of fixed header; the value length after
+        // the one key byte and the operation byte.
+        let with_key_len = |n: usize| {
+            let mut b = base[..70].to_vec();
+            b.extend_from_slice(&u16::try_from(n).unwrap().to_le_bytes());
+            b
+        };
+        assert_eq!(
+            ChangeEvent::decode(&with_key_len(MAX_KEY_LEN + 1)),
+            Err(FeedDecodeError::Invalid("key length"))
+        );
+        assert_eq!(
+            ChangeEvent::decode(&with_key_len(MAX_KEY_LEN)),
+            Err(FeedDecodeError::Truncated)
+        );
+        let with_value_len = |n: usize| {
+            let mut b = base[..74].to_vec();
+            b.extend_from_slice(&u32::try_from(n).unwrap().to_le_bytes());
+            b
+        };
+        assert_eq!(
+            ChangeEvent::decode(&with_value_len(MAX_VALUE_LEN + 1)),
+            Err(FeedDecodeError::Invalid("value length"))
+        );
+        assert_eq!(
+            ChangeEvent::decode(&with_value_len(MAX_VALUE_LEN)),
+            Err(FeedDecodeError::Truncated)
+        );
+    }
+
+    #[test]
     fn encode_refuses_what_the_format_cannot_hold() {
         let mut e = sample();
         e.change.key = vec![0; MAX_KEY_LEN + 1];
