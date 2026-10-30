@@ -448,8 +448,9 @@ impl CredentialStore {
 
     /// Parses the credential file: [`STORE_HEADER`], then one line per token
     /// `id TAB account TAB active|revoked TAB created TAB expires|- TAB salt TAB verifier`, each line
-    /// ending in a newline. Strict and bounded: no blank lines, comments, carriage returns, trailing
-    /// fields, repeated ids or unbounded rotation overlap (see [`StoreError`]).
+    /// ending in a newline, in ascending id order. Strict and bounded: no blank lines, comments,
+    /// carriage returns, trailing fields, repeated ids, out-of-order lines or unbounded rotation
+    /// overlap (see [`StoreError`]). The accepted text is the one [`CredentialStore::render`] writes.
     pub fn parse(text: &str) -> Result<Self, StoreError> {
         if text.len() > MAX_STORE_BYTES {
             return Err(StoreError::TooLarge);
@@ -465,6 +466,14 @@ impl CredentialStore {
                 return Err(StoreError::TooManyEntries);
             }
             let entry = parse_entry(line).ok_or(StoreError::Malformed(index + 2))?;
+            // One canonical text: a line must sort after the one before it, as `render` writes them.
+            if entries
+                .keys()
+                .next_back()
+                .is_some_and(|last| *last > entry.id)
+            {
+                return Err(StoreError::Malformed(index + 2));
+            }
             if entries.insert(entry.id, entry).is_some() {
                 return Err(StoreError::DuplicateId);
             }
@@ -1025,6 +1034,16 @@ mod tests {
             CredentialStore::parse(&format!("{STORE_HEADER}\n{LINE}\n\n")).unwrap_err(),
             StoreError::Malformed(3)
         );
+        // Out of id order is refused, so a parsed file always renders back to the same bytes.
+        let lower = LINE
+            .replace("0001020304050607", "0001020304050606")
+            .replace("active", "revoked");
+        assert_eq!(
+            CredentialStore::parse(&format!("{STORE_HEADER}\n{LINE}\n{lower}\n")).unwrap_err(),
+            StoreError::Malformed(3)
+        );
+        let sorted = format!("{STORE_HEADER}\n{lower}\n{LINE}\n");
+        assert_eq!(CredentialStore::parse(&sorted).unwrap().render(), sorted);
         assert_eq!(
             CredentialStore::parse(&"x".repeat(MAX_STORE_BYTES + 1)).unwrap_err(),
             StoreError::TooLarge
@@ -1080,21 +1099,26 @@ mod tests {
             ])
             .is_ok()
         );
-        // One second more is refused, whatever the line order.
+        // One second more is refused.
         for lines in [
             [
                 entry(1, 100, &past_limit, "active"),
                 entry(2, 100, "-", "active"),
-            ],
-            [
-                entry(2, 100, "-", "active"),
-                entry(1, 100, &past_limit, "active"),
             ],
             // The older token has no expiry at all.
             [entry(1, 50, "-", "active"), entry(2, 100, "-", "active")],
         ] {
             assert_eq!(parse(&lines).unwrap_err(), StoreError::OverlapNotBounded);
         }
+        // The same lines out of id order are refused as such, before the overlap is looked at.
+        assert_eq!(
+            parse(&[
+                entry(2, 100, "-", "active"),
+                entry(1, 100, &past_limit, "active"),
+            ])
+            .unwrap_err(),
+            StoreError::Malformed(3)
+        );
         assert_eq!(
             parse(&[
                 entry(1, 1, "10", "active"),

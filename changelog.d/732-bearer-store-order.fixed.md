@@ -1,0 +1,1 @@
+The bearer credential file must list its tokens in ascending id order, as `lattice account` writes them; an out-of-order line is refused as malformed. A parsed file now always renders back to the same bytes, which the `bearer_verify` fuzz target checks.
