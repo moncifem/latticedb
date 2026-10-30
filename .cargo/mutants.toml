@@ -63,6 +63,9 @@ exclude_re = [
     "cancel\\.rs:\\d+:\\d+: replace \\| with \\^ in CancelRegistry::find_slot",
     # A mutant inside a test helper (a constant random source) changes the test, not the product.
     "cancel\\.rs:\\d+:\\d+: replace tests::<impl lattice_seams::Rng for Constant>::next_u64",
+    # Simulator front end: the failing-seed counter only moves when a run reports a violation, which a
+    # correct build never does; the planted-bug tests cover violations through the scenario runner.
+    "sim_cli\\.rs:96:\\d+: replace \\+= with (-=|\\*=) in execute_with",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies

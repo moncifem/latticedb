@@ -5,6 +5,7 @@
 
 pub mod invariants;
 pub mod scenario;
+pub mod sim_cli;
 pub mod slt;
 
 /// Returns the sum of `values`, the trivial example kept from Phase 0.
