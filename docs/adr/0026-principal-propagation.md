@@ -28,14 +28,25 @@ duplicate name is refused when the file is parsed). When `lattice-identity` assi
 A `Session` holds the principal as pending state until startup completes. It is published only in the
 step that sends `AuthenticationOk`: after a verified SCRAM proof for a known account, or immediately
 in trust mode. It is never changed afterwards. There is no re-authentication and no `SET ROLE` in this
-slice. If the startup `user` differs from the account the exchange was selected for, or `user`
-appears more than once, startup is refused with `28000`. An unknown account never has a pending
-principal and cannot reach the ready phase.
+slice. An unknown account never has a pending principal and cannot reach the ready phase.
+
+Startup `user` handling. Through the listener, a startup with more than one `user` is refused by
+`latticed` with `28P01` before a session exists (the listener also selects the account from that single
+name, so a mismatch cannot arise there). The sans-I/O `Session`, used directly, enforces the same rules
+for a host that wires the selection differently: a repeated `user` ends with `28P01` in a SCRAM session
+(`28000` in trust mode); a `user` that is not the account the exchange was built for drops the pending
+principal and the exchange runs and fails at its end with the same `28P01` an unknown account gets. A
+known and an unknown name are therefore not distinguishable by the startup error. This is about error
+shape only; the credential lookup still has public-data branches and no constant-time claim is made.
 
 `QueryHandler` takes a `&QueryContext` as its first argument on `execute`, `describe`,
 `execute_cancellable` and `describe_cancellable`. The context carries `&Principal` and is
 `#[non_exhaustive]`, so a later field (a policy evaluator, a deadline) is not another breaking change.
 A session in the ready phase without a principal answers `28000` instead of calling the handler.
+`Principal::local_development` and `QueryContext::new` are crate-private and `QueryContext` is
+`#[non_exhaustive]` with a private-constructor path, so code outside `lattice-api` cannot fabricate a
+context or a development principal; `Session` owns the context it passes to each call. Code inside
+`lattice-api` could, which is why only the session builds one outside tests.
 Messages received before authentication completes never reach the handler.
 
 The principal is logged only through `Display` (`account:alice`, `local-development`). No secret,

@@ -302,15 +302,26 @@ impl<H: QueryHandler> Session<H> {
                     );
                 };
                 // The startup name only selects an account; it is never the identity. A second
-                // `user`, or one that is not the account the exchange was built for, is refused.
-                if users.next().is_some()
-                    || (self.authentication.is_some()
-                        && self.pending.as_ref().is_some_and(|p| p.name() != user))
+                // `user` is refused. In a SCRAM session the refusal is the same 28P01 an unknown
+                // account ends with, so the error does not tell known from unknown names.
+                if users.next().is_some() {
+                    return if self.authentication.is_some() {
+                        self.fatal("28P01", "password authentication failed".to_string())
+                    } else {
+                        self.fatal(
+                            "28000",
+                            "more than one user in the startup packet".to_string(),
+                        )
+                    };
+                }
+                // A name that is not the account the exchange was built for can never authenticate.
+                // Drop the pending principal and let the exchange run and fail at its end, exactly
+                // like an unknown account, instead of answering at once (no known-vs-unknown oracle
+                // for a host that wires the selection differently).
+                if self.authentication.is_some()
+                    && self.pending.as_ref().is_some_and(|p| p.name() != user)
                 {
-                    return self.fatal(
-                        "28000",
-                        "startup user does not match the authenticated account".to_string(),
-                    );
+                    self.pending = None;
                 }
                 if self.authentication.is_some() {
                     self.phase = Phase::SaslInitial;
@@ -1811,9 +1822,9 @@ mod tests {
     }
 
     #[test]
-    fn startup_user_that_differs_from_the_exchange_account_is_refused_before_any_offer() {
+    fn startup_user_that_differs_from_the_exchange_account_fails_like_an_unknown_account() {
+        // A second `user` is refused at once with the generic failure.
         for params in [
-            vec![("user".to_string(), "other".to_string())],
             vec![
                 ("user".to_string(), "user".to_string()),
                 ("user".to_string(), "other".to_string()),
@@ -1826,12 +1837,28 @@ mod tests {
             let mut session = scram_session(true);
             let out = session.on_startup(Startup::Params(params));
             assert!(out.close);
-            assert_eq!(err_code(&out.messages[0]), "28000");
+            assert_eq!(err_code(&out.messages[0]), "28P01");
             assert!(session.principal().is_none());
-            assert!(session.is_closed());
             assert!(session.on_message(scram_first()).messages.is_empty());
             assert!(session.handler().seen.is_empty());
         }
+        // A different single name: the exchange is offered and fails at the end, even with the
+        // correct proof for the account the verifier belongs to, and the failure bytes equal the
+        // unknown-account failure.
+        let mut mismatch = scram_session(true);
+        let offer = mismatch.on_startup(Startup::Params(vec![("user".into(), "other".into())]));
+        assert!(!offer.close);
+        mismatch.on_message(scram_first());
+        let failed = mismatch.on_message(scram_final());
+        let mut unknown = scram_session(false);
+        unknown.on_startup(Startup::Params(vec![("user".into(), "other".into())]));
+        unknown.on_message(scram_first());
+        let expected = unknown.on_message(scram_final());
+        assert!(failed.close);
+        assert_eq!(failed, expected);
+        assert_eq!(err_code(&failed.messages[0]), "28P01");
+        assert!(mismatch.principal().is_none());
+        assert!(mismatch.handler().seen.is_empty());
     }
 
     #[test]
