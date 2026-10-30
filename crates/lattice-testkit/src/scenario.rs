@@ -66,6 +66,10 @@ impl SharedIo {
     pub fn rot_events(&self) -> u64 {
         self.0.borrow().rot_events()
     }
+    /// Files a crash left in a non-prefix shape so far.
+    pub fn shape_events(&self) -> u64 {
+        self.0.borrow().shape_events()
+    }
     /// Appends refused for lack of space so far.
     pub fn no_space_events(&self) -> u64 {
         self.0.borrow().no_space_events()
@@ -141,6 +145,13 @@ pub fn profiles() -> [(&'static str, FaultProfile); 5] {
     ]
 }
 
+/// Profiles for power-loss shapes that are not a prefix of the unsynced bytes (issue 442). They
+/// are kept apart from [`profiles`] on purpose: that list is also the row-fault and gate matrix,
+/// whose shard names and recorded runs must not change. `sim_runner --profile <name>` accepts both.
+pub fn shape_profiles() -> [(&'static str, FaultProfile); 1] {
+    [("non-prefix", FaultProfile::non_prefix())]
+}
+
 /// What one run produced.
 #[derive(Debug, Clone, Default)]
 pub struct Outcome {
@@ -156,6 +167,9 @@ pub struct Outcome {
     pub power_cuts: u64,
     /// Appends the simulated disk refused because it was full.
     pub no_space: u64,
+    /// Refusals by recovery that the documented operator procedure (`formats/wal-v1.md`) repaired
+    /// before the run went on. Only a power-loss shape profile produces them.
+    pub repairs: u32,
     /// The random workload stopped early because injected faults kept recovery from completing.
     /// The terminal check still ran, so this is lost workload, not a lost verdict.
     pub cut_short: bool,
@@ -186,6 +200,9 @@ struct World {
     /// Sessions that existed when bit rot last struck.
     exempt_sessions: BTreeSet<u64>,
     seen_rot: u64,
+    /// Non-prefix shape events already accounted for by a successful recovery or a repair.
+    seen_shape: u64,
+    repairs: u32,
     config: Config,
     violations: Vec<Violation>,
     recoveries: u32,
@@ -193,6 +210,38 @@ struct World {
 
 fn violation(w: &mut World, invariant: &'static str, detail: String) {
     w.violations.push(Violation { invariant, detail });
+}
+
+/// The operator procedure of `formats/wal-v1.md` for a refused newest segment, driven only by what
+/// the refusal message says. It truncates the named segment at the reported offset (damage followed
+/// by valid records), or removes the named newest segment when its header is invalid and it holds
+/// nothing but that header. Returns false for any other message.
+fn operator_repair(disk: &SharedIo, why: &str) -> bool {
+    let Some(rest) = why.strip_prefix("segment ") else {
+        return false;
+    };
+    // The operator works on a stopped machine: a power cut armed inside the failed recovery must
+    // not fire during the repair.
+    if disk.is_powered_off() {
+        return false;
+    }
+    disk.restart_process();
+    let mut io = disk.clone();
+    if let Some((name, tail)) = rest.split_once(" damaged at offset ")
+        && tail.contains("valid records follow")
+        && let Some((at, _)) = tail.split_once(' ')
+        && let Ok(at) = at.parse::<u64>()
+    {
+        let path = format!("wal/{name}");
+        return io.truncate(&path, at).is_ok() && io.sync(&path).is_ok();
+    }
+    if let Some((name, _)) = rest.split_once(" header: ") {
+        let path = format!("wal/{name}");
+        return io.len(&path).is_ok_and(|n| n <= 32)
+            && io.remove(&path).is_ok()
+            && io.sync_dir("wal").is_ok();
+    }
+    false
 }
 
 /// Crashes or restarts the machine and reopens the kernel, retrying through injected faults
@@ -218,6 +267,7 @@ fn recover(w: &mut World, disk: &SharedIo, kernel_rng: &mut SeededRng) -> Recove
         ) {
             Ok((mut k, _, _)) => {
                 w.recoveries += 1;
+                w.seen_shape = disk.shape_events();
                 if disk.rot_events() > w.seen_rot {
                     w.seen_rot = disk.rot_events();
                     let ids: Vec<ChangeSetId> = w.oracle.acked.keys().copied().collect();
@@ -243,7 +293,22 @@ fn recover(w: &mut World, disk: &SharedIo, kernel_rng: &mut SeededRng) -> Recove
                 return Recover::Ok(Box::new(k));
             }
             Err(TxnError::Log(LogError::Corrupt(why))) => {
-                if disk.rot_events() == 0 {
+                if disk.rot_events() == 0 && disk.shape_events() > w.seen_shape {
+                    // A non-prefix power loss since the last good recovery explains a refusal
+                    // (`formats/wal-v1.md`: fail safe). It must be one the documented operator
+                    // procedure repairs, and the repaired log must still hold every acknowledged
+                    // record: the check after the next successful recovery enforces that.
+                    if operator_repair(disk, &why) {
+                        w.repairs += 1;
+                        w.seen_shape = disk.shape_events();
+                        continue;
+                    }
+                    violation(
+                        w,
+                        "RECOVERY",
+                        format!("refusal the documented operator procedure does not cover: {why}"),
+                    );
+                } else if disk.rot_events() == 0 {
                     violation(
                         w,
                         "RECOVERY",
@@ -271,6 +336,8 @@ pub fn run(seed: u64, profile: FaultProfile, steps: usize, segment_limit: u64) -
         uncertain_sessions: BTreeSet::new(),
         exempt_sessions: BTreeSet::new(),
         seen_rot: 0,
+        seen_shape: 0,
+        repairs: 0,
         config: Config {
             dir: "wal".into(),
             segment_limit,
@@ -338,6 +405,7 @@ pub fn run(seed: u64, profile: FaultProfile, steps: usize, segment_limit: u64) -
         acked: w.oracle.acked.len(),
         power_cuts: disk.power_cuts(),
         no_space: disk.no_space_events(),
+        repairs: w.repairs,
         cut_short,
         incomplete,
     }
@@ -779,6 +847,8 @@ mod tests {
             uncertain_sessions: BTreeSet::new(),
             exempt_sessions: BTreeSet::new(),
             seen_rot: 0,
+            seen_shape: 0,
+            repairs: 0,
             config: Config {
                 dir: "wal".into(),
                 segment_limit: 512,

@@ -57,6 +57,8 @@ pub mod feed;
 #[cfg(test)]
 mod admission_tests;
 #[cfg(test)]
+mod crash_shape_tests;
+#[cfg(test)]
 mod crdt_peer_tests;
 
 pub mod crdt_text;

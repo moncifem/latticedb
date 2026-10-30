@@ -448,7 +448,10 @@ fn recover<I: Io>(
                 )));
             }
             // A torn tail: drop it.
-            if bugs::active(Bug::AcceptTornTail) {
+            if bugs::active(Bug::AcceptTornTail)
+                || (bugs::active(Bug::ZeroFilledTailKept)
+                    && data.get(at..).is_some_and(|t| t.iter().all(|b| *b == 0)))
+            {
                 off = data.len();
             } else {
                 io.truncate(&path, at as u64)?;

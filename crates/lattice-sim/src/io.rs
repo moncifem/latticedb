@@ -27,7 +27,21 @@ pub struct FaultProfile {
     pub disk_full_after: Option<usize>,
     /// Chance, per crash, that one random bit of one durable file flips.
     pub bit_rot_ppm: u32,
+    /// A crash may persist the unsynced bytes of a file page by page and out of order: a later
+    /// page reaches the disk while an earlier one does not (the gap reads as zeros, because the
+    /// file size had to cover the later page). Only an fsync orders writes, so a filesystem is
+    /// free to do this. Pages are [`SIM_PAGE_BYTES`] wide on the absolute file offset grid.
+    pub reorder_pages: bool,
+    /// A crash may persist the new file size before the data: the unsynced region keeps a random
+    /// prefix and then reads as zeros up to a random length (a zero-filled extent), which is how a
+    /// freshly created segment header can come back as zeros.
+    pub zero_fill_tails: bool,
 }
+
+/// Page width of the simulated disk for [`FaultProfile::reorder_pages`]. Real pages are 4096 bytes;
+/// the simulator's batches are tens to a few hundred bytes, so the grid is scaled down until one
+/// batch spans several pages.
+pub const SIM_PAGE_BYTES: usize = 32;
 
 impl FaultProfile {
     /// No faults except that crashes drop all unsynced data.
@@ -65,6 +79,20 @@ impl FaultProfile {
             append_error_ppm: 15_000,
             disk_full_after: Some(16 * 1024),
             bit_rot_ppm: 5_000,
+            reorder_pages: false,
+            zero_fill_tails: false,
+        }
+    }
+
+    /// Power loss that does not keep a prefix: `crash_heavy` plus out-of-order page persistence and
+    /// zero-filled tails. A crash then picks one of three shapes per file, so the older prefix
+    /// tear still occurs. No transient faults and no bit rot, so every refusal it provokes is
+    /// attributable to the power loss itself.
+    pub fn non_prefix() -> Self {
+        Self {
+            reorder_pages: true,
+            zero_fill_tails: true,
+            ..Self::crash_heavy()
         }
     }
 
@@ -124,11 +152,78 @@ pub struct SimIo {
     profile: FaultProfile,
     trace: TraceHash,
     rot_events: u64,
+    shape_events: u64,
     no_space_events: u64,
     power_cut_after: Option<u64>,
     powered_off: bool,
     power_cuts: u64,
     ops: u64,
+}
+
+/// Decides what part of a file's unsynced bytes a crash leaves behind, for a profile with
+/// `reorder_pages` or `zero_fill_tails`, and appends it to the durable content. One shape is picked
+/// uniformly from those the profile allows: the old random prefix (`torn_writes`), pages persisted
+/// out of order, or a random prefix followed by zeros. Returns whether the result is not a prefix
+/// of the unsynced bytes.
+fn persist_non_prefix(rng: &mut SeededRng, f: &mut SimFile, profile: FaultProfile) -> bool {
+    let mut shapes = [0u8; 3];
+    let mut n = 0;
+    for (allowed, id) in [
+        (profile.torn_writes, 0u8),
+        (profile.reorder_pages, 1),
+        (profile.zero_fill_tails, 2),
+    ] {
+        if allowed && let Some(slot) = shapes.get_mut(n) {
+            *slot = id;
+            n += 1;
+        }
+    }
+    let pick = shapes.get(rng.below(n as u64) as usize).copied();
+    let len = f.pending.len();
+    match pick {
+        Some(1) => {
+            let base = f.durable.len();
+            let first_page = base / SIM_PAGE_BYTES;
+            let last_page = (base + len - 1) / SIM_PAGE_BYTES;
+            let persisted: Vec<bool> = (first_page..=last_page)
+                .map(|_| rng.chance_ppm(500_000))
+                .collect();
+            let Some(last) = persisted.iter().rposition(|p| *p) else {
+                return false;
+            };
+            let end = (base + len).min((first_page + last + 1) * SIM_PAGE_BYTES);
+            let mut gap = false;
+            for (i, byte) in f.pending.iter().enumerate().take(end - base) {
+                let page = (base + i) / SIM_PAGE_BYTES - first_page;
+                if persisted.get(page).copied().unwrap_or(false) {
+                    f.durable.push(*byte);
+                } else {
+                    f.durable.push(0);
+                    gap = true;
+                }
+            }
+            gap
+        }
+        Some(2) => {
+            let keep = rng.below(len as u64 + 1) as usize;
+            let fill = rng.below((len - keep) as u64 + 1) as usize;
+            f.durable
+                .extend_from_slice(f.pending.get(..keep).unwrap_or(&[]));
+            f.durable.resize(f.durable.len() + fill, 0);
+            fill > 0
+        }
+        _ => {
+            let keep = rng.below(len as u64 + 1) as usize;
+            f.durable
+                .extend_from_slice(f.pending.get(..keep).unwrap_or(&[]));
+            if profile.garbage_tail && rng.chance_ppm(500_000) {
+                for _ in 0..rng.below(9) {
+                    f.durable.push((rng.next_u64() & 0xFF) as u8);
+                }
+            }
+            false
+        }
+    }
 }
 
 fn parent(path: &str) -> &str {
@@ -147,6 +242,7 @@ impl SimIo {
             profile,
             trace: TraceHash::default(),
             rot_events: 0,
+            shape_events: 0,
             no_space_events: 0,
             power_cut_after: None,
             powered_off: false,
@@ -163,6 +259,12 @@ impl SimIo {
     /// How many bits bit rot has flipped so far. Durability can only be promised while this is 0.
     pub fn rot_events(&self) -> u64 {
         self.rot_events
+    }
+
+    /// How many files a crash left in a non-prefix shape: a persisted page behind a lost one, or
+    /// a zero-filled tail. A log that recovery refuses is only explained by this (or by rot).
+    pub fn shape_events(&self) -> u64 {
+        self.shape_events
     }
 
     /// How many appends were refused because the simulated disk was full.
@@ -259,7 +361,13 @@ impl SimIo {
                 continue;
             }
             f.trunc = None;
-            if profile.torn_writes && !f.pending.is_empty() {
+            if (profile.reorder_pages || profile.zero_fill_tails) && !f.pending.is_empty() {
+                // A separate branch, so a profile without the new flags draws exactly the random
+                // numbers it always did and recorded runs stay valid.
+                if persist_non_prefix(&mut self.rng, f, profile) {
+                    self.shape_events += 1;
+                }
+            } else if profile.torn_writes && !f.pending.is_empty() {
                 let keep = self.rng.below(f.pending.len() as u64 + 1) as usize;
                 f.durable
                     .extend_from_slice(f.pending.get(..keep).unwrap_or(&[]));

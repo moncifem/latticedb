@@ -1,7 +1,7 @@
 //! The `sim-runner` command line as a function: argument handling, the per-profile loop and the
 //! report, with the ledger write and the printing left to the caller so it can be tested directly.
 
-use crate::scenario::{profiles, run};
+use crate::scenario::{profiles, run, shape_profiles};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -60,9 +60,17 @@ pub fn execute_with(
     let ledger = arg(args, "--ledger");
     let single = arg(args, "--seed").and_then(|v| v.parse::<u64>().ok());
 
+    // Without `--profile` only the standard profiles run, so the default sweep and its recorded
+    // output do not change. The power-loss shape profiles are selected by name.
+    let selectable: Vec<_> = match only_profile.as_deref() {
+        Some(p) if shape_profiles().iter().any(|(name, _)| *name == p) => {
+            shape_profiles().into_iter().collect()
+        }
+        _ => profiles().into_iter().collect(),
+    };
     if only_profile
         .as_deref()
-        .is_some_and(|p| !profiles().iter().any(|(name, _)| *name == p))
+        .is_some_and(|p| !selectable.iter().any(|(name, _)| *name == p))
     {
         sink(
             true,
@@ -80,7 +88,7 @@ pub fn execute_with(
     }
     let (mut runs, mut failures, mut cut_short, mut incomplete, mut cuts, mut recoveries) =
         (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
-    for (name, profile) in profiles() {
+    for (name, profile) in selectable {
         if only_profile.as_deref().is_some_and(|p| p != name) {
             continue;
         }

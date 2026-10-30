@@ -74,6 +74,31 @@ stronger framing (segment footers or a durable high-water mark) is a v2 candidat
 A newest segment shorter than its header is a torn creation and is rewritten. A segment whose first
 LSN does not follow the previous segment's last LSN means a segment is missing: corrupt.
 
+### Power loss that does not keep a prefix (issue 442)
+
+`fsync` is the only ordering barrier, so a power cut may persist the unsynced bytes of a file page by
+page in any order, or persist the file's new size before its data. Every acknowledged record was
+fsynced, so these shapes only ever damage bytes that were never acknowledged. Recovery's behaviour
+for each, derived from the rules above and pinned by the `non-prefix` simulator profile and the tests
+in `crash_shape_tests.rs`:
+
+| Shape | What the newest segment holds | Recovery |
+|---|---|---|
+| A later page persisted, an earlier one lost (zeros) | damage, then a complete valid record | **Refuses** (`damaged at offset N but valid records follow`) and leaves the file untouched. This is the fail-safe above: the log is repairable but recovery cannot prove it |
+| Prefix of the batch, then zeros (zero-filled tail) | intact records, then zeros | Torn tail: truncated at the first bad frame |
+| A new segment's header lost to a zero fill or garbage, 16 bytes or more | a complete but invalid header, no records | **Refuses** (`segment <name> header: ...`) and leaves the file untouched. No acknowledged record can be in it, because the header is fsynced before any record is accepted into the segment, but only a valid staged copy proves a rewrite, so recovery does not rewrite it |
+| A new segment's header shorter than 16 bytes | a torn creation | Rewritten (unchanged) |
+
+Recovery loses no acknowledged record in any of these. The two refusals leave a log that does not open
+until an operator acts, which is the cost of the fail-safe; an automatic rewrite or a per-batch
+footer is a v2 candidate and is not implemented. The operator procedure above covers the first
+refusal (truncate at the reported offset). For the second, stop every process, copy the directory,
+and remove the named segment file if it holds nothing but its header: the previous segment is
+complete and the next append recreates the segment. Both procedures are exercised by tests, and the
+simulator applies them from the refusal message alone before it checks that every acknowledged
+record is still present. Reserved bytes of a version 1 header are not validated by the reader, so a
+header torn only in its last four bytes still opens.
+
 ## Durability protocol
 
 * **Open**: create the log directory and make each new component durable by `fsync` of its parent; take

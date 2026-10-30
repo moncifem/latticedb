@@ -6,7 +6,9 @@ crate.
 - `invariants`: checkers for the log and kernel invariants (I1, I2, I4, I6, I9, I12 and others) over an
   oracle of what was acknowledged.
 - `scenario`: the seeded crash-and-recover workload runner and the fault profiles, used by
-  `cargo xtask sim` and the tests.
+  `cargo xtask sim` and the tests. `profiles()` is the standard set (also the row-fault matrix);
+  `shape_profiles()` holds the power-loss shapes that are not a prefix (`non-prefix`), selected with
+  `sim_runner --profile non-prefix` and run by the nightly simulation.
 - `bin/sim_runner`: command line front end for the runner, with `--ledger` to record a run.
 
 Tests in `tests/` cover planted-bug detection, the exhaustive power-cut sweep, the scrubber, kernel

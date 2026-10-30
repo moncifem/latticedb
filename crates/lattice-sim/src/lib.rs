@@ -14,7 +14,7 @@ mod net;
 mod rng;
 
 pub use clock::SimClock;
-pub use io::{FaultProfile, SimIo};
+pub use io::{FaultProfile, SIM_PAGE_BYTES, SimIo};
 pub use net::SimNet;
 pub use rng::SeededRng;
 

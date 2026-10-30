@@ -123,6 +123,9 @@ pub enum Bug {
     RowOversizeKeyAccepted,
     /// The tree CRDT replays any number of live ops for one peer operation (CPU exhaustion).
     TreeReplayBudgetSkipped,
+    /// Recovery keeps a zero-filled torn tail in place instead of truncating it, so later
+    /// acknowledged records land behind a damaged region (silent loss once that region is repaired).
+    ZeroFilledTailKept,
 }
 
 impl Bug {
@@ -194,6 +197,10 @@ impl Bug {
     /// Recovery-order defect, detected by the focused LSN-gap witnesses in `log.rs`: the log
     /// simulation never writes a gap, so it cannot reach this path.
     pub const RECOVERY_ORDER: [Bug; 1] = [Bug::GapTailTruncated];
+
+    /// Torn-tail defect that only a non-prefix power loss reaches (a zero-filled extent), detected
+    /// by the `non-prefix` fault profile and the focused witnesses in `crash_shape_tests`.
+    pub const NON_PREFIX: [Bug; 1] = [Bug::ZeroFilledTailKept];
 
     /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [
@@ -285,6 +292,7 @@ mod tests {
             .chain(Bug::KEY_LIMIT)
             .chain(Bug::FENCE_ORDER)
             .chain(Bug::RECOVERY_ORDER)
+            .chain(Bug::NON_PREFIX)
     }
 
     #[test]
@@ -304,6 +312,7 @@ mod tests {
             .chain(Bug::KEY_LIMIT)
             .chain(Bug::FENCE_ORDER)
             .chain(Bug::RECOVERY_ORDER)
+            .chain(Bug::NON_PREFIX)
             .collect();
         assert_eq!(all.len(), 55);
         for bug in all {
