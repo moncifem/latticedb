@@ -1,1 +1,1 @@
-The `kani` workflow now keeps each package's proof log as a 30 day artifact and prints the verdict lines in the job summary; `docs/verification.md` and the Phase 1 gate page state that no proof has run yet.
+The `kani` workflow now has a `verified` job that runs only the four harnesses that passed on CI and an opt-in `extended` job for the six that did not finish, keeps each proof log as a 30 day artifact, and `docs/verification.md` records 4 of 10 harnesses verified and 6 not proven.

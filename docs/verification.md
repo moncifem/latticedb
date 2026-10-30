@@ -60,26 +60,43 @@ cargo kani -p lattice-core --harness cursor_round_trips
 
 ## Status of the runs
 
-**Proven: nothing yet.** The harnesses are written, but no run of the `kani` workflow has completed,
-so none is claimed to pass (tracked in #353). The harnesses have never been compiled by Kani: they sit
-behind `cfg(kani)`, no normal check, test or clippy run compiles them, and Kani is never run on the
-maintainers' laptops (it is heavy; the rule is to leave long jobs to CI). The first run of the workflow
-is the first compile and the first execution. A harness that fails to compile, fails, or exceeds its 20
-minute timeout there needs fixing or a lower bound. `event_decode_never_panics` (80 bytes, unwind 82) is
-the likeliest to need one; going below 73 bytes (the smallest valid event) makes its `cover!` of a
-successful decode unreachable, so it would then only show that refusals do not panic.
+**Verified on CI: 4 of 10 harnesses. Not proven: 6 of 10.** The 4 verified harnesses are in
+`lattice-core`: `cursor_round_trips`, `cursor_order_matches_lsn_index_and_bytes`,
+`cursor_decode_never_panics` and `event_decode_never_panics`. Each reported `VERIFICATION:- SUCCESSFUL`
+in all of the last three dispatches of the workflow (runs 41001589752, 41005577558 and 41017313757,
+from the branch of PR 407). No other claim is made.
 
-Each job tees the Kani output to `kani-results/<package>.log`, uploads it as the artifact
-`kani-<package>` (kept 30 days, uploaded even when the proof step fails) and prints the harness and
-`VERIFICATION:-` lines in the job summary. Read the result from there. To record a result, trigger the
-run with `gh workflow run kani.yml`, then copy the run URL, the harness list and each verdict into the
-table below and into the phase gate page. Until a row names a run, it is only written, not proven.
+The other 6 are written but not proven. No counterexample was found for any of them; they did not
+finish:
+
+| Harness | Package | What CI showed |
+| --- | --- | --- |
+| `move_into_own_subtree_is_a_no_op` | `lattice-core` | CBMC timed out (20 minutes) in all three runs, also after the targets were enumerated instead of symbolic |
+| `would_cycle_matches_ancestry` | `lattice-core` | CBMC timed out (20 minutes) in all three runs, also after every node pair was enumerated |
+| `frame_decode_never_panics` | `lattice-api` | 24 and 14 byte bounds: CBMC timed out; 7 byte bound: job killed by the runner ("shutdown signal", exit 143) while solving |
+| `frame_decode_with_limit_never_panics` | `lattice-api` | same |
+| `framer_bounds_hold` | `lattice-sdk` | job killed by the runner (exit 143) while solving, at 6 and at 3 bytes |
+| `framer_finish_resets` | `lattice-sdk` | same |
+
+The cause of the kills is not established. The solver stage was reached with a small formula (about
+8,000 verification conditions at 3 bytes), so the bound alone does not explain it; the logs are full
+of `assume(false)` lines from `alloc` `raw_vec`, which points at the `Vec` and `BTreeMap` code paths
+of the code under test. Redesigning the tree harnesses over fixed arrays was considered and not done:
+it would prove a model of the algorithm, not `Tree`. These harnesses need a different approach (for
+example stubbing the allocator-heavy parts or splitting the harness) and are tracked in issues.
+
+The workflow follows from this. Job `verified` runs only the 4 verified harnesses (weekly and on
+demand), fails unless it sees exactly 4 `SUCCESSFUL` and no `FAILED`, so a green run means those
+proofs ran. Job `extended` runs everything on manual dispatch with `extended: true` and is expected
+to fail until the 6 are fixed. Each job tees the Kani output to a log, uploads it as an artifact
+(30 days, also on failure) and prints the verdict lines in the job summary.
 
 | Package | Last run | Result |
 | --- | --- | --- |
-| `lattice-core` | none | not run |
-| `lattice-api` | none | not run |
-| `lattice-sdk` | none | not run |
+| `lattice-core`, 4 feed harnesses | 41017313757 (branch of PR 407) | 4 of 4 `SUCCESSFUL` |
+| `lattice-core`, 2 tree harnesses | 41017313757 | not proven: timed out |
+| `lattice-api` | 41017313757 | not proven: runner killed |
+| `lattice-sdk` | 41017313757 | not proven: runner killed |
 
 There is no cheap compile check: the harnesses need the `kani` crate's `proof` and `unwind` attributes
 and `any`, `assume` and `cover!`, which only Kani's own compiler driver supplies. A stand-in
@@ -97,6 +114,8 @@ new enough and the only change that lets the proofs build if it is older. The `-
 and `cargo kani -p` were not run against 0.68.0.
 
 ## Demonstration that a proof can fail
+
+Not run yet. Because the tree harnesses do not finish, the cursor variant at the end of this section is the one that can be demonstrated first.
 
 The check is that a deliberately broken variant of a function makes its harness fail. The planned
 variant, not committed and not yet run, drops the cycle check from `Tree::perform` in
