@@ -38,6 +38,7 @@ mod definition;
 mod error;
 mod eval;
 mod exec;
+mod jsonb;
 pub mod schema;
 mod session;
 mod value;
