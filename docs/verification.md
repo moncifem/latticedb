@@ -63,7 +63,7 @@ cargo kani -p lattice-core --harness cursor_round_trips
 **Verified on CI: 4 of 10 harnesses. Not proven: 6 of 10.** The 4 verified harnesses are in
 `lattice-core`: `cursor_round_trips`, `cursor_order_matches_lsn_index_and_bytes`,
 `cursor_decode_never_panics` and `event_decode_never_panics`. Each reported `VERIFICATION:- SUCCESSFUL`
-in all of the last three dispatches of the workflow (runs 41001589752, 41005577558 and 41017313757,
+in each of the last four dispatches of the workflow (runs 41001589752, 41005577558, 41017313757 and 41042663372,
 from the branch of PR 407). No other claim is made.
 
 The other 6 are written but not proven. No counterexample was found for any of them; they did not
@@ -93,7 +93,7 @@ to fail until the 6 are fixed. Each job tees the Kani output to a log, uploads i
 
 | Package | Last run | Result |
 | --- | --- | --- |
-| `lattice-core`, 4 feed harnesses | 41017313757 (branch of PR 407) | 4 of 4 `SUCCESSFUL` |
+| `lattice-core`, 4 feed harnesses (job `verified`) | 41042663372 (branch of PR 407) | 4 of 4 `SUCCESSFUL`, 0 failures |
 | `lattice-core`, 2 tree harnesses | 41017313757 | not proven: timed out |
 | `lattice-api` | 41017313757 | not proven: runner killed |
 | `lattice-sdk` | 41017313757 | not proven: runner killed |
