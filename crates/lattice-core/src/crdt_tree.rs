@@ -73,7 +73,8 @@
 //!   that would is a no-op everywhere ([`Outcome::Skipped`]), decided at the move's place in the
 //!   total order like the cycle rule, so every delivery order agrees. The tree keeps the height of
 //!   every node's subtree (updated along the ancestor chain whenever a node moves), so the check
-//!   costs O(depth) however wide the moved subtree is. `tla/TreeMove.tla` models the rule
+//!   costs O(depth) however wide the moved subtree is. This costs two extra
+//!   map entries per node (`heights`, only for nodes that have children, and `by_height`); the memory is not measured. `tla/TreeMove.tla` models the rule
 //!   (`MaxDepth`, `CheckDepth`) and `tla/negative/TreeMoveNoDepthCheck.cfg` must violate
 //!   `DepthBounded`. [`Tree::with_max_depth`] lowers the limit.
 //! - **Share per origin**: a tree has no per-origin share for [`Tree::apply`] (a trusted bulk load

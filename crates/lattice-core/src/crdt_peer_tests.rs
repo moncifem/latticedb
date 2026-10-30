@@ -722,7 +722,7 @@ proptest! {
 }
 
 #[test]
-fn moving_a_very_wide_subtree_checks_depth_by_height_not_by_walking() {
+fn a_move_of_a_very_wide_subtree_respects_the_depth_boundary() {
     let mut t = tree::Tree::new();
     for i in 1..=255u64 {
         let parent = if i == 1 { 0 } else { link(i - 1) };
@@ -765,7 +765,39 @@ fn trusted_apply_has_no_origin_share_until_one_is_set() {
         capped.apply(mv(4, 1, 20, 0)),
         Err(TreeError::OriginQuota { node: 1, limit: 3 })
     );
-    // A peer entry point always has a share, the default one when none was set.
-    let mut peer = tree::Tree::with_op_limit(100);
-    assert!(peer.apply_from(&ctx(1), mv(1, 1, 10, 0)).is_ok());
+}
+
+#[test]
+fn the_default_origin_share_is_pinned() {
+    use crate::crdt_tree::DEFAULT_ORIGIN_OP_LIMIT;
+    let op = |i: usize| {
+        tree::Op::new(
+            Hlc {
+                wall_ms: 10,
+                counter: i as u32,
+                node: 1,
+            },
+            NodeId(10 + i as u64),
+            NodeId::ROOT,
+            0,
+        )
+    };
+    // A peer entry point has a share even when none was set.
+    let mut peer = tree::Tree::new();
+    for i in 0..DEFAULT_ORIGIN_OP_LIMIT {
+        peer.apply_from(&ctx(1), op(i)).unwrap();
+    }
+    assert_eq!(
+        peer.apply_from(&ctx(1), op(DEFAULT_ORIGIN_OP_LIMIT)),
+        Err(TreeError::OriginQuota {
+            node: 1,
+            limit: DEFAULT_ORIGIN_OP_LIMIT
+        })
+    );
+    // Trusted apply takes the same count and one more, because it has no share.
+    let mut trusted = tree::Tree::new();
+    for i in 0..=DEFAULT_ORIGIN_OP_LIMIT {
+        trusted.apply(op(i)).unwrap();
+    }
+    assert_eq!(trusted.op_count(), DEFAULT_ORIGIN_OP_LIMIT + 1);
 }
