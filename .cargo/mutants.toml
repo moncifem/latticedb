@@ -109,4 +109,7 @@ exclude_globs = [
     "crates/lattice-bench/src/bin/runtime_probe.rs",
     "**/runtime_spike/*.rs",
     "crates/lattice-seams/src/uring.rs",
+    # Kani proof harnesses: compiled only under `cfg(kani)`, run by the Kani workflow, never by `cargo test`,
+    # so a mutant in them cannot be observed by tests; the proofs are checked by their own workflow.
+    "**/sync/proofs.rs",
 ]
