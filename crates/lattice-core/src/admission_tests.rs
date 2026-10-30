@@ -360,6 +360,75 @@ fn independent_omitted_guard_witness_has_a_clean_control() {
     }
 }
 
+#[test]
+fn guarded_header_refuses_zero_and_unknown_requirements_independently() {
+    // Each refusal must hold on its own: zero is never a guard, and a bit this build lacks is never encodable.
+    assert!(matches!(
+        admission::guarded_header(0),
+        Err(admission::HeaderError::Invalid(_))
+    ));
+    assert!(matches!(
+        admission::guarded_header(1 << 40),
+        Err(admission::HeaderError::Invalid(_))
+    ));
+    assert!(matches!(
+        admission::guarded_header(1 | (1 << 40)),
+        Err(admission::HeaderError::Invalid(_))
+    ));
+    assert!(admission::guarded_header(1).is_ok());
+}
+
+fn bad_header_segments(disk: &Disk, supported: u64) -> Vec<String> {
+    crate::scrub::scrub_with_capabilities(disk, "wal", supported)
+        .unwrap()
+        .issues
+        .into_iter()
+        .filter_map(|issue| match issue {
+            crate::scrub::Issue::BadHeader { segment, .. } => Some(segment),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn scrub_flags_a_header_that_needs_more_than_the_caller_supports() {
+    let mut disk = Disk::new();
+    plant(
+        &mut disk,
+        "wal/00000000000000000001.seg",
+        &admission::guarded_header(1).unwrap(),
+    );
+    assert_eq!(
+        bad_header_segments(&disk, 0),
+        vec!["00000000000000000001.seg".to_string()],
+        "a requirement outside the supported set is a finding"
+    );
+    assert!(
+        bad_header_segments(&disk, 1).is_empty(),
+        "the same header is fine once its requirement is supported"
+    );
+}
+
+#[test]
+fn scrub_flags_a_later_header_that_drops_a_requirement() {
+    let mut disk = Disk::new();
+    plant(
+        &mut disk,
+        "wal/00000000000000000001.seg",
+        &admission::guarded_header(1).unwrap(),
+    );
+    plant(
+        &mut disk,
+        "wal/00000000000000000002.seg",
+        &record::segment_header(),
+    );
+    assert_eq!(
+        bad_header_segments(&disk, 1),
+        vec!["00000000000000000002.seg".to_string()],
+        "a downgraded header is a finding even when every requirement it keeps is supported"
+    );
+}
+
 #[path = "admission_matrix_tests.rs"]
 mod matrix;
 
