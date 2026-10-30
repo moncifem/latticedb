@@ -1067,3 +1067,10 @@ fn select_without_from_binds_over_a_one_row_source() {
     assert_eq!(bind_err("SELECT *").sqlstate(), "42601");
     assert_eq!(bind_err("SELECT nope").sqlstate(), "42703");
 }
+
+#[test]
+fn an_empty_alias_is_a_parse_error_so_no_source_is_ever_named_empty() {
+    // The binder tells the FROM-less source apart by its empty qualifier; this keeps that sound.
+    assert!(parse_statement(r#"SELECT 1 AS """#).is_err());
+    assert!(parse_statement(r#"SELECT 1 FROM notes AS """#).is_err());
+}

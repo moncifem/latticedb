@@ -212,24 +212,25 @@ fn datetime_failure_code(s: &str) -> &'static str {
     if fields.len() != 3 || !fields.iter().all(|f| digits(f)) {
         return "22007";
     }
-    if parse_date_part(date).is_none() {
-        return "22008";
+    // PostgreSQL reads every field before it checks ranges, so text after the date that is not a
+    // clock (`2023-02-29 junk`) is a syntax error even when the date itself is out of range.
+    let mut clock_out_of_range = false;
+    if !rest.is_empty() {
+        let Some((clock, _)) = split_offset(rest) else {
+            return "22007";
+        };
+        fn whole(p: &str) -> &str {
+            p.split_once('.').map_or(p, |(w, _)| w)
+        }
+        let parts: Vec<&str> = clock.split(':').collect();
+        if !(2..=3).contains(&parts.len()) || !parts.iter().all(|p| digits(whole(p))) {
+            return "22007";
+        }
+        let num = |p: Option<&&str>| p.and_then(|p| whole(p).parse::<i64>().ok()).unwrap_or(0);
+        let (h, mi, sec) = (num(parts.first()), num(parts.get(1)), num(parts.get(2)));
+        clock_out_of_range = h > 24 || mi > 59 || sec > 60 || (h == 24 && (mi > 0 || sec > 0));
     }
-    // A valid date: only a clock with numeric fields that are out of range is a range error.
-    let clock = match split_offset(rest) {
-        Some((c, _)) => c,
-        None => return "22007",
-    };
-    let parts: Vec<&str> = clock.split(':').collect();
-    fn whole(p: &str) -> &str {
-        p.split_once('.').map_or(p, |(w, _)| w)
-    }
-    if !(2..=3).contains(&parts.len()) || !parts.iter().all(|p| digits(whole(p))) {
-        return "22007";
-    }
-    let num = |p: Option<&&str>| p.and_then(|p| whole(p).parse::<i64>().ok()).unwrap_or(0);
-    let (h, mi, sec) = (num(parts.first()), num(parts.get(1)), num(parts.get(2)));
-    if h > 24 || mi > 59 || sec > 60 {
+    if parse_date_part(date).is_none() || clock_out_of_range {
         "22008"
     } else {
         "22007"
@@ -268,6 +269,8 @@ pub(crate) fn parse_timestamp(s: &str) -> Option<i64> {
     };
     if parts.next().is_some()
         || !(0..=24).contains(&h)
+        // Hour 24 is only the end of the day: 24:00:00, never 24:30.
+        || (h == 24 && (mi > 0 || sec > 0))
         || !(0..60).contains(&mi)
         || !(0..=60).contains(&sec)
     {

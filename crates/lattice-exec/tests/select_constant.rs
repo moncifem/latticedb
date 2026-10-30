@@ -9,7 +9,11 @@
 
 mod common;
 
+use std::rc::Rc;
+
 use common::{err, fixture, ok, rows};
+use lattice_engines::limits::DenyAll;
+use lattice_exec::{ActorPolicy, ExecSession, TxStatus};
 
 fn strs(v: &[&[&str]]) -> Vec<Vec<String>> {
     v.iter()
@@ -109,6 +113,93 @@ fn date_text_shaped_like_a_date_but_out_of_range_is_22008() {
         "SELECT date 'not a date'",
         "SELECT date '2023-02'",
         "SELECT CAST('2024-01-01 ab:cd' AS timestamptz)",
+    ] {
+        assert_eq!(err(&mut f.db, &mut s, sql).sqlstate(), "22007", "{sql}");
+    }
+}
+
+#[test]
+fn a_principal_that_sees_nothing_can_still_run_a_constant_select() {
+    let mut f = fixture();
+    let mut admin = common::admin();
+    ok(&mut f.db, &mut admin, "CREATE TABLE t (id INT PRIMARY KEY)");
+    // Deny-all, catalog hidden: no table is visible, but a constant query reads no table, so no
+    // row policy is consulted. The session itself is all it needs.
+    let mut s = ExecSession::new(ActorPolicy::new(Rc::new(DenyAll)).hiding_catalog());
+    assert_eq!(rows(&mut f.db, &mut s, "SELECT 1"), strs(&[&["1"]]));
+    assert_eq!(
+        err(&mut f.db, &mut s, "SELECT id FROM t").sqlstate(),
+        "42P01"
+    );
+}
+
+#[test]
+fn a_constant_select_in_a_failed_block_is_refused() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    ok(&mut f.db, &mut s, "BEGIN");
+    assert_eq!(err(&mut f.db, &mut s, "SELECT 1 / 0").sqlstate(), "22012");
+    assert_eq!(s.status(), TxStatus::Failed);
+    assert_eq!(err(&mut f.db, &mut s, "SELECT 1").sqlstate(), "25P02");
+    ok(&mut f.db, &mut s, "ROLLBACK");
+    assert_eq!(rows(&mut f.db, &mut s, "SELECT 1"), strs(&[&["1"]]));
+}
+
+#[test]
+fn null_limit_and_offset_mean_no_bound() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT 1 LIMIT NULL"),
+        strs(&[&["1"]])
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT 1 OFFSET NULL"),
+        strs(&[&["1"]])
+    );
+}
+
+#[test]
+fn a_parameter_in_a_constant_select_is_bound() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    let r = s
+        .execute_with(&mut f.db, "SELECT $1 + 1", &[Some(b"41".to_vec())], &|| {
+            false
+        })
+        .unwrap();
+    assert_eq!(common::text(&r), strs(&[&["42"]]));
+}
+
+#[test]
+fn hour_24_is_only_the_end_of_the_day() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    // PostgreSQL accepts 24:00:00 and rejects any later 24:xx.
+    assert_eq!(
+        rows(
+            &mut f.db,
+            &mut s,
+            "SELECT CAST(CAST('2024-01-01 24:00:00+00' AS timestamptz) AS text)"
+        ),
+        strs(&[&["2024-01-02 00:00:00+00"]])
+    );
+    for sql in [
+        "SELECT CAST('2024-01-01 24:30:00' AS timestamptz)",
+        "SELECT CAST('2024-01-01 24:00:01' AS timestamptz)",
+    ] {
+        assert_eq!(err(&mut f.db, &mut s, sql).sqlstate(), "22008", "{sql}");
+    }
+}
+
+#[test]
+fn junk_after_a_date_is_a_syntax_error_even_when_the_date_is_out_of_range() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    // PostgreSQL reads every field before it checks ranges, so the unknown word wins.
+    for sql in [
+        "SELECT date '2023-02-29 junk'",
+        "SELECT CAST('2023-02-29 junk' AS timestamptz)",
     ] {
         assert_eq!(err(&mut f.db, &mut s, sql).sqlstate(), "22007", "{sql}");
     }
