@@ -409,7 +409,7 @@ claimed, and P2-10, P2-13, P2-17 and P2-18 remain open.
 
 ## SQL served by `latticed` from a data directory (P2-17, P2-18, issue 345)
 
-`latticed --data-dir DIR` opens a write-ahead log in `DIR`, replays it, and serves the `lattice-exec`
+PR [412](https://github.com/moncifem/latticedb/pull/412): `latticed --data-dir DIR` opens a write-ahead log in `DIR`, replays it, and serves the `lattice-exec`
 executor over the existing bounded pgwire listener (loopback trust or SCRAM over TLS). Without
 `--data-dir` the `SELECT 1` placeholder remains. See the [listener guide](../../crates/latticed/README.md).
 
