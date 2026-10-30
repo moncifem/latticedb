@@ -344,7 +344,7 @@ fn key_of(row: &[Datum], cols: &[usize]) -> Result<Vec<u8>, ExecError> {
 }
 
 /// Appends an order-preserving, self-delimiting encoding of one key value.
-fn push_key(out: &mut Vec<u8>, d: &Datum) -> Result<(), ExecError> {
+pub(crate) fn push_key(out: &mut Vec<u8>, d: &Datum) -> Result<(), ExecError> {
     match d {
         Datum::Bool(b) => out.push(u8::from(*b)),
         Datum::Int(i) | Datum::Timestamp(i) => {

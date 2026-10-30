@@ -445,3 +445,32 @@ grants, `allow-all` and `deny-all`. Binary result formats are not exercised. No 
 **Not run locally, left to CI:** the workspace gate, Miri, sanitizers, mutation testing and fuzzing.
 This touches authentication-adjacent and serving code and needs an independent review before merge.
 No Phase 2 exit criterion is claimed; P2-17 and P2-18 remain open.
+
+## Index scans in the executor (P2-07, P2-10, issue 381)
+
+`lattice-exec` chooses an access path by fixed rules (no statistics): a `UNIQUE` constraint pinned by `=`
+is one entry lookup, a fully pinned primary key is a point read, and `=` on leading key columns with a
+range on the next is a key range; everything else is a full scan. Only `integer`, `text`, `boolean`,
+`bytea`, `uuid`, `date` and `timestamptz` constants of exactly the column's type are used; the whole
+predicate is still evaluated on every row read, and the choice is made only when every term of the
+predicate is certain to succeed, so rows, order and errors equal a full scan. `UPDATE` and `DELETE` use the
+same paths. `Database::last_access_paths()` reports the choice of the last statement.
+
+Evidence (`crates/lattice-exec/tests/index_scan.rs`, run locally at default proptest case counts and once
+at 1,500 cases): a differential property test (generated tables with `NULL`s, ties, `bigint` extremes and
+out-of-range or non-integer constants, workloads of inserts, updates and deletes, live reads, `AS OF
+CHANGESET` reads, reads inside an open transaction with its own writes, and an actor policy that hides
+half the rows) requires each narrowed `SELECT` to equal the same predicate forced to a full scan; the
+same for composite text keys (prefix keys such as `a` and `ab`) and for `UPDATE`/`DELETE ... RETURNING`
+followed by a table comparison; fixed cases for the chosen path of each rule, parameters, a failing term
+that must keep the full scan, cancellation and memory limits in the index loop, and a policy that hides
+entry tables. Two planted bugs (`ExecIndexUpperBoundOpen`, `ExecIndexPolicySkipped`, group
+`Bug::EXEC_INDEX`) are each caught by a witness test, and a hand-made mutation of the lower bound was
+caught by the suite.
+
+**Not done.** The executor creates no managed secondary index (`CREATE INDEX` is `0A000`), so `lookup_at`
+and the LCIX definitions are not used yet; `IN` lists, `ORDER BY` from key order, `LIMIT` early stop,
+reverse scans, an `EXPLAIN` statement and a streaming range read are open. The range read still
+materialises row references before its first poll, like a full scan. Left to CI: the workspace gate,
+Miri, mutation testing of `access.rs`, and the larger proptest case counts. No Phase 2 exit criterion is
+claimed; P2-07 and P2-10 remain open.

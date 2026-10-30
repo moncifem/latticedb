@@ -11,6 +11,7 @@ use lattice_engines::store::{RowError, RowStore};
 use lattice_seams::{Clock, Io, Rng};
 use lattice_sql::ast::CreateTable;
 
+use crate::access::AccessPath;
 use crate::error::{ErrorKind, ExecError};
 use crate::exec::ActorPolicy;
 use crate::schema::{ExecCatalog, MAX_TABLE_ID, Schema, TableDef, object_name};
@@ -26,6 +27,8 @@ pub struct Database<I: Io, C: Clock + Clone, R: Rng> {
     next_rowid: RefCell<BTreeMap<u32, u64>>,
     /// The definition first registered for each table id in this process (not durable).
     fingerprints: BTreeMap<u32, String>,
+    /// How the scans of the last statement read their tables.
+    access: RefCell<Vec<AccessPath>>,
 }
 
 impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
@@ -38,7 +41,27 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
             schema: Schema::new(),
             next_rowid: RefCell::new(BTreeMap::new()),
             fingerprints: BTreeMap::new(),
+            access: RefCell::new(Vec::new()),
         })
+    }
+
+    /// How each scan of the most recent statement read its table, in execution order. Observability
+    /// for tests and review: the choice never changes a result (see `access`).
+    pub fn last_access_paths(&self) -> Vec<AccessPath> {
+        self.access.borrow().clone()
+    }
+
+    pub(crate) fn clear_access(&self) {
+        self.access.borrow_mut().clear();
+    }
+
+    pub(crate) fn record_access(&self, path: AccessPath) {
+        let mut paths = self.access.borrow_mut();
+        // A statement reads one table per scan and the subset has no joins; the cap keeps the
+        // record bounded whatever a plan does.
+        if paths.len() < 16 {
+            paths.push(path);
+        }
     }
 
     /// The underlying row store, for inspection and tests.

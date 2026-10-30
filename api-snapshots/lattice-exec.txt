@@ -56,6 +56,20 @@ pub const lattice_exec::schema::MAX_TABLE_ID: u32
 pub const lattice_exec::schema::MAX_UNIQUES: usize
 pub fn lattice_exec::schema::is_marker_table(u32) -> bool
 pub fn lattice_exec::schema::owning_table(u32) -> u32
+pub enum lattice_exec::AccessPath
+pub lattice_exec::AccessPath::FullScan
+pub lattice_exec::AccessPath::PrimaryKeyPoint
+pub lattice_exec::AccessPath::PrimaryKeyRange
+pub lattice_exec::AccessPath::UniqueLookup(usize)
+impl core::clone::Clone for lattice_exec::AccessPath
+pub fn lattice_exec::AccessPath::clone(&self) -> Self
+impl core::cmp::Eq for lattice_exec::AccessPath
+impl core::cmp::PartialEq for lattice_exec::AccessPath
+pub fn lattice_exec::AccessPath::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::AccessPath
+pub fn lattice_exec::AccessPath::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_exec::AccessPath
+impl core::marker::StructuralPartialEq for lattice_exec::AccessPath
 pub enum lattice_exec::Datum
 pub lattice_exec::Datum::Bool(bool)
 pub lattice_exec::Datum::Bytes(alloc::vec::Vec<u8>)
@@ -145,6 +159,7 @@ pub fn lattice_exec::Database<I, C, R>::catalog_view_for(&self, &lattice_exec::A
 pub fn lattice_exec::Database<I, C, R>::create_table(&mut self, &lattice_sql::ast::CreateTable, &lattice_exec::ActorPolicy) -> core::result::Result<bool, lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::detach_table(&mut self, &str) -> bool
 pub fn lattice_exec::Database<I, C, R>::drop_table(&mut self, &str, bool, &lattice_exec::ActorPolicy) -> core::result::Result<bool, lattice_exec::ExecError>
+pub fn lattice_exec::Database<I, C, R>::last_access_paths(&self) -> alloc::vec::Vec<lattice_exec::AccessPath>
 pub fn lattice_exec::Database<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<Self, lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::schema(&self) -> &lattice_exec::schema::Schema
 pub fn lattice_exec::Database<I, C, R>::store(&self) -> &lattice_engines::store::RowStore<I, C, R>

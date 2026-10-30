@@ -113,6 +113,12 @@ pub enum Bug {
     /// Recovery truncates a checksum-valid record with an unexpected LSN as if it were a torn tail
     /// (silent loss of acknowledged data after a gap or repeat).
     GapTailTruncated,
+    /// The executor's primary-key range scan treats an inclusive upper bound (`<=`, `BETWEEN`) as
+    /// exclusive (missing boundary rows).
+    ExecIndexUpperBoundOpen,
+    /// The executor's unique-constraint lookup fetches the row without the actor's read policy
+    /// (hidden rows revealed).
+    ExecIndexPolicySkipped,
 }
 
 impl Bug {
@@ -165,6 +171,9 @@ impl Bug {
         Bug::TreeOriginQuotaSkipped,
         Bug::SetTagLimitSkipped,
     ];
+
+    /// Index-scan defects in the SQL executor, detected by the differential index-scan witnesses.
+    pub const EXEC_INDEX: [Bug; 2] = [Bug::ExecIndexUpperBoundOpen, Bug::ExecIndexPolicySkipped];
 
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
@@ -260,6 +269,7 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
@@ -277,6 +287,7 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
@@ -284,7 +295,7 @@ mod tests {
             .chain(Bug::FENCE_ORDER)
             .chain(Bug::RECOVERY_ORDER)
             .collect();
-        assert_eq!(all.len(), 51);
+        assert_eq!(all.len(), 53);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();
