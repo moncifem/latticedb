@@ -459,11 +459,14 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
             "0A000",
             Some("LSQL-0002"),
         ),
+        ("SELECT sum(count(*)) FROM notes", "42803", None),
         (
-            "SELECT sum(score) + 1 FROM notes",
+            "SELECT count(*) FROM notes WHERE count(*) > 1",
             "0A000",
             Some("LSQL-0002"),
         ),
+        ("SELECT id + count(*) FROM notes", "42803", None),
+        ("SELECT count(*) FROM notes ORDER BY id", "42803", None),
         // a query that aggregates may select only aggregates and constants (PostgreSQL: 42803)
         ("SELECT id, count(*) FROM notes", "42803", None),
         ("SELECT title, sum(score) FROM notes", "42803", None),

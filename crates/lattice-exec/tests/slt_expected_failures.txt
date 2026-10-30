@@ -35,7 +35,6 @@ ddl_statements.test:94 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
 ddl_statements.test:100 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
 ddl_statements.test:103 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
 empty_aggregates.test:21 aggregate functions: no aggregate operator in the plan IR
-empty_aggregates.test:32 aggregate functions: no aggregate operator in the plan IR
 empty_aggregates.test:37 GROUP BY and HAVING: no aggregate operator in the plan IR
 empty_aggregates.test:41 DISTINCT: no distinct operator in the plan IR
 empty_aggregates.test:50 GROUP BY and HAVING: no aggregate operator in the plan IR
@@ -78,7 +77,6 @@ joins_small.test:199 refused with 0A000 before the expected error is reached: a 
 joins_small.test:202 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
 limit_offset.test:125 GROUP BY and HAVING: no aggregate operator in the plan IR
 limit_offset.test:134 DISTINCT: no distinct operator in the plan IR
-nulls_functions.test:135 aggregate functions: no aggregate operator in the plan IR
 nulls_functions.test:141 aggregate functions: no aggregate operator in the plan IR
 nulls_functions.test:147 GROUP BY and HAVING: no aggregate operator in the plan IR
 nulls_functions.test:157 GROUP BY and HAVING: no aggregate operator in the plan IR

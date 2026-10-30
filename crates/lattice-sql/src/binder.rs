@@ -176,6 +176,8 @@ pub fn bind_statement(
         catalog,
         params: Vec::new(),
         depth: 0,
+        aggregates: None,
+        in_aggregate_arg: false,
     };
     let plan = b.statement(stmt)?;
     let mut param_types = Vec::with_capacity(b.params.len());
@@ -231,6 +233,12 @@ struct Binder<'a> {
     catalog: &'a dyn CatalogView,
     params: Vec<Option<SqlType>>,
     depth: usize,
+    /// While the items of a query that aggregates are bound: the aggregate calls met so far. A call
+    /// becomes column `i` of the single row the `Aggregate` operator yields, so an expression can mix
+    /// calls and constants. `None` outside such a query, where an aggregate call is refused.
+    aggregates: Option<Vec<AggCall>>,
+    /// Inside the argument of an aggregate call, where columns are allowed.
+    in_aggregate_arg: bool,
 }
 
 fn err<T>(kind: BindErrorKind, message: impl Into<String>, span: Span) -> R<T> {
@@ -261,6 +269,45 @@ fn int_range(ty: SqlType) -> Option<(i128, i128)> {
 /// Whether `e` is a call of `count`, `sum`, `min`, `max` or `avg`.
 fn is_aggregate_call(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Function(f) if matches!(f.name.as_str(), "count" | "sum" | "min" | "max" | "avg"))
+}
+
+/// Whether an aggregate call appears anywhere in `e` (outside a subquery, which is refused anyway).
+/// The match has no wildcard arm, so a new expression form has to say where its operands are.
+fn contains_aggregate(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column(_) => false,
+        ExprKind::Subquery(_) => false,
+        ExprKind::Unary { expr, .. }
+        | ExprKind::IsNull { expr, .. }
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::Extract { expr, .. }
+        | ExprKind::InSubquery { expr, .. } => contains_aggregate(expr),
+        ExprKind::Binary { left, right, .. } => {
+            contains_aggregate(left) || contains_aggregate(right)
+        }
+        ExprKind::InList { expr, list, .. } => {
+            contains_aggregate(expr) || list.iter().any(contains_aggregate)
+        }
+        ExprKind::Between {
+            expr, low, high, ..
+        } => contains_aggregate(expr) || contains_aggregate(low) || contains_aggregate(high),
+        ExprKind::Like { expr, pattern, .. } => {
+            contains_aggregate(expr) || contains_aggregate(pattern)
+        }
+        ExprKind::Position { needle, haystack } => {
+            contains_aggregate(needle) || contains_aggregate(haystack)
+        }
+        ExprKind::Trim { chars, expr, .. } => {
+            contains_aggregate(expr) || chars.as_deref().is_some_and(contains_aggregate)
+        }
+        ExprKind::Function(f) => {
+            is_aggregate_call(e)
+                || match &f.args {
+                    FunctionArgs::Star => false,
+                    FunctionArgs::List(args) => args.iter().any(contains_aggregate),
+                }
+        }
+    }
 }
 
 fn is_integer(ty: SqlType) -> bool {
@@ -609,7 +656,17 @@ impl Binder<'_> {
                 // as inconsistent parameter types (42P08).
                 Ok(typed(ExprNode::Param(*n), SqlType::Unknown))
             }
-            ExprKind::Column(parts) => column(parts, scope, span),
+            ExprKind::Column(parts) => {
+                let bound = column(parts, scope, span)?;
+                if self.aggregates.is_some() && !self.in_aggregate_arg {
+                    return err(
+                        BindErrorKind::Grouping,
+                        "a column must be used in an aggregate function when the query aggregates",
+                        span,
+                    );
+                }
+                Ok(bound)
+            }
             ExprKind::Unary { op, expr } => {
                 let inner = self.expr(expr, scope)?;
                 match op {
@@ -929,7 +986,31 @@ impl Binder<'_> {
     fn function(&mut self, f: &ast::Function, scope: &Scope, span: Span) -> R<TypedExpr> {
         let name = f.name.as_str();
         if matches!(name, "count" | "sum" | "min" | "max" | "avg") {
-            return unsupported("aggregate functions", span);
+            if self.aggregates.is_none() {
+                return unsupported("aggregate functions", span);
+            }
+            if self.in_aggregate_arg {
+                return err(
+                    BindErrorKind::Grouping,
+                    "aggregate function calls cannot be nested",
+                    span,
+                );
+            }
+            self.in_aggregate_arg = true;
+            let call = self.aggregate_call(f, scope, span);
+            self.in_aggregate_arg = false;
+            let call = call?;
+            let ty = call.ty;
+            let calls = self.aggregates.get_or_insert_with(Vec::new);
+            let index = calls.len();
+            calls.push(call);
+            return Ok(typed(
+                ExprNode::Column {
+                    index,
+                    name: f.name.clone(),
+                },
+                ty,
+            ));
         }
         let list = match &f.args {
             FunctionArgs::Star => return unsupported("aggregate functions", span),
@@ -1113,7 +1194,7 @@ impl Binder<'_> {
         }
 
         if q.projection.iter().any(|item| match item {
-            SelectItem::Expr { expr, .. } => is_aggregate_call(expr),
+            SelectItem::Expr { expr, .. } => contains_aggregate(expr),
             _ => false,
         }) {
             return self.aggregate_query(q, plan, &scope, targets);
@@ -1178,50 +1259,16 @@ impl Binder<'_> {
         scope: &Scope,
         targets: Option<&[ColumnInfo]>,
     ) -> R<LogicalPlan> {
-        let mut calls = Vec::with_capacity(q.projection.len());
-        let mut columns = Vec::with_capacity(q.projection.len());
-        for item in &q.projection {
-            let SelectItem::Expr { expr, alias } = item else {
-                return err(
-                    BindErrorKind::Grouping,
-                    "a query that aggregates cannot select every column",
-                    Span::default(),
-                );
-            };
-            let ExprKind::Function(f) = &expr.kind else {
-                columns.push(self.constant_item(expr, alias.as_ref())?);
-                continue;
-            };
-            if !is_aggregate_call(expr) {
-                columns.push(self.constant_item(expr, alias.as_ref())?);
-                continue;
-            }
-            let call = self.aggregate_call(f, scope, expr.span)?;
-            let name = alias
-                .as_ref()
-                .map_or_else(|| f.name.clone(), |a| a.value.clone());
-            let ty = call.ty;
-            columns.push(OutputColumn {
-                expr: typed(
-                    ExprNode::Column {
-                        index: calls.len(),
-                        name: name.clone(),
-                    },
-                    ty,
-                ),
-                name,
-            });
-            calls.push(call);
-        }
+        self.aggregates = Some(Vec::new());
+        let bound = self.aggregate_items(q, scope);
+        let calls = self.aggregates.take().unwrap_or_default();
+        self.in_aggregate_arg = false;
+        let mut columns = bound?;
         if let Some(targets) = targets {
             for (c, t) in columns.iter_mut().zip(targets) {
                 let e = std::mem::replace(&mut c.expr, konst(Value::Null, SqlType::Unknown));
                 c.expr = self.assign(e, t, Span::default())?;
             }
-        }
-        for item in &q.order_by {
-            let key = self.order_key(&item.expr, &columns, &Scope::empty())?;
-            self.finish(key, item.expr.span)?;
         }
         let mut plan = LogicalPlan::Project {
             input: Box::new(LogicalPlan::Aggregate {
@@ -1248,23 +1295,31 @@ impl Binder<'_> {
         Ok(plan)
     }
 
-    /// A select item next to aggregates that mentions no column (`SELECT 1, count(*)`); a column
-    /// outside an aggregate is a grouping error, as in PostgreSQL.
-    fn constant_item(&mut self, expr: &Expr, alias: Option<&ast::Ident>) -> R<OutputColumn> {
-        let bound = match self.expr(expr, &Scope::empty()) {
-            Ok(b) => b,
-            Err(e) if e.kind() == BindErrorKind::UndefinedColumn => {
+    /// The output columns of a query that aggregates. Every item is an expression of aggregate
+    /// calls and constants; the `ORDER BY` keys are bound the same way (a single row has nothing to
+    /// order, but a key that mentions a column outside an aggregate is still an error).
+    fn aggregate_items(&mut self, q: &Query, scope: &Scope) -> R<Vec<OutputColumn>> {
+        let mut columns = Vec::with_capacity(q.projection.len());
+        for item in &q.projection {
+            let SelectItem::Expr { expr, alias } = item else {
                 return err(
                     BindErrorKind::Grouping,
-                    "a column must be used in an aggregate function when the query aggregates",
-                    expr.span,
+                    "a query that aggregates cannot select every column",
+                    Span::default(),
                 );
-            }
-            Err(e) => return Err(e),
-        };
-        let bound = self.finish(bound, expr.span)?;
-        let name = alias.map_or_else(|| output_name(expr), |a| a.value.clone());
-        Ok(OutputColumn { expr: bound, name })
+            };
+            let bound = self.expr(expr, scope)?;
+            let bound = self.finish(bound, expr.span)?;
+            let name = alias
+                .as_ref()
+                .map_or_else(|| output_name(expr), |a| a.value.clone());
+            columns.push(OutputColumn { expr: bound, name });
+        }
+        for item in &q.order_by {
+            let key = self.order_key(&item.expr, &columns, scope)?;
+            self.finish(key, item.expr.span)?;
+        }
+        Ok(columns)
     }
 
     /// Binds one aggregate call and types its result as PostgreSQL does: `count` is `bigint`; `sum`

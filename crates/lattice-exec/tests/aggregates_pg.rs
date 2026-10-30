@@ -196,6 +196,99 @@ fn aggregates_answer_as_postgresql_does() {
     }
 }
 
+/// Expressions over aggregates (`sum(i) + 1`, `coalesce(sum(i), 0)`, `count(*) > 3`, a function of an
+/// aggregate), constants next to aggregates, `ORDER BY` an aggregate, and the grouping errors, in a
+/// fresh session. Left out: `round(avg(f), 1)` (PostgreSQL has no `round(double precision, integer)`)
+/// and an aggregate in `WHERE` (`42803` there, `0A000` here).
+const EXPRESSION_STEPS: &[(&str, &[&str])] = &[
+    (
+        "CREATE TABLE ag (id INT PRIMARY KEY, i INT, s SMALLINT, b BIGINT, n NUMERIC, f DOUBLE PRECISION, t TEXT, d DATE, ts TIMESTAMPTZ, bo BOOLEAN, y BYTEA)",
+        &["CREATE TABLE"],
+    ),
+    (
+        "INSERT INTO ag VALUES (1, 10, 1, 9223372036854775800, 1.50, 1.5, 'b', '2024-03-15', '2024-03-15 10:00:00+00', true, '\\x01'), (2, NULL, 2, 5, 2.25, NULL, 'a', '2024-01-01', '2024-01-01 00:00:00+00', false, '\\x02'), (3, 20, NULL, NULL, NULL, 2.5, NULL, NULL, NULL, NULL, NULL), (4, 5, 3, 100, 0.10, -1.0, 'c', '2025-01-01', '2023-12-31 23:59:59.5+00', true, '\\x00ff')",
+        &["INSERT 0 4"],
+    ),
+    (
+        "CREATE TABLE em (id INT PRIMARY KEY, i INT, n NUMERIC, f DOUBLE PRECISION, t TEXT)",
+        &["CREATE TABLE"],
+    ),
+    ("SELECT sum(i) + 1 FROM ag", &["36"]),
+    ("SELECT 1 + sum(i) FROM ag", &["36"]),
+    ("SELECT sum(i) * 2, count(*) + 1 FROM ag", &["70|5"]),
+    ("SELECT sum(i) / count(i) FROM ag", &["11"]),
+    ("SELECT sum(i)::text FROM ag", &["35"]),
+    ("SELECT coalesce(sum(i), 0) FROM ag WHERE id = 99", &["0"]),
+    (
+        "SELECT coalesce(max(t), 'none') FROM ag WHERE id = 99",
+        &["none"],
+    ),
+    ("SELECT max(i) - min(i) FROM ag", &["15"]),
+    ("SELECT avg(i) * 2 FROM ag", &["23.3333333333333334"]),
+    ("SELECT count(*) > 3 FROM ag", &["t"]),
+    ("SELECT sum(i) IS NULL FROM ag WHERE id = 99", &["t"]),
+    ("SELECT sum(i) = 35 FROM ag", &["t"]),
+    ("SELECT max(t) || '!' FROM ag", &["c!"]),
+    ("SELECT lower(max(t)) FROM ag", &["c"]),
+    ("SELECT length(max(t)) FROM ag", &["1"]),
+    ("SELECT abs(min(i) - 100) FROM ag", &["95"]),
+    ("SELECT nullif(count(*), 4) FROM ag", &[""]),
+    ("SELECT count(*) + count(i) FROM ag", &["7"]),
+    ("SELECT sum(i) + i FROM ag", &["ERR 42803"]),
+    ("SELECT sum(i + count(*)) FROM ag", &["ERR 42803"]),
+    ("SELECT max(sum(i)) FROM ag", &["ERR 42803"]),
+    ("SELECT count(*) FROM ag ORDER BY count(*)", &["4"]),
+    ("SELECT sum(i) FROM ag ORDER BY max(i)", &["35"]),
+    ("SELECT sum(i) FROM ag ORDER BY 1", &["35"]),
+    ("SELECT count(*), 5 FROM ag", &["4|5"]),
+    ("SELECT 5, count(*) FROM ag", &["5|4"]),
+    ("SELECT count(*) + 1 AS c FROM ag LIMIT 1", &["5"]),
+    ("SELECT sum(i) + 1 FROM em", &[""]),
+    ("SELECT sum(1) FROM ag", &["4"]),
+    ("SELECT sum(1.5) FROM ag", &["6.0"]),
+    ("SELECT count(1) FROM ag", &["4"]),
+    ("SELECT count(NULL) FROM ag", &["0"]),
+    ("SELECT min(NULL) FROM ag", &[""]),
+    ("SELECT sum(NULL::int) FROM ag", &[""]),
+    ("SELECT max('a') FROM ag", &["a"]),
+    ("SELECT sum(i) + sum(s) FROM ag", &["41"]),
+    ("SELECT -sum(i) FROM ag", &["-35"]),
+    ("SELECT NOT (count(*) = 4) FROM ag", &["f"]),
+    ("SELECT sum(i) BETWEEN 1 AND 100 FROM ag", &["t"]),
+    ("SELECT sum(i) IN (35, 36) FROM ag", &["t"]),
+    (
+        "SELECT CAST(sum(i) AS double precision) / 2 FROM ag",
+        &["17.5"],
+    ),
+];
+
+#[test]
+fn expressions_over_aggregates_answer_as_postgresql_does() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    for (sql, want) in EXPRESSION_STEPS {
+        let got: Vec<String> = match s.execute(&mut f.db, sql) {
+            Ok(r) => {
+                let mut lines: Vec<String> = text(&r)
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|c| if c == "NULL" { "" } else { c.as_str() })
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    })
+                    .collect();
+                if r.columns.is_empty() {
+                    lines.push(r.tag);
+                }
+                lines
+            }
+            Err(e) => vec![format!("ERR {}", e.sqlstate())],
+        };
+        assert_eq!(&got, want, "{sql}");
+    }
+}
+
 /// Switches a defect off again however the test ends.
 struct Planted;
 
