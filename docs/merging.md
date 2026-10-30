@@ -59,9 +59,15 @@ Safety rules (each has a test in `tools/test_merge_queue.py`):
 - **The `reviewed` label is required for every PR, by default**, not only on risky paths, because the
   risk-gate path list can miss a risky change (PR 412 merged without a review that way). A PR without
   the label is skipped with the reason "no reviewed label"; it is not parked or merged. The only
-  exception is a dependency update: a bot-authored PR titled `build(deps...)` or `chore(deps...)`.
+  exception is a Dependabot dependency update: author login `app/dependabot` or `dependabot[bot]` with the
+  bot flag set, a head branch starting `dependabot/`, and a title `build(deps...)` or `chore(deps...)`.
+  A human named `dependabot-fan` or another bot does not qualify. The exemption is about the label only:
+  `risk-gate` is still required, so a Dependabot PR that touches `.github/**` waits for it.
   `--allow-unreviewed` turns the rule off for a run; use it only when the owner has said so in chat.
   `tools/merge-pr.sh` does not apply this rule; it is for PRs the owner has already cleared.
+- **Known gap:** a push after the label keeps the label, and the queue does not notice. A check that
+  compares the label time with the head commit date fails for every PR the queue rebases, so it is not
+  implemented; see [#418](https://github.com/moncifem/latticedb/issues/418). Re-read the label after any push.
 
 Options: `--once` (single pass), `--rounds N` and `--round-sleep S` (loop mode, defaults 6 and 120),
 `--timeout MINUTES` per PR (default 40), `--poll` and `--settle` seconds, `--hold-label`, `--base`,

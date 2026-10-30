@@ -75,11 +75,12 @@ reply("", 99, "fake gh: unexpected " + " ".join(args))
 '''
 
 
-def view(head=H1, state="OPEN", draft=False, merge="CLEAN", base="main", labels=("reviewed",), bot=False, title="t"):
+def view(head=H1, state="OPEN", draft=False, merge="CLEAN", base="main", labels=("reviewed",), bot=False, title="t", login=None, is_bot=None, branch=None):
     return {"state": state, "isDraft": draft, "mergeStateStatus": merge, "headRefOid": head,
-            "headRefName": "feature", "baseRefName": base, "title": title,
+            "headRefName": branch or ("dependabot/cargo/x" if bot else "feature"), "baseRefName": base, "title": title,
             "labels": [{"name": name} for name in labels],
-            "author": {"login": "app/dependabot" if bot else "someone", "is_bot": bot}}
+            "author": {"login": login or ("app/dependabot" if bot else "someone"),
+                       "is_bot": bot if is_bot is None else is_bot}}
 
 
 def check(name, bucket="pass", run="100", started="2026-10-30T10:00:00Z"):
@@ -354,6 +355,38 @@ class ReadinessTests(QueueCase):
         # A human cannot pass as a dependency update by naming the title, nor a bot by another title.
         self.assertEqual(mq.readiness(view(labels=[], title="build(deps): bump x"))[0], "skip")
         self.assertEqual(mq.readiness(view(labels=[], bot=True, title="feat: x"), listed=True)[0], "skip")
+
+    def test_the_dependency_exemption_cannot_be_spoofed(self):
+        title = "build(deps): bump x from 1 to 2"
+        # Dependabot's two logins pass; both need the bot flag, the branch prefix and the title shape.
+        for login in ("app/dependabot", "dependabot[bot]"):
+            self.assertEqual(mq.readiness(view(labels=[], bot=True, login=login, title=title), listed=True)[0], "ready")
+        spoofs = {
+            "human named dependabot-fan": view(labels=[], title=title, login="dependabot-fan", is_bot=False,
+                                               branch="dependabot/cargo/x"),
+            "bot flag but a human-style login containing dependabot": view(
+                labels=[], title=title, login="not-dependabot", is_bot=True, branch="dependabot/cargo/x"),
+            "another bot app": view(labels=[], title=title, login="app/renovate", is_bot=True,
+                                    branch="dependabot/cargo/x"),
+            "another [bot] account": view(labels=[], title=title, login="github-actions[bot]", is_bot=True,
+                                          branch="dependabot/cargo/x"),
+            "dependabot login without the bot flag": view(labels=[], title=title, login="dependabot[bot]",
+                                                          is_bot=False, branch="dependabot/cargo/x"),
+            "dependabot but a feature branch": view(labels=[], bot=True, title=title, branch="feature"),
+            "dependabot but another title": view(labels=[], bot=True, title="feat: x"),
+        }
+        for name, info in spoofs.items():
+            with self.subTest(name=name):
+                self.assertEqual(mq.readiness(info, listed=True)[0], "skip")
+
+    def test_dependabot_pr_touching_workflows_with_a_red_risk_gate_parks(self):
+        # The exemption is only about the label. risk-gate stays a required check, so a Dependabot
+        # pull request that changes .github/** and has no reviewed label cannot merge.
+        red = ans(all_checks(**{"risk-gate": "fail"}), rc=1)
+        self.pr(5, [view(labels=[], bot=True, title="chore(deps): bump actions/cache")], checks=[red])
+        self.assertEqual(self.make().process(5, listed=True), "parked")
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.status_of(5)["failed_checks"], ["risk-gate"])
 
     def test_allow_unreviewed_switches_the_rule_off(self):
         self.assertEqual(mq.readiness(view(labels=[]), reviewed_label="")[0], "ready")

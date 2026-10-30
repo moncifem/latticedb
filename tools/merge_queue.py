@@ -43,7 +43,8 @@ DEFAULT_HOLD_LABEL = "hold"
 # paths it touches, because the risk-gate path list can miss a risky change (PR 412). Dependency updates
 # are exempt; `--allow-unreviewed` switches the rule off.
 DEFAULT_REVIEWED_LABEL = "reviewed"
-DEPENDENCY_TITLE_RE = re.compile(r"\A(?:build|chore)\(deps(?:-dev)?\)[:!]")
+DEPENDABOT_LOGINS = ("app/dependabot", "dependabot[bot]")
+DEPENDENCY_TITLE_RE =re.compile(r"\A(?:build|chore)\(deps(?:-dev)?\)[:!]")
 # Required by the queue itself even if branch protection does not list it: a red or missing risk gate
 # (the owner's `reviewed` label on risky paths) must never be merged over.
 DEFAULT_ALSO_REQUIRE = ("risk-gate",)
@@ -107,8 +108,18 @@ def is_bot_author(info):
 
 
 def is_dependency_update(info):
-    """A bot-authored pull request titled like Dependabot's `build(deps): ...` / `chore(deps): ...`."""
-    return is_bot_author(info) and bool(DEPENDENCY_TITLE_RE.match(str(info.get("title") or "")))
+    """Dependabot's own pull request: its exact login, a bot account, its branch prefix and title shape.
+
+    The test is narrow on purpose. A human named `dependabot-fan`, another bot app, or any other title
+    or branch does not qualify. The exemption also does not look at paths: a Dependabot pull request
+    that touches `.github/**` still needs a green `risk-gate`, which is a required check."""
+    author = info.get("author") or {}
+    return (
+        author.get("is_bot") is True
+        and author.get("login") in DEPENDABOT_LOGINS
+        and str(info.get("headRefName") or "").startswith("dependabot/")
+        and bool(DEPENDENCY_TITLE_RE.match(str(info.get("title") or "")))
+    )
 
 
 def readiness(info, base=DEFAULT_BASE, hold_label=DEFAULT_HOLD_LABEL, listed=False,

@@ -161,11 +161,12 @@ RFC and an ADR first (`docs/rfc`, `docs/adr`).
 ## Risk gate and review
 
 A pull request that touches a risky path needs an independent review before merge. The paths are
-`formats/**`, `crates/lattice-core/**`, `crates/latticed/**`, `crates/lattice-exec/**`, the
-authentication and SQL host code in `crates/lattice-api` (auth, SCRAM, executor host and handler,
-principal, session, subscription host, wire codec), the row-policy trait in `lattice-engines`,
-`layers.toml`, `.github/**`, the protection, governance and merge tools, the threat model and security
-test plan, and `docs/rfc` and `docs/adr`; the single source is
+`formats/**`, whole crates (`lattice-core`, `lattice-api`, `latticed`, `lattice-exec`,
+`lattice-engines`, `lattice-sql`, `lattice-lsl`, `lattice-sdk`, `lattice-abi`, `lattice-seams`,
+`lattice-sys`, `lattice-identity`; two files in `lattice-api` are exempt), `fuzz/fuzz_targets/**`,
+`tla/**`, lint and toolchain configuration, `layers.toml`, `.github/**`, the protection, governance and
+merge tools, the threat model, security test plan, review policy and merging docs, and `docs/rfc` and
+`docs/adr`; the single source is
 [`docs/review-policy.md`](review-policy.md). The `risk-gate` check fails on such a pull request until
 the owner adds the `reviewed` label, which happens only after a reviewer who did not write the change
 has read the diff, checked the claims against the code and recorded findings on the pull request. A

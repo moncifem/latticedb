@@ -25,42 +25,57 @@ EXEMPT_GLOBS = (
     "fuzz/Cargo.toml",
 )
 
-# (area, globs). `**` crosses directories, `*` does not.
+# (area, globs). `**` crosses directories, `*` does not. Whole crates are listed rather than single
+# files, because a file list is evaded by turning `auth.rs` into `auth/mod.rs` or adding `authz.rs`
+# (PR 412 showed the cost of a list that misses). Files a crate does not need reviewed are named in
+# RISK_EXEMPT. Paths left out on purpose are left to the merge queue's universal `reviewed` rule
+# (docs/review-policy.md, "Left to the merge queue").
 RISK_RULES = (
     ("format", ("formats/**",)),
     ("kernel", ("crates/lattice-core/**",)),
+    # Directory modules count too: `auth*` alone does not match auth/mod.rs.
     (
         "auth",
         (
             "crates/lattice-api/**/auth*",
+            "crates/lattice-api/**/auth*/**",
             "crates/lattice-api/**/scram*",
+            "crates/lattice-api/**/scram*/**",
         ),
     ),
-    # The network server: listener, TLS, startup options, credential and policy file loading, the
-    # database thread. PR 412 changed all of this and the gate saw nothing.
+    # The protocol front door: executor host and handler (the policy table and its file parser),
+    # principal, session, subscription host, cancel-key registry, sync, wire codec, conformance vectors.
+    ("api", ("crates/lattice-api/**",)),
+    # The network server: listener, TLS, startup options, credential and policy file loading,
+    # the database thread.
     ("server", ("crates/latticed/**",)),
-    # Where an authenticated principal becomes an authorization policy and a statement runs under
-    # it: the executor, its host and handler, the session state machine, the subscription host and
-    # the wire codec. The policy file parser (PolicyTable) lives in exec_host.rs.
+    ("sql-host", ("crates/lattice-exec/**",)),
+    # Row store: policy enforcement (store.rs authorize_*, index.rs candidate checks, limits.rs trait)
+    # beside the row, catalog, typed-row and change-feed formats. store.rs mixes both on purpose.
+    ("engines", ("crates/lattice-engines/**",)),
+    ("sql", ("crates/lattice-sql/**", "crates/lattice-lsl/**")),
+    ("sdk", ("crates/lattice-sdk/**",)),
     (
-        "sql-host",
+        "foundations",
         (
-            "crates/lattice-exec/**",
-            "crates/lattice-api/src/exec_host.rs",
-            "crates/lattice-api/src/exec_handler.rs",
-            "crates/lattice-api/src/principal.rs",
-            "crates/lattice-api/src/session.rs",
-            "crates/lattice-api/src/subscribe.rs",
-            "crates/lattice-api/src/pgwire.rs",
-            "crates/lattice-api/tests/**",
+            "crates/lattice-abi/**",
+            "crates/lattice-seams/**",
+            "crates/lattice-sys/**",
+            "crates/lattice-identity/**",
         ),
     ),
-    # The row-policy trait and its enforcement tests in the row store.
+    ("fuzz", ("fuzz/fuzz_targets/**",)),
+    ("tla", ("tla/**",)),
+    # Lints, toolchain and the checks that stop a banned construct or a flaky test.
     (
-        "policy",
+        "toolchain",
         (
-            "crates/lattice-engines/src/limits.rs",
-            "crates/lattice-engines/src/store_policy_tests.rs",
+            "clippy.toml",
+            "rust-toolchain.toml",
+            ".cargo/config.toml",
+            "xtask/src/checks.rs",
+            "tools/allow-banned.toml",
+            "tools/quarantine.toml",
         ),
     ),
     ("layers", ("layers.toml",)),
@@ -80,14 +95,35 @@ RISK_RULES = (
             "tools/test_merge_pr.py",
             "tools/merge-pr.sh",
             "tools/test_merge_pr.sh",
+            "tools/main_guard.py",
+            "tools/test_main_guard.py",
+            "tools/rebase_pr.py",
+            "tools/test_rebase_pr.py",
+            "tools/check_expected_tests.py",
+            "tools/test_check_expected_tests.py",
         ),
     ),
     ("rfc-adr", ("docs/rfc/**", "docs/adr/**")),
-    ("security-docs", ("docs/threat-model.md", "docs/security-test-plan.md")),
+    (
+        "security-docs",
+        (
+            "docs/threat-model.md",
+            "docs/security-test-plan.md",
+            "docs/review-policy.md",
+            "docs/merging.md",
+        ),
+    ),
     # Root manifest, lockfile and cargo-deny policy: where dependencies and their licences are
     # decided (docs/dependency-policy.md). Exact names, so crate manifests are not matched here.
     ("dependencies", ("Cargo.toml", "Cargo.lock", "deny.toml")),
 )
+
+# Files inside a risky tree that do not need the label. Each was read: backpressure.rs is a pure
+# bounded queue with no policy, credential or wire format; the README is prose. conformance.rs is NOT
+# exempt: its vectors pin the sync and feed wire bytes.
+RISK_EXEMPT = {
+    "api": ("crates/lattice-api/README.md", "crates/lattice-api/src/backpressure.rs"),
+}
 
 MAX_OPEN_PRS = 200
 
@@ -123,7 +159,7 @@ def classify_risk(changed_paths):
     areas = set()
     for path in changed_paths:
         for area, globs in RISK_RULES:
-            if matches(path, globs):
+            if matches(path, globs) and not matches(path, RISK_EXEMPT.get(area, ())):
                 areas.add(area)
     return areas
 

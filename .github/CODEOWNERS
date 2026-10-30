@@ -5,19 +5,27 @@
 # Risky paths. Keep in step with tools/pr_governance.py; docs/review-policy.md explains why.
 /formats/ @moncifem
 /crates/lattice-core/ @moncifem
-/crates/lattice-api/src/auth*.rs @moncifem
-/crates/lattice-api/src/scram*.rs @moncifem
 /crates/latticed/ @moncifem
 /crates/lattice-exec/ @moncifem
-/crates/lattice-api/src/exec_host.rs @moncifem
-/crates/lattice-api/src/exec_handler.rs @moncifem
-/crates/lattice-api/src/principal.rs @moncifem
-/crates/lattice-api/src/session.rs @moncifem
-/crates/lattice-api/src/subscribe.rs @moncifem
-/crates/lattice-api/src/pgwire.rs @moncifem
-/crates/lattice-api/tests/ @moncifem
-/crates/lattice-engines/src/limits.rs @moncifem
-/crates/lattice-engines/src/store_policy_tests.rs @moncifem
+# Whole crates, so a new file or a directory module stays covered. The classifier exempts
+# lattice-api/README.md and src/backpressure.rs; CODEOWNERS cannot express that.
+/crates/lattice-api/ @moncifem
+/crates/lattice-engines/ @moncifem
+/crates/lattice-sql/ @moncifem
+/crates/lattice-lsl/ @moncifem
+/crates/lattice-sdk/ @moncifem
+/crates/lattice-abi/ @moncifem
+/crates/lattice-seams/ @moncifem
+/crates/lattice-sys/ @moncifem
+/crates/lattice-identity/ @moncifem
+/fuzz/fuzz_targets/ @moncifem
+/tla/ @moncifem
+/clippy.toml @moncifem
+/rust-toolchain.toml @moncifem
+/.cargo/config.toml @moncifem
+/xtask/src/checks.rs @moncifem
+/tools/allow-banned.toml @moncifem
+/tools/quarantine.toml @moncifem
 /layers.toml @moncifem
 /.github/ @moncifem
 /tools/branch-protection.json @moncifem
@@ -31,10 +39,18 @@
 /tools/test_merge_pr.py @moncifem
 /tools/merge-pr.sh @moncifem
 /tools/test_merge_pr.sh @moncifem
+/tools/main_guard.py @moncifem
+/tools/test_main_guard.py @moncifem
+/tools/rebase_pr.py @moncifem
+/tools/test_rebase_pr.py @moncifem
+/tools/check_expected_tests.py @moncifem
+/tools/test_check_expected_tests.py @moncifem
 /docs/rfc/ @moncifem
 /docs/adr/ @moncifem
 /docs/threat-model.md @moncifem
 /docs/security-test-plan.md @moncifem
+/docs/review-policy.md @moncifem
+/docs/merging.md @moncifem
 /Cargo.toml @moncifem
 /Cargo.lock @moncifem
 /deny.toml @moncifem
