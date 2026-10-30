@@ -68,17 +68,24 @@ impl<T: Clone + Ord> Crdt for LwwRegister<T> {
 pub struct OrSet<T: Ord> {
     adds: BTreeMap<T, BTreeSet<Hlc>>,
     removed: BTreeSet<Hlc>,
+    /// Sum of the sizes of the sets in `adds`, kept in step by `add` and `merge` so that
+    /// [`OrSet::tag_count`] is O(1). `remove` does not change it: a removed tag stays in `adds`.
+    add_tags: usize,
 }
 
 impl<T: Ord + Clone> OrSet<T> {
     /// Adds `value` with a unique tag.
     pub fn add(&mut self, value: T, tag: Hlc) {
-        self.adds.entry(value).or_default().insert(tag);
+        if self.adds.entry(value).or_default().insert(tag) {
+            self.add_tags += 1;
+        }
     }
 
-    /// Tags held: add tags plus removed tags, the quantity [`MAX_SET_TAGS`] bounds.
+    /// Tags held: add tags plus removed tags, the quantity [`MAX_SET_TAGS`] bounds. O(1): the add
+    /// count is kept as the set changes, so checking the cap before every add stays linear over a
+    /// fill instead of quadratic.
     pub fn tag_count(&self) -> usize {
-        self.adds.values().map(BTreeSet::len).sum::<usize>() + self.removed.len()
+        self.add_tags + self.removed.len()
     }
 
     /// Adds a value received from an authenticated peer. The tag must carry the peer's node and
@@ -151,10 +158,12 @@ impl<T: Ord + Clone> OrSet<T> {
 impl<T: Ord + Clone> Crdt for OrSet<T> {
     fn merge(&mut self, other: &Self) {
         for (k, tags) in &other.adds {
-            self.adds
-                .entry(k.clone())
-                .or_default()
-                .extend(tags.iter().copied());
+            let mine = self.adds.entry(k.clone()).or_default();
+            for t in tags {
+                if mine.insert(*t) {
+                    self.add_tags += 1;
+                }
+            }
         }
         self.removed.extend(other.removed.iter().copied());
     }
@@ -612,5 +621,106 @@ mod tests {
             "old",
         );
         assert_eq!(r.get(), Some(&"new"));
+    }
+    // ---- running tag count (issue 451) ----------------------------------------------------------
+
+    /// The count recomputed from the stored sets, the way it was computed before it was kept.
+    fn recounted(s: &OrSet<u8>) -> usize {
+        s.adds.values().map(BTreeSet::len).sum::<usize>() + s.removed.len()
+    }
+
+    #[test]
+    fn tag_count_follows_adds_removes_and_merges() {
+        let tag = |n: u64| Hlc {
+            wall_ms: n,
+            counter: 0,
+            node: 1,
+        };
+        let mut s: OrSet<u8> = OrSet::default();
+        assert_eq!(s.tag_count(), 0);
+        s.add(1, tag(1));
+        assert_eq!(s.tag_count(), 1);
+        s.add(1, tag(1)); // the same tag again is not a new tag
+        assert_eq!(s.tag_count(), 1);
+        s.add(2, tag(2));
+        assert_eq!(s.tag_count(), 2);
+        // A removed tag is counted twice: it stays among the adds and joins the removed ones.
+        s.remove(&1);
+        assert_eq!(s.tag_count(), 3);
+        s.remove(&1);
+        assert_eq!(s.tag_count(), 3);
+        s.remove(&9); // never added
+        assert_eq!(s.tag_count(), 3);
+        let mut other: OrSet<u8> = OrSet::default();
+        other.add(1, tag(1)); // known
+        other.add(1, tag(3)); // new tag, known value
+        other.add(3, tag(4)); // new value
+        other.remove(&3); // tag(4) becomes removed here
+        s.merge(&other);
+        // adds: {1: t1 t3, 2: t2, 3: t4} = 4; removed: {t1, t4} = 2.
+        assert_eq!(s.tag_count(), 6);
+        s.merge(&other); // idempotent
+        assert_eq!(s.tag_count(), 6);
+        assert_eq!(s.tag_count(), recounted(&s));
+    }
+
+    #[test]
+    fn a_state_built_by_merging_equals_one_built_by_adding() {
+        let tag = |n: u64| Hlc {
+            wall_ms: n,
+            counter: 0,
+            node: 1,
+        };
+        let mut direct: OrSet<u8> = OrSet::default();
+        let mut a: OrSet<u8> = OrSet::default();
+        let mut b: OrSet<u8> = OrSet::default();
+        for (v, t) in [(1u8, 1u64), (2, 2), (1, 3), (3, 4)] {
+            direct.add(v, tag(t));
+        }
+        a.add(1, tag(1));
+        a.add(2, tag(2));
+        b.add(1, tag(3));
+        b.add(3, tag(4));
+        b.add(1, tag(1));
+        a.merge(&b);
+        assert_eq!(a, direct);
+        assert_eq!(a.tag_count(), 4);
+    }
+
+    proptest! {
+        /// Whatever mix of adds, removes, merges and checked entry points ran, the kept count is
+        /// the count of the stored tags.
+        #[test]
+        fn the_kept_tag_count_always_matches_the_stored_tags(
+            ops in proptest::collection::vec(
+                prop_oneof![
+                    (0u8..4, arb_hlc()).prop_map(|(v, t)| (0u8, v, t)),
+                    (0u8..4, arb_hlc()).prop_map(|(v, t)| (1u8, v, t)),
+                    (0u8..4, arb_hlc()).prop_map(|(v, t)| (2u8, v, t)),
+                    (0u8..4, arb_hlc()).prop_map(|(v, t)| (3u8, v, t)),
+                ],
+                0..40,
+            ),
+        ) {
+            let peer = PeerContext { node: 1, now_ms: 1_000, max_drift_ms: 0 };
+            let mut a: OrSet<u8> = OrSet::default();
+            let mut b: OrSet<u8> = OrSet::default();
+            for (kind, v, t) in ops {
+                match kind {
+                    0 => a.add(v, t),
+                    1 => a.remove(&v),
+                    2 => {
+                        b.add(v, t);
+                        let _ = a.add_from(&peer, v, Hlc { node: 1, ..t });
+                    }
+                    _ => {
+                        let _ = a.merge_from(&peer, &b);
+                        b.merge(&a);
+                    }
+                }
+                prop_assert_eq!(a.tag_count(), recounted(&a));
+                prop_assert_eq!(b.tag_count(), recounted(&b));
+            }
+        }
     }
 }
