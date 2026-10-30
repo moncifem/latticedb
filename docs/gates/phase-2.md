@@ -323,7 +323,7 @@ guard (`an_omitted_guard_on_actual_compound_commit_is_caught_by_engine_recovery`
 The bit-0-only format cannot yet exercise a rewrite from A to A|B in production; the sweep widens the
 known-capability set per thread in tests only. Local verification covered focused tests and Clippy
 for `lattice-core` and `lattice-engines`; the workspace gate, mutation, Miri and the ignored
-hosted matrices are left to CI. The registry now has 40 bits.
+hosted matrices are left to CI. The registry now has 41 bits.
 
 ## Strict HLC history resolver (P2-14 foundation)
 

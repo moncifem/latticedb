@@ -80,17 +80,17 @@ pub enum Bug {
     TreeCycleCheckSkipped,
     /// A capability-requiring append omits its durable segment guard.
     RequiredGuardOmitted,
-    /// An empty tail's guard is rewritten in place without a durable staged copy (issue 307).
-    GuardRewriteUnstaged,
     /// Recovery ignores managed index definitions and therefore omits their rebuilt entries.
     ManagedIndexesNotRecovered,
-    /// A catalog or managed-index change commits without asking the actor policy (authorization).
-    DdlPolicySkipped,
     /// Strict HLC history resolution silently substitutes the vacuum floor for an expired view.
     HlcSnapshotClamped,
     /// The duplicate check runs before the fence check, so a superseded turn retrying an
     /// already stored record id is answered duplicate instead of fenced (plugin contract: fence first).
     DuplicateBeforeFence,
+    /// An empty tail's guard is rewritten in place without a durable staged copy (issue 307).
+    GuardRewriteUnstaged,
+    /// A catalog or managed-index change commits without asking the actor policy (authorization).
+    DdlPolicySkipped,
 }
 
 impl Bug {
@@ -237,7 +237,7 @@ mod tests {
             .chain(Bug::HLC_SNAPSHOT)
             .chain(Bug::FENCE_ORDER)
             .collect();
-        assert_eq!(all.len(), 40);
+        assert_eq!(all.len(), 41);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();
