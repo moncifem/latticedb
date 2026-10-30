@@ -8,8 +8,11 @@
 //! wait for the next frame of an authenticated session (it defaults to `read_timeout`);
 //! `write_timeout` bounds each socket write and `response_timeout` is an absolute budget for one
 //! whole response, so a peer that drains a few bytes per interval cannot hold a worker. A TLS
-//! connection is closed with `close_notify`. CancelRequests are rate limited per client address and
-//! globally; an excess request is dropped without a reply, like an unknown key.
+//! connection is closed with a best-effort `close_notify` on every exit that still can write (orderly
+//! end, fatal error replies, timeouts), bounded by a short absolute deadline. CancelRequests are
+//! rate limited per client address and globally; an excess request is dropped without a reply, like
+//! an unknown key. Wrong keys consume that budget, so the limit can be used to starve cancels (see
+//! the README).
 //!
 //! Robustness: a failure that belongs to one connection (a reset before accept, a socket option
 //! that fails on a reset socket, a thread that cannot be spawned) drops that socket and the
@@ -132,7 +135,9 @@ const GLOBAL_TLS_STARTS_PER_SECOND: usize = 64;
 const PER_IP_TLS_STARTS_PER_SECOND: usize = 16;
 const MAX_TRACKED_ADDRESSES: usize = 1024;
 /// CancelRequest budgets. A cancel needs a guessed 64-bit key, so these only bound guessing and
-/// registry lock traffic; they are generous enough for a pool cancelling many sessions at once.
+/// registry lock traffic. They are a resource bound, not a DoS guarantee: wrong keys consume budget,
+/// so about 16 addresses (or a few IPv6 /64s) can use the whole global budget and starve real
+/// cancels, and every client behind one NAT shares the per-address budget.
 const GLOBAL_CANCELS_PER_SECOND: usize = 256;
 const PER_IP_CANCELS_PER_SECOND: usize = 16;
 
@@ -189,6 +194,9 @@ impl ServerHandle {
             || config.write_timeout.is_zero()
             || config.response_timeout.is_zero()
             || config.idle_timeout.is_some_and(|idle| idle.is_zero())
+            || config
+                .idle_timeout
+                .is_some_and(|idle| Instant::now().checked_add(idle).is_none())
             || Instant::now()
                 .checked_add(config.response_timeout)
                 .is_none()
@@ -722,8 +730,49 @@ impl HandshakeLimiter {
     }
 }
 
+/// Runs one connection and always ends it through `Transport::shutdown`, so every exit (orderly,
+/// fatal error reply, protocol error, timeout or write failure) sends TLS `close_notify` when the
+/// connection is TLS and the send can still complete within `CLOSE_TIMEOUT`.
 fn connection<H, F>(
     mut socket: Transport,
+    config: ServerConfig,
+    registry: Registry,
+    factory: Arc<F>,
+    limits: Arc<Limits>,
+    peer: IpAddr,
+) -> io::Result<()>
+where
+    H: QueryHandler + 'static,
+    F: Fn() -> H + Send + Sync + 'static,
+{
+    let result = serve_connection(&mut socket, config, registry, factory, limits, peer);
+    let _ = socket.shutdown();
+    result
+}
+
+/// Applies the CancelRequest budget, then signals the matching query. Over budget the request is
+/// dropped without a reply, exactly like an unknown key. The budget is charged before the key is
+/// looked up, so wrong guesses cost as much as right ones.
+fn route_cancel(
+    limits: &Limits,
+    registry: &Registry,
+    peer: IpAddr,
+    now: Instant,
+    key: CancelKey,
+) -> io::Result<bool> {
+    let admitted = limits
+        .cancels
+        .lock()
+        .map_err(|_| io::Error::other("cancel admission unavailable"))?
+        .admit(peer, now);
+    if admitted {
+        lock_registry(registry)?.entries.cancel(key, 0);
+    }
+    Ok(admitted)
+}
+
+fn serve_connection<H, F>(
+    socket: &mut Transport,
     config: ServerConfig,
     registry: Registry,
     factory: Arc<F>,
@@ -740,40 +789,35 @@ where
     // Classify startup before SQL admission: CancelRequest uses its own short-lived connection and
     // must remain routable while all registered SQL sessions are busy.
     loop {
-        let input =
-            match frame_bounded(&mut socket, true, pre_startup, None, MAX_STARTUP_PACKET_LEN) {
-                Ok(Some(input)) => input,
-                Ok(None) => return Ok(()),
-                Err(FrameError::Io(error)) => return Err(error),
-                Err(FrameError::Protocol(error)) => {
-                    send(&mut socket, fatal("08P01", error.to_string()), response)?;
-                    return Ok(());
-                }
-            };
+        let input = match frame_bounded(socket, true, pre_startup, None, MAX_STARTUP_PACKET_LEN) {
+            Ok(Some(input)) => input,
+            Ok(None) => return Ok(()),
+            Err(FrameError::Io(error)) => return Err(error),
+            Err(FrameError::Protocol(error)) => {
+                send(socket, fatal("08P01", error.to_string()), response)?;
+                return Ok(());
+            }
+        };
         let startup = match pgwire::decode_startup(&input) {
             Ok(Some((startup, _))) => startup,
             Ok(None) => {
-                send(&mut socket, fatal("08P01", "truncated startup"), response)?;
+                send(socket, fatal("08P01", "truncated startup"), response)?;
                 return Ok(());
             }
             Err(error) => {
-                send(&mut socket, fatal("08P01", error.to_string()), response)?;
+                send(socket, fatal("08P01", error.to_string()), response)?;
                 return Ok(());
             }
         };
         match startup {
             Startup::Cancel { pid, secret } => {
-                let admitted = limits
-                    .cancels
-                    .lock()
-                    .map_err(|_| io::Error::other("cancel admission unavailable"))?
-                    .admit(peer, Instant::now());
-                if admitted {
-                    lock_registry(&registry)?
-                        .entries
-                        .cancel(CancelKey { pid, secret }, 0);
-                }
-                let _ = socket.shutdown();
+                route_cancel(
+                    &limits,
+                    &registry,
+                    peer,
+                    Instant::now(),
+                    CancelKey { pid, secret },
+                )?;
                 return Ok(());
             }
             Startup::SslRequest => {
@@ -797,7 +841,7 @@ where
                         }
                         socket.write_all(b"S")?;
                         socket.flush()?;
-                        socket = socket.upgrade(tls)?;
+                        socket.upgrade_in_place(tls)?;
                     }
                 }
             }
@@ -811,7 +855,7 @@ where
                 if matches!(config.authentication, Authentication::ScramTls { .. })
                     && !socket.is_tls()
                 {
-                    send(&mut socket, fatal("28000", "TLS required"), response)?;
+                    send(socket, fatal("28000", "TLS required"), response)?;
                     return Ok(());
                 }
                 // The cancel key is registered only once authentication succeeds (see `bind_key`).
@@ -832,7 +876,7 @@ where
                             Ok(exchange) => exchange,
                             Err(_) => {
                                 send(
-                                    &mut socket,
+                                    socket,
                                     fatal("28P01", "password authentication failed"),
                                     response,
                                 )?;
@@ -846,13 +890,13 @@ where
                 let outcome = session.on_startup(Startup::Params(params));
                 let outcome = bind_key(outcome, &registry, &mut registration);
                 let close = outcome.close;
-                send(&mut socket, outcome, response)?;
+                send(socket, outcome, response)?;
                 if session.sasl_phase().is_none() {
                     socket.authenticated();
                 }
                 if !close {
                     serve(
-                        &mut socket,
+                        socket,
                         timeout,
                         config.idle_timeout,
                         config.response_timeout,
@@ -863,7 +907,6 @@ where
                 }
                 drop(session);
                 drop(registration);
-                let _ = socket.shutdown();
                 return Ok(());
             }
         }
@@ -1270,5 +1313,35 @@ mod tests {
         }
         assert!(require_private_file(&std::fs::File::open(&dir).unwrap()).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn route_cancel_charges_the_budget_before_the_key_lookup() {
+        let now = Instant::now();
+        let registry = Arc::new(Mutex::new(RegistryState::new(1).unwrap()));
+        let registration = Registration::new(registry.clone()).unwrap();
+        let token = registration.begin_query().unwrap();
+        let limits = Limits {
+            handshakes: Mutex::new(HandshakeLimiter::default()),
+            cancels: Mutex::new(HandshakeLimiter::with_limits(
+                GLOBAL_CANCELS_PER_SECOND,
+                PER_IP_CANCELS_PER_SECOND,
+            )),
+        };
+        let peer = IpAddr::from([10, 5, 0, 1]);
+        let wrong = CancelKey {
+            pid: registration.key.pid,
+            secret: registration.key.secret ^ 1,
+        };
+        for _ in 0..PER_IP_CANCELS_PER_SECOND {
+            assert!(route_cancel(&limits, &registry, peer, now, wrong).unwrap());
+        }
+        assert!(!token.is_cancelled());
+        // Valid key, but the address has spent its budget on wrong ones: dropped.
+        assert!(!route_cancel(&limits, &registry, peer, now, registration.key).unwrap());
+        assert!(!token.is_cancelled());
+        let later = now + Duration::from_secs(1);
+        assert!(route_cancel(&limits, &registry, peer, later, registration.key).unwrap());
+        assert!(token.is_cancelled());
     }
 }

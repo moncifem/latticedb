@@ -176,6 +176,11 @@ fn bounded_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> 
 /// Like `bounded_file` for key material: the open handle is checked, so the mode that was verified
 /// is the mode of the bytes that are read.
 fn bounded_secret_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {
+    // Stat first so opening a FIFO or device cannot block startup; the handle is checked again below.
+    let metadata = std::fs::metadata(path).map_err(|_| "cannot open configured security file")?;
+    if !metadata.is_file() {
+        return Err(format!("{path}: secret path is not a regular file"));
+    }
     let file = std::fs::File::open(path).map_err(|_| "cannot open configured security file")?;
     require_private_file(&file).map_err(|e| format!("{path}: {e}"))?;
     read_bounded(file, limit)

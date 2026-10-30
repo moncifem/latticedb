@@ -27,8 +27,10 @@ later-ordered operations removed it reports `Convergent` violated (`tla/check-ne
 on CI yet; simulation, row integration and op-log growth measurement of WP43 are still open.
 
 Network hardening of the `latticed` listener (issue #347, no exit criterion): separate idle timeout, absolute
-per-response write deadline, TLS `close_notify`, 0600 check on the key and decoy-secret files and a
-CancelRequest rate limit, each with a test in `crates/latticed` (run locally: `cargo test -p latticed`).
+per-response write deadline, best-effort TLS `close_notify` on every connection exit, a mode check on the key
+and decoy-secret files (mode bits only; 0440 and 0444 mounts are refused) and a CancelRequest rate limit
+(a resource bound: wrong keys consume the budget, so a few dozen addresses can starve real cancels, and
+clients behind one NAT share 16 per second), each with a test in `crates/latticed` (run locally: `cargo test -p latticed`).
 Open from that issue: SCRAM channel binding (`SCRAM-SHA-256-PLUS`), the decoy-secret length-only check
 and a comment fix, all in `lattice-api`.
 

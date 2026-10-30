@@ -637,3 +637,19 @@ fn cli_refuses_group_or_world_accessible_key_and_decoy_files() {
     assert!(!run(&decoy_ok, &key_ok).contains("group or others"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn fatal_error_reply_is_followed_by_close_notify() {
+    let (config, client_config) = fixture(Duration::from_secs(3));
+    let server = ServerHandle::start(config).unwrap();
+    let mut client = tls(server.local_addr(), client_config);
+    // A wrong password ends in a FATAL reply, not in an orderly Terminate.
+    let first = begin(&mut client, "user");
+    finish(&mut client, &first, b"wrong");
+    let (tag, body) = message(&mut client);
+    assert_eq!(tag, b'E');
+    assert!(body.windows(7).any(|field| field == b"C28P01\0"));
+    let mut byte = [0];
+    assert_eq!(client.read(&mut byte).unwrap(), 0);
+    server.shutdown().unwrap();
+}

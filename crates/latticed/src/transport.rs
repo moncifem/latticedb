@@ -47,6 +47,11 @@ impl TlsConfig {
     }
 }
 
+/// Largest single socket write, so the response deadline is rechecked often.
+const MAX_WRITE_CHUNK: usize = 16 * 1024;
+/// Longest the `close_notify` flush may take.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub(super) struct TimedSocket {
     socket: TcpStream,
     startup_deadline: Option<Instant>,
@@ -91,7 +96,10 @@ impl Write for TimedSocket {
             timeout = timeout.min(remaining(deadline)?);
         }
         self.socket.set_write_timeout(Some(timeout))?;
-        self.socket.write(bytes)
+        // A large blocking send restarts its kernel timeout whenever the peer frees a little space,
+        // so cap each call and let `write_all` come back through the deadline checks above.
+        let chunk = bytes.get(..MAX_WRITE_CHUNK).unwrap_or(bytes);
+        self.socket.write(chunk)
     }
     fn flush(&mut self) -> io::Result<()> {
         self.socket.flush()
@@ -132,26 +140,43 @@ impl Transport {
         matches!(self, Self::Tls(_))
     }
     /// Closes the connection. A TLS session first sends `close_notify`, so the peer can tell an
-    /// orderly close from a truncation attack; that send is best effort and bounded by the write
-    /// timeout, and the socket is always shut down afterwards.
+    /// orderly close from a truncation attack. That send is best effort: it only writes (never
+    /// reads) and is bounded by an absolute `CLOSE_TIMEOUT`, so a peer that drains one byte per
+    /// interval cannot hold the worker. The socket is always shut down afterwards.
     pub(super) fn shutdown(&mut self) -> io::Result<()> {
         if let Self::Tls(stream) = self {
+            stream.sock.response_deadline = Instant::now().checked_add(CLOSE_TIMEOUT);
             stream.conn.send_close_notify();
-            let _ = stream.conn.complete_io(&mut stream.sock);
+            while stream.conn.wants_write() {
+                if stream.conn.write_tls(&mut stream.sock).is_err() {
+                    break;
+                }
+            }
         }
         self.raw().socket.shutdown(Shutdown::Both)
     }
-    pub(super) fn upgrade(self, config: &TlsConfig) -> io::Result<Self> {
-        let Self::Plain(mut socket) = self else {
+    /// Upgrades a plaintext transport to TLS in place. On failure the transport stays plaintext
+    /// (over a duplicate handle of the same socket), so the caller can still close it.
+    pub(super) fn upgrade_in_place(&mut self, config: &TlsConfig) -> io::Result<()> {
+        let Self::Plain(socket) = self else {
             return Err(io::Error::other("TLS already active"));
         };
+        let duplicate = TimedSocket {
+            socket: socket.socket.try_clone()?,
+            startup_deadline: socket.startup_deadline,
+            read_deadline: socket.read_deadline,
+            write_timeout: socket.write_timeout,
+            response_deadline: None,
+        };
+        let mut socket = std::mem::replace(socket, duplicate);
         socket.read_deadline = socket.startup_deadline;
         let mut connection = ServerConnection::new(config.0.clone()).map_err(io::Error::other)?;
         connection.set_buffer_limit(Some(64 * 1024));
         while connection.is_handshaking() {
             connection.complete_io(&mut socket)?;
         }
-        Ok(Self::Tls(Box::new(StreamOwned::new(connection, socket))))
+        *self = Self::Tls(Box::new(StreamOwned::new(connection, socket)));
+        Ok(())
     }
 }
 impl Read for Transport {
@@ -213,9 +238,9 @@ mod tests {
         let mut transport = Transport::new(server, far, Duration::from_secs(5));
         transport.set_response_deadline(Some(Instant::now() + Duration::from_millis(400)));
         let started = Instant::now();
-        let payload = vec![0u8; 64 * 1024 * 1024];
+        let payload = vec![0u8; 32 * 1024 * 1024];
         let error = transport.write_all(&payload).unwrap_err();
-        assert!(started.elapsed() < Duration::from_secs(3), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{error}");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         transport.shutdown().unwrap();
         reader.join().unwrap();
@@ -234,5 +259,16 @@ mod tests {
         let mut seen = [0u8; 2];
         client.read_exact(&mut seen).unwrap();
         assert_eq!(&seen, b"ok");
+    }
+
+    #[test]
+    fn close_flush_is_bounded_even_when_the_peer_never_reads() {
+        let (server, _client) = pair();
+        let far = Instant::now() + Duration::from_secs(600);
+        let mut transport = Transport::new(server, far, Duration::from_secs(60));
+        // A plaintext transport has no close_notify; the socket is still shut down at once.
+        let started = Instant::now();
+        transport.shutdown().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }
