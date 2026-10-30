@@ -3,9 +3,11 @@
 Settings as code: `tools/branch-protection.json`. Apply with
 `gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input tools/branch-protection.json`
 and export the live settings into the gate package (`gh api repos/<owner>/<repo>/branches/main/protection`).
-CODEOWNERS only names reviewers; the approval count is enforced by these settings. Paths that need
-two approvals (`formats/`, `crates/lattice-core/`, policy code, `clippy.toml`, `layers.toml`) are
-enforced with a repository ruleset using the same CODEOWNERS paths.
+CODEOWNERS only names reviewers; the approval count is enforced by these settings. The repository
+has no rulesets (checked with `gh api repos/moncifem/latticedb/rulesets`, which returns an empty list);
+protection is the classic branch protection above, with zero required approvals. Per-path approval
+(`formats/`, `crates/lattice-core/`, policy code, `clippy.toml`, `layers.toml`) is therefore not enforced by
+GitHub today; the `reviewed` label and the owner's process stand in for it (#366).
 
 Current settings: pull request required, the seven checks above must pass, linear history, no force pushes or
 deletions, conversations resolved. Approvals are set to 0 while there is a single maintainer; raise
