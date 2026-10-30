@@ -30,8 +30,9 @@
 //! longer line as a whole and sends no receipts, which would make the identical batch fail again
 //! at every resend and block every write behind it. For the same reason [`Outbox::enqueue`]
 //! refuses a body whose escaped line cannot fit even alone ([`OutboxError::BodyUnsendable`];
-//! each control character escapes to six bytes) and [`Outbox::from_bytes`] refuses a stored queue
-//! holding one.
+//! each control character escapes to six bytes). [`Outbox::from_bytes`] refuses a stored queue
+//! holding one, and [`Outbox::from_bytes_lossless`] restores the rest of it and returns the
+//! unsendable writes to the application, keeping the counter so no record id is reused.
 //!
 //! # Retry
 //!
@@ -659,7 +660,33 @@ impl Outbox {
 
     /// Restore a queue stored from [`Outbox::snapshot`] bytes. Every restored write keeps its record id;
     /// the in-flight state is not stored, so unacked writes are sent again at the next poll.
+    ///
+    /// A stored write whose escaped line cannot fit in one protocol line (see
+    /// [`OutboxError::BodyUnsendable`]) is refused here with [`DecodeError::NonCanonical`]; use
+    /// [`Outbox::from_bytes_lossless`] to restore the rest of such a queue.
     pub fn from_bytes(bytes: &[u8], cfg: OutboxConfig) -> Result<Self, DecodeError> {
+        Self::decode(bytes, cfg, false).map(|(outbox, _)| outbox)
+    }
+
+    /// Like [`Outbox::from_bytes`], but a stored write that could never be sent (its escaped line
+    /// passes the line limit, which a build before this check could queue) does not fail the
+    /// restore. Such writes are left out of the restored queue and returned to the application, in
+    /// queue order, the way fenced writes are returned in [`Outcome::fenced`]. The counter and
+    /// every other write are kept, so no record id is ever reused. Re-encoding the restored queue
+    /// leaves the returned writes out; a queue with none restores exactly as `from_bytes` does. The
+    /// returned list lives only in this result: store the new snapshot after handling it.
+    pub fn from_bytes_lossless(
+        bytes: &[u8],
+        cfg: OutboxConfig,
+    ) -> Result<(Self, Vec<Pending>), DecodeError> {
+        Self::decode(bytes, cfg, true)
+    }
+
+    fn decode(
+        bytes: &[u8],
+        cfg: OutboxConfig,
+        quarantine: bool,
+    ) -> Result<(Self, Vec<Pending>), DecodeError> {
         if !cfg.validate() {
             return Err(DecodeError::InvalidConfig);
         }
@@ -713,6 +740,7 @@ impl Outbox {
             return Err(DecodeError::OverLimit);
         }
         let mut items = VecDeque::new();
+        let mut unsendable = Vec::new();
         let mut total = 0usize;
         let mut prev: Option<u64> = None;
         for _ in 0..n_items {
@@ -729,17 +757,27 @@ impl Outbox {
             if len > MAX_BODY_BYTES {
                 return Err(DecodeError::NonCanonical("body too large"));
             }
-            total = total.saturating_add(len);
-            if total > cfg.max_bytes {
-                return Err(DecodeError::OverLimit);
-            }
             let text = std::str::from_utf8(r.take(len)?)
                 .map_err(|_| DecodeError::NonCanonical("body is not UTF-8"))?
                 .to_owned();
             // A write that cannot fit in one line would block the queue forever once sent.
             let rid = format!("{client_id}-{counter}");
             if line_len_alone(&rid, kind, &text) > MAX_LINE_BYTES {
-                return Err(DecodeError::NonCanonical("body does not fit in one line"));
+                if !quarantine {
+                    return Err(DecodeError::NonCanonical("body does not fit in one line"));
+                }
+                prev = Some(counter);
+                unsendable.push(Pending {
+                    rid,
+                    turn,
+                    kind,
+                    body: text,
+                });
+                continue;
+            }
+            total = total.saturating_add(len);
+            if total > cfg.max_bytes {
+                return Err(DecodeError::OverLimit);
             }
             prev = Some(counter);
             items.push_back(Item {
@@ -752,7 +790,7 @@ impl Outbox {
         if !r.data.is_empty() {
             return Err(DecodeError::TrailingBytes);
         }
-        Ok(Self {
+        let outbox = Self {
             cfg,
             client_id,
             next_counter,
@@ -762,7 +800,8 @@ impl Outbox {
             bytes: total,
             flight: None,
             attempt: 0,
-        })
+        };
+        Ok((outbox, unsendable))
     }
 }
 

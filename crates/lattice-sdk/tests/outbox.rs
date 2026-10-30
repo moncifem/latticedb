@@ -1038,3 +1038,64 @@ proptest! {
         drain(&mut o);
     }
 }
+
+#[test]
+fn a_lossless_restore_returns_the_unsendable_write_and_keeps_the_counter() {
+    let big = vec![1u8; 200_000];
+    let bytes = raw(
+        "c",
+        3,
+        &[],
+        &[
+            item(0, 1, 2, b"a"),
+            item(1, 1, 2, &big),
+            item(2, 2, 0, b"b"),
+        ],
+    );
+    // The strict restore still refuses the whole queue.
+    assert!(matches!(
+        Outbox::from_bytes(&bytes, big_cfg()),
+        Err(DecodeError::NonCanonical(_))
+    ));
+    let (mut o, lost) = Outbox::from_bytes_lossless(&bytes, big_cfg()).unwrap();
+    assert_eq!(lost.len(), 1);
+    assert_eq!(
+        (
+            lost[0].rid.as_str(),
+            lost[0].turn,
+            lost[0].kind,
+            lost[0].body.len()
+        ),
+        ("c-1", 1, Kind::ToolResult, 200_000)
+    );
+    assert_eq!(o.len(), 2);
+    // The counter is kept, so the id of the dropped write is never issued again.
+    assert_eq!(o.enqueue(1, Kind::Note, "new").unwrap(), "c-3");
+    // Re-encoding leaves the quarantined write out and keeps everything else, canonically.
+    let expected = raw(
+        "c",
+        4,
+        &[],
+        &[
+            item(0, 1, 2, b"a"),
+            item(2, 2, 0, b"b"),
+            item(3, 1, 3, b"new"),
+        ],
+    );
+    assert_eq!(o.snapshot().as_bytes(), expected);
+    // The remaining writes are deliverable.
+    persist(&mut o);
+    assert_eq!(drain(&mut o), [1, 1, 1]);
+}
+
+#[test]
+fn a_lossless_restore_of_a_valid_queue_is_the_strict_restore() {
+    let bytes = raw("c", 2, &[], &[item(0, 1, 2, b"a"), item(1, 1, 0, b"b")]);
+    let (o, lost) = Outbox::from_bytes_lossless(&bytes, big_cfg()).unwrap();
+    assert!(lost.is_empty());
+    assert_eq!(o.snapshot().as_bytes(), bytes);
+    // Corrupt input is still refused.
+    let mut bad = bytes.clone();
+    bad[6] ^= 1;
+    assert!(Outbox::from_bytes_lossless(&bad, big_cfg()).is_err());
+}
