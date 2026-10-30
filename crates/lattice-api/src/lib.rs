@@ -27,3 +27,5 @@ pub mod backpressure;
 
 #[cfg(test)]
 mod conformance;
+
+pub mod websocket;

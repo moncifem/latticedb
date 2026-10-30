@@ -27,3 +27,5 @@ The sync `subscribe::SubscriptionHost` is built with the connection's authentica
 `EventSource::read_after`, so the source applies scope and row policy for that identity. The `Hello`
 `agent` text is a label, never an identity. A transport that authenticates and supplies the principal
 does not exist yet (threat model G-03).
+
+`websocket` is a sans-I/O RFC 6455 server-side codec for the future sync gateway: the HTTP upgrade request (strict, bounded, origin hook, `lattice.sync.v1` subprotocol), the accept key, frame decode and encode, message reassembly with size caps and UTF-8 checks, ping/pong and close handling, and timers on a caller-supplied logical clock. It does no I/O and is not connected to a listener, TLS or authentication yet ([ADR 0027](../../docs/adr/0027-sync-transport-websocket-first.md), proposed).

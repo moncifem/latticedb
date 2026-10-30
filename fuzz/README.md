@@ -97,3 +97,7 @@ id, reserved tree nodes, wrong lengths, a trailing byte, truncation, a zero ordi
 unsorted proposals, options that do not match the proposals and a resolution that is not an option. The
 targets are registered in the nightly, weekly and manual 24-hour matrices; registration is not evidence that
 those runs have completed.
+
+## WebSocket frame target
+
+`websocket_frame` feeds arbitrary bytes to the WebSocket codec (`lattice_api::websocket`). A client or server frame that decodes must re-encode to exactly the bytes it came from (shortest length form, mask key read from the frame) and is incomplete one byte short. The input is also run through a `Connection` with small frame and message caps, once as a stream and once byte by byte through a caller-side buffer (the unconsumed buffer stays within 14 bytes plus the frame cap), and through the upgrade request parser. Seeds in `seeds/websocket_frame/` cover the RFC 6455 examples, fragmentation with an interleaved ping, split UTF-8, invalid UTF-8, close payloads, reserved bits and opcodes, non-minimal and oversized lengths, a continuation without a start, a sync Hello inside a binary frame and several upgrade requests. The target is registered in the nightly, weekly and manual 24-hour matrices; registration is not evidence that those runs have completed.

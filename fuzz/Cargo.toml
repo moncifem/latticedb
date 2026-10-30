@@ -154,3 +154,10 @@ path = "fuzz_targets/crdt_tree_decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "websocket_frame"
+path = "fuzz_targets/websocket_frame.rs"
+test = false
+doc = false
+bench = false

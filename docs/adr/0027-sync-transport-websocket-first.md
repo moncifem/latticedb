@@ -11,7 +11,7 @@ reliable byte stream and brings its own framing ([ADR 0024](0024-sync-protocol-f
 transport only has to carry opaque frames, enforce the existing authentication and TLS rules and bound
 connections and messages. Candidates are WebSocket (RFC 6455) over TLS and QUIC (RFC 9000).
 
-WebSocket is available in every browser and in the standard library of every SDK language Lattice
+WebSocket is available in every browser and has client libraries in every SDK language Lattice
 targets, passes the HTTP proxies and load balancers teams already run, and is a small protocol: a text
 upgrade followed by length-prefixed frames. QUIC would remove head-of-line blocking between streams and
 survive client address changes, but browsers cannot open raw QUIC connections (only WebTransport), the
@@ -21,8 +21,9 @@ surface to test and secure.
 ## Decision
 
 Build the sync gateway on WebSocket first. Each sync frame travels as one binary WebSocket message, so
-the sync length prefix and the WebSocket frame length agree and a single message never carries a partial
-sync frame. Text messages are refused on the sync subprotocol `lattice.sync.v1`. The gateway requires
+the sync length prefix gives the message length and a message never carries a partial
+sync frame. The codec can refuse text messages (close code 1003) so the gateway can enforce binary-only
+messages on the subprotocol `lattice.sync.v1`. The gateway requires
 the same protections as the PostgreSQL listener: TLS and authentication on every non-loopback bind.
 
 The WebSocket layer is a sans-I/O codec (`lattice_api::websocket`): upgrade request parsing, the accept
