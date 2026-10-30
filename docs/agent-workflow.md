@@ -116,6 +116,26 @@ rest in its text, since one pull request adds one fragment. Commit both changes,
 `--force-with-lease`, and check that `python3 tools/changelog.py check` passes. Never resolve the
 conflict by keeping both sides of `[Unreleased]`: that is the conflict this rule removes.
 
+## Before every push
+
+The cheap checks. Run the ones that match what you touched; they take seconds and CI runs the same ones.
+
+```bash
+export PATH=/opt/homebrew/bin:$PATH      # actionlint, zizmor, typos and shellcheck live here
+python3 -m unittest discover -s tools -p 'test_<tool>.py'   # each tool whose code or tests you changed
+actionlint                               # when you touched .github/workflows
+zizmor --offline .                       # same; the triage record is .github/zizmor.yml
+typos
+cargo xtask lint-conventions
+cargo xtask check-links
+python3 tools/changelog.py check         # exactly one new fragment (see above), never CHANGELOG.md
+cargo xtask commit-lint <file-with-message>
+```
+
+If a tool is missing, `brew install` it; do not skip the check. Before you mark a pull request ready, rebase
+it onto `origin/main`. `tools/rebase_pr.py` does that in a private worktree and resolves only prose list
+conflicts ([`docs/merging.md`](merging.md)).
+
 ## Before opening a pull request
 
 ```bash
@@ -146,7 +166,8 @@ author before merging.
 ## Merging
 
 Authors open pull requests and do not merge them. One coordinator merges with
-[`tools/merge-pr.sh`](../tools/merge-pr.sh) (see [`docs/merging.md`](merging.md)): it merges serially,
+[`tools/merge-pr.sh`](../tools/merge-pr.sh) for one or a few pull requests, or with the batch queue
+[`tools/merge_queue.py`](../tools/merge_queue.py) (see [`docs/merging.md`](merging.md)): it merges serially,
 brings a branch that is behind `main` up to date, waits for the checks on the new head and refuses to
 merge on a failed check or an unknown state. Merging is by rebase; merge commits are not used and
 branches are deleted on merge. The required checks are listed in `tools/branch-protection.json`. If

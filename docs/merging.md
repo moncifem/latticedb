@@ -1,6 +1,7 @@
 # Merging pull requests
 
 `tools/merge-pr.sh` is an opt-in serial merger for independently reviewed PRs targeting `main`.
+It is the tool for a few PRs and for humans; for a batch see "Batches: the merge queue" below.
 It requires bash 3.2+, Python 3 and an existing authenticated `gh` session. No service is installed.
 
 ```bash
@@ -12,6 +13,84 @@ Options: `--tries N` (default 90, or `MERGE_PR_TRIES`) and `--sleep SECONDS` (de
 `MERGE_PR_SLEEP`). The repository is discovered from the current checkout. The queue stops on its
 first refusal/exhausted retry and reports later PRs skipped. Already-merged PRs are reported separately.
 Tests use fake JSON APIs only: `tools/test_merge_pr.sh` never contacts GitHub.
+
+## Batches: the merge queue
+
+`tools/merge-pr.sh` is the tool for one or two reviewed PRs: it refuses at the first problem. For a
+batch (a dozen open PRs after a busy day) use `tools/merge_queue.py`. It is standard-library Python 3 and
+uses an authenticated `gh` session, like the other tools. It goes through the PRs one at a time and does not
+stop the batch when one PR fails:
+
+```bash
+tools/merge_queue.py --dry-run                 # read only: what would happen to every ready PR
+tools/merge_queue.py --once 301 302 305        # one pass, in this order
+tools/merge_queue.py 301 302 305               # loop mode: up to 6 rounds, parked PRs come back
+tools/merge_queue.py                           # every ready open PR, lowest number first
+```
+
+For each PR it (1) skips it unless it is ready, (2) brings it up to date with `gh pr update-branch
+--rebase` when it is `BEHIND`, (3) waits for **all** checks on the new head, (4) re-runs the failed jobs
+once (flakes and stale runs), (5) merges, or parks the PR with the failing check names and moves on.
+Ready means: open, targets `main`, not a draft, not `DIRTY`, no `hold` label, and not a Dependabot PR
+unless it is named on the command line (or `--include-bots` is used with discovery).
+
+Safety rules (each has a test in `tools/test_merge_queue.py`):
+
+- It merges only when no check failed or is pending **and** every context listed in
+  `tools/branch-protection.json` passed on the head it is merging. A required check that never
+  reported is pending, then a park when the per-PR timeout ends. Without that file it refuses to start.
+- The merge is `gh pr merge --rebase --match-head-commit <sha>` after a fresh read of the head, the
+  merge state and the checks; a push in between makes the server refuse. A merge that exits 0 but is not
+  confirmed as merged by a fresh read is retried, not counted.
+- An API error, an empty answer or malformed JSON is unknown: it waits and asks again, it is never a
+  result. (`gh pr checks` exits 1 or 8 for failed or pending checks with valid JSON; exit codes outside
+  0, 1 and 8 are unknown.)
+- It never force-pushes, never passes `--admin` and never deletes a branch (the repository deletes merged
+  branches). The only branch change it makes is `gh pr update-branch --rebase`, which GitHub performs.
+- `risk-gate` is one of the checks: a PR on a risky path stays parked until the owner adds the `reviewed`
+  label. The queue does not review anything and does not decide owner-gated questions.
+
+Options: `--once` (single pass), `--rounds N` and `--round-sleep S` (loop mode, defaults 6 and 120),
+`--timeout MINUTES` per PR (default 40), `--poll` and `--settle` seconds, `--hold-label`, `--base`,
+`--repo OWNER/NAME`, `--required-file`, `--status-file`, `--log-file`. Exit status is 0 when nothing is
+left unmerged (or with `--dry-run`), 1 when PRs remain parked or skipped, 2 on a usage error.
+
+**Status and log.** After every decision it rewrites a JSON status file atomically and appends to a
+human log, by default `$TMPDIR/lattice-merge-queue/status.json` and `queue.log`. The status has
+`updated`, `round`, `current`, `finished`, `left` and, per PR number, `state` (`merged`, `parked`,
+`skipped`, `closed`, `waiting`, `updating`, `dry-run`), `reason`, `head`, `failed_checks` and `at`. Read it
+from another terminal to see where a long batch stands.
+
+Run the queue from one place only: two queues racing each other defeat the serial order. Each PR waits for
+its own checks (the strict up-to-date rule re-runs them after every merge), so a batch of N PRs takes N
+check cycles; leave it running in the background.
+
+## Rebasing stale branches
+
+`tools/rebase_pr.py <PR>...` rebases pull request branches onto `main` in a private worktree under
+`$TMPDIR/lattice-rebase-pr/`, so your checkout is never touched:
+
+```bash
+tools/rebase_pr.py 301 302            # rebase, check, push
+tools/rebase_pr.py --no-push 301      # rebase and check only
+```
+
+- Conflicts in prose list files (`docs/gates/*.md`, `README.md`, `fuzz/README.md`) are resolved by keeping
+  both sides (the base branch's lines first, then the PR's). Check the result: it also re-adds a line the
+  PR meant to delete.
+- A conflict in any other file (code, workflows, lock files, `CHANGELOG.md`, formats) aborts the rebase
+  and is reported with the file names; nothing is pushed. For `CHANGELOG.md` see "Changelog fragments" in
+  [agent-workflow.md](agent-workflow.md): move the entry into a fragment instead.
+- If `tools/check_public_api.sh` exists and Rust files changed, it regenerates the snapshots of the
+  changed crates that have one and commits them as `chore: refresh the public API snapshots after a
+  rebase`; a conflict in `api-snapshots/*.txt` is then taken from `main` and regenerated. A failing
+  script blocks the push. This step needs the pinned nightly and `cargo-public-api` on the machine.
+- When Rust files changed it runs `cargo fmt --all -- --check` and does not push if it fails.
+- It pushes with `--force-with-lease` pinned to the branch tip it fetched, so a push by the author
+  in the meantime makes it fail instead of overwriting. It skips closed PRs, PRs from forks and PRs that
+  do not target `main`, and treats a `gh` error as unknown (nothing changes).
+- Rebasing rewrites the branch and starts its checks again, so rebase a batch just before queueing it,
+  not hours earlier.
 
 ## Exact-head checks
 
