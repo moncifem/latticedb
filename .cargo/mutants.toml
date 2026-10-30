@@ -84,6 +84,10 @@ exclude_re = [
     # expected violation kind over a sweep; `convergence_replicas.rs` asserts the kind per planted flaw,
     # not a particular drop pattern.
     "convergence\\.rs:(332|392|395|424):\\d+: ",
+    # Subscription host: `clip` shortens an error text to the protocol limit, but every text passed to
+    # it is a literal well under that limit with no control character, so its length and control-character
+    # conditions never decide anything; the function itself is pinned by the text tests.
+    "subscribe\\.rs:196:\\d+: replace .* in clip",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
