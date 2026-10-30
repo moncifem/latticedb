@@ -29,7 +29,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use lattice_exec::{
-    ActorPolicy, Database, ExecError, ExecResult, ExecSession, ResultColumn, TxStatus,
+    ActorPolicy, Database, ExecError, ExecLimits, ExecResult, ExecSession, ResultColumn, TxStatus,
 };
 use lattice_seams::{Clock, Io, Rng};
 
@@ -48,6 +48,8 @@ pub struct ExecHandler<I: Io, C: Clock + Clone, R: Rng> {
     accounts: AccountPolicy,
     /// The connection's principal and its session, created by the first statement.
     bound: Option<(Principal, ExecSession)>,
+    /// Statement limits for the session, including the host's timeout ceiling.
+    limits: ExecLimits,
 }
 
 impl<I: Io, C: Clock + Clone, R: Rng> ExecHandler<I, C, R> {
@@ -63,6 +65,16 @@ impl<I: Io, C: Clock + Clone, R: Rng> ExecHandler<I, C, R> {
             development,
             accounts: Box::new(accounts),
             bound: None,
+            limits: ExecLimits::default(),
+        }
+    }
+
+    /// Sets the statement limits of this connection (default timeout, memory budget and the ceiling
+    /// a client's `SET statement_timeout` cannot lift). Applies to the running session too.
+    pub fn set_limits(&mut self, limits: ExecLimits) {
+        self.limits = limits;
+        if let Some((_, session)) = self.bound.as_mut() {
+            session.set_limits(limits);
         }
     }
 
@@ -81,7 +93,9 @@ impl<I: Io, C: Clock + Clone, R: Rng> ExecHandler<I, C, R> {
                 PrincipalKind::LocalDevelopment => self.development.clone(),
                 PrincipalKind::Account => (self.accounts)(principal.name()),
             };
-            self.bound = Some((principal.clone(), ExecSession::new(policy)));
+            let mut session = ExecSession::new(policy);
+            session.set_limits(self.limits);
+            self.bound = Some((principal.clone(), session));
         }
         match self.bound.as_mut() {
             Some((bound, session)) if bound == principal => Ok(session),
@@ -527,5 +541,49 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.code, "28000");
         assert_eq!(h.tx_status(), TxStatus::Idle);
+    }
+
+    #[test]
+    fn ddl_follows_the_principals_policy() {
+        let db = shared_db();
+        let dev = Principal::local_development();
+        let mut developer = new_handler(db.clone());
+        // The development policy allows DDL; the account policy (deny-all here) does not.
+        developer
+            .execute(&QueryContext::new(&dev), "CREATE TABLE t (id INT)", &[])
+            .unwrap();
+        let alice = Principal::account("alice");
+        let mut account = new_handler(db);
+        let actx = QueryContext::new(&alice);
+        for sql in ["CREATE TABLE u (id INT)", "DROP TABLE t"] {
+            assert_eq!(
+                account.execute(&actx, sql, &[]).unwrap_err().code,
+                "42501",
+                "{sql}"
+            );
+        }
+        assert_eq!(
+            developer
+                .execute(&QueryContext::new(&dev), "DROP TABLE t", &[])
+                .unwrap()
+                .tag,
+            "DROP TABLE"
+        );
+    }
+
+    #[test]
+    fn the_host_timeout_ceiling_reaches_the_session() {
+        let db = shared_db();
+        let dev = Principal::local_development();
+        let ctx = QueryContext::new(&dev);
+        let mut h = new_handler(db);
+        h.set_limits(ExecLimits {
+            timeout_ms: Some(50),
+            memory_bytes: 1 << 20,
+            max_timeout_ms: Some(50),
+        });
+        h.execute(&ctx, "SET statement_timeout = 0", &[]).unwrap();
+        let shown = h.execute(&ctx, "SHOW statement_timeout", &[]).unwrap();
+        assert_eq!(shown.rows, vec![vec![Some(b"50ms".to_vec())]]);
     }
 }

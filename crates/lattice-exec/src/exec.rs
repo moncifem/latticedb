@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use lattice_abi::Hlc;
 use lattice_core::changeset::ChangeSetId;
+use lattice_engines::catalog::DdlRef;
 use lattice_engines::limits::{
     AllowAll, MemoryReservation, PolicyEvaluator, RowRef, RowWriteRef, StatementLimits,
 };
@@ -56,6 +57,10 @@ impl PolicyEvaluator for ActorPolicy {
 
     fn allows_write(&self, row: RowWriteRef<'_>) -> bool {
         self.0.allows_write(row)
+    }
+
+    fn authorize_ddl(&self, change: DdlRef<'_>) -> bool {
+        self.0.authorize_ddl(change)
     }
 }
 
@@ -509,6 +514,17 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             (Datum::Text(_), SqlType::Text) => d,
             _ => cast(d, col.ty)?,
         };
+        // Whatever produced it (a cast, `date_trunc`, arithmetic on a date), a value the row codec
+        // cannot read back is refused here instead of being stored.
+        match &d {
+            Datum::Timestamp(t) if !crate::value::timestamp_in_range(*t) => {
+                return Err(ExecError::eval("22008", "timestamp out of range"));
+            }
+            Datum::Date(x) if !crate::value::date_in_range(*x) => {
+                return Err(ExecError::eval("22008", "date out of range"));
+            }
+            _ => {}
+        }
         if let (Datum::Text(s), Some(n)) = (&d, col.varchar_len)
             && s.chars().count() > n as usize
         {

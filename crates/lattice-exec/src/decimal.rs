@@ -33,13 +33,26 @@ fn pow10(n: u32) -> Option<i128> {
     10i128.checked_pow(n)
 }
 
+/// `i128::MIN` is never a mantissa: it has no positive counterpart, so negating, taking the absolute
+/// value or dividing it by -1 would overflow, and its text does not parse back.
+fn valid(mantissa: i128) -> Result<i128, NumError> {
+    if mantissa == i128::MIN {
+        Err(NumError::Overflow)
+    } else {
+        Ok(mantissa)
+    }
+}
+
 impl Decimal {
     /// Builds a decimal; the scale is limited to 38 digits.
     pub(crate) fn new(mantissa: i128, scale: u32) -> Result<Self, NumError> {
         if scale > MAX_SCALE {
             return Err(NumError::Overflow);
         }
-        Ok(Decimal { mantissa, scale })
+        Ok(Decimal {
+            mantissa: valid(mantissa)?,
+            scale,
+        })
     }
 
     pub(crate) fn from_i64(v: i64) -> Self {
@@ -103,6 +116,14 @@ impl Decimal {
         if dropped_round_up {
             mantissa = mantissa.checked_add(1).ok_or(NumError::Overflow)?;
         }
+        // Zero is zero at any exponent; do not walk a huge one digit by digit.
+        if mantissa == 0 {
+            let scale = (scale - i64::from(exp)).clamp(0, i64::from(MAX_SCALE));
+            return Ok(Decimal {
+                mantissa: 0,
+                scale: u32::try_from(scale).map_err(|_| NumError::Overflow)?,
+            });
+        }
         // Apply the exponent by moving the decimal point.
         let mut scale = scale - i64::from(exp);
         while scale < 0 {
@@ -119,6 +140,7 @@ impl Decimal {
         if neg {
             d.mantissa = -d.mantissa;
         }
+        valid(d.mantissa)?;
         Ok(d)
     }
 
@@ -128,7 +150,7 @@ impl Decimal {
         }
         let f = pow10(scale - self.scale).ok_or(NumError::Overflow)?;
         Ok(Decimal {
-            mantissa: self.mantissa.checked_mul(f).ok_or(NumError::Overflow)?,
+            mantissa: valid(self.mantissa.checked_mul(f).ok_or(NumError::Overflow)?)?,
             scale,
         })
     }
@@ -138,15 +160,21 @@ impl Decimal {
         if scale >= self.scale {
             return Ok(self);
         }
-        let f = pow10(self.scale - scale).ok_or(NumError::Overflow)?;
-        let q = self.mantissa / f;
-        let r = self.mantissa % f;
+        // Dropping more than 38 digits leaves less than half a unit of the last place: zero.
+        let Some(f) = pow10(self.scale - scale) else {
+            return Ok(Decimal { mantissa: 0, scale });
+        };
+        let q = self.mantissa.checked_div(f).ok_or(NumError::Overflow)?;
+        let r = self.mantissa.checked_rem(f).ok_or(NumError::Overflow)?;
         let q = if r.unsigned_abs() * 2 >= f.unsigned_abs() {
             q + if self.mantissa < 0 { -1 } else { 1 }
         } else {
             q
         };
-        Ok(Decimal { mantissa: q, scale })
+        Ok(Decimal {
+            mantissa: valid(q)?,
+            scale,
+        })
     }
 
     pub(crate) fn neg(self) -> Result<Self, NumError> {
@@ -168,10 +196,11 @@ impl Decimal {
         let s = self.scale.max(o.scale);
         let (a, b) = (self.rescale_up(s)?, o.rescale_up(s)?);
         Ok(Decimal {
-            mantissa: a
-                .mantissa
-                .checked_add(b.mantissa)
-                .ok_or(NumError::Overflow)?,
+            mantissa: valid(
+                a.mantissa
+                    .checked_add(b.mantissa)
+                    .ok_or(NumError::Overflow)?,
+            )?,
             scale: s,
         })
     }
@@ -186,7 +215,7 @@ impl Decimal {
             .checked_mul(o.mantissa)
             .ok_or(NumError::Overflow)?;
         let mut d = Decimal {
-            mantissa: m,
+            mantissa: valid(m)?,
             scale: self.scale + o.scale,
         };
         while d.scale > MAX_SCALE {
@@ -207,20 +236,20 @@ impl Decimal {
             let attempt = u32::try_from(e).ok().and_then(|e| {
                 let f = pow10(e)?;
                 let n = self.mantissa.checked_mul(f)?;
-                let q = n / o.mantissa;
-                let rem = n % o.mantissa;
-                let twice = rem.checked_mul(2)?;
-                let q = if twice.unsigned_abs() >= o.mantissa.unsigned_abs() {
-                    q + if (n < 0) != (o.mantissa < 0) { -1 } else { 1 }
+                let q = n.checked_div(o.mantissa)?;
+                let rem = n.checked_rem(o.mantissa)?;
+                // Round half away from zero: |rem| * 2 >= |divisor|, written without overflow.
+                let half_up = rem.unsigned_abs() >= o.mantissa.unsigned_abs().div_ceil(2);
+                if half_up {
+                    q.checked_add(if (n < 0) != (o.mantissa < 0) { -1 } else { 1 })
                 } else {
-                    q
-                };
-                Some(q)
+                    Some(q)
+                }
             });
             match attempt {
                 Some(q) => {
                     return Ok(Decimal {
-                        mantissa: q,
+                        mantissa: valid(q)?,
                         scale: r,
                     });
                 }
@@ -237,7 +266,11 @@ impl Decimal {
         let s = self.scale.max(o.scale);
         let (a, b) = (self.rescale_up(s)?, o.rescale_up(s)?);
         Ok(Decimal {
-            mantissa: a.mantissa % b.mantissa,
+            mantissa: valid(
+                a.mantissa
+                    .checked_rem(b.mantissa)
+                    .ok_or(NumError::Overflow)?,
+            )?,
             scale: s,
         })
     }
@@ -391,5 +424,101 @@ mod tests {
         let tiny = d("0.00000000000000000000000000000000000001");
         assert!(big > tiny);
         assert!(big.neg().unwrap() < tiny);
+    }
+
+    #[test]
+    fn the_extremes_are_errors_not_panics() {
+        // i128::MIN is not a mantissa, so nothing can reach the operations that overflow on it.
+        assert_eq!(Decimal::new(i128::MIN, 0), Err(NumError::Overflow));
+        let max = Decimal::new(i128::MAX, 0).unwrap();
+        assert_eq!(
+            max.div(Decimal::from_i64(-1)).unwrap().to_string(),
+            format!("-{}", i128::MAX)
+        );
+        assert_eq!(max.neg().unwrap().neg().unwrap(), max);
+        let min = max.neg().unwrap();
+        assert_eq!(min.abs().unwrap(), max);
+        assert_eq!(min.rem(Decimal::from_i64(-1)).unwrap().to_string(), "0");
+        // The negation of the largest value is the smallest the type keeps, and one more is refused.
+        assert_eq!(min.sub(Decimal::from_i64(1)), Err(NumError::Overflow));
+        assert_eq!(
+            Decimal::parse("-170141183460469231731687303715884105728"),
+            Err(NumError::Overflow)
+        );
+        assert_eq!(Decimal::parse(&i128::MAX.to_string()).unwrap(), max);
+        assert_eq!(Decimal::parse(&format!("-{}", i128::MAX)).unwrap(), min);
+    }
+
+    #[test]
+    fn a_zero_with_a_huge_exponent_returns_at_once() {
+        assert_eq!(Decimal::parse("0e2147483647").unwrap().to_string(), "0");
+        assert_eq!(
+            Decimal::parse("0e-2147483648").unwrap().to_string(),
+            "0.00000000000000000000000000000000000000"
+        );
+        assert_eq!(Decimal::parse("0.000e2147483647").unwrap().to_string(), "0");
+        // Non-zero values with extreme exponents are errors or zero, quickly.
+        assert_eq!(Decimal::parse("1e2147483647"), Err(NumError::Overflow));
+        assert_eq!(
+            Decimal::parse("1e-2147483648").unwrap().to_string(),
+            "0.00000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn tiny_values_round_to_zero_instead_of_overflowing() {
+        let tiny = Decimal::parse("1e-100").unwrap();
+        assert_eq!(tiny.round_to(2).unwrap().to_string(), "0.00");
+        assert_eq!(
+            Decimal::parse("0.5e-39")
+                .unwrap()
+                .round_to(0)
+                .unwrap()
+                .to_string(),
+            "0"
+        );
+    }
+
+    mod adversarial {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn mantissa() -> impl Strategy<Value = i128> {
+            prop_oneof![
+                any::<i128>(),
+                Just(i128::MAX),
+                Just(i128::MIN),
+                Just(i128::MIN + 1),
+                Just(0),
+                Just(-1),
+                Just(1),
+                -1000i128..1000,
+            ]
+        }
+
+        fn decimal() -> impl Strategy<Value = Decimal> {
+            (mantissa(), 0u32..=MAX_SCALE + 2)
+                .prop_filter_map("valid", |(m, s)| Decimal::new(m, s).ok())
+        }
+
+        proptest! {
+            /// Every operation on any pair, including the extremes, returns a value or an error, and
+            /// whatever it returns prints and parses back to the same number.
+            #[test]
+            fn operations_never_panic_and_results_round_trip(a in decimal(), b in decimal(), digits in 0u32..40) {
+                let results = [a.add(b), a.sub(b), a.mul(b), a.div(b), a.rem(b), a.neg(), a.abs(), a.round_to(digits)];
+                for r in results.into_iter().flatten() {
+                    prop_assert_eq!(Decimal::parse(&r.to_string()), Ok(r));
+                }
+                let _ = a.to_i128_round();
+                let _ = a.cmp(&b);
+                let _ = a.to_f64();
+            }
+
+            #[test]
+            fn parse_never_panics_or_hangs(text in "[+-]?[0-9]{0,45}(\\.[0-9]{0,45})?([eE][+-]?[0-9]{1,10})?") {
+                let _ = Decimal::parse(&text);
+            }
+        }
     }
 }

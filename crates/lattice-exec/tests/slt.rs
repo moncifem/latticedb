@@ -111,11 +111,16 @@ const EXPECTED: &str = include_str!("slt_expected_failures.txt");
 struct Runner {
     db: Db,
     session: ExecSession,
+    /// The SQLSTATE of each statement run so far (`None` for success), in order.
+    codes: Vec<Option<String>>,
 }
 
 impl Executor for Runner {
     fn execute(&mut self, sql: &str) -> Result<Outcome, ExecError> {
-        match self.session.execute(&mut self.db, sql) {
+        let result = self.session.execute(&mut self.db, sql);
+        self.codes
+            .push(result.as_ref().err().map(|e| e.sqlstate().to_string()));
+        match result {
             Err(e) => Err(ExecError {
                 code: e.sqlstate().to_string(),
                 message: e.message().to_string(),
@@ -159,23 +164,45 @@ fn expected() -> BTreeMap<(String, usize), String> {
         .collect()
 }
 
-/// Runs one script and returns (records passed, failing lines with detail).
-fn run_script(text: &str) -> (usize, Vec<(usize, String)>) {
+/// A failing record: its line, what differed, and the SQLSTATE the statement actually returned.
+type Failure = (usize, String, Option<String>);
+
+/// Runs one script and returns (records passed, failures).
+fn run_script(text: &str) -> (usize, Vec<Failure>) {
     let f = fixture();
     let mut runner = Runner {
         db: f.db,
         session: common::admin(),
+        codes: Vec::new(),
     };
     let records = parse(text, "lattice").unwrap();
     let report = run(&records, &mut runner);
-    (
-        report.passed,
-        report
-            .mismatches
-            .into_iter()
-            .map(|m| (m.line, m.detail))
-            .collect(),
-    )
+    // Each record before a `halt` runs exactly one statement, in order, so the n-th code belongs to
+    // the n-th record.
+    let lines: Vec<usize> = records
+        .iter()
+        .take_while(|r| !matches!(r, Record::Halt { .. }))
+        .map(|r| match r {
+            Record::StatementOk { line, .. }
+            | Record::StatementError { line, .. }
+            | Record::Query { line, .. }
+            | Record::Halt { line } => *line,
+        })
+        .collect();
+    assert_eq!(lines.len(), runner.codes.len(), "one statement per record");
+    let failures = report
+        .mismatches
+        .into_iter()
+        .map(|m| {
+            let code = lines
+                .iter()
+                .position(|l| *l == m.line)
+                .and_then(|i| runner.codes.get(i).cloned())
+                .flatten();
+            (m.line, m.detail, code)
+        })
+        .collect();
+    (report.passed, failures)
 }
 
 #[test]
@@ -186,11 +213,11 @@ fn scripts_pass_except_the_listed_records() {
     for (name, text) in SCRIPTS {
         let (passed, failed) = run_script(text);
         summary.push(format!("{name}: {passed} passed, {} failed", failed.len()));
-        let failed_lines: Vec<usize> = failed.iter().map(|(l, _)| *l).collect();
-        for (line, detail) in &failed {
+        let failed_lines: Vec<usize> = failed.iter().map(|(l, _, _)| *l).collect();
+        for (line, detail, code) in &failed {
             if !expected.contains_key(&(name.to_string(), *line)) {
                 problems.push(format!("{name}:{line} fails and is not listed: {detail}"));
-            } else if !detail.contains("0A000")
+            } else if code.as_deref() != Some("0A000")
                 && !expected[&(name.to_string(), *line)].starts_with("not-0A000:")
             {
                 // Every listed failure is a binder refusal; any other error is a real defect.
@@ -239,9 +266,9 @@ fn every_listed_record_exists_in_its_script() {
 fn tally() {
     for (name, text) in SCRIPTS {
         let (passed, failed) = run_script(text);
-        let lines: Vec<usize> = failed.iter().map(|(l, _)| *l).collect();
+        let lines: Vec<usize> = failed.iter().map(|(l, _, _)| *l).collect();
         println!("{name}: {passed} passed, {} failed {lines:?}", failed.len());
-        for (l, d) in &failed {
+        for (l, d, _) in &failed {
             println!("    {name}:{l} {d}");
         }
     }

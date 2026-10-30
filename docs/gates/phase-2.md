@@ -387,15 +387,17 @@ in-process fingerprint refuses a different re-attach, see #379), and the stored 
 frozen format.
 
 **sqllogictest.** All 21 scripts in `crates/lattice-testkit/tests/slt/` (669 records) run unchanged through
-the executor: **451 pass and 218 fail**. `changes.test` (14) and `unsupported.test` (64) pass in full;
-`transactions_visibility.test` 54 of 65, `constraints.test` 40 of 45 and `basics.test` 7 of 9, for example.
+the executor: **433 pass and 236 fail**. `changes.test` (14) and `unsupported.test` (64) pass in full;
+`transactions_visibility.test` 54 of 65, `constraints.test` 38 of 45 and `basics.test` 7 of 9, for example; `types_and_casts.test` is down to 4 of 38
+because its table is declared with `numeric(p, s)`.
 The failures are listed one by one, with a reason, in `crates/lattice-exec/tests/slt_expected_failures.txt`.
-208 are statements refused with `0A000` (aggregates 69, `SELECT` without `FROM` 34, joins 25, `GROUP BY`
-and `HAVING` 16, subqueries 10, `DISTINCT` 6, `ALTER TABLE`/`CREATE INDEX` 6, `jsonb` operators 4, and 38 whose
-expected error is not reached because an earlier part of the statement is refused). The other 10 are not `0A000`:
-the `numeric(p, s)` scale and range records (the plan carries no type modifiers) and three records that depend on
-`ALTER TABLE` or `CREATE UNIQUE INDEX` having run. The test fails if an unlisted record fails or a listed one
-passes. This is **not** the 100 percent P2-13 asks for, and no differential run against PostgreSQL was made
+203 are statements refused with `0A000` (aggregates 66, `SELECT` without `FROM` 34, joins 25, `GROUP BY`
+and `HAVING` 16, subqueries 10, `DISTINCT` 6, `ALTER TABLE`/`CREATE INDEX` 6, and 40 whose expected error
+is not reached because an earlier part of the statement is refused). The other 33 are not `0A000`: they
+depend on a `CREATE TABLE` with `numeric(p, s)` (refused with `0A000`, so the table does not exist, 28 of
+them in `types_and_casts.test` and `constraints.test`) or on `ALTER TABLE` or `CREATE UNIQUE INDEX` having
+run. The test compares the real SQLSTATE of each failing statement, not its message, and fails if an
+unlisted record fails or a listed one passes. This is **not** the 100 percent P2-13 asks for, and no differential run against PostgreSQL was made
 for this executor.
 
 **Evidence run locally for `lattice-exec` and the `lattice-api` adapter only, at default proptest case

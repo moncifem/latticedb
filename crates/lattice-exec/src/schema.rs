@@ -108,6 +108,13 @@ impl TableDef {
                     format!("column \"{}\" specified more than once", c.name.value),
                 ));
             }
+            if let DataType::Numeric(Some(_)) = c.data_type {
+                // The plan carries no type modifiers, so precision and scale could not be applied or
+                // checked; accepting them would store values the declaration forbids.
+                return Err(ExecError::unsupported(
+                    "numeric(p, s): precision and scale are not enforced; use numeric",
+                ));
+            }
             let ty = SqlType::from_data_type(c.data_type);
             let varchar_len = match c.data_type {
                 DataType::Varchar(n) => n,

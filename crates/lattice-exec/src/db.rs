@@ -5,14 +5,15 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use lattice_core::Config;
-use lattice_engines::catalog::{CatalogError, CatalogOp};
-use lattice_engines::limits::AllowAll;
+use lattice_engines::catalog::{CatalogError, CatalogOp, DdlRef};
+use lattice_engines::limits::{AllowAll, PolicyEvaluator};
 use lattice_engines::store::{RowError, RowStore};
 use lattice_seams::{Clock, Io, Rng};
 use lattice_sql::ast::CreateTable;
 
 use crate::error::{ErrorKind, ExecError};
-use crate::schema::{ExecCatalog, Schema, TableDef, object_name};
+use crate::exec::ActorPolicy;
+use crate::schema::{ExecCatalog, MAX_TABLE_ID, Schema, TableDef, object_name};
 
 /// A row store plus the schema the executor needs to read and write it.
 ///
@@ -70,8 +71,24 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
 
     /// Creates a table: commits the name to the engine catalog and registers its columns.
     /// Returns `false` when the table exists and `if_not_exists` is set.
-    pub fn create_table(&mut self, ct: &CreateTable) -> Result<bool, ExecError> {
+    ///
+    /// The catalog change runs under `policy`: the engine asks it to authorize the DDL, and an actor
+    /// without that grant gets `42501` before anything about the catalog is revealed.
+    pub fn create_table(
+        &mut self,
+        ct: &CreateTable,
+        policy: &ActorPolicy,
+    ) -> Result<bool, ExecError> {
         let name = object_name(&ct.name)?;
+        // Ask first, so a denied actor cannot probe which names exist. The ids here are placeholders:
+        // the engine asks again with the real change at commit.
+        authorize_ddl(
+            policy,
+            &[CatalogOp::Create {
+                table: 0,
+                name: name.clone(),
+            }],
+        )?;
         if self.schema.table(&name).is_some() {
             if ct.if_not_exists {
                 return Ok(false);
@@ -96,7 +113,9 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         // Ids are never reused, including dropped ones the live catalog no longer lists.
         for _ in 0..64 {
             let def = TableDef::from_create(id, ct)?;
-            match self.store.commit_catalog(
+            let tx = self.store.begin_with_policy(policy.clone());
+            match self.store.commit_with_catalog(
+                tx,
                 vec![CatalogOp::Create {
                     table: id,
                     name: name.clone(),
@@ -118,6 +137,16 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
     /// Registers the columns of a table that already exists in the engine catalog, for example after
     /// a restart. The id and name must match the catalog.
     pub fn attach_table(&mut self, def: TableDef) -> Result<(), ExecError> {
+        if def.id > MAX_TABLE_ID {
+            return Err(ExecError::new(
+                ErrorKind::Bind,
+                "42P01",
+                format!(
+                    "table id {} is above the largest id the executor serves",
+                    def.id
+                ),
+            ));
+        }
         let current = self.store.catalog().current();
         if current.get(&def.id) != Some(&def.name) {
             return Err(ExecError::new(
@@ -165,7 +194,14 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
 
     /// Drops a table; its rows stay in the log. Returns `false` when it did not exist and
     /// `if_exists` is set.
-    pub fn drop_table(&mut self, name: &str, if_exists: bool) -> Result<bool, ExecError> {
+    pub fn drop_table(
+        &mut self,
+        name: &str,
+        if_exists: bool,
+        policy: &ActorPolicy,
+    ) -> Result<bool, ExecError> {
+        let known = self.schema.table(name).map_or(0, |d| d.id);
+        authorize_ddl(policy, &[CatalogOp::Drop { table: known }])?;
         let Some(def) = self.schema.table(name) else {
             if if_exists {
                 return Ok(false);
@@ -177,8 +213,9 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
             ));
         };
         let id = def.id;
-        self.store
-            .commit_catalog(vec![CatalogOp::Drop { table: id }], Vec::new())?;
+        let ops = vec![CatalogOp::Drop { table: id }];
+        let tx = self.store.begin_with_policy(policy.clone());
+        self.store.commit_with_catalog(tx, ops, Vec::new())?;
         self.schema.remove(name);
         self.next_rowid.borrow_mut().remove(&id);
         Ok(true)
@@ -200,6 +237,22 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         };
         ids.insert(table, next.saturating_add(1));
         Ok(next)
+    }
+}
+
+/// Asks the actor's policy whether it may run this catalog change.
+fn authorize_ddl(policy: &ActorPolicy, tables: &[CatalogOp]) -> Result<(), ExecError> {
+    if policy.authorize_ddl(DdlRef {
+        tables,
+        indexes: &[],
+    }) {
+        Ok(())
+    } else {
+        Err(ExecError::new(
+            ErrorKind::Permission,
+            "42501",
+            "permission denied: the actor may not change the catalog",
+        ))
     }
 }
 

@@ -39,6 +39,13 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
 - **Row policy.** Scans only return rows the actor may read, and the engine checks every final
   old-to-new transition at commit (`42501`). The executor's own constraint probes ignore the read policy,
   as PostgreSQL does for row security, so a duplicate key reveals that a hidden row exists.
+- **DDL follows the policy too.** `CREATE TABLE` and `DROP TABLE` commit through a transaction bound to
+  the actor's policy, and `ActorPolicy` forwards `authorize_ddl` to it: an actor without that grant gets
+  `42501` before anything about the catalog (which names exist) is revealed. Row access never implies
+  DDL.
+- **`describe` reveals names.** Describing a statement (the extended protocol's `Parse`) binds it against
+  the catalog without running it, so a column or table name is answered to any actor that may connect,
+  whatever its row policy. Names are not rows; hiding them is a policy question for Phase 4.
 - **Known side channel (interim rule, revisit with the Phase 4 policy).** A duplicate primary key or
   `UNIQUE` value is `23505` even when the row that holds it is hidden from the actor, as in PostgreSQL
   row-level security, so an actor can learn that a key exists. Nothing else is revealed: the message is
@@ -54,7 +61,9 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
 - **Limits.** `ExecLimits` sets a statement timeout (`SET statement_timeout`, on the database clock) and a
   memory budget. Cancellation, the deadline and the budget are checked for every row; a limit error
   is `57014` (cancelled, timed out) or `53200` (memory) and an aborted statement commits nothing.
-  Memory is reserved after a row is decoded and before it is kept, so a statement can exceed its
+  The host sets a ceiling with
+  `ExecLimits::max_timeout_ms`: a client's `SET statement_timeout` is clamped to it, and `0`, `DEFAULT`
+  or a larger value fall back to it. Memory is reserved after a row is decoded and before it is kept, so a statement can exceed its
   budget by one row. `scan_at` materialises the table's borrowed row references before any poll or
   charge, so that step is neither cancellable nor counted; a sort polls once per key evaluation and its
   comparison pass is not interruptible. Write amplification (staged copies of rows and entries) is not
@@ -79,7 +88,8 @@ frozen format; it needs an RFC and an ADR before any persistence claim.
 
 Joins, `GROUP BY`, aggregates, `DISTINCT` and subqueries (refused by the binder with `0A000`);
 `ALTER TABLE`, `CREATE INDEX`, `DROP INDEX` (`0A000`); the `jsonb` operators `->`, `->>`, `@>` (bound,
-`0A000` at run time); `round` with negative digits; `DDL` inside a transaction block (`25001`); keys on
+`0A000` at run time); `numeric(p)` and `numeric(p, s)` columns (`0A000`: the plan carries no type
+modifiers, so the declaration could not be enforced); `round` with negative digits; `DDL` inside a transaction block (`25001`); keys on
 `numeric` or `jsonb` columns; more than 15 `UNIQUE` constraints on a table. Every scan reads the whole
 table: no index is used. See `docs/gates/phase-2.md` for the sqllogictest records that fail for these
 reasons.

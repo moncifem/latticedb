@@ -871,3 +871,149 @@ fn unsupported_statements_are_refused_with_0a000() {
         "42703"
     );
 }
+
+#[test]
+fn numeric_with_precision_and_scale_is_refused_instead_of_ignored() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    for sql in [
+        "CREATE TABLE m (id INT PRIMARY KEY, amt NUMERIC(5, 2))",
+        "CREATE TABLE m (id INT PRIMARY KEY, amt NUMERIC(5))",
+    ] {
+        assert_eq!(err(&mut f.db, &mut s, sql).sqlstate(), "0A000", "{sql}");
+    }
+    assert!(f.db.schema().table("m").is_none());
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE m (id INT PRIMARY KEY, amt NUMERIC)",
+    );
+}
+
+#[test]
+fn timestamps_and_dates_outside_the_readable_range_are_refused_when_written() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE t (id INT PRIMARY KEY, ts TIMESTAMPTZ, d DATE)",
+    );
+    // A zone offset can push the instant before 0001-01-01 00:00 UTC.
+    assert_eq!(
+        err(
+            &mut f.db,
+            &mut s,
+            "INSERT INTO t (id, ts) VALUES (1, '0001-01-01 00:00:00+05')"
+        )
+        .sqlstate(),
+        "22008"
+    );
+    assert_eq!(
+        err(
+            &mut f.db,
+            &mut s,
+            "INSERT INTO t (id, ts) VALUES (1, '9999-12-31 23:59:59-05')"
+        )
+        .sqlstate(),
+        "22008"
+    );
+    ok(
+        &mut f.db,
+        &mut s,
+        "INSERT INTO t (id, ts, d) VALUES (1, '9999-12-31 23:59:59+00', '9999-12-31')",
+    );
+    ok(
+        &mut f.db,
+        &mut s,
+        "INSERT INTO t (id, ts) VALUES (2, '0001-01-01 00:00:00+00')",
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT ts, d FROM t WHERE id = 1"),
+        strs(&[&["9999-12-31 23:59:59+00", "9999-12-31"]]),
+        "what was accepted reads back"
+    );
+    // A derived value is checked at assignment as well.
+    assert_eq!(
+        err(&mut f.db, &mut s, "UPDATE t SET ts = ts + 1 WHERE id = 1").sqlstate(),
+        "42804"
+    );
+}
+
+#[test]
+fn malformed_zone_offsets_are_text_errors_and_cannot_overflow() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE t (id INT PRIMARY KEY, ts TIMESTAMPTZ)",
+    );
+    for off in [
+        "+25",
+        "+25:00",
+        "+01:60",
+        "+99999999999999999999",
+        "-9223372036854775807:00",
+        "+1:-5",
+    ] {
+        let sql = format!("INSERT INTO t VALUES (1, '2024-01-01 00:00:00{off}')");
+        assert_eq!(err(&mut f.db, &mut s, &sql).sqlstate(), "22007", "{off}");
+    }
+    ok(
+        &mut f.db,
+        &mut s,
+        "INSERT INTO t VALUES (1, '2024-01-01 12:00:00+05:30')",
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT ts FROM t"),
+        strs(&[&["2024-01-01 06:30:00+00"]])
+    );
+}
+
+#[test]
+fn numeric_extremes_error_instead_of_panicking_or_bricking_the_table() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE n (id INT PRIMARY KEY, v NUMERIC)",
+    );
+    let max = i128::MAX.to_string();
+    ok(
+        &mut f.db,
+        &mut s,
+        &format!("INSERT INTO n VALUES (1, {max})"),
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT v / -1 FROM n"),
+        strs(&[&[&format!("-{max}")]])
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT v % -1 FROM n"),
+        strs(&[&["0"]])
+    );
+    // One below the smallest representable value is an overflow, not a stored unreadable number.
+    assert_eq!(
+        err(&mut f.db, &mut s, "SELECT -v - 1 FROM n").sqlstate(),
+        "22003"
+    );
+    assert_eq!(
+        err(&mut f.db, &mut s, "UPDATE n SET v = -v - 1").sqlstate(),
+        "22003"
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT v FROM n"),
+        strs(&[&[&max]]),
+        "the table still reads"
+    );
+    assert_eq!(
+        rows(
+            &mut f.db,
+            &mut s,
+            "SELECT CAST('0e2147483647' AS numeric) FROM n"
+        ),
+        strs(&[&["0"]])
+    );
+}

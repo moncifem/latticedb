@@ -260,7 +260,13 @@ fn split_offset(s: &str) -> Option<(&str, i64)> {
             None => (off, "0"),
         };
         let (hh, mm): (i64, i64) = (hh.parse().ok()?, mm.parse().ok()?);
-        return Some((body.trim_end(), sign * (hh * 60 + mm)));
+        // Offsets are at most 24 hours and 59 minutes; larger or negative-looking fields are text
+        // errors, and the arithmetic cannot overflow.
+        if !(0..=24).contains(&hh) || !(0..=59).contains(&mm) {
+            return None;
+        }
+        let minutes = hh.checked_mul(60)?.checked_add(mm)?;
+        return Some((body.trim_end(), sign * minutes));
     }
     Some((s, 0))
 }
@@ -578,18 +584,31 @@ pub(crate) fn parse_text(s: &str, ty: SqlType) -> Result<Datum, ExecError> {
         SqlType::Text | SqlType::Unknown => Datum::Text(s.to_string()),
         SqlType::Bytea => Datum::Bytes(parse_bytea(s).ok_or_else(|| invalid(ty, s))?),
         SqlType::Uuid => Datum::Uuid(parse_uuid(s).ok_or_else(|| invalid(ty, s))?),
-        SqlType::Date => Datum::Date(parse_date(s).ok_or_else(|| {
-            ExecError::eval(
-                "22007",
-                format!("invalid input syntax for type date: \"{s}\""),
-            )
-        })?),
-        SqlType::Timestamptz => Datum::Timestamp(parse_timestamp(s).ok_or_else(|| {
-            ExecError::eval(
-                "22007",
-                format!("invalid input syntax for type timestamp with time zone: \"{s}\""),
-            )
-        })?),
+        SqlType::Date => {
+            let d = parse_date(s).ok_or_else(|| {
+                ExecError::eval(
+                    "22007",
+                    format!("invalid input syntax for type date: \"{s}\""),
+                )
+            })?;
+            if !date_in_range(d) {
+                return Err(ExecError::eval("22008", "date out of range"));
+            }
+            Datum::Date(d)
+        }
+        SqlType::Timestamptz => {
+            let t = parse_timestamp(s).ok_or_else(|| {
+                ExecError::eval(
+                    "22007",
+                    format!("invalid input syntax for type timestamp with time zone: \"{s}\""),
+                )
+            })?;
+            // A zone offset can move a timestamp across the first or last day of the range.
+            if !timestamp_in_range(t) {
+                return Err(ExecError::eval("22008", "timestamp out of range"));
+            }
+            Datum::Timestamp(t)
+        }
         SqlType::Jsonb => {
             if !json_is_valid(s) {
                 return Err(ExecError::eval(

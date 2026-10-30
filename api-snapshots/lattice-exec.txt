@@ -121,6 +121,7 @@ pub fn lattice_exec::ActorPolicy::clone(&self) -> Self
 impl lattice_engines::limits::PolicyEvaluator for lattice_exec::ActorPolicy
 pub fn lattice_exec::ActorPolicy::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
 pub fn lattice_exec::ActorPolicy::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+pub fn lattice_exec::ActorPolicy::authorize_ddl(&self, lattice_engines::catalog::DdlRef<'_>) -> bool
 pub struct lattice_exec::ColumnDef
 pub lattice_exec::ColumnDef::default: core::option::Option<lattice_exec::Datum>
 pub lattice_exec::ColumnDef::name: alloc::string::String
@@ -139,9 +140,9 @@ impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: latt
 pub fn lattice_exec::Database<I, C, R>::attach_table(&mut self, lattice_exec::schema::TableDef) -> core::result::Result<(), lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::catalog_version(&self) -> u64
 pub fn lattice_exec::Database<I, C, R>::catalog_view(&self) -> lattice_exec::schema::ExecCatalog<'_>
-pub fn lattice_exec::Database<I, C, R>::create_table(&mut self, &lattice_sql::ast::CreateTable) -> core::result::Result<bool, lattice_exec::ExecError>
+pub fn lattice_exec::Database<I, C, R>::create_table(&mut self, &lattice_sql::ast::CreateTable, &lattice_exec::ActorPolicy) -> core::result::Result<bool, lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::detach_table(&mut self, &str) -> bool
-pub fn lattice_exec::Database<I, C, R>::drop_table(&mut self, &str, bool) -> core::result::Result<bool, lattice_exec::ExecError>
+pub fn lattice_exec::Database<I, C, R>::drop_table(&mut self, &str, bool, &lattice_exec::ActorPolicy) -> core::result::Result<bool, lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<Self, lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::schema(&self) -> &lattice_exec::schema::Schema
 pub fn lattice_exec::Database<I, C, R>::store(&self) -> &lattice_engines::store::RowStore<I, C, R>
@@ -189,6 +190,7 @@ impl core::fmt::Display for lattice_exec::ExecError
 pub fn lattice_exec::ExecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_exec::ExecError
 pub struct lattice_exec::ExecLimits
+pub lattice_exec::ExecLimits::max_timeout_ms: core::option::Option<u64>
 pub lattice_exec::ExecLimits::memory_bytes: u64
 pub lattice_exec::ExecLimits::timeout_ms: core::option::Option<u64>
 impl core::clone::Clone for lattice_exec::ExecLimits

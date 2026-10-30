@@ -46,8 +46,10 @@ basics.test:39 aggregate functions: no aggregate operator in the plan IR
 constraints.test:79 aggregate functions: no aggregate operator in the plan IR
 constraints.test:105 aggregate functions: no aggregate operator in the plan IR
 constraints.test:129 aggregate functions: no aggregate operator in the plan IR
-constraints.test:153 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
-constraints.test:156 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
+constraints.test:147 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+constraints.test:150 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+constraints.test:153 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+constraints.test:156 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
 ddl_statements.test:16 aggregate functions: no aggregate operator in the plan IR
 ddl_statements.test:25 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
 ddl_statements.test:28 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
@@ -206,20 +208,36 @@ transactions_visibility.test:100 aggregate functions: no aggregate operator in t
 transactions_visibility.test:115 aggregate functions: no aggregate operator in the plan IR
 transactions_visibility.test:155 aggregate functions: no aggregate operator in the plan IR
 transactions_visibility.test:173 aggregate functions: no aggregate operator in the plan IR
-types_and_casts.test:33 aggregate functions: no aggregate operator in the plan IR
+types_and_casts.test:5 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+types_and_casts.test:8 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:11 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:14 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:18 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:23 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:28 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:33 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
 types_and_casts.test:38 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
-types_and_casts.test:45 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
-types_and_casts.test:53 aggregate functions: no aggregate operator in the plan IR
-types_and_casts.test:63 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
-types_and_casts.test:78 not-0A000: numeric(p, s) precision and scale are not enforced or applied (the plan carries no type modifiers)
+types_and_casts.test:41 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:45 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:53 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:58 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:63 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:68 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:73 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:78 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:82 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:89 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:94 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
 types_and_casts.test:100 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
 types_and_casts.test:103 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
+types_and_casts.test:107 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:112 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
 types_and_casts.test:117 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
-types_and_casts.test:121 jsonb operators ->, ->> and @> are bound but not executed
-types_and_casts.test:126 jsonb operators ->, ->> and @> are bound but not executed
-types_and_casts.test:131 jsonb operators ->, ->> and @> are bound but not executed
-types_and_casts.test:136 jsonb operators ->, ->> and @> are bound but not executed
-types_and_casts.test:141 aggregate functions: no aggregate operator in the plan IR
+types_and_casts.test:121 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:126 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:131 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:136 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
+types_and_casts.test:141 not-0A000: depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
 types_and_casts.test:146 refused with 0A000 before the expected error is reached: a feature outside the plan IR (SELECT without FROM, aggregates, joins, subqueries or DDL)
 types_and_casts.test:150 SELECT without FROM: the binder has no constant-row source
 types_and_casts.test:157 SELECT without FROM: the binder has no constant-row source

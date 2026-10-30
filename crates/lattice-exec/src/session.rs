@@ -129,6 +129,9 @@ pub struct ExecLimits {
     pub timeout_ms: Option<u64>,
     /// Bytes a statement may hold in result and working rows.
     pub memory_bytes: u64,
+    /// The host's ceiling for the timeout. A client's `SET statement_timeout` is clamped to it, and
+    /// `0`, `DEFAULT` or a larger value fall back to it. `None` leaves the client free.
+    pub max_timeout_ms: Option<u64>,
 }
 
 impl Default for ExecLimits {
@@ -136,6 +139,7 @@ impl Default for ExecLimits {
         ExecLimits {
             timeout_ms: None,
             memory_bytes: 64 << 20,
+            max_timeout_ms: None,
         }
     }
 }
@@ -188,6 +192,13 @@ impl ExecSession {
 
     /// Replaces the limits for later statements.
     pub fn set_limits(&mut self, limits: ExecLimits) {
+        // The effective timeout never exceeds the ceiling, whatever the caller left in `timeout_ms`.
+        let mut limits = limits;
+        limits.timeout_ms = match (limits.timeout_ms, limits.max_timeout_ms) {
+            (None, cap) => cap,
+            (Some(r), Some(cap)) => Some(r.min(cap)),
+            (Some(r), None) => Some(r),
+        };
         self.limits = limits;
     }
 
@@ -346,12 +357,12 @@ impl ExecSession {
             }
             Statement::CreateTable(ct) => {
                 self.no_ddl_in_block()?;
-                db.create_table(&ct)?;
+                db.create_table(&ct, &self.policy)?;
                 Ok(ExecResult::command("CREATE TABLE"))
             }
             Statement::DropTable { name, if_exists } => {
                 self.no_ddl_in_block()?;
-                db.drop_table(&object_name(&name)?, if_exists)?;
+                db.drop_table(&object_name(&name)?, if_exists, &self.policy)?;
                 Ok(ExecResult::command("DROP TABLE"))
             }
             Statement::AlterTable(_) | Statement::CreateIndex(_) | Statement::DropIndex { .. } => {
@@ -389,7 +400,12 @@ impl ExecSession {
                     parse_timeout_ms(&n)?
                 }
             };
-            self.limits.timeout_ms = ms;
+            // The client may tighten the timeout but never lift the host's ceiling.
+            self.limits.timeout_ms = match (ms, self.limits.max_timeout_ms) {
+                (None, cap) => cap,
+                (Some(r), Some(cap)) => Some(r.min(cap)),
+                (Some(r), None) => Some(r),
+            };
             return Ok(ExecResult::command("SET"));
         }
         if IGNORED_SETTINGS.contains(&name) {

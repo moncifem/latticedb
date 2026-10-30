@@ -5,6 +5,6 @@ row-store transactions with `BEGIN`, `COMMIT`, `ROLLBACK`, PostgreSQL command ta
 deadline, memory and cancellation limits. `CREATE TABLE` and `DROP TABLE` register tables; column
 definitions are in memory only. A `QueryHandler` adapter is in `lattice-api` and is not wired into
 `latticed`. Of the 669 records in the 21 sqllogictest
-scripts, 451 pass; the 218 failures are listed with reasons (aggregates, joins, `GROUP BY`, `DISTINCT`,
+scripts, 433 pass; the 236 failures are listed with reasons (aggregates, joins, `GROUP BY`, `DISTINCT`,
 subqueries, `SELECT` without `FROM` and DDL the binder or executor refuses, and `numeric(p, s)` modifiers).
 No exit criterion is claimed.

@@ -596,6 +596,7 @@ fn the_memory_budget_is_reserved_before_rows_are_kept() {
     s.set_limits(ExecLimits {
         timeout_ms: None,
         memory_bytes: 8 * 1024,
+        max_timeout_ms: None,
     });
     let e = s
         .execute(&mut db, "SELECT * FROM big ORDER BY v DESC")
@@ -613,6 +614,7 @@ fn the_memory_budget_is_reserved_before_rows_are_kept() {
     s.set_limits(ExecLimits {
         timeout_ms: None,
         memory_bytes: 1024,
+        max_timeout_ms: None,
     });
     assert_eq!(
         s.execute(&mut db, "DELETE FROM big")
@@ -891,4 +893,90 @@ fn an_expired_snapshot_is_its_own_retryable_kind() {
         (e.sqlstate(), e.kind()),
         ("72000", ErrorKind::SnapshotTooOld)
     );
+}
+
+// ----- review fixes -----
+
+#[test]
+fn ddl_runs_under_the_actors_policy() {
+    let mut f = fixture();
+    let mut admin = common::admin();
+    ok(
+        &mut f.db,
+        &mut admin,
+        "CREATE TABLE keep (id INT PRIMARY KEY)",
+    );
+    // A deny-all actor may not create or drop tables, and learns nothing about which names exist.
+    let mut denied = ExecSession::new(ActorPolicy::new(Rc::new(DenyAll)));
+    for sql in [
+        "CREATE TABLE fresh (id INT)",
+        "CREATE TABLE keep (id INT)",
+        "CREATE TABLE IF NOT EXISTS keep (id INT)",
+        "DROP TABLE keep",
+        "DROP TABLE IF EXISTS keep",
+        "DROP TABLE nothing_here",
+    ] {
+        let e = err(&mut f.db, &mut denied, sql);
+        assert_eq!(
+            (e.sqlstate(), e.kind()),
+            ("42501", ErrorKind::Permission),
+            "{sql}"
+        );
+    }
+    assert!(f.db.schema().table("keep").is_some() && f.db.schema().table("fresh").is_none());
+    // An allowing policy still creates and drops.
+    ok(&mut f.db, &mut admin, "CREATE TABLE fresh (id INT)");
+    ok(&mut f.db, &mut admin, "DROP TABLE fresh");
+    assert!(f.db.schema().table("fresh").is_none());
+}
+
+#[test]
+fn a_policy_that_allows_row_access_but_not_ddl_cannot_change_the_catalog() {
+    struct RowsOnly;
+    impl PolicyEvaluator for RowsOnly {
+        fn allows_read(&self, _: RowRef<'_>) -> bool {
+            true
+        }
+        fn allows_write(&self, _: RowWriteRef<'_>) -> bool {
+            true
+        }
+    }
+    let mut f = fixture();
+    let mut s = ExecSession::new(ActorPolicy::new(Rc::new(RowsOnly)));
+    assert_eq!(
+        err(&mut f.db, &mut s, "CREATE TABLE t (id INT)").sqlstate(),
+        "42501"
+    );
+}
+
+#[test]
+fn the_host_ceiling_on_the_statement_timeout_cannot_be_lifted_by_the_client() {
+    let (mut f, mut s) = accounts();
+    s.set_limits(ExecLimits {
+        timeout_ms: Some(900),
+        memory_bytes: 1 << 20,
+        max_timeout_ms: Some(100),
+    });
+    assert_eq!(
+        s.limits().timeout_ms,
+        Some(100),
+        "the default is clamped to the ceiling"
+    );
+    ok(&mut f.db, &mut s, "SET statement_timeout = 0");
+    assert_eq!(s.limits().timeout_ms, Some(100));
+    ok(&mut f.db, &mut s, "SET statement_timeout = '1min'");
+    assert_eq!(s.limits().timeout_ms, Some(100));
+    ok(&mut f.db, &mut s, "SET statement_timeout = 40");
+    assert_eq!(s.limits().timeout_ms, Some(40), "a client may tighten it");
+    ok(&mut f.db, &mut s, "SET statement_timeout = DEFAULT");
+    assert_eq!(s.limits().timeout_ms, Some(100));
+}
+
+#[test]
+fn attaching_a_table_above_the_largest_id_is_refused() {
+    let (mut f, _s) = accounts();
+    let mut def = f.db.schema().table("acct").unwrap().clone();
+    f.db.detach_table("acct");
+    def.id = lattice_exec::schema::MAX_TABLE_ID + 1;
+    assert_eq!(f.db.attach_table(def).unwrap_err().sqlstate(), "42P01");
 }
