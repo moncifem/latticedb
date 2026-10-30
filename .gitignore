@@ -15,5 +15,8 @@ __pycache__/
 
 # Local operating manual for development agents
 /AGENTS.md
+
+# Private notes that stay on the maintainer machine
+/*.private.md
 /clients/typescript/node_modules
 /clients/typescript/dist
