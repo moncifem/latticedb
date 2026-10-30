@@ -92,3 +92,22 @@ independently calculate client proofs. The accepted design is [RFC 0007](../../d
 with [ADR 0021](../../docs/adr/0021-pgwire-scram-tls-integration.md). Independent security review and
 fix rereview are complete; the owner accepted the integration and waived its comment period on
 2026-10-29. This decision does not establish production readiness, driver conformance or a phase gate.
+
+## Timeouts, close and cancel limits
+
+- `--read-timeout-ms` bounds one frame once its first byte arrives. `--idle-timeout-ms` (default: the
+  read timeout) separately bounds the wait for the next frame of an authenticated session, so a pool
+  can keep idle connections longer than it tolerates a stalled frame. SASL frames stay under the
+  startup budget.
+- `--write-timeout-ms` bounds each socket write; `--response-timeout-ms` (default 15 s) is an absolute
+  budget for one whole response, so a peer that drains a few bytes per interval cannot hold a worker.
+  A response that exceeds it ends the connection.
+- A TLS connection is closed with `close_notify` (best effort, bounded by the write timeout), so a
+  peer can tell an orderly close from a truncated stream.
+- `--tls-key` and `--scram-decoy-secret` files must not be accessible to group or others (mode 0600
+  or stricter); the check runs on the open handle before the bytes are read. Unix only.
+- CancelRequests are limited to 16 per second per client address (IPv6 /64) and 256 per second
+  globally; an excess request is dropped without a reply, like an unknown key.
+
+Not done here: channel binding / `SCRAM-SHA-256-PLUS`, the decoy-secret length-only check and the
+`auth.rs` comment fix live in `lattice-api` and are tracked in issue 347.

@@ -26,6 +26,12 @@ move rule with 2 replicas, 3 nodes and 4 operations. One local run with a single
 later-ordered operations removed it reports `Convergent` violated (`tla/check-negative.sh`). Not run
 on CI yet; simulation, row integration and op-log growth measurement of WP43 are still open.
 
+Network hardening of the `latticed` listener (issue #347, no exit criterion): separate idle timeout, absolute
+per-response write deadline, TLS `close_notify`, 0600 check on the key and decoy-secret files and a
+CancelRequest rate limit, each with a test in `crates/latticed` (run locally: `cargo test -p latticed`).
+Open from that issue: SCRAM channel binding (`SCRAM-SHA-256-PLUS`), the decoy-secret length-only check
+and a comment fix, all in `lattice-api`.
+
 ## Exit criteria
 
 | # | Criterion | State |

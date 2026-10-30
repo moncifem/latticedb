@@ -569,3 +569,71 @@ fn a_second_startup_user_cannot_select_a_different_account() {
     assert!(log.entries().is_empty());
     server.shutdown().unwrap();
 }
+
+#[test]
+fn tls_session_ends_with_close_notify_not_a_truncation() {
+    let (config, client_config) = fixture(Duration::from_secs(3));
+    let server = ServerHandle::start(config).unwrap();
+    let mut client = tls(server.local_addr(), client_config);
+    let first = begin(&mut client, "user");
+    finish(&mut client, &first, b"pencil");
+    loop {
+        if message(&mut client).0 == b'Z' {
+            break;
+        }
+    }
+    client.write_all(&frame(b'X', b"")).unwrap();
+    client.flush().unwrap();
+    // rustls reports a missing close_notify as UnexpectedEof; an orderly TLS close reads as Ok(0).
+    let mut byte = [0];
+    assert_eq!(client.read(&mut byte).unwrap(), 0);
+    server.shutdown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_refuses_group_or_world_accessible_key_and_decoy_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("latticed-cli-perm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, bytes: &[u8], mode: u32| {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let cert = write("cert.pem", b"unused", 0o644);
+    let verifiers = write("accounts", b"unused", 0o644);
+    let run = |decoy: &str, key: &str| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_latticed"))
+            .args([
+                "--auth",
+                "scram-tls",
+                "--tls-cert",
+                &cert,
+                "--tls-key",
+                key,
+                "--scram-verifiers",
+                &verifiers,
+                "--scram-decoy-secret",
+                decoy,
+            ])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        String::from_utf8(out.stderr).unwrap()
+    };
+    let decoy_open = write("decoy-open", &[7; 32], 0o644);
+    let decoy_ok = write("decoy-ok", &[7; 32], 0o600);
+    let key_open = write("key-open", b"unused", 0o640);
+    let key_ok = write("key-ok", b"unused", 0o600);
+    assert!(run(&decoy_open, &key_ok).contains("group or others"));
+    let error = run(&decoy_ok, &key_open);
+    assert!(
+        error.contains("group or others") && error.contains("key-open"),
+        "{error}"
+    );
+    // With private files the permission check passes and a later check (bad PEM) fails instead.
+    assert!(!run(&decoy_ok, &key_ok).contains("group or others"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

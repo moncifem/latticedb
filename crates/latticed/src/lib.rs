@@ -4,6 +4,13 @@
 //! The default `SELECT 1` handler does not open a database. Cancel requests signal a cooperative
 //! handler; they cannot preempt blocking I/O or undo a committed operation.
 //!
+//! Timeouts: `read_timeout` bounds one frame once its first byte arrives; `idle_timeout` bounds the
+//! wait for the next frame of an authenticated session (it defaults to `read_timeout`);
+//! `write_timeout` bounds each socket write and `response_timeout` is an absolute budget for one
+//! whole response, so a peer that drains a few bytes per interval cannot hold a worker. A TLS
+//! connection is closed with `close_notify`. CancelRequests are rate limited per client address and
+//! globally; an excess request is dropped without a reply, like an unknown key.
+//!
 //! Robustness: a failure that belongs to one connection (a reset before accept, a socket option
 //! that fails on a reset socket, a thread that cannot be spawned) drops that socket and the
 //! listener keeps accepting. Only a fatal listener error ends the accept loop. Cancel keys are
@@ -63,11 +70,16 @@ pub struct ServerConfig {
     /// bounded workers let startup/cancel packets be classified when SQL sessions fill the limit.
     pub max_connections: usize,
     /// Maximum time to receive a complete startup or frontend frame, including slow partial reads.
-    /// For an authenticated session this also acts as a connection idle timeout: a client that sends
+    /// Unless `idle_timeout` is set this also acts as a connection idle timeout: a client that sends
     /// nothing for this long is disconnected, so pools must send keepalive traffic or raise it.
     pub read_timeout: Duration,
-    /// Socket write timeout for replies.
+    /// How long an authenticated session may wait between frames. `None` uses `read_timeout`. When
+    /// set, `read_timeout` then only bounds a frame whose first byte has already arrived.
+    pub idle_timeout: Option<Duration>,
+    /// Socket write timeout for each write call of a reply.
     pub write_timeout: Duration,
+    /// Absolute budget for writing one complete response, however the peer paces its reads.
+    pub response_timeout: Duration,
     /// One absolute budget from accept through startup, TLS and SCRAM; not reset per message.
     pub startup_timeout: Duration,
     /// Default is explicitly local development trust; remote binds require SCRAM/TLS.
@@ -79,11 +91,34 @@ impl Default for ServerConfig {
             address: SocketAddr::from(([127, 0, 0, 1], 5432)),
             max_connections: 32,
             read_timeout: Duration::from_secs(30),
+            idle_timeout: None,
             write_timeout: Duration::from_secs(5),
+            response_timeout: Duration::from_secs(15),
             startup_timeout: Duration::from_secs(10),
             authentication: Authentication::DevelopmentTrust,
         }
     }
+}
+
+/// Refuses a secret file (TLS private key, decoy secret) that group or others can access, because a
+/// readable key is a leaked key. Unix only; other platforms rely on the operator's ACLs.
+pub fn require_private_file(file: &std::fs::File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(io::Error::other("secret path is not a regular file"));
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::other(
+                "secret file is accessible to group or others (use mode 0600)",
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    Ok(())
 }
 
 /// Largest accepted pre-authentication startup packet (PostgreSQL's own limit is 10000 bytes).
@@ -96,6 +131,10 @@ pub const PRE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const GLOBAL_TLS_STARTS_PER_SECOND: usize = 64;
 const PER_IP_TLS_STARTS_PER_SECOND: usize = 16;
 const MAX_TRACKED_ADDRESSES: usize = 1024;
+/// CancelRequest budgets. A cancel needs a guessed 64-bit key, so these only bound guessing and
+/// registry lock traffic; they are generous enough for a pool cancelling many sessions at once.
+const GLOBAL_CANCELS_PER_SECOND: usize = 256;
+const PER_IP_CANCELS_PER_SECOND: usize = 16;
 
 /// Additional transport workers reserved for startup/cancel classification at the SQL-session cap.
 /// Flooding these slots can still delay/refuse cancellation; this is a resource bound, not a DoS guarantee.
@@ -148,6 +187,11 @@ impl ServerHandle {
             || config.max_connections > 1024
             || config.read_timeout.is_zero()
             || config.write_timeout.is_zero()
+            || config.response_timeout.is_zero()
+            || config.idle_timeout.is_some_and(|idle| idle.is_zero())
+            || Instant::now()
+                .checked_add(config.response_timeout)
+                .is_none()
             || config.startup_timeout.is_zero()
             || Instant::now().checked_add(config.startup_timeout).is_none()
             || (matches!(config.authentication, Authentication::DevelopmentTrust)
@@ -298,7 +342,14 @@ where
     F: Fn() -> H + Send + Sync + 'static,
 {
     let mut workers: Vec<Worker> = Vec::new();
-    let handshakes = Arc::new(Mutex::new(HandshakeLimiter::default()));
+    let limits = Limits {
+        handshakes: Mutex::new(HandshakeLimiter::default()),
+        cancels: Mutex::new(HandshakeLimiter::with_limits(
+            GLOBAL_CANCELS_PER_SECOND,
+            PER_IP_CANCELS_PER_SECOND,
+        )),
+    };
+    let limits = Arc::new(limits);
     let mut consecutive = 0u32;
     let mut last_report: Option<Instant> = None;
     let result = (|| {
@@ -328,8 +379,7 @@ where
                         continue;
                     }
                     // A socket that fails setup or a failed spawn drops only that client.
-                    if let Ok(worker) =
-                        start_worker(socket, &config, &registry, &factory, &handshakes)
+                    if let Ok(worker) = start_worker(socket, &config, &registry, &factory, &limits)
                     {
                         workers.push(worker);
                         open.store(workers.len(), Ordering::Release);
@@ -390,7 +440,7 @@ fn start_worker<H, F>(
     config: &ServerConfig,
     registry: &Registry,
     factory: &Arc<F>,
-    handshakes: &Arc<Mutex<HandshakeLimiter>>,
+    limits: &Arc<Limits>,
 ) -> io::Result<Worker>
 where
     H: QueryHandler + 'static,
@@ -404,7 +454,7 @@ where
     let peer = socket.peer_addr()?.ip();
     let controller = socket.try_clone()?;
     let connection_config = config.clone();
-    let handshake_limit = handshakes.clone();
+    let connection_limits = limits.clone();
     let deadline = Instant::now()
         .checked_add(config.startup_timeout)
         .ok_or_else(|| io::Error::other("startup deadline overflow"))?;
@@ -419,7 +469,7 @@ where
                 connection_config,
                 connection_registry,
                 connection_factory,
-                handshake_limit,
+                connection_limits,
                 peer,
             );
         })?;
@@ -478,14 +528,24 @@ fn frame_bounded(
     socket: &mut Transport,
     startup: bool,
     timeout: Duration,
+    idle: Option<Duration>,
     maximum: usize,
 ) -> Result<Option<Vec<u8>>, FrameError> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "read timeout overflow"))?;
+    let overflow = || io::Error::new(io::ErrorKind::InvalidInput, "read timeout overflow");
+    let mut deadline = Instant::now().checked_add(timeout).ok_or_else(overflow)?;
     let mut tag = [0u8; 1];
-    if !startup && !read_before(socket, &mut tag, deadline)? {
-        return Ok(None);
+    if !startup {
+        // The wait for a frame's first byte may be longer than the time allowed to finish it.
+        let wait = match idle {
+            Some(idle) => Instant::now().checked_add(idle).ok_or_else(overflow)?,
+            None => deadline,
+        };
+        if !read_before(socket, &mut tag, wait)? {
+            return Ok(None);
+        }
+        if idle.is_some() {
+            deadline = Instant::now().checked_add(timeout).ok_or_else(overflow)?;
+        }
     }
     let mut raw_length = [0u8; 4];
     if !read_before(socket, &mut raw_length, deadline)? {
@@ -587,10 +647,22 @@ fn fatal(code: &str, message: impl Into<String>) -> Outcome {
 }
 
 /// Sliding one-second windows of TLS handshake starts: one global and one per client address.
-#[derive(Default)]
 struct HandshakeLimiter {
     global: VecDeque<Instant>,
     per_address: HashMap<IpAddr, VecDeque<Instant>>,
+    global_limit: usize,
+    per_address_limit: usize,
+}
+impl Default for HandshakeLimiter {
+    fn default() -> Self {
+        Self::with_limits(GLOBAL_TLS_STARTS_PER_SECOND, PER_IP_TLS_STARTS_PER_SECOND)
+    }
+}
+
+/// Admission windows shared by all connection workers.
+struct Limits {
+    handshakes: Mutex<HandshakeLimiter>,
+    cancels: Mutex<HandshakeLimiter>,
 }
 const WINDOW: Duration = Duration::from_secs(1);
 fn expire(starts: &mut VecDeque<Instant>, now: Instant) {
@@ -602,6 +674,15 @@ fn expire(starts: &mut VecDeque<Instant>, now: Instant) {
     }
 }
 impl HandshakeLimiter {
+    fn with_limits(global_limit: usize, per_address_limit: usize) -> Self {
+        Self {
+            global: VecDeque::new(),
+            per_address: HashMap::new(),
+            global_limit,
+            per_address_limit,
+        }
+    }
+
     /// IPv6 clients are keyed by /64 so one host cannot rotate through its whole prefix.
     fn key(address: IpAddr) -> IpAddr {
         // A dual-stack `[::]` listener reports IPv4 peers as ::ffff:a.b.c.d; treat them as IPv4.
@@ -617,7 +698,7 @@ impl HandshakeLimiter {
     /// `MAX_TRACKED_ADDRESSES * PER_IP_TLS_STARTS_PER_SECOND` timestamps.
     fn admit(&mut self, address: IpAddr, now: Instant) -> bool {
         expire(&mut self.global, now);
-        if self.global.len() >= GLOBAL_TLS_STARTS_PER_SECOND {
+        if self.global.len() >= self.global_limit {
             return false;
         }
         let key = Self::key(address);
@@ -632,7 +713,7 @@ impl HandshakeLimiter {
         }
         let starts = self.per_address.entry(key).or_default();
         expire(starts, now);
-        if starts.len() >= PER_IP_TLS_STARTS_PER_SECOND {
+        if starts.len() >= self.per_address_limit {
             return false;
         }
         starts.push_back(now);
@@ -646,7 +727,7 @@ fn connection<H, F>(
     config: ServerConfig,
     registry: Registry,
     factory: Arc<F>,
-    handshakes: Arc<Mutex<HandshakeLimiter>>,
+    limits: Arc<Limits>,
     peer: IpAddr,
 ) -> io::Result<()>
 where
@@ -655,34 +736,43 @@ where
 {
     let timeout = config.read_timeout;
     let pre_startup = timeout.min(PRE_STARTUP_TIMEOUT);
+    let response = config.response_timeout;
     // Classify startup before SQL admission: CancelRequest uses its own short-lived connection and
     // must remain routable while all registered SQL sessions are busy.
     loop {
-        let input = match frame_bounded(&mut socket, true, pre_startup, MAX_STARTUP_PACKET_LEN) {
-            Ok(Some(input)) => input,
-            Ok(None) => return Ok(()),
-            Err(FrameError::Io(error)) => return Err(error),
-            Err(FrameError::Protocol(error)) => {
-                send(&mut socket, fatal("08P01", error.to_string()))?;
-                return Ok(());
-            }
-        };
+        let input =
+            match frame_bounded(&mut socket, true, pre_startup, None, MAX_STARTUP_PACKET_LEN) {
+                Ok(Some(input)) => input,
+                Ok(None) => return Ok(()),
+                Err(FrameError::Io(error)) => return Err(error),
+                Err(FrameError::Protocol(error)) => {
+                    send(&mut socket, fatal("08P01", error.to_string()), response)?;
+                    return Ok(());
+                }
+            };
         let startup = match pgwire::decode_startup(&input) {
             Ok(Some((startup, _))) => startup,
             Ok(None) => {
-                send(&mut socket, fatal("08P01", "truncated startup"))?;
+                send(&mut socket, fatal("08P01", "truncated startup"), response)?;
                 return Ok(());
             }
             Err(error) => {
-                send(&mut socket, fatal("08P01", error.to_string()))?;
+                send(&mut socket, fatal("08P01", error.to_string()), response)?;
                 return Ok(());
             }
         };
         match startup {
             Startup::Cancel { pid, secret } => {
-                lock_registry(&registry)?
-                    .entries
-                    .cancel(CancelKey { pid, secret }, 0);
+                let admitted = limits
+                    .cancels
+                    .lock()
+                    .map_err(|_| io::Error::other("cancel admission unavailable"))?
+                    .admit(peer, Instant::now());
+                if admitted {
+                    lock_registry(&registry)?
+                        .entries
+                        .cancel(CancelKey { pid, secret }, 0);
+                }
                 let _ = socket.shutdown();
                 return Ok(());
             }
@@ -697,7 +787,8 @@ where
                     Authentication::ScramTls { tls, .. } => {
                         // Bound expensive TLS starts globally (64/s) and per client address (16/s).
                         {
-                            let mut starts = handshakes
+                            let mut starts = limits
+                                .handshakes
                                 .lock()
                                 .map_err(|_| io::Error::other("TLS admission unavailable"))?;
                             if !starts.admit(peer, Instant::now()) {
@@ -720,7 +811,7 @@ where
                 if matches!(config.authentication, Authentication::ScramTls { .. })
                     && !socket.is_tls()
                 {
-                    send(&mut socket, fatal("28000", "TLS required"))?;
+                    send(&mut socket, fatal("28000", "TLS required"), response)?;
                     return Ok(());
                 }
                 // The cancel key is registered only once authentication succeeds (see `bind_key`).
@@ -743,6 +834,7 @@ where
                                 send(
                                     &mut socket,
                                     fatal("28P01", "password authentication failed"),
+                                    response,
                                 )?;
                                 return Ok(());
                             }
@@ -754,7 +846,7 @@ where
                 let outcome = session.on_startup(Startup::Params(params));
                 let outcome = bind_key(outcome, &registry, &mut registration);
                 let close = outcome.close;
-                send(&mut socket, outcome)?;
+                send(&mut socket, outcome, response)?;
                 if session.sasl_phase().is_none() {
                     socket.authenticated();
                 }
@@ -762,6 +854,8 @@ where
                     serve(
                         &mut socket,
                         timeout,
+                        config.idle_timeout,
+                        config.response_timeout,
                         &registry,
                         &mut registration,
                         &mut session,
@@ -810,6 +904,8 @@ fn bind_key(
 fn serve<H: QueryHandler>(
     socket: &mut Transport,
     timeout: Duration,
+    idle: Option<Duration>,
+    response_timeout: Duration,
     registry: &Registry,
     registration: &mut Option<Registration>,
     session: &mut Session<H>,
@@ -819,6 +915,12 @@ fn serve<H: QueryHandler>(
             socket,
             false,
             timeout,
+            // SASL frames belong to the startup budget; only an established session may idle.
+            if session.sasl_phase().is_some() {
+                None
+            } else {
+                idle
+            },
             if session.sasl_phase().is_some() {
                 pgwire::MAX_SASL_BODY_LEN + 4
             } else {
@@ -829,7 +931,7 @@ fn serve<H: QueryHandler>(
             Ok(None) => break,
             Err(FrameError::Io(error)) => return Err(error),
             Err(FrameError::Protocol(error)) => {
-                send(socket, session.on_protocol_error(&error))?;
+                send(socket, session.on_protocol_error(&error), response_timeout)?;
                 break;
             }
         };
@@ -858,7 +960,7 @@ fn serve<H: QueryHandler>(
         };
         let outcome = bind_key(outcome, registry, registration);
         let close = outcome.close;
-        send(socket, outcome)?;
+        send(socket, outcome, response_timeout)?;
         if session.sasl_phase().is_none() && !close {
             socket.authenticated();
         }
@@ -869,7 +971,18 @@ fn serve<H: QueryHandler>(
     Ok(())
 }
 
-fn send(socket: &mut Transport, outcome: Outcome) -> io::Result<()> {
+/// Writes one response under an absolute deadline (`ServerConfig::response_timeout`).
+fn send(socket: &mut Transport, outcome: Outcome, budget: Duration) -> io::Result<()> {
+    let deadline = Instant::now()
+        .checked_add(budget)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "response timeout overflow"))?;
+    socket.set_response_deadline(Some(deadline));
+    let result = write_outcome(socket, outcome);
+    socket.set_response_deadline(None);
+    result
+}
+
+fn write_outcome(socket: &mut Transport, outcome: Outcome) -> io::Result<()> {
     if let Some(byte) = outcome.encryption_reply {
         socket.write_all(&[byte])?;
     }
@@ -1113,5 +1226,49 @@ mod tests {
         let mut other = None;
         let full = bind_key(placeholder(), &registry, &mut other);
         assert!(other.is_none() && full.close);
+    }
+
+    #[test]
+    fn cancel_window_is_independent_of_the_tls_window_and_has_its_own_limits() {
+        let now = Instant::now();
+        let ip = IpAddr::from([10, 3, 0, 1]);
+        let mut cancels =
+            HandshakeLimiter::with_limits(GLOBAL_CANCELS_PER_SECOND, PER_IP_CANCELS_PER_SECOND);
+        for _ in 0..PER_IP_CANCELS_PER_SECOND {
+            assert!(cancels.admit(ip, now));
+        }
+        assert!(!cancels.admit(ip, now));
+        assert!(cancels.admit(IpAddr::from([10, 3, 0, 2]), now));
+        let mut many = HandshakeLimiter::with_limits(GLOBAL_CANCELS_PER_SECOND, usize::MAX);
+        for n in 0..GLOBAL_CANCELS_PER_SECOND {
+            let address = IpAddr::from([10, 4, (n / 256) as u8, (n % 256) as u8]);
+            assert!(many.admit(address, now));
+        }
+        assert!(!many.admit(ip, now));
+        assert!(many.admit(ip, now + Duration::from_secs(1)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_files_must_be_private_and_regular() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("latticed-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("key");
+        std::fs::write(&path, b"x").unwrap();
+        for (mode, ok) in [
+            (0o600, true),
+            (0o400, true),
+            (0o640, false),
+            (0o604, false),
+            (0o644, false),
+            (0o660, false),
+        ] {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            let file = std::fs::File::open(&path).unwrap();
+            assert_eq!(require_private_file(&file).is_ok(), ok, "{mode:o}");
+        }
+        assert!(require_private_file(&std::fs::File::open(&dir).unwrap()).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

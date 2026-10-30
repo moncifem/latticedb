@@ -740,3 +740,82 @@ fn trust_mode_gives_every_connection_the_labeled_development_principal() {
     assert_eq!(*seen.lock().unwrap(), ["local-development"; 3]);
     server.shutdown().unwrap();
 }
+
+fn idle_server(read: Duration, idle: Option<Duration>) -> ServerHandle {
+    ServerHandle::start(ServerConfig {
+        address: SocketAddr::from(([127, 0, 0, 1], 0)),
+        read_timeout: read,
+        idle_timeout: idle,
+        write_timeout: Duration::from_secs(2),
+        ..ServerConfig::default()
+    })
+    .unwrap()
+}
+
+#[test]
+fn idle_timeout_is_separate_from_the_frame_read_timeout() {
+    // Idle for much longer than read_timeout is fine while idle_timeout allows it.
+    let server = idle_server(Duration::from_millis(200), Some(Duration::from_secs(5)));
+    let mut client = connect(server.local_addr());
+    client.write_all(&startup()).unwrap();
+    ready(&mut client);
+    std::thread::sleep(Duration::from_millis(700));
+    select_one(&mut client);
+    // A frame that starts but does not finish is still bounded by read_timeout, not by idle.
+    let started = Instant::now();
+    client.write_all(&[b'Q', 0, 0]).unwrap();
+    closed(&mut client);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn idle_timeout_disconnects_a_silent_authenticated_session() {
+    let server = idle_server(Duration::from_secs(20), Some(Duration::from_millis(300)));
+    let mut client = connect(server.local_addr());
+    client.write_all(&startup()).unwrap();
+    ready(&mut client);
+    let started = Instant::now();
+    closed(&mut client);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn zero_idle_and_response_timeouts_are_refused() {
+    for config in [
+        ServerConfig {
+            address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            idle_timeout: Some(Duration::ZERO),
+            ..ServerConfig::default()
+        },
+        ServerConfig {
+            address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            response_timeout: Duration::ZERO,
+            ..ServerConfig::default()
+        },
+    ] {
+        assert!(ServerHandle::start(config).is_err());
+    }
+}
+
+#[test]
+fn cancel_requests_are_rate_limited_per_address_and_recover() {
+    let (server, started) = cancellable_server(1);
+    let address = server.local_addr();
+    let mut client = connect(address);
+    let key = registered(&mut client);
+    client.write_all(&frontend(b'Q', b"WAIT\0")).unwrap();
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Spend the whole per-address budget (16 per second) on wrong keys.
+    for n in 0..16 {
+        cancel(address, (key.0, key.1 ^ (n + 1)));
+    }
+    cancel(address, key); // Valid, but over budget: dropped silently like an unknown key.
+    no_reply(&mut client);
+    std::thread::sleep(Duration::from_millis(1100));
+    cancel(address, key);
+    cancellation_error(&mut client);
+    assert_eq!(message(&mut client), (b'Z', vec![b'I']));
+    server.shutdown().unwrap();
+}

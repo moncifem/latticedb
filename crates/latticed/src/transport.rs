@@ -52,6 +52,9 @@ pub(super) struct TimedSocket {
     startup_deadline: Option<Instant>,
     read_deadline: Option<Instant>,
     write_timeout: Duration,
+    /// Absolute budget for the response being written; `write_timeout` alone restarts per call, so a
+    /// peer that accepts one byte per interval could otherwise hold a worker indefinitely.
+    response_deadline: Option<Instant>,
 }
 fn remaining(deadline: Instant) -> io::Result<Duration> {
     deadline
@@ -80,10 +83,13 @@ impl Read for TimedSocket {
 }
 impl Write for TimedSocket {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let timeout = match self.startup_deadline {
-            Some(deadline) => self.write_timeout.min(remaining(deadline)?),
-            None => self.write_timeout,
-        };
+        let mut timeout = self.write_timeout;
+        for deadline in [self.startup_deadline, self.response_deadline]
+            .into_iter()
+            .flatten()
+        {
+            timeout = timeout.min(remaining(deadline)?);
+        }
         self.socket.set_write_timeout(Some(timeout))?;
         self.socket.write(bytes)
     }
@@ -103,6 +109,7 @@ impl Transport {
             startup_deadline: Some(deadline),
             read_deadline: None,
             write_timeout,
+            response_deadline: None,
         })
     }
     fn raw(&mut self) -> &mut TimedSocket {
@@ -114,13 +121,24 @@ impl Transport {
     pub(super) fn set_deadline(&mut self, deadline: Instant) {
         self.raw().read_deadline = Some(deadline);
     }
+    /// Bounds every write until the next call; `None` removes the bound.
+    pub(super) fn set_response_deadline(&mut self, deadline: Option<Instant>) {
+        self.raw().response_deadline = deadline;
+    }
     pub(super) fn authenticated(&mut self) {
         self.raw().startup_deadline = None;
     }
     pub(super) fn is_tls(&self) -> bool {
         matches!(self, Self::Tls(_))
     }
+    /// Closes the connection. A TLS session first sends `close_notify`, so the peer can tell an
+    /// orderly close from a truncation attack; that send is best effort and bounded by the write
+    /// timeout, and the socket is always shut down afterwards.
     pub(super) fn shutdown(&mut self) -> io::Result<()> {
+        if let Self::Tls(stream) = self {
+            stream.conn.send_close_notify();
+            let _ = stream.conn.complete_io(&mut stream.sock);
+        }
         self.raw().socket.shutdown(Shutdown::Both)
     }
     pub(super) fn upgrade(self, config: &TlsConfig) -> io::Result<Self> {
@@ -160,5 +178,61 @@ impl Write for Transport {
             Self::Plain(socket) => socket.flush(),
             Self::Tls(stream) => stream.flush(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
+    use super::*;
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (server, client)
+    }
+
+    #[test]
+    fn response_deadline_bounds_a_peer_that_drains_slowly() {
+        let (server, mut client) = pair();
+        // Every write call makes progress within `write_timeout`, so only the absolute response
+        // budget can stop this peer from holding the writer for the whole payload.
+        let reader = thread::spawn(move || {
+            let mut buffer = [0u8; 65536];
+            while let Ok(count) = client.read(&mut buffer) {
+                if count == 0 {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let far = Instant::now() + Duration::from_secs(600);
+        let mut transport = Transport::new(server, far, Duration::from_secs(5));
+        transport.set_response_deadline(Some(Instant::now() + Duration::from_millis(400)));
+        let started = Instant::now();
+        let payload = vec![0u8; 64 * 1024 * 1024];
+        let error = transport.write_all(&payload).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(3), "{error}");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        transport.shutdown().unwrap();
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn clearing_the_response_deadline_restores_per_call_timeouts() {
+        let (server, mut client) = pair();
+        let far = Instant::now() + Duration::from_secs(600);
+        let mut transport = Transport::new(server, far, Duration::from_secs(5));
+        transport.set_response_deadline(Some(Instant::now() + Duration::from_millis(1)));
+        thread::sleep(Duration::from_millis(5));
+        assert!(transport.write_all(b"late").is_err());
+        transport.set_response_deadline(None);
+        transport.write_all(b"ok").unwrap();
+        let mut seen = [0u8; 2];
+        client.read_exact(&mut seen).unwrap();
+        assert_eq!(&seen, b"ok");
     }
 }

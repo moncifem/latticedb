@@ -8,7 +8,7 @@
 )]
 
 use lattice_api::auth::{Accounts, DecoySecret, MAX_CREDENTIAL_BYTES};
-use latticed::{Authentication, ServerConfig, ServerHandle, TlsConfig};
+use latticed::{Authentication, ServerConfig, ServerHandle, TlsConfig, require_private_file};
 use std::io::Read;
 use std::io::{self, BufRead};
 use std::process::ExitCode;
@@ -31,7 +31,7 @@ fn run() -> Result<(), String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N]\nLoopback development trust by default; SELECT 1 only. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. The read timeout also disconnects idle sessions."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default; SELECT 1 only. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Optional --startup-timeout-ms N bounds startup/TLS/authentication. Send 'shutdown' on stdin for a clean stop; end-of-file on stdin also stops the server, so run it with stdin held open or under a supervisor that keeps a pipe open. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
             );
             return Ok(());
         }
@@ -65,6 +65,20 @@ fn run() -> Result<(), String> {
                         .map_err(|e| format!("invalid read timeout: {e}"))?,
                 )
             }
+            "--idle-timeout-ms" => {
+                config.idle_timeout = Some(Duration::from_millis(
+                    value
+                        .parse()
+                        .map_err(|e| format!("invalid idle timeout: {e}"))?,
+                ))
+            }
+            "--response-timeout-ms" => {
+                config.response_timeout = Duration::from_millis(
+                    value
+                        .parse()
+                        .map_err(|e| format!("invalid response timeout: {e}"))?,
+                )
+            }
             "--write-timeout-ms" => {
                 config.write_timeout = Duration::from_millis(
                     value
@@ -89,11 +103,12 @@ fn run() -> Result<(), String> {
             let decoy_path = decoy_secret
                 .as_deref()
                 .ok_or("--scram-decoy-secret required")?;
-            let secret = bounded_file(decoy_path, 32)?;
+            let secret = bounded_secret_file(decoy_path, 32)?;
             let secret = DecoySecret::from_bytes(&secret)
                 .map_err(|_| "decoy secret must contain exactly 32 binary bytes")?;
             let cert = bounded_file(certificates.as_deref().ok_or("--tls-cert required")?, 65536)?;
-            let key = bounded_file(private_key.as_deref().ok_or("--tls-key required")?, 16384)?;
+            let key =
+                bounded_secret_file(private_key.as_deref().ok_or("--tls-key required")?, 16384)?;
             let verifiers = bounded_file(
                 credentials.as_deref().ok_or("--scram-verifiers required")?,
                 MAX_CREDENTIAL_BYTES,
@@ -154,8 +169,20 @@ fn run() -> Result<(), String> {
 }
 
 fn bounded_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {
-    let mut bytes = Zeroizing::new(Vec::new());
     let file = std::fs::File::open(path).map_err(|_| "cannot open configured security file")?;
+    read_bounded(file, limit)
+}
+
+/// Like `bounded_file` for key material: the open handle is checked, so the mode that was verified
+/// is the mode of the bytes that are read.
+fn bounded_secret_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {
+    let file = std::fs::File::open(path).map_err(|_| "cannot open configured security file")?;
+    require_private_file(&file).map_err(|e| format!("{path}: {e}"))?;
+    read_bounded(file, limit)
+}
+
+fn read_bounded(file: std::fs::File, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {
+    let mut bytes = Zeroizing::new(Vec::new());
     file.take((limit + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| "cannot read configured security file")?;
