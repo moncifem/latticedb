@@ -386,20 +386,34 @@ pub(crate) fn parse_bool(s: &str) -> Option<bool> {
 
 const MAX_JSON_DEPTH: usize = 64;
 
-/// Whether `s` is one JSON value (RFC 8259), nested at most 64 deep.
-pub(crate) fn json_is_valid(s: &str) -> bool {
+/// Checks that `s` is one JSON value (RFC 8259), nested at most 64 deep. On failure the SQLSTATE PostgreSQL gives: `22P05` for a NUL escape,
+/// which it cannot store in text, and `22P02` for any other fault, including an unpaired surrogate escape.
+pub(crate) fn json_check(s: &str) -> Result<(), &'static str> {
     let b = s.as_bytes();
-    let mut p = JsonScan { b, i: 0 };
+    let mut p = JsonScan {
+        b,
+        i: 0,
+        nul_escape: false,
+    };
     p.ws();
-    p.value(0) && {
+    let ok = p.value(0) && {
         p.ws();
         p.i == b.len()
+    };
+    if ok {
+        Ok(())
+    } else if p.nul_escape {
+        Err("22P05")
+    } else {
+        Err("22P02")
     }
 }
 
 struct JsonScan<'a> {
     b: &'a [u8],
     i: usize,
+    /// A `\u0000` escape was met (PostgreSQL refuses it with its own SQLSTATE).
+    nul_escape: bool,
 }
 
 impl JsonScan<'_> {
@@ -487,6 +501,16 @@ impl JsonScan<'_> {
             _ => false,
         }
     }
+    /// Four hex digits as a UTF-16 code unit, advancing past them.
+    fn hex4(&mut self) -> Option<u32> {
+        let mut unit = 0u32;
+        for _ in 0..4 {
+            let digit = char::from(self.peek()?).to_digit(16)?;
+            unit = unit * 16 + digit;
+            self.i += 1;
+        }
+        Some(unit)
+    }
     fn string(&mut self) -> bool {
         if self.peek() != Some(b'"') {
             return false;
@@ -505,11 +529,29 @@ impl JsonScan<'_> {
                         Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => self.i += 1,
                         Some(b'u') => {
                             self.i += 1;
-                            for _ in 0..4 {
-                                if !self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+                            let Some(unit) = self.hex4() else {
+                                return false;
+                            };
+                            match unit {
+                                0 => {
+                                    self.nul_escape = true;
                                     return false;
                                 }
-                                self.i += 1;
+                                // A high surrogate must be followed by an escaped low surrogate.
+                                0xD800..=0xDBFF => {
+                                    if self.peek() != Some(b'\\')
+                                        || self.b.get(self.i + 1) != Some(&b'u')
+                                    {
+                                        return false;
+                                    }
+                                    self.i += 2;
+                                    if !matches!(self.hex4(), Some(0xDC00..=0xDFFF)) {
+                                        return false;
+                                    }
+                                }
+                                // A low surrogate on its own is not a character.
+                                0xDC00..=0xDFFF => return false,
+                                _ => {}
                             }
                         }
                         _ => return false,
@@ -655,9 +697,9 @@ pub(crate) fn parse_text(s: &str, ty: SqlType) -> Result<Datum, ExecError> {
             Datum::Timestamp(t)
         }
         SqlType::Jsonb => {
-            if !json_is_valid(s) {
+            if let Err(code) = json_check(s) {
                 return Err(ExecError::eval(
-                    "22P02",
+                    code,
                     format!("invalid input syntax for type json: \"{s}\""),
                 ));
             }
