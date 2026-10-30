@@ -601,8 +601,10 @@ pub fn lattice_api::session::Session<H>::on_startup(&mut self, lattice_api::pgwi
 pub fn lattice_api::session::Session<H>::principal(&self) -> core::option::Option<&lattice_api::principal::Principal>
 pub fn lattice_api::session::Session<H>::sasl_phase(&self) -> core::option::Option<lattice_api::pgwire::SaslPhase>
 pub fn lattice_api::session::Session<H>::tx_status(&self) -> lattice_api::pgwire::TxStatus
+pub fn lattice_api::session::Session<H>::with_portal_budget(self, usize) -> Self
 pub fn lattice_api::session::Session<H>::with_scram(H, i32, i32, lattice_api::scram::ScramServer, core::option::Option<lattice_api::principal::Principal>) -> Self
 pub const lattice_api::session::MAX_PORTALS: usize
+pub const lattice_api::session::MAX_PORTAL_BYTES: usize
 pub const lattice_api::session::MAX_STATEMENTS: usize
 pub const lattice_api::session::SERVER_VERSION: &str
 pub trait lattice_api::session::QueryHandler

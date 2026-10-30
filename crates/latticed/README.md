@@ -46,6 +46,12 @@ bounded work units and choose their abort/commit boundary. Returning `57014` giv
 error flow; extended errors discard messages until Sync, and an active transaction remains failed
 until rollback. A portal cancelled before execution cannot resume; cached successful results remain readable. Idle cancellation does not poison the next query.
 
+A suspended portal keeps its remaining rows once and sends them from a cursor; the rows and the
+statement text and parameters of every open portal are charged to a 64 MiB per-connection budget
+(a soft cap: `53200` before a statement runs once the connection is over it, never after; at most 128 portals, `COMMIT`/`ROLLBACK` destroys them). The budget is separate
+from `--statement-memory-bytes`, so a connection can hold up to 64 MiB of retained results after its
+statements finished. Portals opened outside a transaction block are not destroyed at `Sync`.
+
 Legacy handler methods remain usable: their default cancellation-aware methods check before entry,
 but they cannot preempt a handler that blocks without polling. Successful possibly-committed results
 are never relabeled as cancellation after return, and already-computed result transmission is not

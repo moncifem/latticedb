@@ -37,8 +37,14 @@ pub const SERVER_VERSION: &str = "16.0";
 
 /// The most prepared statements one session may hold.
 pub const MAX_STATEMENTS: usize = 1024;
-/// The most portals one session may hold.
-pub const MAX_PORTALS: usize = 1024;
+/// The most portals one session may hold. Drivers keep a handful open; the old limit of 1,024 let
+/// one connection pin a thousand copies of a large result.
+pub const MAX_PORTALS: usize = 128;
+/// The most bytes one session may keep in portals: the statement text and bound parameters of
+/// every open portal plus the rows a suspended portal still has to send. A client that fills it
+/// gets `53200` and the session stays usable after `Close`. It matches the default statement
+/// memory budget, so one maximal result still fits but a hundred of them do not.
+pub const MAX_PORTAL_BYTES: usize = 64 * 1024 * 1024;
 
 /// One row; `None` is SQL NULL.
 pub type Row = Vec<Option<Vec<u8>>>;
@@ -167,6 +173,41 @@ struct Portal {
     params: Vec<Option<Vec<u8>>>,
     columns: Vec<Column>,
     state: PortalState,
+    /// Bytes of the session's portal budget this portal holds: its text and parameters, plus the
+    /// rows still waiting in `Suspended`. Returned when the portal goes away.
+    charged: usize,
+}
+
+const CELL_SLOT: usize = std::mem::size_of::<Option<Vec<u8>>>();
+
+/// What a row costs in memory: the outer vector, one slot per cell and the cell bytes.
+fn row_bytes(row: &Row) -> usize {
+    let data = row
+        .iter()
+        .flatten()
+        .fold(0usize, |n, c| n.saturating_add(c.len()));
+    std::mem::size_of::<Row>()
+        .saturating_add(row.len().saturating_mul(CELL_SLOT))
+        .saturating_add(data)
+}
+
+/// What a portal costs before it holds any rows: its statement text and bound parameters.
+fn portal_base_bytes(sql: &str, params: &[Option<Vec<u8>>]) -> usize {
+    let data = params
+        .iter()
+        .flatten()
+        .fold(0usize, |n, c| n.saturating_add(c.len()));
+    sql.len()
+        .saturating_add(params.len().saturating_mul(CELL_SLOT))
+        .saturating_add(data)
+        .saturating_add(64)
+}
+
+fn over_portal_budget() -> QueryError {
+    QueryError::new(
+        "53200",
+        "too much memory held by open portals; close portals or fetch their rows",
+    )
 }
 
 /// One client connection.
@@ -187,6 +228,9 @@ pub struct Session<H> {
     discarding: bool,
     statements: BTreeMap<String, Statement>,
     portals: BTreeMap<String, Portal>,
+    /// Sum of `Portal::charged` over `portals`.
+    portal_bytes: usize,
+    portal_budget: usize,
 }
 
 impl<H: QueryHandler> Session<H> {
@@ -223,7 +267,29 @@ impl<H: QueryHandler> Session<H> {
             discarding: false,
             statements: BTreeMap::new(),
             portals: BTreeMap::new(),
+            portal_bytes: 0,
+            portal_budget: MAX_PORTAL_BYTES,
         }
+    }
+
+    /// Replaces the per-session portal byte budget ([`MAX_PORTAL_BYTES`] by default).
+    #[must_use]
+    pub fn with_portal_budget(mut self, bytes: usize) -> Self {
+        self.portal_budget = bytes;
+        self
+    }
+
+    /// Drops a portal and returns what it held to the budget.
+    fn remove_portal(&mut self, name: &str) {
+        if let Some(portal) = self.portals.remove(name) {
+            self.portal_bytes = self.portal_bytes.saturating_sub(portal.charged);
+        }
+    }
+
+    /// PostgreSQL destroys every portal when the transaction ends.
+    fn drop_all_portals(&mut self) {
+        self.portals.clear();
+        self.portal_bytes = 0;
     }
 
     /// Requires a configured SCRAM exchange before any query or successful startup output.
@@ -536,7 +602,10 @@ impl<H: QueryHandler> Session<H> {
             Ok(result) => {
                 match result.tag.as_str() {
                     "BEGIN" if self.tx == TxStatus::Idle => self.tx = TxStatus::InTransaction,
-                    "COMMIT" | "ROLLBACK" => self.tx = TxStatus::Idle,
+                    "COMMIT" | "ROLLBACK" => {
+                        self.tx = TxStatus::Idle;
+                        self.drop_all_portals();
+                    }
                     _ => {}
                 }
                 Ok(result)
@@ -640,12 +709,23 @@ impl<H: QueryHandler> Session<H> {
                 if !self.portals.contains_key(&portal) && self.portals.len() >= MAX_PORTALS {
                     return Err(QueryError::new("54000", "too many portals"));
                 }
+                let charged = portal_base_bytes(&stmt.sql, &params);
                 let made = Portal {
                     sql: stmt.sql.clone(),
                     params,
                     columns: stmt.columns.clone(),
                     state: PortalState::Fresh,
+                    charged,
                 };
+                // Binding over the unnamed portal replaces it, so its bytes do not count against
+                // the new one. Check first: a refused bind must leave the old portal in place.
+                let replaced = self.portals.get(&portal).map_or(0, |p| p.charged);
+                let others = self.portal_bytes.saturating_sub(replaced);
+                if others.saturating_add(charged) > self.portal_budget {
+                    return Err(over_portal_budget());
+                }
+                self.remove_portal(&portal);
+                self.portal_bytes += charged;
                 self.portals.insert(portal, made);
                 out.push(Backend::BindComplete);
             }
@@ -670,13 +750,13 @@ impl<H: QueryHandler> Session<H> {
                 out.push(Backend::CloseComplete);
             }
             Frontend::Close(Target::Portal(name)) => {
-                self.portals.remove(&name);
+                self.remove_portal(&name);
                 out.push(Backend::CloseComplete);
             }
             Frontend::Execute { portal, max_rows } => {
                 if let Err(error) = self.execute_portal(&portal, max_rows, out, cancellation) {
                     if error.code == "57014" {
-                        self.portals.remove(&portal);
+                        self.remove_portal(&portal);
                     }
                     return Err(error);
                 }
@@ -702,7 +782,8 @@ impl<H: QueryHandler> Session<H> {
     ) -> Result<(), QueryError> {
         let missing = || QueryError::new("34000", format!("portal \"{name}\" does not exist"));
         let portal = self.portals.get(name).ok_or_else(missing)?;
-        let state = match &portal.state {
+        let fresh = matches!(portal.state, PortalState::Fresh);
+        let (mut rows, tag) = match &portal.state {
             PortalState::Fresh => {
                 check_cancellation(cancellation)?;
                 let sql = portal.sql.clone();
@@ -714,40 +795,81 @@ impl<H: QueryHandler> Session<H> {
                     }
                     return Ok(());
                 }
+                // Never fail after running: a statement with side effects (INSERT ... RETURNING)
+                // would be committed while the client sees an error. So refuse before it starts when
+                // the session already holds more than its budget. Once it ran, its result is always
+                // kept (it is bounded by the statement memory budget), which makes the budget soft:
+                // retained bytes stay under the budget plus one result.
+                if self.portal_bytes > self.portal_budget {
+                    return Err(over_portal_budget());
+                }
                 let result = self.run(&sql, &params, cancellation)?;
-                let rows = if result.columns.is_empty() {
+                let rows: VecDeque<Row> = if result.columns.is_empty() {
                     VecDeque::new()
                 } else {
                     result.rows.into()
                 };
-                PortalState::Suspended(rows, result.tag)
+                (rows, result.tag)
             }
-            PortalState::Suspended(rows, tag) => PortalState::Suspended(rows.clone(), tag.clone()),
-            PortalState::Done(tag) => PortalState::Suspended(VecDeque::new(), tag.clone()),
-        };
-        let PortalState::Suspended(mut rows, tag) = state else {
-            return Ok(());
+            PortalState::Suspended(..) => {
+                // Move the rows out instead of copying them: a client that reads one row at a time
+                // would otherwise pay for the whole remainder on every message.
+                let Some(p) = self.portals.get_mut(name) else {
+                    return Ok(());
+                };
+                match std::mem::replace(&mut p.state, PortalState::Done(String::new())) {
+                    PortalState::Suspended(rows, tag) => (rows, tag),
+                    other => {
+                        p.state = other;
+                        return Ok(());
+                    }
+                }
+            }
+            PortalState::Done(tag) => (VecDeque::new(), tag.clone()),
         };
         let limit = match usize::try_from(max_rows) {
             Ok(0) | Err(_) => usize::MAX,
             Ok(n) => n,
         };
-        let mut sent = 0;
-        while sent < limit {
+        let mut batch = Vec::new();
+        let mut sent_bytes = 0usize;
+        while batch.len() < limit {
             let Some(row) = rows.pop_front() else { break };
-            out.push(Backend::DataRow(row));
-            sent += 1;
+            sent_bytes = sent_bytes.saturating_add(row_bytes(&row));
+            batch.push(row);
         }
-        let next = if rows.is_empty() {
+        let Some(portal) = self.portals.get_mut(name) else {
+            // The statement ended the transaction and took the portal with it.
+            out.extend(batch.into_iter().map(Backend::DataRow));
+            out.push(Backend::CommandComplete(tag));
+            return Ok(());
+        };
+        // What stays behind is charged to the session. The first run measures the rows once; later
+        // runs subtract what they sent, so no message costs more than the rows it moves.
+        let base = portal_base_bytes(&portal.sql, &portal.params);
+        let kept = if rows.is_empty() {
+            0
+        } else if fresh {
+            rows.iter()
+                .fold(0usize, |n, r| n.saturating_add(row_bytes(r)))
+        } else {
+            portal
+                .charged
+                .saturating_sub(base)
+                .saturating_sub(sent_bytes)
+        };
+        let charged = base.saturating_add(kept);
+        let others = self.portal_bytes.saturating_sub(portal.charged);
+        portal.charged = charged;
+        self.portal_bytes = others.saturating_add(charged);
+        out.extend(batch.into_iter().map(Backend::DataRow));
+        portal.state = if rows.is_empty() {
             out.push(Backend::CommandComplete(tag.clone()));
             PortalState::Done(tag)
         } else {
             out.push(Backend::PortalSuspended);
             PortalState::Suspended(rows, tag)
         };
-        if let Some(p) = self.portals.get_mut(name) {
-            p.state = next;
-        }
         Ok(())
     }
 }
@@ -1923,5 +2045,300 @@ mod tests {
         let out = session.on_message(q("SELECT 1"));
         assert_eq!(err_code(&out.messages[0]), "28000");
         assert!(session.handler().executed.is_empty());
+    }
+
+    /// `ROWS <n> <bytes>` returns n rows of that many bytes; `BEGIN`/`COMMIT` return their tags.
+    #[derive(Default)]
+    struct Wide {
+        /// `INSERT` statements that ran (each returns one row, like `INSERT ... RETURNING`).
+        inserts: usize,
+        /// Times the session asked the handler to fail its open block.
+        aborts: usize,
+    }
+
+    impl QueryHandler for Wide {
+        fn abort_transaction(&mut self, _ctx: &QueryContext<'_>) {
+            self.aborts += 1;
+        }
+
+        fn execute(
+            &mut self,
+            _ctx: &QueryContext<'_>,
+            sql: &str,
+            _params: &[Option<Vec<u8>>],
+        ) -> Result<QueryOutput, QueryError> {
+            let words: Vec<&str> = sql.split_whitespace().collect();
+            if words.first() == Some(&"INSERT") {
+                self.inserts += 1;
+                return Ok(QueryOutput {
+                    columns: vec![col()],
+                    rows: vec![vec![Some(b"1".to_vec())]],
+                    tag: "INSERT 0 1".into(),
+                });
+            }
+            if let ["ROWS", n, width] = words[..] {
+                let n: usize = n.parse().unwrap();
+                let width: usize = width.parse().unwrap();
+                return Ok(QueryOutput {
+                    columns: vec![col()],
+                    rows: (0..n).map(|_| vec![Some(vec![b'x'; width])]).collect(),
+                    tag: format!("SELECT {n}"),
+                });
+            }
+            Ok(QueryOutput {
+                tag: sql.trim().to_ascii_uppercase(),
+                ..QueryOutput::default()
+            })
+        }
+
+        fn describe(
+            &mut self,
+            _ctx: &QueryContext<'_>,
+            sql: &str,
+        ) -> Result<Vec<Column>, QueryError> {
+            Ok(if sql.starts_with("ROWS") || sql.starts_with("INSERT") {
+                vec![col()]
+            } else {
+                Vec::new()
+            })
+        }
+    }
+
+    fn wide_session() -> Session<Wide> {
+        let mut s = Session::local_trust(Wide::default(), 1, 2);
+        s.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
+        s
+    }
+
+    /// The heap address of the first cell of the `index`th row still waiting in portal `p`.
+    fn waiting_row_address(session: &Session<Wide>, index: usize) -> usize {
+        let PortalState::Suspended(rows, _) = &session.portals["p"].state else {
+            panic!("portal must be suspended");
+        };
+        rows[index][0].as_ref().unwrap().as_ptr() as usize
+    }
+
+    #[test]
+    fn reading_a_portal_row_by_row_never_copies_the_remaining_rows() {
+        // A deep copy of the remainder gives every row a new heap buffer. After each Execute, the
+        // row that was second in line must be the same allocation now at the front.
+        let mut s = wide_session();
+        s.on_message(parse("", "ROWS 10000 8"));
+        s.on_message(bind("p", "", vec![]));
+        assert_eq!(s.on_message(exec("p", 1)).messages.len(), 2);
+        for _ in 0..500 {
+            let second = waiting_row_address(&s, 1);
+            let last = waiting_row_address(&s, 9000 - 1 - 500);
+            let out = s.on_message(exec("p", 1));
+            assert_eq!(out.messages.len(), 2);
+            assert_eq!(out.messages[1], Backend::PortalSuspended);
+            assert_eq!(waiting_row_address(&s, 0), second);
+            // The tail did not move either, so nothing was rebuilt.
+            assert_eq!(waiting_row_address(&s, 9000 - 2 - 500), last);
+        }
+        // Reading it all out still yields every row exactly once.
+        let rest = s.on_message(exec("p", 0));
+        assert_eq!(rest.messages.len(), 10_000 - 501 + 1);
+        assert_eq!(
+            rest.messages.last(),
+            Some(&Backend::CommandComplete("SELECT 10000".into()))
+        );
+    }
+
+    #[test]
+    fn portal_bytes_follow_the_rows_still_waiting_and_return_when_the_portal_goes() {
+        let mut s = wide_session();
+        s.on_message(parse("", "ROWS 100 1000"));
+        s.on_message(bind("p", "", vec![]));
+        let base = s.portal_bytes;
+        assert_eq!(base, s.portals["p"].charged);
+        s.on_message(exec("p", 10));
+        let ninety = s.portal_bytes - base;
+        assert!(ninety >= 90 * 1000, "90 rows of 1000 bytes are retained");
+        assert!(
+            ninety < 100 * 1000,
+            "the ten sent rows are no longer charged"
+        );
+        s.on_message(exec("p", 10));
+        let eighty = s.portal_bytes - base;
+        assert_eq!(ninety - eighty, ninety / 90 * 10);
+        // Reading to the end releases everything but the portal's own text.
+        s.on_message(exec("p", 0));
+        assert_eq!(s.portal_bytes, base);
+        s.on_message(Frontend::Close(Target::Portal("p".into())));
+        assert_eq!(s.portal_bytes, 0);
+    }
+
+    #[test]
+    fn a_session_over_its_portal_budget_refuses_before_running_and_stays_usable() {
+        let mut s = wide_session().with_portal_budget(64 * 1024);
+        s.on_message(parse("big", "ROWS 100 1000"));
+        s.on_message(parse("write", "INSERT RETURNING"));
+        s.on_message(bind("p", "big", vec![]));
+        s.on_message(bind("w", "write", vec![]));
+        // The first result is always admitted once it ran: the budget is soft by one result.
+        let out = s.on_message(exec("p", 1));
+        assert_eq!(out.messages.last(), Some(&Backend::PortalSuspended));
+        assert!(s.portal_bytes > 64 * 1024);
+        // The next statement is refused before it starts, so it has no side effect.
+        let out = s.on_message(exec("w", 0));
+        assert_eq!(err_code(&out.messages[0]), "53200");
+        assert_eq!(s.handler().inserts, 0);
+        assert_eq!(s.handler().aborts, 0, "no block was open");
+        s.on_message(Frontend::Sync);
+        // Closing the big portal frees the budget, and the same portal then runs.
+        s.on_message(Frontend::Close(Target::Portal("p".into())));
+        let out = s.on_message(exec("w", 0));
+        assert_eq!(out.messages.len(), 2);
+        assert_eq!(s.handler().inserts, 1);
+        // A result read to the end in one message is never held, whatever its size.
+        s.on_message(parse("rows", "ROWS 100 1000"));
+        s.on_message(bind("r", "rows", vec![]));
+        assert_eq!(s.on_message(exec("r", 0)).messages.len(), 101);
+    }
+
+    #[test]
+    fn a_refusal_inside_a_block_fails_the_handlers_block_too() {
+        let mut s = wide_session().with_portal_budget(64 * 1024);
+        s.on_message(parse("begin", "BEGIN"));
+        s.on_message(bind("b", "begin", vec![]));
+        s.on_message(exec("b", 0));
+        assert_eq!(s.tx_status(), TxStatus::InTransaction);
+        s.on_message(parse("big", "ROWS 100 1000"));
+        s.on_message(parse("write", "INSERT RETURNING"));
+        s.on_message(bind("p", "big", vec![]));
+        s.on_message(bind("w", "write", vec![]));
+        s.on_message(exec("p", 1));
+        let out = s.on_message(exec("w", 0));
+        assert_eq!(err_code(&out.messages[0]), "53200");
+        assert_eq!(s.handler().inserts, 0);
+        // The session's block failed, and so did the handler's: a COMMIT cannot commit it.
+        assert_eq!(s.handler().aborts, 1);
+        s.on_message(Frontend::Sync);
+        assert_eq!(s.tx_status(), TxStatus::Failed);
+        // A refused Bind inside a block is a wire-session error too.
+        let mut t = wide_session().with_portal_budget(64 * 1024);
+        t.on_message(parse("begin", "BEGIN"));
+        t.on_message(bind("b", "begin", vec![]));
+        t.on_message(exec("b", 0));
+        t.on_message(parse("big", "ROWS 100 1000"));
+        t.on_message(bind("p", "big", vec![]));
+        t.on_message(exec("p", 1));
+        let out = t.on_message(bind("q", "big", vec![]));
+        assert_eq!(err_code(&out.messages[0]), "53200");
+        assert_eq!(t.handler().aborts, 1);
+    }
+
+    #[test]
+    fn a_client_that_opens_many_suspended_portals_hits_the_budget_not_the_heap() {
+        let mut s = wide_session().with_portal_budget(1024 * 1024);
+        s.on_message(parse("s", "ROWS 500 1000"));
+        let mut refused = 0;
+        for i in 0..MAX_PORTALS {
+            let name = format!("p{i}");
+            let bound = s.on_message(bind(&name, "s", vec![]));
+            let out = s.on_message(exec(&name, 1));
+            if err_code_of(&bound.messages) == Some("53200")
+                || err_code_of(&out.messages) == Some("53200")
+            {
+                refused += 1;
+                s.on_message(Frontend::Sync);
+            }
+            // Soft cap: the budget plus the one result admitted while under it.
+            assert!(s.portal_bytes <= 1024 * 1024 + 600_000);
+        }
+        // Each portal keeps about 500 KB, so three fit before the session is over budget.
+        assert!(refused >= MAX_PORTALS - 4, "refused {refused}");
+        // Closing frees the budget for new work.
+        let names: Vec<String> = s.portals.keys().cloned().collect();
+        for name in names {
+            s.on_message(Frontend::Close(Target::Portal(name)));
+        }
+        assert_eq!(s.portal_bytes, 0);
+        s.on_message(bind("again", "s", vec![]));
+        let out = s.on_message(exec("again", 1));
+        assert_eq!(out.messages.last(), Some(&Backend::PortalSuspended));
+    }
+
+    fn err_code_of(messages: &[Backend]) -> Option<&str> {
+        messages.iter().find_map(|m| match m {
+            Backend::ErrorResponse { code, .. } => Some(code.as_str()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn binding_more_than_max_portals_is_refused_and_replacing_the_unnamed_portal_is_not() {
+        let mut s = wide_session();
+        s.on_message(parse("s", "ROWS 1 1"));
+        for i in 0..MAX_PORTALS {
+            let out = s.on_message(bind(&format!("p{i}"), "s", vec![]));
+            assert_eq!(out.messages, vec![Backend::BindComplete]);
+        }
+        let out = s.on_message(bind("one-more", "s", vec![]));
+        assert_eq!(err_code(&out.messages[0]), "54000");
+        s.on_message(Frontend::Sync);
+        // The unnamed portal can be rebound any number of times without growing the charge.
+        let mut t = wide_session();
+        t.on_message(parse("s", "ROWS 1 1"));
+        t.on_message(bind("", "s", vec![]));
+        let once = t.portal_bytes;
+        for _ in 0..50 {
+            t.on_message(bind("", "s", vec![]));
+        }
+        assert_eq!(t.portal_bytes, once);
+    }
+
+    #[test]
+    fn commit_and_rollback_drop_every_portal_and_its_bytes() {
+        let mut s = wide_session();
+        s.on_message(parse("rows", "ROWS 50 100"));
+        s.on_message(parse("begin", "BEGIN"));
+        s.on_message(parse("commit", "COMMIT"));
+        s.on_message(parse("rollback", "ROLLBACK"));
+        for end in ["commit", "rollback"] {
+            s.on_message(bind("b", "begin", vec![]));
+            s.on_message(exec("b", 0));
+            s.on_message(bind("p", "rows", vec![]));
+            s.on_message(exec("p", 1));
+            assert_eq!(s.portals.len(), 2);
+            assert!(s.portal_bytes > 5000);
+            s.on_message(bind("e", end, vec![]));
+            let out = s.on_message(exec("e", 0));
+            assert_eq!(
+                out.messages,
+                vec![Backend::CommandComplete(end.to_uppercase())]
+            );
+            assert!(s.portals.is_empty());
+            assert_eq!(s.portal_bytes, 0);
+            let out = s.on_message(exec("p", 0));
+            assert_eq!(err_code(&out.messages[0]), "34000");
+            s.on_message(Frontend::Sync);
+        }
+    }
+
+    #[test]
+    fn a_refused_rebind_keeps_the_portal_it_would_have_replaced() {
+        let mut s = wide_session().with_portal_budget(64 * 1024);
+        s.on_message(parse("big", "ROWS 100 1000"));
+        s.on_message(parse("small", "ROWS 3 10"));
+        s.on_message(bind("", "small", vec![]));
+        s.on_message(bind("hog", "big", vec![]));
+        s.on_message(exec("hog", 1));
+        assert!(s.portal_bytes > 64 * 1024);
+        let before = s.portal_bytes;
+        let out = s.on_message(bind("", "small", vec![]));
+        assert_eq!(err_code(&out.messages[0]), "53200");
+        s.on_message(Frontend::Sync);
+        // The unnamed portal is still there and still charged.
+        assert!(s.portals.contains_key(""));
+        assert_eq!(s.portal_bytes, before);
+        // Once the hog is closed the old portal still runs and the same rebind works.
+        s.on_message(Frontend::Close(Target::Portal("hog".into())));
+        assert_eq!(s.on_message(exec("", 0)).messages.len(), 4);
+        assert_eq!(
+            s.on_message(bind("", "small", vec![])).messages,
+            vec![Backend::BindComplete]
+        );
     }
 }

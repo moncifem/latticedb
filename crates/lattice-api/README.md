@@ -22,6 +22,24 @@ remain stable independently of fresh nonce RNG. Rotation changes unknown-account
 account existence across that event; no unobservable-rotation or measured timing-safety claim is made.
 See [RFC 0007](../../docs/rfc/0007-pgwire-scram-tls-integration.md) (accepted, with ADR 0021).
 
+`Session` keeps what a suspended portal still has to send exactly once and reads it with a cursor, so an
+`Execute` with a row limit costs the rows it sends, not the rows left. Open portals are charged to a
+per-session budget (`MAX_PORTAL_BYTES`, 64 MiB; `Session::with_portal_budget` changes it): the statement
+text and bound parameters of every portal plus the rows a suspended portal has not sent. The budget is a
+soft cap and never fails a statement after it ran. A `Bind` is refused with `53200` when the bytes held
+by the other portals plus the new portal's own text and parameters would pass the budget (a refused
+rebind of the unnamed portal leaves the old one in place). The first `Execute` of a portal is refused
+with `53200` before anything runs only when the session already holds more than the budget. A
+statement that did run always keeps its result (bounded by the statement memory budget), so retained
+bytes stay under the budget plus one result. The result is fully materialized before it is counted, so
+the budget bounds what a session retains, not its peak. `Close` returns the bytes. A `53200` raised
+inside a block, like any session error there, calls `QueryHandler::abort_transaction` so the handler's
+block fails with the session's. At most `MAX_PORTALS` (128) portals exist per session
+(`54000` beyond). `COMMIT` and `ROLLBACK` destroy every portal, as PostgreSQL does. Not done: the
+implicit transaction of the extended protocol does not end at `Sync`, so portals opened outside a block
+survive it; statements are still bounded by count only, and the frame buffer is not yet sized by
+received bytes (the rest of threat model G-06, #362).
+
 The sync `subscribe::SubscriptionHost` is built with the connection's authenticated `Principal`
 (`SubscriptionHost::new`; `local_development` is the loopback stand-in) and passes it to every
 `EventSource::read_after`, so the source applies scope and row policy for that identity. The `Hello`
