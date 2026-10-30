@@ -94,6 +94,22 @@ pub enum Bug {
     /// The sync subscription host reads events for a fixed development identity instead of the
     /// principal its connection authenticated as (authorization).
     SubscribePrincipalDropped,
+    /// A peer's operation id is accepted whatever node it carries (forged node id).
+    CrdtNodeBindingSkipped,
+    /// A peer's operation id is accepted however far ahead of the clock it is (clock drift).
+    CrdtDriftNotChecked,
+    /// A peer's batch is accepted whatever its length (operation budget).
+    CrdtBatchLimitSkipped,
+    /// The text CRDT does not count inserts per quota key (lifetime budget exhaustion).
+    CrdtKeyBudgetSkipped,
+    /// The tree CRDT does not cap the number of nodes (memory exhaustion).
+    TreeNodeLimitSkipped,
+    /// The tree CRDT does not cap node depth (walk cost).
+    TreeDepthLimitSkipped,
+    /// The tree CRDT does not share the op log between origins (log exhaustion).
+    TreeOriginQuotaSkipped,
+    /// The set CRDT accepts a merge of any size (memory exhaustion).
+    SetTagLimitSkipped,
 }
 
 impl Bug {
@@ -134,6 +150,18 @@ impl Bug {
 
     /// Strict HLC snapshot defects, detected by the focused retention witness.
     pub const HLC_SNAPSHOT: [Bug; 1] = [Bug::HlcSnapshotClamped];
+
+    /// Hostile-peer defects (G-08), detected by the hostile peer witnesses in `crdt_peer_tests`.
+    pub const CRDT_PEER: [Bug; 8] = [
+        Bug::CrdtNodeBindingSkipped,
+        Bug::CrdtDriftNotChecked,
+        Bug::CrdtBatchLimitSkipped,
+        Bug::CrdtKeyBudgetSkipped,
+        Bug::TreeNodeLimitSkipped,
+        Bug::TreeDepthLimitSkipped,
+        Bug::TreeOriginQuotaSkipped,
+        Bug::SetTagLimitSkipped,
+    ];
 
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
@@ -225,6 +253,7 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
@@ -240,12 +269,13 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
             .chain(Bug::FENCE_ORDER)
             .collect();
-        assert_eq!(all.len(), 42);
+        assert_eq!(all.len(), 50);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

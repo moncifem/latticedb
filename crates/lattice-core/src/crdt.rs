@@ -1,6 +1,8 @@
 //! State-based CRDTs and the laws they must satisfy: merge is commutative, associative and
 //! idempotent. Text sequences arrive later (Phase 1 ADR decides build or adopt).
 
+use crate::bugs::{self, Bug};
+use crate::crdt_peer::{MAX_SET_TAGS, PeerContext, PeerError};
 use lattice_abi::Hlc;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,6 +39,15 @@ impl<T: Clone + Ord> LwwRegister<T> {
         }
     }
 
+    /// Writes a value received from an authenticated peer. The timestamp must carry the peer's
+    /// node and be within the drift bound ([`PeerContext::admit`]); otherwise nothing changes. A
+    /// far-future timestamp would otherwise win every later write for as long as it lasts.
+    pub fn set_from(&mut self, peer: &PeerContext, at: Hlc, value: T) -> Result<(), PeerError> {
+        peer.admit(at)?;
+        self.set(at, value);
+        Ok(())
+    }
+
     /// The current value.
     pub fn get(&self) -> Option<&T> {
         self.value.as_ref().map(|(_, v)| v)
@@ -63,6 +74,54 @@ impl<T: Ord + Clone> OrSet<T> {
     /// Adds `value` with a unique tag.
     pub fn add(&mut self, value: T, tag: Hlc) {
         self.adds.entry(value).or_default().insert(tag);
+    }
+
+    /// Tags held: add tags plus removed tags, the quantity [`MAX_SET_TAGS`] bounds.
+    pub fn tag_count(&self) -> usize {
+        self.adds.values().map(BTreeSet::len).sum::<usize>() + self.removed.len()
+    }
+
+    /// Adds a value received from an authenticated peer. The tag must carry the peer's node and
+    /// be within the drift bound, and the set must stay within [`MAX_SET_TAGS`]; otherwise
+    /// nothing changes. Re-adding an existing tag is accepted and changes nothing.
+    pub fn add_from(&mut self, peer: &PeerContext, value: T, tag: Hlc) -> Result<(), PeerError> {
+        peer.admit(tag)?;
+        let known = self.adds.get(&value).is_some_and(|t| t.contains(&tag));
+        if !known && self.tag_count() >= MAX_SET_TAGS && !bugs::active(Bug::SetTagLimitSkipped) {
+            return Err(PeerError::SetTooLarge { max: MAX_SET_TAGS });
+        }
+        self.add(value, tag);
+        Ok(())
+    }
+
+    /// Merges a replica's state received from a peer. Every tag in it must be within the drift
+    /// bound (the state legitimately carries other replicas' tags, so the node is not checked),
+    /// and the union must stay within [`MAX_SET_TAGS`]. Both are decided before anything is
+    /// merged, so a refusal changes nothing. The caller has already decoded `other`; bound its
+    /// size where it is decoded.
+    pub fn merge_from(&mut self, peer: &PeerContext, other: &Self) -> Result<(), PeerError> {
+        let mut fresh = 0usize;
+        for (k, tags) in &other.adds {
+            for t in tags {
+                peer.admit_time(*t)?;
+                if !self.adds.get(k).is_some_and(|mine| mine.contains(t)) {
+                    fresh += 1;
+                }
+            }
+        }
+        for t in &other.removed {
+            peer.admit_time(*t)?;
+            if !self.removed.contains(t) {
+                fresh += 1;
+            }
+        }
+        if self.tag_count().saturating_add(fresh) > MAX_SET_TAGS
+            && !bugs::active(Bug::SetTagLimitSkipped)
+        {
+            return Err(PeerError::SetTooLarge { max: MAX_SET_TAGS });
+        }
+        self.merge(other);
+        Ok(())
     }
 
     /// Removes `value`, cancelling every add tag currently visible.

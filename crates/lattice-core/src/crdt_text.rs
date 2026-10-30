@@ -23,6 +23,13 @@
 //!   grows (it survives compaction so duplicates stay duplicates), so a document that has
 //!   received `max_inserts` inserts over its life refuses new ones even when empty; start a new
 //!   document (a snapshot-and-reset protocol is future work).
+//! - Each quota key may have at most [`Limits::max_inserts_per_key`] inserts applied over the
+//!   document's life ([`TextError::KeyBudget`]), so one peer cannot use up `max_inserts`. A parked
+//!   operation is charged to the key it arrived under when it is finally applied.
+//! - Operations from a peer go through [`Doc::apply_from`] or [`Doc::apply_batch_from`], which take
+//!   a [`PeerContext`]: the id must carry the node bound to the peer, be within the drift bound
+//!   and, for a batch, the batch must fit [`crate::crdt_peer::MAX_BATCH_OPS`]. These checks run
+//!   before the document is touched. [`Doc::apply`] trusts the id it is given.
 //! - Content hashes are 128 bit BLAKE3 digests, unkeyed but collision resistant, so a peer
 //!   cannot cheaply forge two contents with one hash.
 //! - A parked operation that fails once its target arrives is dropped and counted in
@@ -68,6 +75,8 @@
 //! the accepted encodings are exactly the canonical ones: `decode(b)` succeeding implies
 //! `encode() == Ok(b)`.
 
+use crate::bugs::{self, Bug};
+use crate::crdt_peer::{BatchError, PeerContext, PeerError};
 use lattice_abi::Hlc;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -96,6 +105,12 @@ pub struct Limits {
     pub max_elements: usize,
     /// Most applied inserts remembered.
     pub max_inserts: usize,
+    /// Most inserts one quota key (the sender's node id, or the caller's key for
+    /// [`Doc::apply_keyed`] and [`Doc::apply_from`]) may have applied over the document's life,
+    /// so one peer cannot use up `max_inserts` alone. Only as strong as the key: a self-declared
+    /// node id lets a sender pick a new key per insert, which is why [`Doc::apply_from`] binds
+    /// the key to an authenticated peer.
+    pub max_inserts_per_key: usize,
 }
 
 impl Default for Limits {
@@ -103,6 +118,7 @@ impl Default for Limits {
         Self {
             max_elements: 1 << 21,
             max_inserts: 1 << 21,
+            max_inserts_per_key: 1 << 19,
         }
     }
 }
@@ -201,6 +217,12 @@ pub enum TextError {
     /// The document reached a size cap in [`Limits`].
     #[error("document size limit reached")]
     OpLimit,
+    /// The quota key already has [`Limits::max_inserts_per_key`] inserts applied.
+    #[error("insert budget of quota key {0} is used up")]
+    KeyBudget(u64),
+    /// A peer's operation or batch was refused before it touched the document.
+    #[error("{0}")]
+    Peer(PeerError),
     /// The referenced element was compacted away or never existed in its chunk.
     #[error("referenced element is gone")]
     AnchorGone,
@@ -478,6 +500,8 @@ pub struct Doc {
     parked_ids: BTreeMap<Hlc, (Hlc, u64)>,
     /// Parked operations per quota key.
     parked_by_key: BTreeMap<u64, usize>,
+    /// Inserts applied per quota key over the document's life (bounded by `max_inserts`).
+    applied_by_key: BTreeMap<u64, usize>,
     /// Parked operations dropped because they turned out unusable.
     rejected: usize,
     limits: Limits,
@@ -509,7 +533,7 @@ impl Doc {
     /// connection id) instead of the self-declared node id.
     pub fn apply_keyed(&mut self, quota_key: u64, op: Op) -> Result<Outcome, TextError> {
         op.validate().map_err(TextError::Op)?;
-        match self.try_apply(&op)? {
+        match self.try_apply(quota_key, &op)? {
             Step::Duplicate => Ok(Outcome::Duplicate),
             Step::Applied => {
                 if matches!(op, Op::Insert { .. }) {
@@ -522,6 +546,52 @@ impl Doc {
                 Ok(Outcome::Pending)
             }
         }
+    }
+
+    /// Applies an operation from an authenticated peer. The peer's context is checked first, so
+    /// a refused operation changes nothing: the id must carry the node bound to the peer
+    /// ([`PeerError::ForgedNode`]) and be no further ahead of the caller's clock than the drift
+    /// bound ([`PeerError::DriftTooLarge`]). The quota key is the peer's node, so parked and
+    /// applied counts follow the authenticated identity and not a field the sender chooses.
+    pub fn apply_from(&mut self, peer: &PeerContext, op: Op) -> Result<Outcome, TextError> {
+        peer.admit(op.id()).map_err(TextError::Peer)?;
+        self.apply_keyed(u64::from(peer.node), op)
+    }
+
+    /// Applies a batch from an authenticated peer. The batch length ([`crate::crdt_peer::MAX_BATCH_OPS`]),
+    /// every operation's shape, node binding and drift are checked before the first operation is
+    /// applied; see [`BatchError`] for what a refusal leaves behind.
+    pub fn apply_batch_from(
+        &mut self,
+        peer: &PeerContext,
+        ops: Vec<Op>,
+    ) -> Result<Vec<Outcome>, BatchError<TextError>> {
+        let refuse = |error| BatchError { applied: 0, error };
+        peer.check_batch(ops.len())
+            .map_err(|e| refuse(TextError::Peer(e)))?;
+        for op in &ops {
+            op.validate().map_err(|e| refuse(TextError::Op(e)))?;
+            peer.admit(op.id())
+                .map_err(|e| refuse(TextError::Peer(e)))?;
+        }
+        let mut out = Vec::with_capacity(ops.len());
+        for op in ops {
+            match self.apply_keyed(u64::from(peer.node), op) {
+                Ok(o) => out.push(o),
+                Err(error) => {
+                    return Err(BatchError {
+                        applied: out.len(),
+                        error,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// How many inserts `quota_key` has had applied.
+    pub fn applied_by_key(&self, quota_key: u64) -> usize {
+        self.applied_by_key.get(&quota_key).copied().unwrap_or(0)
     }
 
     fn park(&mut self, key: u64, op: Op, awaited: Hlc) -> Result<(), TextError> {
@@ -568,7 +638,7 @@ impl Doc {
         while let Some(done) = ready.pop_front() {
             for (key, op) in self.parked.remove(&done).unwrap_or_default() {
                 self.unpark_bookkeeping(op.id(), key);
-                match self.try_apply(&op) {
+                match self.try_apply(key, &op) {
                     Ok(Step::Applied) => {
                         if matches!(op, Op::Insert { .. }) {
                             ready.push_back(op.id());
@@ -606,7 +676,7 @@ impl Doc {
         self.elems.iter().position(|e| e.id == id)
     }
 
-    fn try_apply(&mut self, op: &Op) -> Result<Step, TextError> {
+    fn try_apply(&mut self, key: u64, op: &Op) -> Result<Step, TextError> {
         match op {
             Op::Insert { id, after, text } => {
                 let hash = content_hash(*after, text);
@@ -632,6 +702,12 @@ impl Doc {
                 {
                     return Err(TextError::OpLimit);
                 }
+                let used = self.applied_by_key.get(&key).copied().unwrap_or(0);
+                if used >= self.limits.max_inserts_per_key
+                    && !bugs::active(Bug::CrdtKeyBudgetSkipped)
+                {
+                    return Err(TextError::KeyBudget(key));
+                }
                 // Skip newer siblings and their subtrees: every such element is newer than us.
                 while self.elems.get(at).is_some_and(|e| e.id.op > *id) {
                     at += 1;
@@ -649,6 +725,7 @@ impl Doc {
                         hash,
                     },
                 );
+                *self.applied_by_key.entry(key).or_insert(0) += 1;
                 Ok(Step::Applied)
             }
             Op::Delete { id, target } => {
@@ -1089,6 +1166,7 @@ mod tests {
         let mut small = Doc::with_limits(Limits {
             max_elements: 3,
             max_inserts: 10,
+            ..Limits::default()
         });
         small.apply(ins(h(1, 1), None, "abc")).unwrap();
         assert_eq!(
@@ -1098,6 +1176,7 @@ mod tests {
         let mut few = Doc::with_limits(Limits {
             max_elements: 100,
             max_inserts: 1,
+            ..Limits::default()
         });
         few.apply(ins(h(1, 1), None, "a")).unwrap();
         assert_eq!(few.apply(ins(h(2, 1), None, "b")), Err(TextError::OpLimit));

@@ -7,3 +7,10 @@ Layer L3.
 **Must not.** Open sockets, spawn background loops, know any pack, load models.
 
 Allowed workspace dependencies: lattice-abi, lattice-seams, lattice-lsl.
+
+**CRDTs.** `crdt`, `crdt_text` and `crdt_tree` converge on any set of valid operations. For input from an
+untrusted peer use the `*_from` entry points with a `PeerContext` (`crdt_peer`): they check the node id bound to
+the peer, the clock drift bound and the batch length before changing state, and the documents cap inserts per
+quota key, tree nodes, tree depth and each origin's share of the tree op log. The limits are named public
+constants documented in the module headers and in `docs/threat-model.md` (G-08). The compaction frontier is still
+supplied by the caller and trusted.

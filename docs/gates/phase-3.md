@@ -19,6 +19,17 @@ Requirements and exit criteria are in [the Phase 3 specification](../spec/03-syn
 None yet. The kernel already has last-writer-wins registers and an observed-remove set
 (`lattice-core::crdt`), which Phase 3 extends.
 
+Verification evidence, not an exit criterion: hostile-peer limits for the CRDTs (issue #364, threat-model gap
+G-08). `lattice-core::crdt_peer` defines `PeerContext` and the limits `MAX_BATCH_OPS` (1024) and `MAX_SET_TAGS`
+(2^20); `crdt_text::Limits::max_inserts_per_key` (2^19), `crdt_tree::DEFAULT_NODE_LIMIT` (2^20),
+`MAX_TREE_DEPTH` (256) and `DEFAULT_ORIGIN_OP_LIMIT` (2^18) bound what one peer can make a replica hold, and the
+`*_from` entry points refuse a forged node id, an id past the drift bound and an oversized batch before any state
+changes. `crdt_peer_tests.rs` holds a scenario per limit, three property tests with generated hostile peers
+(refused input changes nothing, a flood cannot starve an honest peer, a hostile tree peer stays inside its share)
+and eight planted bugs (`Bug::CRDT_PEER`) that the scenarios catch. Not done: nothing in the repository calls these
+entry points yet (no sync layer), the compaction frontier is still trusted, and the depth rule is not in
+`tla/TreeMove.tla`.
+
 Verification evidence, not an exit criterion: `tla/TreeMove.tla` (WP43, issue #245) models the tree CRDT
 move rule with 2 replicas, 3 nodes and 4 operations. One local run with a single worker explored
 6,635,881 states (751,243 distinct) in 45 to 48 s (two runs) with no violation of `Acyclic`, `Rooted`, `Convergent` or

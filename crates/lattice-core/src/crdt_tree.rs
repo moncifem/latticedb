@@ -61,6 +61,26 @@
 //! - A refused remote op is lost unless it is delivered again. The sync layer must retry it after
 //!   compaction; the tree keeps no queue. The caller owns both retrying and compacting.
 //!
+//! # Limits on what a peer can make a replica hold
+//!
+//! Besides the op log cap above, a tree bounds three more things, all decided before the tree is
+//! changed (G-08):
+//!
+//! - **Nodes**: at most [`DEFAULT_NODE_LIMIT`] ([`Tree::with_node_limit`]). Nodes survive
+//!   compaction, so this is the lifetime bound on tree size; an operation naming a new node past it
+//!   is [`TreeError::NodeLimitReached`] and, like an op-log refusal, is lost unless sent again.
+//! - **Depth**: a node, and everything below it, may not sit deeper than [`MAX_TREE_DEPTH`]. A move
+//!   that would is a no-op everywhere ([`Outcome::Skipped`]), decided at the move's place in the
+//!   total order like the cycle rule, so every delivery order agrees. Checking it walks the moved
+//!   subtree (as deep as the limit allows), which adds to the cost of replaying a late operation.
+//!   The TLA+ model in `tla/TreeMove.tla` does not include this rule.
+//! - **Share per origin**: through [`Tree::apply`] one origin node may hold at most
+//!   [`DEFAULT_ORIGIN_OP_LIMIT`] live ops (a quarter of the default log); see
+//!   [`Tree::with_origin_quota`]. Trees built with [`Tree::with_op_limit`] have no share until one is
+//!   set. The origin is the id's node, so the share binds a peer only when [`Tree::apply_from`]
+//!   (which also checks the node binding and the drift bound) is used. Several hostile origins can
+//!   still fill the log together.
+//!
 //! # Operation encoding (version 1, little endian, 41 bytes)
 //!
 //! | offset | size | field |
@@ -74,6 +94,7 @@
 //! Decoding rejects any other length, any other version and reserved node ids.
 
 use crate::bugs::{self, Bug};
+use crate::crdt_peer::{BatchError, PeerContext, PeerError};
 use lattice_abi::Hlc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
@@ -141,6 +162,23 @@ pub enum TreeError {
         /// The configured cap.
         limit: usize,
     },
+    /// The tree already holds its cap of nodes and the operation would name a new one.
+    #[error("tree holds {limit} nodes; the operation names a new one")]
+    NodeLimitReached {
+        /// The configured cap.
+        limit: usize,
+    },
+    /// One origin node already has its share of the live op log.
+    #[error("node {node} already has {limit} live ops in the log")]
+    OriginQuota {
+        /// The origin node id of the refused operation.
+        node: u32,
+        /// The configured per-origin cap.
+        limit: usize,
+    },
+    /// A peer's operation or batch was refused before it touched the tree.
+    #[error("{0}")]
+    Peer(PeerError),
 }
 
 /// What [`Tree::apply`] did.
@@ -162,6 +200,16 @@ const VERSION: u8 = 1;
 
 /// Default cap on the live (uncompacted) op count of a [`Tree`].
 pub const DEFAULT_OP_LIMIT: usize = 1 << 20;
+/// Default cap on the number of nodes a [`Tree`] holds (the two roots do not count). Unlike the op
+/// log, nodes survive compaction, so this is the lifetime bound on tree size.
+pub const DEFAULT_NODE_LIMIT: usize = 1 << 20;
+/// Deepest position a node may hold, counting the roots as depth 0. A move that would put the node,
+/// or anything in its subtree, deeper is a no-op everywhere ([`Outcome::Skipped`]), like a cycle.
+pub const MAX_TREE_DEPTH: usize = 256;
+/// Default share of the live op log one origin node may fill through [`Tree::apply`]: a quarter of
+/// [`DEFAULT_OP_LIMIT`]. Trees built with [`Tree::with_op_limit`] have no per-origin share until
+/// [`Tree::with_origin_quota`] sets one.
+pub const DEFAULT_ORIGIN_OP_LIMIT: usize = DEFAULT_OP_LIMIT / 4;
 
 impl Op {
     /// Encoded size in bytes.
@@ -263,6 +311,12 @@ pub struct Tree {
     limit: usize,
     /// Slots of the cap kept for local ops; only meaningful when `limit` is set.
     reserve: usize,
+    /// Cap on `parents.len()`; `0` means [`DEFAULT_NODE_LIMIT`].
+    node_limit: usize,
+    /// Cap on live ops per origin node for remote ops; `0` means [`DEFAULT_ORIGIN_OP_LIMIT`].
+    origin_limit: usize,
+    /// Live ops in `log` per origin node (the id's node).
+    origin_ops: BTreeMap<u32, usize>,
     /// Arrivals at or below the frontier.
     below: u64,
     /// Ops undone and redone so far (late-op cost counter, tests only).
@@ -293,7 +347,41 @@ impl Tree {
         Self {
             limit,
             reserve: reserve.min(limit - 1),
+            origin_limit: limit,
             ..Self::default()
+        }
+    }
+
+    /// Caps the number of nodes (at least 1); an operation naming a new node past it is refused
+    /// with [`TreeError::NodeLimitReached`].
+    #[must_use]
+    pub fn with_node_limit(mut self, limit: usize) -> Self {
+        self.node_limit = limit.max(1);
+        self
+    }
+
+    /// Caps the live ops one origin node may hold in the log through [`Tree::apply`] (at least 1);
+    /// local ops are not counted against it. The origin is the id's node, so the cap only binds
+    /// a peer when the transport binds node ids ([`Tree::apply_from`] does).
+    #[must_use]
+    pub fn with_origin_quota(mut self, limit: usize) -> Self {
+        self.origin_limit = limit.max(1);
+        self
+    }
+
+    fn node_cap(&self) -> usize {
+        if self.node_limit == 0 {
+            DEFAULT_NODE_LIMIT
+        } else {
+            self.node_limit
+        }
+    }
+
+    fn origin_cap(&self) -> usize {
+        if self.origin_limit == 0 {
+            DEFAULT_ORIGIN_OP_LIMIT
+        } else {
+            self.origin_limit
         }
     }
 
@@ -350,6 +438,10 @@ impl Tree {
             dropped += 1;
         }
         self.log = keep;
+        self.origin_ops.clear();
+        for id in self.log.keys() {
+            *self.origin_ops.entry(id.node).or_insert(0) += 1;
+        }
         Ok(dropped)
     }
 
@@ -357,15 +449,62 @@ impl Tree {
     /// Refused with [`TreeError::OpLimitReached`] once the log is within the local reserve of the cap.
     pub fn apply(&mut self, op: Op) -> Result<Outcome, TreeError> {
         let room = self.cap().saturating_sub(self.reserved());
-        self.apply_within(op, room.max(1))
+        self.apply_within(op, room.max(1), true)
+    }
+
+    /// Applies an operation from an authenticated peer. The id must carry the node bound to the
+    /// peer ([`PeerError::ForgedNode`]) and be no further ahead of the caller's clock than the
+    /// drift bound ([`PeerError::DriftTooLarge`]); a refusal changes nothing. Past that this is
+    /// [`Tree::apply`], including the per-origin quota, which the node binding makes meaningful.
+    pub fn apply_from(&mut self, peer: &PeerContext, op: Op) -> Result<Outcome, TreeError> {
+        peer.admit(op.id).map_err(TreeError::Peer)?;
+        self.apply(op)
+    }
+
+    /// Applies a batch from an authenticated peer. The batch length
+    /// ([`crate::crdt_peer::MAX_BATCH_OPS`]) and every operation's shape, node binding and drift
+    /// are checked before the first operation is applied; see [`BatchError`] for what a refusal
+    /// leaves behind. A refused remote op is lost unless sent again (see the cap section above).
+    pub fn apply_batch_from(
+        &mut self,
+        peer: &PeerContext,
+        ops: &[Op],
+    ) -> Result<Vec<Outcome>, BatchError<TreeError>> {
+        let refuse = |error| BatchError { applied: 0, error };
+        peer.check_batch(ops.len())
+            .map_err(|e| refuse(TreeError::Peer(e)))?;
+        for op in ops {
+            if op.node.is_reserved() {
+                return Err(refuse(TreeError::ReservedNode));
+            }
+            peer.admit(op.id).map_err(|e| refuse(TreeError::Peer(e)))?;
+        }
+        let mut out = Vec::with_capacity(ops.len());
+        for op in ops {
+            match self.apply(*op) {
+                Ok(o) => out.push(o),
+                Err(error) => {
+                    return Err(BatchError {
+                        applied: out.len(),
+                        error,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Number of nodes in the tree, not counting the two roots.
+    pub fn node_count(&self) -> usize {
+        self.parents.len()
     }
 
     /// Applies an operation issued by this replica; may use the headroom reserved for local ops.
     pub fn apply_local(&mut self, op: Op) -> Result<Outcome, TreeError> {
-        self.apply_within(op, self.cap())
+        self.apply_within(op, self.cap(), false)
     }
 
-    fn apply_within(&mut self, op: Op, room: usize) -> Result<Outcome, TreeError> {
+    fn apply_within(&mut self, op: Op, room: usize, remote: bool) -> Result<Outcome, TreeError> {
         if op.node.is_reserved() {
             return Err(TreeError::ReservedNode);
         }
@@ -384,6 +523,23 @@ impl Tree {
         if self.log.len() >= room {
             return Err(TreeError::OpLimitReached { limit: self.cap() });
         }
+        if remote
+            && self.origin_ops.get(&op.id.node).copied().unwrap_or(0) >= self.origin_cap()
+            && !bugs::active(Bug::TreeOriginQuotaSkipped)
+        {
+            return Err(TreeError::OriginQuota {
+                node: op.id.node,
+                limit: self.origin_cap(),
+            });
+        }
+        if !self.parents.contains_key(&op.node)
+            && self.parents.len() >= self.node_cap()
+            && !bugs::active(Bug::TreeNodeLimitSkipped)
+        {
+            return Err(TreeError::NodeLimitReached {
+                limit: self.node_cap(),
+            });
+        }
         let later: Vec<Hlc> = self
             .log
             .range((Bound::Excluded(op.id), Bound::Unbounded))
@@ -399,6 +555,7 @@ impl Tree {
         let entry = self.perform(op);
         let applied = entry.applied;
         self.log.insert(op.id, entry);
+        *self.origin_ops.entry(op.id.node).or_insert(0) += 1;
         for k in later {
             self.redo(k);
         }
@@ -429,7 +586,8 @@ impl Tree {
         let old = self.parents.get(&op.node).copied();
         let parent_known = op.parent.is_reserved() || self.parents.contains_key(&op.parent);
         let valid = parent_known
-            && (bugs::active(Bug::TreeCycleCheckSkipped) || !self.would_cycle(op.node, op.parent));
+            && (bugs::active(Bug::TreeCycleCheckSkipped) || !self.would_cycle(op.node, op.parent))
+            && (bugs::active(Bug::TreeDepthLimitSkipped) || self.fits_depth(op.node, op.parent));
         if valid {
             self.set(op.node, Some((op.parent, op.pos)));
         }
@@ -438,6 +596,42 @@ impl Tree {
             old,
             applied: valid,
         }
+    }
+
+    /// Depth of `node` (roots are 0), or `None` when it is deeper than [`MAX_TREE_DEPTH`].
+    fn depth_of(&self, node: NodeId) -> Option<usize> {
+        let mut cur = node;
+        for depth in 0..=MAX_TREE_DEPTH {
+            match self.parents.get(&cur) {
+                Some((p, _)) => cur = *p,
+                None => return Some(depth),
+            }
+        }
+        None
+    }
+
+    /// Whether moving `node` under `parent` keeps `node` and everything below it within
+    /// [`MAX_TREE_DEPTH`]. Visits the moved subtree only as deep as the limit allows.
+    fn fits_depth(&self, node: NodeId, parent: NodeId) -> bool {
+        let Some(base) = self.depth_of(parent).map(|d| d + 1) else {
+            return false;
+        };
+        if base > MAX_TREE_DEPTH {
+            return false;
+        }
+        let mut stack: Vec<(NodeId, usize)> = vec![(node, base)];
+        while let Some((n, depth)) = stack.pop() {
+            for (_, _, child) in self
+                .kids
+                .range((n, 0, NodeId(0))..=(n, u64::MAX, NodeId(u64::MAX)))
+            {
+                if depth + 1 > MAX_TREE_DEPTH {
+                    return false;
+                }
+                stack.push((*child, depth + 1));
+            }
+        }
+        true
     }
 
     /// Whether `node` is `parent` or an ancestor of it.

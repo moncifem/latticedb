@@ -49,6 +49,10 @@ pub lattice_core::bugs::Bug::AckBeforeSync
 pub lattice_core::bugs::Bug::BatchDuplicateAckedEarly
 pub lattice_core::bugs::Bug::CheckpointIgnoresInFlight
 pub lattice_core::bugs::Bug::CrcSkipsPayload
+pub lattice_core::bugs::Bug::CrdtBatchLimitSkipped
+pub lattice_core::bugs::Bug::CrdtDriftNotChecked
+pub lattice_core::bugs::Bug::CrdtKeyBudgetSkipped
+pub lattice_core::bugs::Bug::CrdtNodeBindingSkipped
 pub lattice_core::bugs::Bug::DdlPolicySkipped
 pub lattice_core::bugs::Bug::DedupeNotRebuilt
 pub lattice_core::bugs::Bug::DuplicateBeforeFence
@@ -81,16 +85,21 @@ pub lattice_core::bugs::Bug::RowReadOwnWriteIgnored
 pub lattice_core::bugs::Bug::RowRecoveryDropsDeletes
 pub lattice_core::bugs::Bug::RowScanUpperBoundIncluded
 pub lattice_core::bugs::Bug::RowTombstoneSkipped
+pub lattice_core::bugs::Bug::SetTagLimitSkipped
 pub lattice_core::bugs::Bug::SkipFsync
 pub lattice_core::bugs::Bug::SkipRecoverySync
 pub lattice_core::bugs::Bug::SubscribePrincipalDropped
 pub lattice_core::bugs::Bug::TreeCycleCheckSkipped
+pub lattice_core::bugs::Bug::TreeDepthLimitSkipped
+pub lattice_core::bugs::Bug::TreeNodeLimitSkipped
+pub lattice_core::bugs::Bug::TreeOriginQuotaSkipped
 pub lattice_core::bugs::Bug::VacuumDropsVisibleVersion
 impl lattice_core::bugs::Bug
 pub const lattice_core::bugs::Bug::ADMISSION: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::ALL: [lattice_core::bugs::Bug; 21]
 pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 8]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::POLICY: [lattice_core::bugs::Bug; 2]
@@ -261,6 +270,7 @@ pub struct lattice_core::crdt::LwwRegister<T>
 impl<T: core::clone::Clone + core::cmp::Ord> lattice_core::crdt::LwwRegister<T>
 pub fn lattice_core::crdt::LwwRegister<T>::get(&self) -> core::option::Option<&T>
 pub fn lattice_core::crdt::LwwRegister<T>::set(&mut self, lattice_abi::hlc::Hlc, T)
+pub fn lattice_core::crdt::LwwRegister<T>::set_from(&mut self, &lattice_core::crdt_peer::PeerContext, lattice_abi::hlc::Hlc, T) -> core::result::Result<(), lattice_core::crdt_peer::PeerError>
 impl<T: core::clone::Clone + core::cmp::Ord> lattice_core::crdt::Crdt for lattice_core::crdt::LwwRegister<T>
 pub fn lattice_core::crdt::LwwRegister<T>::merge(&mut self, &Self)
 impl<T: core::clone::Clone> core::clone::Clone for lattice_core::crdt::LwwRegister<T>
@@ -276,9 +286,12 @@ pub fn lattice_core::crdt::LwwRegister<T>::default() -> Self
 pub struct lattice_core::crdt::OrSet<T: core::cmp::Ord>
 impl<T: core::cmp::Ord + core::clone::Clone> lattice_core::crdt::OrSet<T>
 pub fn lattice_core::crdt::OrSet<T>::add(&mut self, T, lattice_abi::hlc::Hlc)
+pub fn lattice_core::crdt::OrSet<T>::add_from(&mut self, &lattice_core::crdt_peer::PeerContext, T, lattice_abi::hlc::Hlc) -> core::result::Result<(), lattice_core::crdt_peer::PeerError>
 pub fn lattice_core::crdt::OrSet<T>::contains(&self, &T) -> bool
 pub fn lattice_core::crdt::OrSet<T>::elements(&self) -> alloc::vec::Vec<T>
+pub fn lattice_core::crdt::OrSet<T>::merge_from(&mut self, &lattice_core::crdt_peer::PeerContext, &Self) -> core::result::Result<(), lattice_core::crdt_peer::PeerError>
 pub fn lattice_core::crdt::OrSet<T>::remove(&mut self, &T)
+pub fn lattice_core::crdt::OrSet<T>::tag_count(&self) -> usize
 impl<T: core::clone::Clone + core::cmp::Ord> core::clone::Clone for lattice_core::crdt::OrSet<T>
 pub fn lattice_core::crdt::OrSet<T>::clone(&self) -> Self
 impl<T: core::cmp::Eq + core::cmp::Ord> core::cmp::Eq for lattice_core::crdt::OrSet<T>
@@ -319,6 +332,65 @@ pub fn lattice_core::crdt::LwwRegister<T>::merge(&mut self, &Self)
 impl<T: core::cmp::Ord + core::clone::Clone> lattice_core::crdt::Crdt for lattice_core::crdt::OrSet<T>
 pub fn lattice_core::crdt::OrSet<T>::merge(&mut self, &Self)
 pub type lattice_core::crdt::CharId = lattice_abi::hlc::Hlc
+pub mod lattice_core::crdt_peer
+pub enum lattice_core::crdt_peer::PeerError
+pub lattice_core::crdt_peer::PeerError::BatchTooLarge
+pub lattice_core::crdt_peer::PeerError::BatchTooLarge::len: usize
+pub lattice_core::crdt_peer::PeerError::BatchTooLarge::max: usize
+pub lattice_core::crdt_peer::PeerError::DriftTooLarge
+pub lattice_core::crdt_peer::PeerError::DriftTooLarge::ahead_ms: u64
+pub lattice_core::crdt_peer::PeerError::DriftTooLarge::max_ms: u64
+pub lattice_core::crdt_peer::PeerError::ForgedNode
+pub lattice_core::crdt_peer::PeerError::ForgedNode::bound: u32
+pub lattice_core::crdt_peer::PeerError::ForgedNode::claimed: u32
+pub lattice_core::crdt_peer::PeerError::SetTooLarge
+pub lattice_core::crdt_peer::PeerError::SetTooLarge::max: usize
+impl core::clone::Clone for lattice_core::crdt_peer::PeerError
+pub fn lattice_core::crdt_peer::PeerError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_peer::PeerError
+impl core::cmp::PartialEq for lattice_core::crdt_peer::PeerError
+pub fn lattice_core::crdt_peer::PeerError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_core::crdt_peer::PeerError
+impl core::fmt::Debug for lattice_core::crdt_peer::PeerError
+pub fn lattice_core::crdt_peer::PeerError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_core::crdt_peer::PeerError
+pub fn lattice_core::crdt_peer::PeerError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_peer::PeerError
+impl core::marker::StructuralPartialEq for lattice_core::crdt_peer::PeerError
+pub struct lattice_core::crdt_peer::BatchError<E: core::error::Error + 'static>
+pub lattice_core::crdt_peer::BatchError::applied: usize
+pub lattice_core::crdt_peer::BatchError::error: E
+impl<E: core::clone::Clone + core::error::Error + 'static> core::clone::Clone for lattice_core::crdt_peer::BatchError<E>
+pub fn lattice_core::crdt_peer::BatchError<E>::clone(&self) -> Self
+impl<E: core::cmp::Eq + core::error::Error + 'static> core::cmp::Eq for lattice_core::crdt_peer::BatchError<E>
+impl<E: core::cmp::PartialEq + core::error::Error + 'static> core::cmp::PartialEq for lattice_core::crdt_peer::BatchError<E>
+pub fn lattice_core::crdt_peer::BatchError<E>::eq(&self, &Self) -> bool
+impl<E: core::cmp::PartialEq + core::error::Error + 'static> core::marker::StructuralPartialEq for lattice_core::crdt_peer::BatchError<E>
+impl<E: core::error::Error + 'static> core::error::Error for lattice_core::crdt_peer::BatchError<E> where Self: core::fmt::Debug + core::fmt::Display
+impl<E: core::fmt::Debug + core::error::Error + 'static> core::fmt::Debug for lattice_core::crdt_peer::BatchError<E>
+pub fn lattice_core::crdt_peer::BatchError<E>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<E: core::marker::Copy + core::error::Error + 'static> core::marker::Copy for lattice_core::crdt_peer::BatchError<E>
+impl<E> core::fmt::Display for lattice_core::crdt_peer::BatchError<E> where E: core::fmt::Display + core::error::Error + 'static
+pub fn lattice_core::crdt_peer::BatchError<E>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_core::crdt_peer::PeerContext
+pub lattice_core::crdt_peer::PeerContext::max_drift_ms: u64
+pub lattice_core::crdt_peer::PeerContext::node: u32
+pub lattice_core::crdt_peer::PeerContext::now_ms: u64
+impl lattice_core::crdt_peer::PeerContext
+pub fn lattice_core::crdt_peer::PeerContext::admit(&self, lattice_abi::hlc::Hlc) -> core::result::Result<(), lattice_core::crdt_peer::PeerError>
+pub fn lattice_core::crdt_peer::PeerContext::admit_time(&self, lattice_abi::hlc::Hlc) -> core::result::Result<(), lattice_core::crdt_peer::PeerError>
+pub fn lattice_core::crdt_peer::PeerContext::check_batch(&self, usize) -> core::result::Result<(), lattice_core::crdt_peer::PeerError>
+impl core::clone::Clone for lattice_core::crdt_peer::PeerContext
+pub fn lattice_core::crdt_peer::PeerContext::clone(&self) -> Self
+impl core::cmp::Eq for lattice_core::crdt_peer::PeerContext
+impl core::cmp::PartialEq for lattice_core::crdt_peer::PeerContext
+pub fn lattice_core::crdt_peer::PeerContext::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_core::crdt_peer::PeerContext
+pub fn lattice_core::crdt_peer::PeerContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_core::crdt_peer::PeerContext
+impl core::marker::StructuralPartialEq for lattice_core::crdt_peer::PeerContext
+pub const lattice_core::crdt_peer::MAX_BATCH_OPS: usize
+pub const lattice_core::crdt_peer::MAX_SET_TAGS: usize
 pub mod lattice_core::crdt_text
 pub enum lattice_core::crdt_text::CompactError
 pub lattice_core::crdt_text::CompactError::AckBehind(u32)
@@ -411,8 +483,10 @@ impl core::marker::StructuralPartialEq for lattice_core::crdt_text::TextDecodeEr
 pub enum lattice_core::crdt_text::TextError
 pub lattice_core::crdt_text::TextError::AnchorGone
 pub lattice_core::crdt_text::TextError::ConflictingOpId
+pub lattice_core::crdt_text::TextError::KeyBudget(u64)
 pub lattice_core::crdt_text::TextError::Op(lattice_core::crdt_text::OpError)
 pub lattice_core::crdt_text::TextError::OpLimit
+pub lattice_core::crdt_text::TextError::Peer(lattice_core::crdt_peer::PeerError)
 pub lattice_core::crdt_text::TextError::PendingFull
 pub lattice_core::crdt_text::TextError::PendingQuota(u64)
 impl core::clone::Clone for lattice_core::crdt_text::TextError
@@ -442,8 +516,11 @@ impl core::marker::StructuralPartialEq for lattice_core::crdt_text::Compaction
 pub struct lattice_core::crdt_text::Doc
 impl lattice_core::crdt_text::Doc
 pub const lattice_core::crdt_text::Doc::ELEM_BYTES: usize
+pub fn lattice_core::crdt_text::Doc::applied_by_key(&self, u64) -> usize
 pub fn lattice_core::crdt_text::Doc::applied_inserts(&self) -> usize
 pub fn lattice_core::crdt_text::Doc::apply(&mut self, lattice_core::crdt_text::Op) -> core::result::Result<lattice_core::crdt_text::Outcome, lattice_core::crdt_text::TextError>
+pub fn lattice_core::crdt_text::Doc::apply_batch_from(&mut self, &lattice_core::crdt_peer::PeerContext, alloc::vec::Vec<lattice_core::crdt_text::Op>) -> core::result::Result<alloc::vec::Vec<lattice_core::crdt_text::Outcome>, lattice_core::crdt_peer::BatchError<lattice_core::crdt_text::TextError>>
+pub fn lattice_core::crdt_text::Doc::apply_from(&mut self, &lattice_core::crdt_peer::PeerContext, lattice_core::crdt_text::Op) -> core::result::Result<lattice_core::crdt_text::Outcome, lattice_core::crdt_text::TextError>
 pub fn lattice_core::crdt_text::Doc::apply_keyed(&mut self, u64, lattice_core::crdt_text::Op) -> core::result::Result<lattice_core::crdt_text::Outcome, lattice_core::crdt_text::TextError>
 pub fn lattice_core::crdt_text::Doc::compact(&mut self, &lattice_core::crdt_text::Frontier, &[lattice_abi::hlc::Hlc]) -> core::result::Result<lattice_core::crdt_text::Compaction, lattice_core::crdt_text::CompactError>
 pub fn lattice_core::crdt_text::Doc::discard_pending(&mut self, lattice_abi::hlc::Hlc) -> usize
@@ -499,6 +576,7 @@ impl core::marker::StructuralPartialEq for lattice_core::crdt_text::Frontier
 pub struct lattice_core::crdt_text::Limits
 pub lattice_core::crdt_text::Limits::max_elements: usize
 pub lattice_core::crdt_text::Limits::max_inserts: usize
+pub lattice_core::crdt_text::Limits::max_inserts_per_key: usize
 impl core::clone::Clone for lattice_core::crdt_text::Limits
 pub fn lattice_core::crdt_text::Limits::clone(&self) -> Self
 impl core::cmp::Eq for lattice_core::crdt_text::Limits
@@ -549,8 +627,14 @@ impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::TreeDecodeEr
 pub enum lattice_core::crdt_tree::TreeError
 pub lattice_core::crdt_tree::TreeError::ConflictingOpId
 pub lattice_core::crdt_tree::TreeError::FrontierBeyondLog
+pub lattice_core::crdt_tree::TreeError::NodeLimitReached
+pub lattice_core::crdt_tree::TreeError::NodeLimitReached::limit: usize
 pub lattice_core::crdt_tree::TreeError::OpLimitReached
 pub lattice_core::crdt_tree::TreeError::OpLimitReached::limit: usize
+pub lattice_core::crdt_tree::TreeError::OriginQuota
+pub lattice_core::crdt_tree::TreeError::OriginQuota::limit: usize
+pub lattice_core::crdt_tree::TreeError::OriginQuota::node: u32
+pub lattice_core::crdt_tree::TreeError::Peer(lattice_core::crdt_peer::PeerError)
 pub lattice_core::crdt_tree::TreeError::ReservedNode
 impl core::clone::Clone for lattice_core::crdt_tree::TreeError
 pub fn lattice_core::crdt_tree::TreeError::clone(&self) -> Self
@@ -618,6 +702,8 @@ impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::Snapshot
 pub struct lattice_core::crdt_tree::Tree
 impl lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::apply(&mut self, lattice_core::crdt_tree::Op) -> core::result::Result<lattice_core::crdt_tree::Outcome, lattice_core::crdt_tree::TreeError>
+pub fn lattice_core::crdt_tree::Tree::apply_batch_from(&mut self, &lattice_core::crdt_peer::PeerContext, &[lattice_core::crdt_tree::Op]) -> core::result::Result<alloc::vec::Vec<lattice_core::crdt_tree::Outcome>, lattice_core::crdt_peer::BatchError<lattice_core::crdt_tree::TreeError>>
+pub fn lattice_core::crdt_tree::Tree::apply_from(&mut self, &lattice_core::crdt_peer::PeerContext, lattice_core::crdt_tree::Op) -> core::result::Result<lattice_core::crdt_tree::Outcome, lattice_core::crdt_tree::TreeError>
 pub fn lattice_core::crdt_tree::Tree::apply_local(&mut self, lattice_core::crdt_tree::Op) -> core::result::Result<lattice_core::crdt_tree::Outcome, lattice_core::crdt_tree::TreeError>
 pub fn lattice_core::crdt_tree::Tree::below_frontier_arrivals(&self) -> u64
 pub fn lattice_core::crdt_tree::Tree::children(&self, lattice_core::crdt_tree::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = lattice_core::crdt_tree::NodeId> + '_
@@ -626,19 +712,25 @@ pub fn lattice_core::crdt_tree::Tree::contains(&self, lattice_core::crdt_tree::N
 pub fn lattice_core::crdt_tree::Tree::is_acyclic(&self) -> bool
 pub fn lattice_core::crdt_tree::Tree::is_deleted(&self, lattice_core::crdt_tree::NodeId) -> bool
 pub fn lattice_core::crdt_tree::Tree::new() -> Self
+pub fn lattice_core::crdt_tree::Tree::node_count(&self) -> usize
 pub fn lattice_core::crdt_tree::Tree::op_count(&self) -> usize
 pub fn lattice_core::crdt_tree::Tree::parent(&self, lattice_core::crdt_tree::NodeId) -> core::option::Option<lattice_core::crdt_tree::NodeId>
 pub fn lattice_core::crdt_tree::Tree::snapshot(&self) -> lattice_core::crdt_tree::Snapshot
 pub fn lattice_core::crdt_tree::Tree::stable_frontier(&self) -> core::option::Option<lattice_abi::hlc::Hlc>
+pub fn lattice_core::crdt_tree::Tree::with_node_limit(self, usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_op_limit(usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_op_limit_and_reserve(usize, usize) -> Self
+pub fn lattice_core::crdt_tree::Tree::with_origin_quota(self, usize) -> Self
 impl core::clone::Clone for lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::clone(&self) -> Self
 impl core::default::Default for lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::default() -> Self
 impl core::fmt::Debug for lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const lattice_core::crdt_tree::DEFAULT_NODE_LIMIT: usize
 pub const lattice_core::crdt_tree::DEFAULT_OP_LIMIT: usize
+pub const lattice_core::crdt_tree::DEFAULT_ORIGIN_OP_LIMIT: usize
+pub const lattice_core::crdt_tree::MAX_TREE_DEPTH: usize
 pub mod lattice_core::feed
 pub enum lattice_core::feed::ChangeOp
 pub lattice_core::feed::ChangeOp::Delete

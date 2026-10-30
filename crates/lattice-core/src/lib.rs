@@ -28,6 +28,7 @@ pub mod chain;
 pub mod changeset;
 pub mod crc;
 pub mod crdt;
+pub mod crdt_peer;
 pub mod crdt_tree;
 pub mod hlc;
 pub mod kernel;
@@ -55,6 +56,8 @@ pub mod feed;
 
 #[cfg(test)]
 mod admission_tests;
+#[cfg(test)]
+mod crdt_peer_tests;
 
 pub mod crdt_text;
 pub mod workflow;
