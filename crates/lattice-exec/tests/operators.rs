@@ -858,7 +858,10 @@ fn unsupported_statements_are_refused_with_0a000() {
         err(&mut db, &mut s, "SELECT jsonb_nope(id) FROM notes").sqlstate(),
         "0A000"
     );
-    assert_eq!(err(&mut db, &mut s, "SELEC 1").sqlstate(), "42601");
+    assert_eq!(
+        err(&mut db, &mut s, "SELECT id FROM FROM notes").sqlstate(),
+        "42601"
+    );
     assert_eq!(
         err(&mut db, &mut s, "SELECT * FROM missing").sqlstate(),
         "42P01"

@@ -229,7 +229,7 @@ fn an_error_in_a_block_fails_it_until_rollback() {
     );
     // A syntax error also fails the block.
     ok(&mut f.db, &mut s, "BEGIN");
-    assert_eq!(err(&mut f.db, &mut s, "SELEKT").sqlstate(), "42601");
+    assert_eq!(err(&mut f.db, &mut s, "SELECT FROM FROM").sqlstate(), "42601");
     assert_eq!(s.status(), TxStatus::Failed);
     ok(&mut f.db, &mut s, "ROLLBACK");
     assert_eq!(s.status(), TxStatus::Idle);

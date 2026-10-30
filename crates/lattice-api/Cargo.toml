@@ -12,6 +12,7 @@ lattice-abi = { path = "../lattice-abi" }
 lattice-seams = { path = "../lattice-seams" }
 lattice-core = { path = "../lattice-core" }
 lattice-engines = { path = "../lattice-engines" }
+lattice-exec = { path = "../lattice-exec" }
 lattice-identity = { path = "../lattice-identity" }
 lattice-service = { path = "../lattice-service" }
 lattice-packs = { path = "../lattice-packs" }
@@ -26,6 +27,8 @@ subtle = { version = "=2.6.1", default-features = false }
 zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+lattice-sim = { path = "../lattice-sim" }
+lattice-testkit = { path = "../lattice-testkit" }
 proptest = "1.12.0"
 
 [lints]
