@@ -25,3 +25,4 @@
 | [0024](0024-sync-protocol-framing.md) | ADR 0024: Sync protocol framing and messages | proposed |
 | [0025](0025-sql-planner-in-house.md) | ADR 0025: SQL planner: build in house | accepted |
 | [0026](0026-principal-propagation.md) | ADR 0026: Carry the authenticated principal from the credential store to the query handler | proposed |
+| [0027](0027-sync-transport-websocket-first.md) | ADR 0027: Sync transport: WebSocket first, QUIC only if data justifies it | proposed |
