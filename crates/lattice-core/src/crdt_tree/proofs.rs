@@ -16,6 +16,7 @@ fn hlc(wall_ms: u64) -> Hlc {
 /// and a single later move; deeper chains and out-of-order delivery are covered by the
 /// property tests, not by this proof.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(8)]
 fn move_into_own_subtree_is_a_no_op() {
     let mut tree = Tree::new();
@@ -41,6 +42,7 @@ fn move_into_own_subtree_is_a_no_op() {
 /// The cycle check itself: in the same two-node chain, `would_cycle(node, parent)` is true
 /// exactly when `parent` is `node` or below it, for every pair drawn from nodes 0 to 3.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(8)]
 fn would_cycle_matches_ancestry() {
     let mut tree = Tree::new();

@@ -39,8 +39,8 @@ cargo kani -p lattice-core --harness cursor_round_trips
 | `cursor_order_matches_lsn_index_and_bytes` | `lattice-core/src/feed.rs` | all pairs of nonzero cursors | 14 | Cursor order equals `(lsn, index)` order, and equals the order of the encoded 12 bytes compared as unsigned strings. |
 | `cursor_decode_never_panics` | `lattice-core/src/feed.rs` | slices of 0 to 14 bytes | 16 | `Cursor::from_bytes` never panics; it accepts only 12 byte inputs and re-encodes what it accepts to the same bytes. |
 | `event_decode_never_panics` | `lattice-core/src/feed.rs` | slices of 0 to 80 bytes | 82 | `ChangeEvent::decode` never panics, including past the fixed header into the key and operation tag. |
-| `frame_decode_never_panics` | `lattice-api/src/sync.rs` | slices of 0 to 24 bytes | 26 | `sync::decode` never panics, and a returned frame length is within the input and at least the header. |
-| `frame_decode_with_limit_never_panics` | `lattice-api/src/sync.rs` | 0 to 24 bytes, any payload limit | 26 | The same for `decode_with_limit`, and the payload length never exceeds the limit or `MAX_PAYLOAD`. |
+| `frame_decode_never_panics` | `lattice-api/src/sync.rs` | slices of 0 to 14 bytes | 16 | `sync::decode` never panics, and a returned frame length is within the input and at least the header. |
+| `frame_decode_with_limit_never_panics` | `lattice-api/src/sync.rs` | 0 to 14 bytes, any payload limit | 16 | The same for `decode_with_limit`, and the payload length never exceeds the limit or `MAX_PAYLOAD`. |
 | `framer_bounds_hold` | `lattice-sdk/src/contract.rs` | 6 bytes in two arbitrary pushes | 10 | `Framer::push` never panics, yields one result per newline, returns no line holding a newline or longer than its input, and never buffers more than `MAX_LINE_BYTES`. |
 | `framer_finish_resets` | `lattice-sdk/src/contract.rs` | 0 to 6 bytes | 10 | `Framer::finish` never panics and leaves the framer empty and not skipping. |
 | `move_into_own_subtree_is_a_no_op` | `lattice-core/src/crdt_tree.rs` | two-node chain, one later move, any position | 8 | A move of a node under itself or its descendant is `Skipped`, leaves the snapshot unchanged and the tree acyclic. |
@@ -48,7 +48,7 @@ cargo kani -p lattice-core --harness cursor_round_trips
 
 ## What these do not establish
 
-- Larger inputs. The decoders are proved up to 24 to 80 bytes. Maximum-size keys, values, texts and
+- Larger inputs. The decoders are proved up to 14 to 80 bytes. Maximum-size keys, values, texts and
   event lists are beyond the bound; they stay with the property tests and the fuzz targets.
 - The line splitter's over-long-line branch. `MAX_LINE_BYTES` is 1 MiB, far beyond any bound Kani can
   unroll, so `framer_bounds_hold` shows the invariants on short inputs only; the limit itself is

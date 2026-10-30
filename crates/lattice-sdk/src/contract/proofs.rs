@@ -9,6 +9,7 @@ use super::*;
 /// below `MAX_LINE_BYTES` (1 MiB), so this proof does not reach the over-long-line branch;
 /// that branch is covered by the unit tests.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(10)]
 fn framer_bounds_hold() {
     let raw: [u8; 6] = kani::any();
@@ -33,6 +34,7 @@ fn framer_bounds_hold() {
 
 /// `finish` after any input of up to 6 bytes never panics and leaves the framer empty.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(10)]
 fn framer_finish_resets() {
     let raw: [u8; 6] = kani::any();

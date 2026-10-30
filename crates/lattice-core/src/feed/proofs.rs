@@ -6,6 +6,7 @@ use super::*;
 /// Any valid cursor survives encode then decode unchanged, and the origin does too.
 /// Bound: none on the values (every `lsn` and `index` is symbolic); 12 bytes, no loops.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(14)]
 fn cursor_round_trips() {
     let lsn: u64 = kani::any();
@@ -27,6 +28,7 @@ fn cursor_round_trips() {
 /// Comparing two cursors gives the order of `(lsn, index)`, and comparing their encodings as
 /// unsigned byte strings gives the same order. Bound: none on the values; 12 bytes each.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(14)]
 fn cursor_order_matches_lsn_index_and_bytes() {
     let (l1, i1): (u64, u32) = (kani::any(), kani::any());
@@ -43,6 +45,7 @@ fn cursor_order_matches_lsn_index_and_bytes() {
 /// length, so both the short and the trailing-bytes paths are covered), and anything it
 /// accepts re-encodes to the same bytes.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(16)]
 fn cursor_decode_never_panics() {
     let raw: [u8; 14] = kani::any();
@@ -61,6 +64,7 @@ fn cursor_decode_never_panics() {
 /// length) and into the key and operation tag; it is not enough to reach a maximum-size key
 /// or value, so those limits are covered by the unit and property tests, not by this proof.
 #[kani::proof]
+#[kani::solver(cadical)]
 #[kani::unwind(82)]
 fn event_decode_never_panics() {
     let raw: [u8; 80] = kani::any();
