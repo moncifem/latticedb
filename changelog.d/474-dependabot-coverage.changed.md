@@ -1,0 +1,1 @@
+Dependabot now also tracks the `Dockerfile` base image (`docker`), the four Cargo lockfiles outside the root workspace (`fuzz`, `tools/cancel-loom`, `experiments/sql-planner` and its `bridge-baseline`) and the hash-pinned `tools/requirements-sql-planner.txt`. Every entry runs weekly with a seven day cooldown, and `docs/dependency-policy.md` lists the coverage.
