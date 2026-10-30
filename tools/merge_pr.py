@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Merge reviewed PRs serially, fail closed on incomplete or stale GitHub evidence."""
+"""Merge reviewed PRs serially, fail closed on incomplete or stale GitHub evidence.
+
+A PR needs the reviewed label (Dependabot dependency updates are exempt) and a green risk-gate check."""
 import argparse
 import datetime
 import json
@@ -10,7 +12,10 @@ import subprocess
 import sys
 import time
 
-FIELDS = 'state,headRefOid,headRefName,baseRefName,isDraft,mergeStateStatus,statusCheckRollup'
+from review_rules import DEFAULT_ALSO_REQUIRE, DEFAULT_REVIEWED_LABEL, lacks_review
+
+FIELDS = ('state,headRefOid,headRefName,baseRefName,isDraft,mergeStateStatus,statusCheckRollup,'
+          'labels,title,author')
 MINIMUM = {'gate (ubuntu-latest)', 'gate (ubuntu-24.04-arm)', 'secret-scan',
            'typos', 'commit-messages', 'msrv'}
 FAILED = {'FAILURE', 'ERROR', 'TIMED_OUT', 'STARTUP_FAILURE', 'ACTION_REQUIRED', 'CANCELLED', 'STALE'}
@@ -171,6 +176,14 @@ def assess(snapshot, required, repo=None):
     return 'CLEAN'
 
 
+def assess_reviewed(snapshot, required, repo=None, reviewed_label=DEFAULT_REVIEWED_LABEL):
+    """assess() plus the review rule shared with merge_queue.py: an open PR needs the reviewed label
+    unless it is a Dependabot dependency update. A merged or closed PR is answered by assess() alone."""
+    if isinstance(snapshot, dict) and snapshot.get('state') == 'OPEN' and lacks_review(snapshot, reviewed_label):
+        raise Refused(f'no {reviewed_label} label (only a Dependabot dependency update is exempt)')
+    return assess(snapshot, required, repo)
+
+
 def snapshot(pr, repo):
     return api('pr', 'view', str(pr), '--repo', repo, '--json', FIELDS)
 
@@ -208,12 +221,16 @@ def protected_action(repo, required, dry_run):
 
 
 def merge_one(pr, repo, args, required):
+    # `required` is the branch-protection set the live settings must contain. The checks the PR must
+    # pass also include risk-gate, which protection does not list.
+    needed = required | set(DEFAULT_ALSO_REQUIRE)
+    label = '' if args.allow_unreviewed else DEFAULT_REVIEWED_LABEL
     updated = set()
     stale_head = None
     for _ in range(args.tries):
         try:
             first = snapshot(pr, repo)
-            state = assess(first, required, repo)
+            state = assess_reviewed(first, needed, repo, label)
             if state == 'MERGED':
                 print(f'PR {pr}: already merged')
                 return True
@@ -238,7 +255,7 @@ def merge_one(pr, repo, args, required):
                 if children(repo, first['headRefName']):
                     raise Refused('open stacked children; retarget them explicitly before merging parent')
                 second = snapshot(pr, repo)
-                if assess(second, required, repo) != 'CLEAN' or second['headRefOid'] != first['headRefOid'] \
+                if assess_reviewed(second, needed, repo, label) != 'CLEAN' or second['headRefOid'] != first['headRefOid'] \
                         or second['headRefName'] != first['headRefName']:
                     raise Unknown('head or evidence changed during validation')
                 if not protected_action(repo, required, args.dry_run):
@@ -271,6 +288,8 @@ def merge_one(pr, repo, args, required):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--allow-unreviewed', action='store_true',
+                        help='merge PRs without the reviewed label; only when the owner said so in chat')
     parser.add_argument('--tries', type=int, default=os.environ.get('MERGE_PR_TRIES', '90'))
     parser.add_argument('--sleep', type=int, default=os.environ.get('MERGE_PR_SLEEP', '20'))
     parser.add_argument('prs', type=int, nargs='+')

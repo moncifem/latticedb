@@ -15,11 +15,23 @@ HEAD = 'a' * 40
 NEXT = 'b' * 40
 
 
+NEEDED = merge_pr.MINIMUM | {'risk-gate'}
+
+
 def clean(head=HEAD):
     return {'state': 'OPEN', 'headRefOid': head, 'headRefName': 'feature', 'baseRefName': 'main',
-            'isDraft': False, 'mergeStateStatus': 'CLEAN', 'statusCheckRollup': [
+            'isDraft': False, 'mergeStateStatus': 'CLEAN', 'labels': [{'name': 'reviewed'}],
+            'title': 'ci: change something', 'author': {'login': 'moncifem', 'is_bot': False},
+            'statusCheckRollup': [
                 {'__typename': 'CheckRun', 'name': name, 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}
-                for name in sorted(merge_pr.MINIMUM)]}
+                for name in sorted(NEEDED)]}
+
+
+def dependabot(head=HEAD):
+    value = clean(head)
+    value.update({'labels': [], 'headRefName': 'dependabot/cargo/x', 'title': 'chore(deps): bump x from 1 to 2',
+                  'author': {'login': 'app/dependabot', 'is_bot': True}})
+    return value
 
 
 FAKE = r'''
@@ -78,10 +90,83 @@ class MergerTests(unittest.TestCase):
         self.assertEqual(self.merges(calls)[0][-1], HEAD)
         self.assertNotIn('--delete-branch', self.merges(calls)[0])
 
+    def test_missing_reviewed_label_refuses_without_any_merge(self):
+        for labels in ([], [{'name': 'hold'}], None, ['reviewed']):
+            value = clean(); value['labels'] = labels
+            result, calls = self.invoke({'views': [value]}, '1')
+            self.assertNotEqual(result.returncode, 0, labels)
+            self.assertIn('refused, no reviewed label', result.stdout, labels)
+            self.assertFalse(self.merges(calls), labels)
+        value = clean(); del value['labels']
+        result, calls = self.invoke({'views': [value]}, '1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.merges(calls))
+
+    def test_label_added_between_the_two_snapshots_is_not_assumed_and_removal_refuses(self):
+        unlabelled = clean(); unlabelled['labels'] = []
+        result, calls = self.invoke({'views': [clean(), unlabelled]}, '1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.merges(calls))
+
+    def test_allow_unreviewed_switches_only_the_label_rule_off(self):
+        value = clean(); value['labels'] = []
+        result, calls = self.invoke({'views': [value]}, '--allow-unreviewed', '1')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(len(self.merges(calls)), 1)
+        value['statusCheckRollup'] = [c for c in value['statusCheckRollup'] if c['name'] != 'risk-gate']
+        result, calls = self.invoke({'views': [value]}, '--allow-unreviewed', '1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.merges(calls))
+
+    def test_dependabot_dependency_update_needs_no_label_but_still_needs_risk_gate(self):
+        result, calls = self.invoke({'views': [dependabot()]}, '1')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(len(self.merges(calls)), 1)
+        value = dependabot()
+        value['statusCheckRollup'] = [c for c in value['statusCheckRollup'] if c['name'] != 'risk-gate']
+        result, calls = self.invoke({'views': [value]}, '1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.merges(calls))
+
+    def test_lookalikes_of_dependabot_get_no_exemption(self):
+        cases = {
+            'human named dependabot-fan': {'author': {'login': 'dependabot-fan', 'is_bot': False}},
+            'bot flag with another login': {'author': {'login': 'not-dependabot', 'is_bot': True}},
+            'dependabot login without the bot flag': {'author': {'login': 'dependabot[bot]', 'is_bot': False}},
+            'feature branch': {'headRefName': 'feature'},
+            'feature title': {'title': 'feat: x'},
+            'no author': {'author': None},
+        }
+        for name, change in cases.items():
+            value = dependabot(); value.update(change)
+            result, calls = self.invoke({'views': [value]}, '1')
+            self.assertNotEqual(result.returncode, 0, name)
+            self.assertFalse(self.merges(calls), name)
+        value = dependabot(); value['author']['login'] = 'dependabot[bot]'
+        result, calls = self.invoke({'views': [value]}, '1')
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_missing_risk_gate_never_merges_even_with_the_label(self):
+        for mode in ('missing', 'failed', 'pending'):
+            value = clean()
+            gate = next(c for c in value['statusCheckRollup'] if c['name'] == 'risk-gate')
+            if mode == 'missing': value['statusCheckRollup'].remove(gate)
+            elif mode == 'failed': gate['conclusion'] = 'FAILURE'
+            else: gate['status'] = 'IN_PROGRESS'
+            result, calls = self.invoke({'views': [value]}, '1')
+            self.assertNotEqual(result.returncode, 0, mode)
+            self.assertFalse(self.merges(calls), mode)
+
+    def test_assess_reviewed_leaves_merged_and_closed_pull_requests_to_assess(self):
+        merged = {'state': 'MERGED'}
+        self.assertEqual(merge_pr.assess_reviewed(merged, NEEDED), 'MERGED')
+        with self.assertRaises(merge_pr.Refused):
+            merge_pr.assess_reviewed({'state': 'CLOSED', 'labels': []}, NEEDED)
+
     def test_legacy_success_status_contexts_are_supported(self):
         value = clean()
         value['statusCheckRollup'] = [{'__typename': 'StatusContext', 'context': n, 'state': 'SUCCESS'}
-                                    for n in merge_pr.MINIMUM]
+                                    for n in NEEDED]
         result, calls = self.invoke({'views': [value]}, '1')
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(len(self.merges(calls)), 1)
@@ -211,6 +296,8 @@ class MergerTests(unittest.TestCase):
 
     def governed_snapshot(self):
         value = clean()
+        # The real history supplies every risk-gate run; drop the synthetic one.
+        value['statusCheckRollup'] = [r for r in value['statusCheckRollup'] if r['name'] != 'risk-gate']
         value['statusCheckRollup'].extend(copy.deepcopy([
             row for row in self.actual_history()['statusCheckRollup']
             if row.get('name') in ('risk-gate', 'claims')]))
