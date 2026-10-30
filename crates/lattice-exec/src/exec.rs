@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use lattice_abi::Hlc;
+use lattice_core::bugs::{self, Bug};
 use lattice_core::changeset::ChangeSetId;
 use lattice_engines::catalog::DdlRef;
 use lattice_engines::limits::{
@@ -33,6 +34,7 @@ use lattice_sql::plan::{
     AsOfPlan, InsertSource, LogicalPlan, OutputColumn, SortKey, SqlType, TypedExpr,
 };
 
+use crate::access::{self, Access};
 use crate::db::Database;
 use crate::error::{ErrorKind, ExecError};
 use crate::eval::{EvalCtx, cast, eval, truthy};
@@ -223,6 +225,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
 
     /// Runs a bound statement's plan.
     pub(crate) fn run(&mut self, plan: &LogicalPlan) -> Result<RunOutput, ExecError> {
+        self.db.clear_access();
         match plan {
             LogicalPlan::Insert { .. } => self.insert(plan),
             LogicalPlan::Update { .. } => self.update(plan),
@@ -447,7 +450,46 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
     ) -> Result<Vec<Tuple>, ExecError> {
         let def = self.table(table_id)?;
         let snapshot = self.snapshot_for(as_of)?;
-        let stored = self.store().scan_at(snapshot, def.id, .., self.policy)?;
+        let access = match predicate {
+            Some(p) => access::choose(def, p, &self.ctx()),
+            None => Access::Full,
+        };
+        self.db.record_access(access.path());
+        let stored = match &access {
+            Access::Full => self.store().scan_at(snapshot, def.id, .., self.policy)?,
+            Access::Nothing => {
+                // Same snapshot check as a read, so a too-old snapshot fails the same way.
+                self.store().check_snapshot(snapshot)?;
+                Vec::new()
+            }
+            Access::Keys { lo, hi, .. } => {
+                self.gov.check()?;
+                self.store()
+                    .scan_at(snapshot, def.id, (lo.clone(), hi.clone()), self.policy)?
+            }
+            Access::Unique { constraint, entry } => {
+                self.gov.check()?;
+                self.store().check_snapshot(snapshot)?;
+                // The entry table is internal: it is read without the actor's policy, which only
+                // finds the primary key. The row itself is then read under the actor's policy
+                // exactly as a scan would, so a hidden row is never returned.
+                let marker = self
+                    .store()
+                    .get_at(snapshot, def.marker_table(*constraint), entry, &AllowAll)?
+                    .cloned();
+                match marker {
+                    None => Vec::new(),
+                    Some(pk) if bugs::active(Bug::ExecIndexPolicySkipped) => {
+                        self.store()
+                            .scan_at(snapshot, def.id, pk.clone()..=pk, &AllowAll)?
+                    }
+                    Some(pk) => {
+                        self.store()
+                            .scan_at(snapshot, def.id, pk.clone()..=pk, self.policy)?
+                    }
+                }
+            }
+        };
         let overlay = as_of.is_none();
         let mut out: Vec<Tuple> = Vec::with_capacity(stored.len().min(4096));
         for (key, value) in stored {

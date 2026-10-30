@@ -175,7 +175,11 @@ pub fn scrub_with_capabilities<I: Io>(
                     // look-alike headers cannot make a scrub quadratic.
                     let later =
                         crate::log::valid_record_after(&data, off, expected_lsn.saturating_sub(1));
-                    if idx == last && !later {
+                    // A complete, checksum-valid frame with the wrong LSN is lost or reordered data,
+                    // never a torn write, so it is damage even at the very end (issue 441).
+                    let valid_out_of_order =
+                        matches!(decode_record(&data, off), Decoded::Record(..));
+                    if idx == last && !later && !valid_out_of_order {
                         report.issues.push(Issue::TornTail {
                             segment: name.clone(),
                             offset: off,

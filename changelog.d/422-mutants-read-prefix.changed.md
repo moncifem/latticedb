@@ -1,0 +1,1 @@
+Mutation testing no longer reports the loop-bound and interrupted-retry variants of the real file reader's prefix read as survivors: with the bound loosened the extra pass reads into an empty slice and ends the loop, and the interrupted retry cannot be provoked on a regular file. Nothing else about mutation coverage changes.

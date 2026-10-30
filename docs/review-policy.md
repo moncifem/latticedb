@@ -26,10 +26,12 @@ lists the same paths. Keep the three in step.
 | foundations | `crates/lattice-abi/**`, `crates/lattice-seams/**`, `crates/lattice-sys/**`, `crates/lattice-identity/**` |
 | fuzz | `fuzz/fuzz_targets/**` (a weakened target hides a decoder bug; `fuzz/Cargo.toml` and `fuzz/README.md` are not listed) |
 | tla | `tla/**` |
-| toolchain | `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml`, `xtask/src/checks.rs`, `tools/allow-banned.toml`, `tools/quarantine.toml` (lints, toolchain and the checks that stop banned constructs and flaky tests) |
+| toolchain | `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml`, `xtask/src/checks.rs`, `tools/allow-banned.toml`, `tools/quarantine.toml` (lints, toolchain and the checks that stop banned constructs and flaky tests), and what defines or weakens the required gate: `xtask/src/main.rs` (defines `ci()`), `xtask/src/conventions.rs`, `xtask/src/lex.rs`, `_typos.toml`, `.gitleaks.toml`, `.cargo/mutants.toml` and `api-snapshots/**` |
+| packaging | `Dockerfile` (base image digest, build steps, the user the image runs as) |
+| verification | Verification evidence: `crates/lattice-testkit/**`, `crates/lattice-sim/**`, `tools/check_*` and `tools/test_check_*`, `tools/expected-tests/**`, `tools/mutation_*`, `tools/focused_mutation.py`, `tools/scorecard*`, `tools/slt_reference.py` and the tests of these tools. A weakened harness, simulator or evidence tool makes a green check mean less |
 | layers | `layers.toml` |
 | workflows | `.github/**` |
-| protection | `tools/branch-protection.json`, `tools/pr_governance.py`, `tools/test_pr_governance.py`, `tools/changelog.py`, `tools/test_changelog.py`, and the merge tools `tools/merge_queue.py`, `tools/merge_pr.py`, `tools/merge-pr.sh` with their tests, `tools/main_guard.py`, `tools/rebase_pr.py` and `tools/check_expected_tests.py` with their tests |
+| protection | `tools/branch-protection.json`, `tools/pr_governance.py`, `tools/test_pr_governance.py`, `tools/changelog.py`, `tools/test_changelog.py`, and the merge tools `tools/merge_queue.py`, `tools/merge_pr.py`, `tools/merge-pr.sh` and the rule they share, `tools/review_rules.py`, with their tests and `tools/fixtures/**`, `tools/main_guard.py` and `tools/rebase_pr.py` with their tests |
 | rfc-adr | `docs/rfc/**`, `docs/adr/**` |
 | security-docs | `docs/threat-model.md`, `docs/security-test-plan.md`, `docs/review-policy.md`, `docs/merging.md` |
 | dependencies | `Cargo.toml`, `Cargo.lock`, `deny.toml` (root files only) |
@@ -39,16 +41,17 @@ into `auth/mod.rs` or adding a new `policy.rs` or `authz.rs`. The classifier is
 `RISK_RULES` and `RISK_EXEMPT` in `tools/pr_governance.py`; `.github/CODEOWNERS` lists the same crates
 (it cannot express the two exemptions, so it owns them too).
 
-### Left to the merge queue
+### Left to the mergers
 
 These are deliberately not risk areas: `lattice-cli`, `lattice-bench`, `lattice-evalkit`,
-`lattice-testkit`, `lattice-sim`, `lattice-service`, `lattice-packs`, `lattice-intel`, the rest of
-`xtask`, `fuzz/Cargo.toml` and `fuzz/README.md`, docs other than those above, and the other tools. A
-pull request touching only them can pass `risk-gate` without the label, but the merge queue refuses
-any pull request without `reviewed` except a Dependabot dependency update
-([`docs/merging.md`](merging.md)), so they still get a review before they merge.
+`lattice-service`, `lattice-packs`, `lattice-intel`, the rest of `xtask` (`backlog.rs`, `gate.rs`,
+`Cargo.toml`), `fuzz/Cargo.toml` and `fuzz/README.md`, docs other than those above, and the other
+tools. A pull request touching only them can pass `risk-gate` without the label, but both mergers
+(`tools/merge_queue.py` and `tools/merge-pr.sh`) refuse any pull request without `reviewed` except a
+Dependabot dependency update ([`docs/merging.md`](merging.md)), so they still get a review before they
+merge.
 
-The Dependabot exemption is the queue's only one, and `risk-gate` has no bot carve-out. A Dependabot
+The Dependabot exemption is the mergers' only one, and `risk-gate` has no bot carve-out. A Dependabot
 pull request that touches a risky path (`Cargo.toml`, `Cargo.lock`, `.github/**`) still needs the
 `reviewed` label, so the exemption only helps updates under non-risky manifests, such as crate or
 `clients/` manifests.
@@ -73,8 +76,8 @@ The `risk-gate` check fails on a pull request that touches any risk area unless 
 - The path list is a floor, not a judgement. PR 412 (latticed SQL wiring) merged unlabelled because no
   path was listed. When a pull request touches authentication, authorization, policy or credentials
   outside the listed paths, the owner or reviewer adds the path to `RISK_RULES` in the same or the next
-  pull request. The merge queue (`tools/merge_queue.py`) independently refuses any pull request without
-  `reviewed`, except dependency updates; see [`docs/merging.md`](merging.md).
+  pull request. The mergers (`tools/merge_queue.py` and `tools/merge-pr.sh`) independently refuse any
+  pull request without `reviewed`, except dependency updates; see [`docs/merging.md`](merging.md).
 
 ## What a review covers
 

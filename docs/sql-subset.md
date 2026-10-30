@@ -46,7 +46,7 @@ The intended front door is PostgreSQL wire v3 (P2-11). Transaction behaviour is 
 |---|---|
 | `SELECT` list, `*`, aliases, expressions over supported types | Yes |
 | `FROM` with one or more tables, `JOIN` (`INNER`, `LEFT`, `CROSS`) with `ON` | Yes. `RIGHT`, `FULL`, `NATURAL`, `LATERAL` no |
-| `WHERE` | Comparison, `AND`/`OR`/`NOT`, `IN (list)`, `BETWEEN`, `LIKE`, `IS [NOT] NULL` |
+| `WHERE` | Comparison, `AND`/`OR`/`NOT`, `IN (list)`, `BETWEEN`, `LIKE`, `IS [NOT] NULL`. The executor reads only a key range or one entry when `AND` terms compare the primary key or a `UNIQUE` constraint with constants; results are the same as a full scan (see the `lattice-exec` README, Access paths) |
 | `GROUP BY`, `HAVING` | Yes, with `COUNT`, `SUM`, `MIN`, `MAX`, `AVG`; `COUNT(DISTINCT x)` |
 | `ORDER BY`, `LIMIT`, `OFFSET` | Yes, with `NULLS FIRST/LAST` |
 | `DISTINCT` | Yes |

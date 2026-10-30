@@ -79,6 +79,43 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
   comparison pass is not interruptible. Write amplification (staged copies of rows and entries) is not
   charged. A snapshot that was vacuumed away is `72000` with its own `ErrorKind::SnapshotTooOld`.
 
+## Access paths
+
+A scan under a `WHERE` reads only the rows its predicate can match when the primary key or a `UNIQUE`
+constraint allows it. The rules are fixed and use no statistics (`src/access.rs`):
+
+1. Every column of a `UNIQUE` constraint (and not the whole primary key) is compared with `=` to a
+   constant: **one entry lookup** in the constraint's entry table (`AccessPath::UniqueLookup(k)`), then the
+   row it names is read under the actor's policy.
+2. Every primary key column is compared with `=`: a **point read** (`PrimaryKeyPoint`).
+3. The leading primary key columns are compared with `=` and the next one by `<`, `<=`, `>`, `>=` or
+   `BETWEEN` (or only that first column is bounded): a **key range** (`PrimaryKeyRange`).
+4. Anything else (`OR`, `NOT`, `<>`, `IN`, `LIKE`, a non-key column) reads the whole table (`FullScan`).
+
+Only the top-level `AND` terms of the form `column <op> constant` are used (the constant can be a
+literal, a `$n` parameter or a constant expression such as a cast), and only if its value has exactly
+the column's type: an `integer` key with an integer, `text` with text, and so on. `NULL`, `double
+precision`, `numeric` and `jsonb` constants or columns never narrow a scan, so `id = 1.5` is a full scan.
+
+**Results do not change.** The narrowed set is a superset of the matching rows, the whole predicate is
+still evaluated on every row read, and rows come out in key order, so an index scan equals the full scan,
+including the transaction's own uncommitted writes (merged exactly as before), `AS OF` snapshots (the same
+snapshot check runs first, so a vacuumed-away snapshot is `72000` either way) and the row policy
+(`RowStore::scan_at` authorizes each row; the entry-table read finds only a key, and the row is then read
+under the actor's policy). The choice is made only when **every** term of the predicate is certain to
+succeed (comparisons, logic, `IS NULL`, `IN`, `BETWEEN`, constants that already evaluated); a term that can
+fail, such as `10 / v > 1` or a cast of a column, keeps the full scan, so an error a full scan raises on a
+row the narrowed scan would skip is still raised. Limits are unchanged: cancellation and the deadline are
+polled before the read and for every candidate row, and memory is charged for every row kept; a narrower
+read simply keeps and polls fewer rows. `UPDATE` and `DELETE` find their rows the same way.
+
+`Database::last_access_paths()` reports, for the most recent statement, how each scan read its table (a
+test and review aid; there is no `EXPLAIN` yet).
+
+**Not done.** Managed secondary indexes (`CREATE INDEX` is `0A000`, so the executor creates none), `IN`
+lists as several point reads, `ORDER BY` on a key without a sort, early stop for `LIMIT`, reverse scans, and
+streaming (the range is still materialised as row references before the first poll, like a full scan).
+
 ## Storage layout (experimental)
 
 The engine catalog persists table ids and names only. **Column definitions are kept in memory** (`Schema`);
@@ -101,7 +138,7 @@ Joins, `GROUP BY`, aggregates, `DISTINCT` and subqueries (refused by the binder 
 `0A000` at run time); `numeric(p)` and `numeric(p, s)` columns (`0A000`: the plan carries no type
 modifiers, so the declaration could not be enforced); `round` with negative digits; `DDL` inside a transaction block (`25001`); keys on
 `numeric` or `jsonb` columns; more than 15 `UNIQUE` constraints on a table. Every scan reads the whole
-table: no index is used. See `docs/gates/phase-2.md` for the sqllogictest records that fail for these
+table unless the rules in **Access paths** above apply. See `docs/gates/phase-2.md` for the sqllogictest records that fail for these
 reasons.
 
 ## Known differences from PostgreSQL

@@ -139,8 +139,10 @@ PRs [197](https://github.com/moncifem/latticedb/pull/197),
 - `latticed` drives the existing simple/extended sans-I/O session over bounded TCP workers, with
   complete-frame read deadlines, write timeouts and explicit shutdown. Six independent socket tests
   passed locally; portability testing caught and fixed macOS accepted-socket nonblocking inheritance.
-  The handler only answers `SELECT 1`, uses plaintext/trust authentication and opens no database.
-  Authentication, TLS, cancellation routing, query execution and driver conformance remain open.
+  When PRs 200 and 201 merged, the handler only answered `SELECT 1`, used plaintext/trust authentication
+  and opened no database; authentication, TLS, cancellation routing, query execution and driver
+  conformance were open then. Later sections record the TLS/SCRAM integration and the data-directory
+  SQL listener (PR 412); driver conformance is still open (#413).
 - `lattice-api::cancel` has a bounded RNG-seam credential registry, expiry and one-way per-query
   tokens. Its fixed-capacity arithmetic-mask lookup is not a formal platform timing proof. The
   registry is not connected to the TCP listener or query executor yet.
@@ -344,7 +346,8 @@ This is bounded API evidence, not full SQL conformance or soak-volume evidence.
 `lattice-sql` now binds single-table `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `AS OF`),
 `INSERT`, `UPDATE` and `DELETE` with `RETURNING` into a typed logical plan, against an abstract
 catalog view. Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries and DDL are refused with `0A000`.
-Nothing executes SQL against storage yet, and the listener handler is still `SELECT 1`.
+When this section was written nothing executed SQL against storage and the listener handler was still
+`SELECT 1`; the executor and the data-directory listener are recorded in the two sections below.
 
 The binder tests (table of goldens, error-code table, the five sqllogictest scripts as bind inputs, a
 property test that binding never panics and leaves no untyped expression) were run locally for
@@ -368,8 +371,8 @@ level, first-committer-wins as `40001`, `NOT NULL` and key violations as `23502`
 overflow `22003`, division by zero `22012`. Plans bound at an older catalog version are refused. The
 actor's row policy applies to scans and commits; the statement deadline, memory budget and cancellation
 are polled for every row. `CREATE TABLE` and `DROP TABLE` register tables, with the engine catalog
-persisting ids and names only. A `QueryHandler` adapter exists in `lattice-api` and is **not wired**
-into `latticed`, which still answers `SELECT 1`.
+persisting ids and names only. When this section was written, the `QueryHandler` adapter in `lattice-api`
+was not wired into `latticed`; PR 412 wired it (next section).
 
 **Known side channel and policy rules (interim, revisit with Phase 4).** A duplicate key or `UNIQUE`
 value is `23505` even when a hidden row holds it, as in PostgreSQL row-level security; the message
@@ -445,3 +448,32 @@ grants, `allow-all` and `deny-all`. Binary result formats are not exercised. No 
 **Not run locally, left to CI:** the workspace gate, Miri, sanitizers, mutation testing and fuzzing.
 This touches authentication-adjacent and serving code and needs an independent review before merge.
 No Phase 2 exit criterion is claimed; P2-17 and P2-18 remain open.
+
+## Index scans in the executor (P2-07, P2-10, issue 381)
+
+`lattice-exec` chooses an access path by fixed rules (no statistics): a `UNIQUE` constraint pinned by `=`
+is one entry lookup, a fully pinned primary key is a point read, and `=` on leading key columns with a
+range on the next is a key range; everything else is a full scan. Only `integer`, `text`, `boolean`,
+`bytea`, `uuid`, `date` and `timestamptz` constants of exactly the column's type are used; the whole
+predicate is still evaluated on every row read, and the choice is made only when every term of the
+predicate is certain to succeed, so rows, order and errors equal a full scan. `UPDATE` and `DELETE` use the
+same paths. `Database::last_access_paths()` reports the choice of the last statement.
+
+Evidence (`crates/lattice-exec/tests/index_scan.rs`, run locally at default proptest case counts and once
+at 1,500 cases): a differential property test (generated tables with `NULL`s, ties, `bigint` extremes and
+out-of-range or non-integer constants, workloads of inserts, updates and deletes, live reads, `AS OF
+CHANGESET` reads, reads inside an open transaction with its own writes, and an actor policy that hides
+half the rows) requires each narrowed `SELECT` to equal the same predicate forced to a full scan; the
+same for composite text keys (prefix keys such as `a` and `ab`) and for `UPDATE`/`DELETE ... RETURNING`
+followed by a table comparison; fixed cases for the chosen path of each rule, parameters, a failing term
+that must keep the full scan, cancellation and memory limits in the index loop, and a policy that hides
+entry tables. Two planted bugs (`ExecIndexUpperBoundOpen`, `ExecIndexPolicySkipped`, group
+`Bug::EXEC_INDEX`) are each caught by a witness test, and a hand-made mutation of the lower bound was
+caught by the suite.
+
+**Not done.** The executor creates no managed secondary index (`CREATE INDEX` is `0A000`), so `lookup_at`
+and the LCIX definitions are not used yet; `IN` lists, `ORDER BY` from key order, `LIMIT` early stop,
+reverse scans, an `EXPLAIN` statement and a streaming range read are open. The range read still
+materialises row references before its first poll, like a full scan. Left to CI: the workspace gate,
+Miri, mutation testing of `access.rs`, and the larger proptest case counts. No Phase 2 exit criterion is
+claimed; P2-07 and P2-10 remain open.

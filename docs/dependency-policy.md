@@ -12,7 +12,7 @@ tooling and what by review. It complements [`deny.toml`](../deny.toml), [`layers
 | `cargo deny check` | `cargo xtask ci`, gate job | Licence allow list, RustSec advisories, yanked crates (denied), banned crates (`openssl`, `openssl-sys`, `lazy_static`; `anyhow` outside the tools), duplicate versions (warning) |
 | Layer rules | `cargo xtask check-layers` | A crate may only depend on crates `layers.toml` allows for its layer |
 | `unsafe` | `cargo xtask check-unsafe`, `unsafe_code = "forbid"` | No `unsafe` in our crates outside `lattice-sys` |
-| Dependabot | `.github/dependabot.yml` | Weekly pull requests for Cargo and workflow action updates |
+| Dependabot | `.github/dependabot.yml` | Weekly pull requests for Cargo (root and four standalone lockfiles), the `Dockerfile` base image, workflow actions, pip requirements and npm; see "Dependabot coverage" |
 | `risk-gate` and CODEOWNERS | `docs/review-policy.md` | A pull request that changes the root `Cargo.toml`, `Cargo.lock` or `deny.toml` needs the owner's `reviewed` label |
 
 `deny.toml` has no `[sources]` section, so cargo-deny's defaults apply (warnings for unknown registries
@@ -140,10 +140,37 @@ crate; the decision is recorded in issue #303.
 
 ## Updating and removing
 
-Dependabot opens weekly pull requests for Cargo and for workflow actions. A routine update of a crate
+Dependabot opens weekly pull requests for every ecosystem listed under "Dependabot coverage". A routine update of a crate
 outside the set is merged when the gate is green and `cargo deny check` is clean. Remove a dependency
 as soon as the last use goes; `cargo tree -i <crate>` shows who still needs it. A yanked version or a
 new advisory is fixed in the next pull request, not at the next scheduled update.
+
+## Dependabot coverage
+
+Every entry in `.github/dependabot.yml` runs weekly with `cooldown: default-days: 7`, so a release must
+be a week old before Dependabot proposes it. Each directory below has its own manifest and lockfile
+outside the root workspace (each has a nested `[workspace]`), which the root `cargo` entry does not see.
+
+| Ecosystem | Directory | What it tracks |
+|---|---|---|
+| cargo | `/` | The workspace and its `Cargo.lock` |
+| cargo | `/fuzz` | The fuzz targets' own lockfile |
+| cargo | `/tools/cancel-loom` | The Loom cancellation model |
+| cargo | `/experiments/sql-planner` | The ADR 0013 planner experiment (DataFusion and sqlparser) |
+| cargo | `/experiments/sql-planner/bridge-baseline` | The experiment's bridge baseline |
+| docker | `/` | The digest-pinned `ubuntu:24.04` base image in `Dockerfile` |
+| github-actions | `/` | Actions pinned by SHA in the workflows |
+| pip | `/.github` | `requirements-zizmor.txt` (hash-pinned) |
+| pip | `/tools` | `requirements-sql-planner.txt` (hash-pinned) |
+| npm | `/clients/typescript` | Exact-pinned development tools |
+
+The experiment and loom lockfiles stay out of the production graph on purpose; their update pull
+requests are reviewed like any other, but they do not change what ships. The classifier's
+`dependencies` area still lists only the root Cargo files (see the limit above), so these updates pass
+`risk-gate` without the label; the mergers still require `reviewed` for them unless the pull request is a
+Dependabot dependency update. `tools/requirements-sql-planner.txt` says its three pins move together;
+I did not check how Dependabot handles a multi-pin hashed file, so read such a pull request before
+merging it.
 
 ## npm projects (`clients/typescript`)
 

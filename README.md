@@ -44,7 +44,7 @@ These are the design goals. The [phase status](docs/gates) separates them from i
 | Durable kernel | Checksummed write-ahead log, crash recovery, group commits, deduplication and turn fencing |
 | Row engine | Snapshot reads, `AS OF`, write conflicts, a versioned catalog, persisted managed-index definitions/history, callback legacy mode and in-memory version vacuum; reads below the vacuum floor return an error; strict full-HLC resolution rejects expired history alongside the existing clamping helper |
 | Development listener | PostgreSQL v3 simple/extended sessions over bounded TCP connections; loopback trust or configured SCRAM over TLS. With `--data-dir` it runs the single-table SQL executor against a durable log (explicit row policy per account); without it, a `SELECT 1` placeholder |
-| SQL front end | A bounded parser and AST for the declared subset; planning and execution remain pending |
+| SQL front end | A bounded parser and AST, a binder with a logical plan (`lattice-sql`) and an executor for single-table `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE` and `DROP TABLE` (`lattice-exec`). Joins, aggregates, `DISTINCT` and subqueries return `0A000` |
 | Statement controls | Actor-bound row transactions and filtered snapshot reads; cancellation, deadline and memory-budget primitives await executor integration |
 | Sync building blocks | Early Phase 3 pieces, none connected to a server yet: a typed change-feed event model with a stable cursor, a sync protocol frame codec, a WebSocket codec, a tree CRDT with moves (with a TLA+ model), an agent plugin contract with a conformance suite, a client state machine that resumes without gaps, and experimental TypeScript and Python clients ([`clients/typescript`](clients/typescript), [`clients/python`](clients/python)) whose codecs are checked against vectors written by the Rust side |
 | Schema tools | LSL parser, validation, formatting, compatibility checks and a typed-row codec |
@@ -63,11 +63,11 @@ build cost and full retained-state memory bounds are still unmeasured; see the
 flowchart TB
   subgraph ahead["Not built yet"]
     direction LR
-    sql["SQL server"] ~~~ pol["Authenticated agent policy"] ~~~ sync["Live sync"] ~~~ ws["Team workspace"]
+    sql["Joins, aggregates, durable table columns (#379), driver matrix (#413)"] ~~~ pol["Authenticated agent policy"] ~~~ sync["Live sync"] ~~~ ws["Team workspace"]
   end
   subgraph have["Works today"]
     direction TB
-    ifc["Interfaces: development TCP listener, CLI, SQL/LSL parsers"]
+    ifc["Interfaces: development TCP listener with single-table SQL, CLI, SQL/LSL parsers"]
     eng["Storage engine: row engine, AS OF reads, indexes, catalog"]
     ker["Durable kernel: WAL, recovery, commit logic, checkpoints"]
     ver["Verification: simulator, fuzzing, mutation tests, TLA+, Miri, ASan, Loom"]
@@ -77,7 +77,7 @@ flowchart TB
   ahead -.-> have
 ```
 
-Storage-backed SQL execution, PostgreSQL driver conformance, live sync, authenticated agent permissions and the connected workspace are still ahead.
+Single-table SQL runs from a durable data directory, but column definitions are not recovered after a restart (#379); joins, aggregates, the PostgreSQL driver matrix (#413) and binary result formats are open. Live sync, authenticated agent permissions and the connected workspace are still ahead.
 Row policies currently come from a trusted host; authenticated listener identities are not yet bound to those evaluators.
 See the [delivery plan](docs/spec/README.md) and [milestones](https://github.com/moncifem/latticedb/milestones).
 

@@ -24,6 +24,28 @@
 /rust-toolchain.toml @moncifem
 /.cargo/config.toml @moncifem
 /xtask/src/checks.rs @moncifem
+# What defines or weakens the required gate (xtask ci, scanner config, mutation scope, API snapshots).
+/xtask/src/main.rs @moncifem
+/xtask/src/conventions.rs @moncifem
+/xtask/src/lex.rs @moncifem
+/_typos.toml @moncifem
+/.gitleaks.toml @moncifem
+/.cargo/mutants.toml @moncifem
+/api-snapshots/ @moncifem
+/Dockerfile @moncifem
+# Verification evidence: harnesses, simulator, checkers, mutation, scorecard and SQL reference tools.
+/crates/lattice-testkit/ @moncifem
+/crates/lattice-sim/ @moncifem
+/tools/check_* @moncifem
+/tools/test_check_* @moncifem
+/tools/expected-tests/ @moncifem
+/tools/mutation_* @moncifem
+/tools/focused_mutation.py @moncifem
+/tools/test_focused_mutation.py @moncifem
+/tools/scorecard* @moncifem
+/tools/test_scorecard.py @moncifem
+/tools/slt_reference.py @moncifem
+/tools/test_slt_reference.py @moncifem
 /tools/allow-banned.toml @moncifem
 /tools/quarantine.toml @moncifem
 /layers.toml @moncifem
@@ -43,8 +65,9 @@
 /tools/test_main_guard.py @moncifem
 /tools/rebase_pr.py @moncifem
 /tools/test_rebase_pr.py @moncifem
-/tools/check_expected_tests.py @moncifem
-/tools/test_check_expected_tests.py @moncifem
+/tools/review_rules.py @moncifem
+/tools/test_review_rules.py @moncifem
+/tools/fixtures/ @moncifem
 /docs/rfc/ @moncifem
 /docs/adr/ @moncifem
 /docs/threat-model.md @moncifem

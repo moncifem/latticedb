@@ -31,6 +31,7 @@
 //! bound plan; failures are [`ExecError`]s carrying a SQLSTATE.
 #![forbid(unsafe_code)]
 
+mod access;
 mod db;
 mod decimal;
 mod error;
@@ -40,6 +41,7 @@ pub mod schema;
 mod session;
 mod value;
 
+pub use access::AccessPath;
 pub use db::Database;
 pub use decimal::Decimal;
 pub use error::{ErrorKind, ExecError};

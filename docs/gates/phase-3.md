@@ -16,8 +16,20 @@ Requirements and exit criteria are in [the Phase 3 specification](../spec/03-syn
 
 ## Implemented slices
 
-None yet. The kernel already has last-writer-wins registers and an observed-remove set
-(`lattice-core::crdt`), which Phase 3 extends.
+Merged, none connected to a live sync server (the evidence paragraphs below give the measurements and
+what was not run):
+
+- Typed change-feed event model with a stable cursor, and the experimental change-feed and sync frame
+  codecs (encodings not frozen).
+- Sans-I/O WebSocket codec (`lattice-api::websocket`) and the principal-bound `SubscriptionHost`
+  (`lattice-api::subscribe`); no transport supplies a principal yet.
+- CRDT peer limits and the tree CRDT with moves (`lattice-core`), with the `tla/TreeMove.tla` model.
+- Agent plugin contract with a conformance suite, and the MCP server and SDK outbox in `lattice-sdk`.
+- A client state machine that resumes without gaps, and experimental TypeScript and Python codec
+  clients (`clients/typescript`, `clients/python`).
+
+The kernel already had last-writer-wins registers and an observed-remove set (`lattice-core::crdt`),
+which Phase 3 extends.
 
 Verification evidence, not an exit criterion: hostile-peer limits for the CRDTs (issue #364, threat-model gap
 G-08). `lattice-core::crdt_peer` defines `PeerContext` and the limits `MAX_BATCH_OPS` (1024) and `MAX_SET_TAGS`

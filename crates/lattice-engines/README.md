@@ -20,8 +20,12 @@ updated internally at the same LSN as row writes, and recovery rebuilds their hi
 change sets. `lookup_at` returns exact-key matches at a snapshot; `check_indexes_at` recomputes entries
 from the rows and compares both keys and values. A checker can inspect old snapshots too.
 
-Index definitions are supplied by the caller on each open; they are not persisted in the catalog yet.
-There is no SQL server, index planner integration, vacuum or checkpoint-based recovery start yet.
+With an empty index list `open_with_indexes` selects managed mode: index definitions are persisted in
+the catalog through the log ([RFC 0005](../../docs/rfc/0005-catalog-managed-indexes.md), accepted) and
+rebuilt on open. A nonempty list selects legacy callback mode, where the caller supplies the
+definitions on every open. `RowStore::vacuum` drops versions below a horizon in memory. The SQL
+executor is the separate `lattice-exec` crate. There is no index planner integration and no
+checkpoint-based recovery start yet.
 See [the Phase 2 status](../../docs/gates/phase-2.md).
 
 ## Testing the checks

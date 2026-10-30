@@ -35,19 +35,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from review_rules import (  # noqa: F401  (some names are re-exported for the tests)
+    DEFAULT_ALSO_REQUIRE, DEFAULT_REVIEWED_LABEL, DEPENDABOT_LOGINS, DEPENDENCY_TITLE_RE, is_dependency_update,
+    label_names, lacks_review)
+
 HERE = Path(__file__).resolve().parent
 DEFAULT_REQUIRED_FILE = HERE / "branch-protection.json"
 DEFAULT_BASE = "main"
 DEFAULT_HOLD_LABEL = "hold"
-# The owner's label after an independent review. The queue refuses a pull request without it, whatever
-# paths it touches, because the risk-gate path list can miss a risky change (PR 412). Dependency updates
-# are exempt; `--allow-unreviewed` switches the rule off.
-DEFAULT_REVIEWED_LABEL = "reviewed"
-DEPENDABOT_LOGINS = ("app/dependabot", "dependabot[bot]")
-DEPENDENCY_TITLE_RE = re.compile(r"\A(?:build|chore)\(deps(?:-dev)?\)[:!]")
-# Required by the queue itself even if branch protection does not list it: a red or missing risk gate
-# (the owner's `reviewed` label on risky paths) must never be merged over.
-DEFAULT_ALSO_REQUIRE = ("risk-gate",)
+# The review rule (reviewed label, Dependabot exemption, risk-gate) lives in review_rules.py, shared with
+# merge_pr.py. `--allow-unreviewed` switches the label rule off.
 UNKNOWN_STATE_TRIES = 3
 HEAD_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 RUN_RE = re.compile(r"/actions/runs/([0-9]+)")
@@ -97,29 +94,10 @@ def parse_pr_view(text):
     return info
 
 
-def label_names(info):
-    return {label.get("name") for label in info.get("labels") or [] if isinstance(label, dict)}
-
-
 def is_bot_author(info):
     author = info.get("author") or {}
     login = str(author.get("login") or "").lower()
     return bool(author.get("is_bot")) or "dependabot" in login or login.endswith("[bot]")
-
-
-def is_dependency_update(info):
-    """Dependabot's own pull request: its exact login, a bot account, its branch prefix and title shape.
-
-    The test is narrow on purpose. A human named `dependabot-fan`, another bot app, or any other title
-    or branch does not qualify. The exemption also does not look at paths: a Dependabot pull request
-    that touches `.github/**` still needs a green `risk-gate`, which is a required check."""
-    author = info.get("author") or {}
-    return (
-        author.get("is_bot") is True
-        and author.get("login") in DEPENDABOT_LOGINS
-        and str(info.get("headRefName") or "").startswith("dependabot/")
-        and bool(DEPENDENCY_TITLE_RE.match(str(info.get("title") or "")))
-    )
 
 
 def readiness(info, base=DEFAULT_BASE, hold_label=DEFAULT_HOLD_LABEL, listed=False,
@@ -137,7 +115,7 @@ def readiness(info, base=DEFAULT_BASE, hold_label=DEFAULT_HOLD_LABEL, listed=Fal
         return "skip", "conflicts with the base branch"
     if hold_label and hold_label in label_names(info):
         return "skip", f"has the {hold_label} label"
-    if reviewed_label and reviewed_label not in label_names(info) and not is_dependency_update(info):
+    if lacks_review(info, reviewed_label):
         return "skip", f"no {reviewed_label} label (not a dependency update)"
     if is_bot_author(info) and not listed:
         return "skip", "bot pull request not listed by number"

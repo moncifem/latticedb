@@ -11,8 +11,8 @@ disagrees with a gate page, the gate page is right and this page needs a fix.
 |---|---|---|---|
 | 0 Repository and conventions | Workspace, CI, governance | Done | [phase-0](gates/phase-0.md) |
 | 1 Foundations and evaluation | Durable log, simulation, schema language, verification instruments | Built; evidence still accumulating (nightly history, review package) | Open: [phase-1](gates/phase-1.md), [review](gates/phase-1-review.md) |
-| 2 Storage engines and SQL | MVCC row engine, SQL over the PostgreSQL wire | In progress: storage, wire, auth and parser exist; SQL planning and execution do not | Open: [phase-2](gates/phase-2.md) |
-| 3 Sync, CRDTs and SDKs | Live subscriptions, offline merge, SDKs, agent plugin contract | Started: building blocks that do not need the server; experimental TypeScript and Python codec clients (`clients/typescript`, `clients/python`) exist | Open: [phase-3](gates/phase-3.md) |
+| 2 Storage engines and SQL | MVCC row engine, SQL over the PostgreSQL wire | In progress: storage, wire, auth, parser, binder, executor and a data-directory SQL listener exist for single-table SQL; durable column definitions (#379), joins, aggregates and driver conformance (#413) do not | Open: [phase-2](gates/phase-2.md) |
+| 3 Sync, CRDTs and SDKs | Live subscriptions, offline merge, SDKs, agent plugin contract | Started: building blocks that do not need the server (CRDTs, change-feed and sync codecs, WebSocket codec, principal-bound subscription host, plugin contract, MCP server, SDK outbox); experimental TypeScript and Python codec clients (`clients/typescript`, `clients/python`) exist | Open: [phase-3](gates/phase-3.md) |
 | 4 to 12 | Identity and policy, blobs and S3, schema v1 and packs, search, intelligence, role packs, cluster, optional models, 1.0 | Not started | None yet |
 
 Phases 2 and 3 run ahead of the earlier gates under a documented, owner-confirmed waiver. The waiver
@@ -21,12 +21,15 @@ forbids release tags and exit-criteria claims for those phases until the earlier
 ## What you can do today
 
 Open a data directory with the kernel and the row engine, replay crashes in the simulator, check
-schemas with the LSL tools, run the development listener and connect with a PostgreSQL client
-(`SELECT 1` only). There is no storage-backed SQL yet. See the [README](../README.md) for commands.
+schemas with the LSL tools, run the development listener and connect with a PostgreSQL client. With
+`latticed --data-dir DIR --development-policy allow-all` it runs single-table SQL against a durable log;
+without `--data-dir` it answers `SELECT 1` only. Column definitions are not recovered after a restart
+(#379). See the [README](../README.md) for commands.
 
 ## What comes next
 
-1. Storage-backed SQL: planner decision, executor, wiring to the row store, driver conformance.
+1. SQL: persist table column definitions (#379), the PostgreSQL driver matrix and binary formats (#413),
+   then joins and aggregates. The in-house planner is decided ([ADR 0025](adr/0025-sql-planner-in-house.md)).
 2. Phase 1 evidence: more nightly passes, mutation score, Linux runtime numbers, two-maintainer sign-off.
 3. Phase 3 packages that need the server: subscriptions over a gateway, live queries, the SDK clients.
 4. Draft formats (plugin contract, change feed, sync protocol) go through an RFC, golden files and an

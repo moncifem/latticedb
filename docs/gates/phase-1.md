@@ -16,6 +16,7 @@ are exercised.
 | A repeated id in one batch was acknowledged even when the original's fsync failed | Fixed: repeats share the original's fate; planted bug `BatchDuplicateAckedEarly` proves the harness catches the old behaviour |
 | Writer could acknowledge records the decoder rejects (over 16 MiB); `ChangeSet::encode` silently dropped parents above 65,535 | Fixed: size checked before an LSN is taken; `encode` is fallible |
 | Recovery adopted visible-but-unsynced bytes; WAL directory creation lacked parent durability; two writers could share a log | Fixed: recovery fsyncs before returning, parents are synced, an exclusive `Io::lock` is held for the log's lifetime. Planted bugs `SkipRecoverySync` and `NoParentDirSync` are caught |
+| Recovery truncated a checksum-valid last record with a skipped or repeated LSN as if it were a torn tail (issue 441) | Fixed: recovery refuses it without touching the file and scrub reports mid-log damage. Genuine torn tails (incomplete or checksum-failing frames) are still repaired. A log that earlier versions "repaired" this way had already lost the record; it now fails loudly. Planted bug `GapTailTruncated` is caught by the focused refusal witnesses (the simulator never writes a gap) |
 | Recovery skipped malformed known records | Fixed: corruption error |
 | Entropy failure silently produced zero ids | Fixed: the process aborts |
 | Torn-tail heuristic can mistake an embedded record for later data; CPU amplification | Bounded (plausibility filter before checksums) and **documented** as a conservative refusal (`formats/wal-v1.md`, ADR 0007). Not eliminated |
@@ -69,6 +70,16 @@ the harness before the kernel fixes in PR 61; the nightly run is the current evi
 | E1-14 | Traceability matrix complete | Partial: I1, I2 (log level), I4, I5, I6, I8, I9, I12 and I13 each have a named test (`cargo xtask traceability`); I3 has early row snapshot tests but still needs full Phase 2 evidence. I7, I10, I11 and I14 belong to later phases |
 | E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs, then `lattice ledger check` fails when the latest simulation run has violations, no runs or mostly unverified runs and reports the streak and trend over the last seven simulation runs; nightly artifact/ledger ingestion and ten observed-or-missing sections are implemented, with retained-history provenance and completed-fuzz summaries. Integrated nightly validation is still pending; mutation/eval ingestion is implemented with exact producer fields, but completed project producer evidence, reviewed risk/coverage classifications and product dogfood measures remain incomplete |
 | E1-16 | Gate review package | Review not met: `cargo xtask gate --phase 1` now collects declared criteria, source/document provenance, invariant traceability and optional raw/verified ledger snapshots. Every criterion stays unverified until reviewed; no signature or phase-pass decision is generated |
+
+## Kani bounded proofs (not a gate criterion)
+
+Kani harnesses for the change feed cursor, the sync frame decoder, the plugin line splitter and the
+tree CRDT cycle check are merged (PR 296) and run only through the `kani` workflow (weekly and on
+demand, results uploaded as artifacts). Bounded proofs: 4 of 10 harnesses verified on CI (the `lattice-core` feed cursor and event decoder
+proofs, four consecutive runs); 6 not proven (the tree cycle check timed out, the `lattice-api`
+sync frame and `lattice-sdk` framer harnesses were killed on the hosted runner; no counterexample was
+found). Tracked in #424 and #425. The broken-variant demonstration has not been run. Details, bounds and run links are in
+[docs/verification.md](../verification.md).
 
 ## Not built
 

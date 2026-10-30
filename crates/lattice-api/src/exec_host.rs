@@ -575,6 +575,14 @@ impl ExecProxy {
         self.hold = Some((entered, release));
     }
 
+    /// Replaces how long this connection waits for an answer (tests only). A test arms a short wait
+    /// just before the one statement that must time out and restores a generous one straight after,
+    /// so set-up statements and the release of a held statement never race the wall clock.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_wait_for_test(&mut self, wait: Option<Duration>) {
+        self.wait = wait;
+    }
+
     /// Sends a request and waits for its answer, at most the statement ceiling plus slack. On
     /// timeout the statement's token is cancelled: the actor skips the request if it has not started
     /// and stops it at its next row if it has, and this connection gets `57014`. The abort request
@@ -1028,20 +1036,29 @@ reader	allow-all
         std::fs::remove_dir_all(path).unwrap();
     }
 
-    /// A host whose connections give up after 200 ms, so a stalled thread times a request out fast.
+    /// A host with the default limits. Set-up statements (a CREATE TABLE is a WAL commit with a real
+    /// fsync) must never run under a short ceiling, so the timeout tests arm one on a single proxy
+    /// with `arm` only around the statement that is held, and lift it again with `disarm`.
     fn quick_host(name: &str) -> (ExecHost, PathBuf) {
         let path = dir(name);
         let host = ExecHost::start_dir(
             path.clone(),
             PolicyTable::new(Grant::AllowAll),
-            HostLimits {
-                max_timeout_ms: Some(200),
-                wait_slack_ms: 0,
-                ..HostLimits::default()
-            },
+            HostLimits::default(),
         )
         .unwrap();
         (host, path)
+    }
+
+    /// The wait that expires for a statement the test holds. It cannot finish early, so a loaded
+    /// runner only makes the test slower, never wrong.
+    fn arm(p: &mut ExecProxy) {
+        p.set_wait_for_test(Some(Duration::from_millis(200)));
+    }
+
+    /// A wait no loaded runner reaches, for every statement that is expected to complete.
+    fn disarm(p: &mut ExecProxy) {
+        p.set_wait_for_test(Some(Duration::from_secs(120)));
     }
 
     fn rows_of(host: &ExecHost, sql: &str) -> usize {
@@ -1062,9 +1079,11 @@ reader	allow-all
         p.execute(&ctx, "INSERT INTO t VALUES (1)", &[]).unwrap();
         // A statement queued behind a stalled thread times out without ever starting.
         let stall = host.stall_for_test();
+        arm(&mut p);
         let error = p
             .execute(&ctx, "INSERT INTO t VALUES (2)", &[])
             .unwrap_err();
+        disarm(&mut p);
         assert_eq!(error.code, "57014");
         drop(stall);
         // The client saw an error in its block, so the block is aborted: statements are refused and
@@ -1103,6 +1122,7 @@ reader	allow-all
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
         p.hold_next_for_test(entered_tx, release_rx);
+        arm(&mut p);
         let worker = thread::Builder::new()
             .spawn(move || {
                 let principal = Principal::local_development();
@@ -1115,6 +1135,7 @@ reader	allow-all
             .unwrap();
         entered_rx.recv().unwrap();
         let (mut p, code) = worker.join().unwrap();
+        disarm(&mut p);
         assert_eq!(code, "57014");
         // Now the statement finishes and stages its row; the abort queued behind it then fails the block.
         drop(release_tx);
@@ -1134,12 +1155,14 @@ reader	allow-all
         p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
             .unwrap();
         let stall = host.stall_for_test();
+        arm(&mut p);
         assert_eq!(
             p.execute(&ctx, "INSERT INTO t VALUES (1)", &[])
                 .unwrap_err()
                 .code,
             "57014"
         );
+        disarm(&mut p);
         drop(stall);
         // Autocommit: no block to fail, and the skipped insert never ran.
         assert_eq!(
@@ -1238,10 +1261,12 @@ reader	allow-all
         let principal = Principal::local_development();
         let ctx = QueryContext::new(&principal);
         let stall = host.stall_for_test();
+        arm(&mut p);
         assert_eq!(
             p.describe(&ctx, "SELECT id FROM t").unwrap_err().code,
             "57014"
         );
+        disarm(&mut p);
         drop(stall);
         assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
         assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
@@ -1279,6 +1304,7 @@ reader	allow-all
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
         p.hold_next_for_test(entered_tx, release_rx);
+        arm(&mut p);
         let worker = thread::Builder::new()
             .spawn(move || {
                 let principal = Principal::local_development();
@@ -1289,6 +1315,7 @@ reader	allow-all
             .unwrap();
         entered_rx.recv().unwrap();
         let (mut p, code) = worker.join().unwrap();
+        disarm(&mut p);
         assert_eq!(code, "57014");
         drop(release_tx);
         // The client saw BEGIN fail, so it is outside any block: the next statement is an ordinary
@@ -1318,6 +1345,7 @@ reader	allow-all
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
         p.hold_next_for_test(entered_tx, release_rx);
+        arm(&mut p);
         let sql = closing.to_string();
         let worker = thread::Builder::new()
             .spawn(move || {
@@ -1329,6 +1357,7 @@ reader	allow-all
             .unwrap();
         entered_rx.recv().unwrap();
         let (mut p, code) = worker.join().unwrap();
+        disarm(&mut p);
         assert_eq!(code, "57014");
         drop(release_tx);
         // The closing statement ran late and ended the block, so the abort queued behind it finds no
@@ -1369,6 +1398,7 @@ reader	allow-all
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
         p.hold_next_for_test(entered_tx, release_rx);
+        arm(&mut p);
         let worker = thread::Builder::new()
             .spawn(move || {
                 let principal = Principal::local_development();
@@ -1379,6 +1409,7 @@ reader	allow-all
             .unwrap();
         entered_rx.recv().unwrap();
         let (mut p, code) = worker.join().unwrap();
+        disarm(&mut p);
         assert_eq!(code, "57014");
         drop(release_tx);
         // The retry is queued after the abort of the first BEGIN, so the abort discards the first

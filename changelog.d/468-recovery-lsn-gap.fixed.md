@@ -1,0 +1,1 @@
+Recovery now refuses a log whose newest segment ends in a complete, checksum-valid record with a skipped or repeated LSN instead of truncating it as a torn tail; scrub reports it as mid-log damage. Genuine torn tails are still repaired. A log that earlier versions silently shortened this way now fails to open.

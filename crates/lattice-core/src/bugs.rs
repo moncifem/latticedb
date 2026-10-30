@@ -110,6 +110,15 @@ pub enum Bug {
     TreeOriginQuotaSkipped,
     /// The set CRDT accepts a merge of any size (memory exhaustion).
     SetTagLimitSkipped,
+    /// Recovery truncates a checksum-valid record with an unexpected LSN as if it were a torn tail
+    /// (silent loss of acknowledged data after a gap or repeat).
+    GapTailTruncated,
+    /// The executor's primary-key range scan treats an inclusive upper bound (`<=`, `BETWEEN`) as
+    /// exclusive (missing boundary rows).
+    ExecIndexUpperBoundOpen,
+    /// The executor's unique-constraint lookup fetches the row without the actor's read policy
+    /// (hidden rows revealed).
+    ExecIndexPolicySkipped,
 }
 
 impl Bug {
@@ -163,6 +172,9 @@ impl Bug {
         Bug::SetTagLimitSkipped,
     ];
 
+    /// Index-scan defects in the SQL executor, detected by the differential index-scan witnesses.
+    pub const EXEC_INDEX: [Bug; 2] = [Bug::ExecIndexUpperBoundOpen, Bug::ExecIndexPolicySkipped];
+
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
 
@@ -170,6 +182,10 @@ impl Bug {
     pub const PRINCIPAL: [Bug; 1] = [Bug::SubscribePrincipalDropped];
     /// Guarded-WAL admission defects, exercised by independent context witnesses.
     pub const ADMISSION: [Bug; 2] = [Bug::RequiredGuardOmitted, Bug::GuardRewriteUnstaged];
+
+    /// Recovery-order defect, detected by the focused LSN-gap witnesses in `log.rs`: the log
+    /// simulation never writes a gap, so it cannot reach this path.
+    pub const RECOVERY_ORDER: [Bug; 1] = [Bug::GapTailTruncated];
 
     /// Log defects, for the log simulation detection suite.
     pub const ALL: [Bug; 21] = [
@@ -253,11 +269,13 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
             .chain(Bug::FENCE_ORDER)
+            .chain(Bug::RECOVERY_ORDER)
     }
 
     #[test]
@@ -269,13 +287,15 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
             .chain(Bug::CATALOG_INDEX)
             .chain(Bug::HLC_SNAPSHOT)
             .chain(Bug::FENCE_ORDER)
+            .chain(Bug::RECOVERY_ORDER)
             .collect();
-        assert_eq!(all.len(), 50);
+        assert_eq!(all.len(), 53);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

@@ -9,8 +9,15 @@ tools/merge-pr.sh --dry-run 301 302   # reads only
 tools/merge-pr.sh 301 302             # merge 301, then 302 if 301 succeeds
 ```
 
-Options: `--tries N` (default 90, or `MERGE_PR_TRIES`) and `--sleep SECONDS` (default 20, or
-`MERGE_PR_SLEEP`). The repository is discovered from the current checkout. The queue stops on its
+A PR is merged only with the `reviewed` label and a green `risk-gate` check, the same rule as the
+queue (shared code in `tools/review_rules.py`). A PR without the label is refused, and the serial run
+stops there. The only exception is a Dependabot dependency update, defined under "Batches" below.
+`risk-gate` is required on top of the six branch-protection contexts, and the exemption does not
+cover it.
+
+Options: `--tries N` (default 90, or `MERGE_PR_TRIES`), `--sleep SECONDS` (default 20, or
+`MERGE_PR_SLEEP`) and `--allow-unreviewed` (drops the label rule for a run; only when the owner said so
+in chat; `risk-gate` is still required). The repository is discovered from the current checkout. The queue stops on its
 first refusal/exhausted retry and reports later PRs skipped. Already-merged PRs are reported separately.
 Tests use fake JSON APIs only: `tools/test_merge_pr.sh` never contacts GitHub.
 
@@ -67,7 +74,7 @@ Safety rules (each has a test in `tools/test_merge_queue.py`):
   `Cargo.lock`, `.github/**`) still needs the `reviewed` label, so the exemption only helps updates
   under non-risky manifests.
   `--allow-unreviewed` turns the rule off for a run; use it only when the owner has said so in chat.
-  `tools/merge-pr.sh` does not apply this rule; it is for PRs the owner has already cleared.
+  `tools/merge-pr.sh` applies the same rule through the same code (`tools/review_rules.py`).
 - **Known gap:** a push after the label keeps the label, and the queue does not notice. A check that
   compares the label time with the head commit date fails for every PR the queue rebases, so it is not
   implemented; see [#418](https://github.com/moncifem/latticedb/issues/418). Re-read the label after any push.

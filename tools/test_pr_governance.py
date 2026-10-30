@@ -123,6 +123,56 @@ class ClassifyRisk(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(g.classify_risk([path]))
 
+    def test_files_that_define_or_weaken_the_required_gate_are_risky(self):
+        # The audit found these classified "none", so a change to the gate itself needed no review.
+        expected = {
+            "xtask/src/main.rs": "toolchain",
+            "xtask/src/conventions.rs": "toolchain",
+            "xtask/src/lex.rs": "toolchain",
+            "_typos.toml": "toolchain",
+            ".gitleaks.toml": "toolchain",
+            ".cargo/mutants.toml": "toolchain",
+            "api-snapshots/lattice-core.txt": "toolchain",
+            "api-snapshots/new-crate.txt": "toolchain",
+            "Dockerfile": "packaging",
+            "crates/lattice-testkit/src/slt.rs": "verification",
+            "crates/lattice-testkit/tests/scenario.rs": "verification",
+            "crates/lattice-sim/src/lib.rs": "verification",
+            "crates/lattice-sim/Cargo.toml": "verification",
+            "tools/check_expected_tests.py": "verification",
+            "tools/check_fuzz_matrices.py": "verification",
+            "tools/check_public_api.sh": "verification",
+            "tools/check_something_new.py": "verification",
+            "tools/test_check_fuzz_matrices.py": "verification",
+            "tools/expected-tests/wal-admission.txt": "verification",
+            "tools/mutation_campaign.py": "verification",
+            "tools/mutation_results.py": "verification",
+            "tools/focused_mutation.py": "verification",
+            "tools/test_focused_mutation.py": "verification",
+            "tools/scorecard.py": "verification",
+            "tools/scorecard_metrics.py": "verification",
+            "tools/scorecard_replay.py": "verification",
+            "tools/test_scorecard.py": "verification",
+            "tools/slt_reference.py": "verification",
+            "tools/test_slt_reference.py": "verification",
+            "tools/review_rules.py": "protection",
+            "tools/test_review_rules.py": "protection",
+            "tools/fixtures/pr288-check-history.json": "protection",
+        }
+        for path, area in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {area})
+
+    def test_neighbours_of_the_new_gate_paths_stay_unlisted(self):
+        for path in [
+            "xtask/Cargo.toml", "xtask/src/backlog.rs", "xtask/src/gate.rs", "_typos.toml.bak",
+            "docs/Dockerfile", "Dockerfile.dev", "crates/lattice-sim-extras/src/x.rs",
+            "crates/lattice-testkit2/src/x.rs", "tools/docs_wiki.py", "tools/test_docs_wiki.py",
+            "tools/checks.py", "api-snapshots-notes.md", "docs/api-snapshots/x.txt",
+        ]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), set())
+
     def test_directory_modules_and_new_files_in_the_api_crate_do_not_escape(self):
         # `**/auth*` alone does not match auth/mod.rs, and a new policy.rs or authz.rs would be
         # missed by a file list. The whole crate is covered, with a short exempt list.
@@ -190,10 +240,10 @@ class ClassifyRisk(unittest.TestCase):
             "crates/latticed-tools/src/x.rs",
             "crates/lattice-api-extras/src/x.rs",
             "crates/lattice-engines-extras/src/x.rs",
-            "tools/scorecard_metrics.py",
+            "tools/foundation_comparison.py",
             "docs/threat-model-notes.md",
             "crates/lattice-core-extras/src/x.rs",
-            "tools/scorecard.py",
+            "tools/docs_wiki.py",
             "docs/gates/phase-1.md",
             "README.md",
             "CHANGELOG.md",
@@ -203,7 +253,7 @@ class ClassifyRisk(unittest.TestCase):
             "docs/adr-notes.md",
             "my-formats/x.md",
             "crates/lattice-cli/src/main.rs",
-            "crates/lattice-testkit/src/lib.rs",
+            "crates/lattice-bench/src/lib.rs",
         ]:
             with self.subTest(path=path):
                 self.assertEqual(g.classify_risk([path]), set())
@@ -260,7 +310,7 @@ class PastPrs(unittest.TestCase):
          {"kernel", "format", "rfc-adr"}),
         ("scram over tls", ["crates/lattice-api/src/scram.rs", "crates/latticed/src/main.rs"],
          {"auth", "api", "server"}),
-        ("ci guard for formats", [".github/workflows/pr.yml", "xtask/src/main.rs"], {"workflows"}),
+        ("ci guard for formats", [".github/workflows/pr.yml", "xtask/src/main.rs"], {"workflows", "toolchain"}),
         ("gate docs only", ["docs/gates/phase-2.md", "README.md", "CHANGELOG.md"], set()),
         ("layer rule change", ["layers.toml", "crates/lattice-sdk/Cargo.toml"], {"layers", "sdk"}),
         ("protection update", ["tools/branch-protection.json", "docs/releasing.md"], {"protection"}),
@@ -383,8 +433,29 @@ class CodeownersMatchesClassifier(unittest.TestCase):
         "tools/test_main_guard.py": "tools/test_main_guard.py",
         "tools/rebase_pr.py": "tools/rebase_pr.py",
         "tools/test_rebase_pr.py": "tools/test_rebase_pr.py",
-        "tools/check_expected_tests.py": "tools/check_expected_tests.py",
-        "tools/test_check_expected_tests.py": "tools/test_check_expected_tests.py",
+        "tools/review_rules.py": "tools/review_rules.py",
+        "tools/test_review_rules.py": "tools/test_review_rules.py",
+        "tools/fixtures/**": "tools/fixtures/pr288-check-history.json",
+        "xtask/src/main.rs": "xtask/src/main.rs",
+        "xtask/src/conventions.rs": "xtask/src/conventions.rs",
+        "xtask/src/lex.rs": "xtask/src/lex.rs",
+        "_typos.toml": "_typos.toml",
+        ".gitleaks.toml": ".gitleaks.toml",
+        ".cargo/mutants.toml": ".cargo/mutants.toml",
+        "api-snapshots/**": "api-snapshots/lattice-abi.txt",
+        "Dockerfile": "Dockerfile",
+        "crates/lattice-testkit/**": "crates/lattice-testkit/src/slt.rs",
+        "crates/lattice-sim/**": "crates/lattice-sim/src/lib.rs",
+        "tools/check_*": "tools/check_public_api.sh",
+        "tools/test_check_*": "tools/test_check_expected_tests.py",
+        "tools/expected-tests/**": "tools/expected-tests/wal-admission.txt",
+        "tools/mutation_*": "tools/mutation_campaign.py",
+        "tools/focused_mutation.py": "tools/focused_mutation.py",
+        "tools/test_focused_mutation.py": "tools/test_focused_mutation.py",
+        "tools/scorecard*": "tools/scorecard_metrics.py",
+        "tools/test_scorecard.py": "tools/test_scorecard.py",
+        "tools/slt_reference.py": "tools/slt_reference.py",
+        "tools/test_slt_reference.py": "tools/test_slt_reference.py",
         "docs/threat-model.md": "docs/threat-model.md",
         "docs/security-test-plan.md": "docs/security-test-plan.md",
         "docs/review-policy.md": "docs/review-policy.md",

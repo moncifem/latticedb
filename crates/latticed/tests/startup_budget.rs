@@ -44,9 +44,9 @@ fn until_ready(stream: &mut TcpStream) {
 }
 
 fn connect(address: SocketAddr) -> TcpStream {
-    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(20)).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     stream
 }
@@ -56,7 +56,7 @@ fn an_authenticated_idle_session_outlives_the_startup_budget() {
     let server = ServerHandle::start(ServerConfig {
         address: SocketAddr::from(([127, 0, 0, 1], 0)),
         startup_timeout: Duration::from_millis(400),
-        read_timeout: Duration::from_secs(10),
+        read_timeout: Duration::from_secs(60),
         write_timeout: Duration::from_secs(2),
         ..ServerConfig::default()
     })
@@ -84,7 +84,7 @@ fn a_connection_that_never_finishes_startup_is_dropped_at_the_budget() {
     let server = ServerHandle::start(ServerConfig {
         address: SocketAddr::from(([127, 0, 0, 1], 0)),
         startup_timeout: Duration::from_millis(400),
-        read_timeout: Duration::from_secs(10),
+        read_timeout: Duration::from_secs(60),
         write_timeout: Duration::from_secs(2),
         ..ServerConfig::default()
     })

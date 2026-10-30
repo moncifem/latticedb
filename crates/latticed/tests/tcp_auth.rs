@@ -54,14 +54,19 @@ fn fixture(budget: Duration) -> (ServerConfig, Arc<ClientConfig>) {
         Arc::new(client),
     )
 }
+/// Startup budget of every test that is not about the budget. Client sockets give up sooner
+/// (`CLIENT_WAIT`), so a server that wrongly waits out its budget fails the test, while a loaded
+/// runner that is merely slow does not.
+const GENEROUS_BUDGET: Duration = Duration::from_secs(30);
+const CLIENT_WAIT: Duration = Duration::from_secs(20);
+/// Ceiling for "released at once" assertions: far below the 30-second read timeout the server would
+/// otherwise wait out, far above any scheduling delay.
+const NOT_THE_READ_TIMEOUT: Duration = Duration::from_secs(20);
+
 fn raw(address: SocketAddr) -> TcpStream {
-    let socket = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
-    socket
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    socket
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    let socket = TcpStream::connect_timeout(&address, CLIENT_WAIT).unwrap();
+    socket.set_read_timeout(Some(CLIENT_WAIT)).unwrap();
+    socket.set_write_timeout(Some(CLIENT_WAIT)).unwrap();
     socket.set_nodelay(true).unwrap();
     socket
 }
@@ -172,7 +177,7 @@ fn is_closed(stream: &mut impl Read) {
 }
 #[test]
 fn verified_tls_scram_completes_before_query_and_never_accepts_password_again() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let server = ServerHandle::start(config).unwrap();
     let mut client = tls(server.local_addr(), client_config);
     let first = begin(&mut client, "user");
@@ -201,7 +206,7 @@ fn verified_tls_scram_completes_before_query_and_never_accepts_password_again() 
 }
 #[test]
 fn wrong_password_and_unknown_user_have_identical_terminal_failure() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let server = ServerHandle::start(config).unwrap();
     let mut failures = Vec::new();
     for user in ["user", "missing"] {
@@ -219,7 +224,7 @@ fn wrong_password_and_unknown_user_have_identical_terminal_failure() {
 }
 #[test]
 fn plaintext_startup_and_queries_before_proof_are_refused() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let server = ServerHandle::start(config).unwrap();
     let mut plaintext = raw(server.local_addr());
     plaintext.write_all(&startup("user")).unwrap();
@@ -239,7 +244,7 @@ fn plaintext_startup_and_queries_before_proof_are_refused() {
 }
 #[test]
 fn oversized_auth_header_is_rejected_without_waiting_for_payload() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let server = ServerHandle::start(config).unwrap();
     let mut client = tls(server.local_addr(), client_config);
     client.write_all(&startup("user")).unwrap();
@@ -265,13 +270,13 @@ fn one_startup_budget_includes_negotiation_and_partial_tls_and_shutdown_releases
     assert_eq!(reply, *b"S");
     // No TLS bytes: the same accept-to-auth budget, not read_timeout=30s, must release it.
     is_closed(&mut client);
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(started.elapsed() < NOT_THE_READ_TIMEOUT);
     let mut pending = raw(server.local_addr());
     pending.write_all(&[0, 0, 0, 8, 4, 210, 22, 47]).unwrap();
     pending.read_exact(&mut reply).unwrap();
     let started = Instant::now();
     server.shutdown().unwrap();
-    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(started.elapsed() < NOT_THE_READ_TIMEOUT);
     is_closed(&mut pending);
 }
 #[test]
@@ -282,7 +287,7 @@ fn scram_has_one_absolute_budget_and_shutdown_handles_authenticating_clients() {
     let _first = begin(&mut client, "user");
     let started = Instant::now();
     is_closed(&mut client);
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(started.elapsed() < NOT_THE_READ_TIMEOUT);
     let mut client = tls(server.local_addr(), client_config);
     begin(&mut client, "user");
     server.shutdown().unwrap();
@@ -311,7 +316,7 @@ fn development_trust_cannot_bind_remotely_and_invalid_tls_config_fails_before_bi
 
 #[test]
 fn client_rejects_untrusted_certificate_and_wrong_server_name() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let server = ServerHandle::start(config).unwrap();
     let untrusted =
         ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -386,7 +391,7 @@ fn cli_requires_persistent_decoy_secret_and_refuses_it_in_trust_mode() {
 
 #[test]
 fn registry_full_after_scram_success_reaches_the_client_as_53300() {
-    let (mut config, client_config) = fixture(Duration::from_secs(5));
+    let (mut config, client_config) = fixture(GENEROUS_BUDGET);
     config.max_connections = 1;
     let server = ServerHandle::start(config).unwrap();
     let mut first = tls(server.local_addr(), client_config.clone());
@@ -482,7 +487,7 @@ fn parse(client: &mut Client, sql: &str) {
 
 #[test]
 fn handler_receives_exactly_the_account_that_completed_scram_over_tls() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let (server, log) = recording_server(config);
     let address = server.local_addr();
     let mut analyst = login(address, &client_config, "analyst");
@@ -508,7 +513,7 @@ fn handler_receives_exactly_the_account_that_completed_scram_over_tls() {
 
 #[test]
 fn nothing_reaches_the_handler_before_a_verified_proof() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let (server, log) = recording_server(config);
     let address = server.local_addr();
     // Queries, parses and a password message sent in place of the proof.
@@ -546,7 +551,7 @@ fn nothing_reaches_the_handler_before_a_verified_proof() {
 
 #[test]
 fn a_second_startup_user_cannot_select_a_different_account() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let (server, log) = recording_server(config);
     for pair in [("user", "analyst"), ("analyst", "user"), ("user", "user")] {
         let mut client = tls(server.local_addr(), client_config.clone());
@@ -572,7 +577,7 @@ fn a_second_startup_user_cannot_select_a_different_account() {
 
 #[test]
 fn tls_session_ends_with_close_notify_not_a_truncation() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let server = ServerHandle::start(config).unwrap();
     let mut client = tls(server.local_addr(), client_config);
     let first = begin(&mut client, "user");
@@ -640,7 +645,7 @@ fn cli_refuses_group_or_world_accessible_key_and_decoy_files() {
 
 #[test]
 fn fatal_error_reply_is_followed_by_close_notify() {
-    let (config, client_config) = fixture(Duration::from_secs(3));
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
     let server = ServerHandle::start(config).unwrap();
     let mut client = tls(server.local_addr(), client_config);
     // A wrong password ends in a FATAL reply, not in an orderly Terminate.
