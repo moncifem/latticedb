@@ -61,6 +61,53 @@ jobs:
         run: cargo test -p lattice-core -p lattice-abi -p lattice-lsl --release
         env:
           PROPTEST_CASES: "1000000"
+  volume-convergence:
+    # CRDT convergence over a faulty network at gate volume (#455). The ignored test uses the fixed seeds 0 to 99,999,
+    # so every night repeats the same seeds; its run time on a hosted runner has not been measured. Not named
+    # evidence-* because the scorecard ingests those artifacts and this log has no ledger record.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: convergence_at_gate_volume, 100,000 seeds per profile and family
+        run: |
+          set -o pipefail
+          cargo test -p lattice-testkit --release --test convergence_replicas -- --ignored convergence_at_gate_volume --nocapture 2>&1 | tee volume.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: volume-convergence_replicas
+          path: volume.log
+          if-no-files-found: warn
+  volume-fencing:
+    # Fenced superseded turns under crash and takeover races at gate volume (#455). Fixed seeds 0 to 99,999 per
+    # profile, repeated every night; run time unmeasured.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: 1.99.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: superseded_turns_are_fenced_across_profiles_volume, 100,000 seeds per profile
+        run: |
+          set -o pipefail
+          cargo test -p lattice-testkit --release --test fencing_races -- --ignored superseded_turns_are_fenced_across_profiles_volume --nocapture 2>&1 | tee volume.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          overwrite: true
+          name: volume-fencing_races
+          path: volume.log
+          if-no-files-found: warn
   proptest-sql:
     # The SQL print/parse round-trip properties at 1,000,000 cases. Manual dispatch only until a run
     # has measured the time: a timeout here would turn the scheduled night red. TODO: after a dispatch
@@ -327,7 +374,7 @@ jobs:
     # pull requests, so nothing cancels a job on purpose; a run an owner cancels by hand also stops
     # this job, and so opens nothing.
     if: always() && github.event_name == 'schedule'
-    needs: [sim, determinism-and-planted-bugs, proptest-sql, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, scorecard, row-faults, cancel-loom]
+    needs: [sim, determinism-and-planted-bugs, volume-convergence, volume-fencing, proptest-sql, fuzz, miri, asan, bench, config-formats, tlc, sql-reference, scorecard, row-faults, cancel-loom]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

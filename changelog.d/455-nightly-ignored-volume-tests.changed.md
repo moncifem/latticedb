@@ -1,0 +1,1 @@
+The 100,000-seed convergence and fencing volume tests now run in the nightly workflow, and the pull request gate fails when an ignored test is neither run by a workflow nor listed with a reason in `tools/ignored-tests.toml`. No run of the new nightly jobs has been observed, so their run time and result are unrecorded.

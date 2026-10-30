@@ -155,6 +155,17 @@ These two checks are not Kani proofs; they are recorded here because the same fi
   (Python `struct`, not the Rust encoders; `--check` verifies the tracked bytes). A one-off local read of
   every seed through the three decoders gave the intended accept or refusal for each. Registering a target
   is not evidence of a completed fuzz run: no scheduled run of the three new targets has been observed yet.
+- **Ignored volume tests.** A test marked `#[ignore]` never runs in `cargo test`. The convergence and
+  fencing volume tests (`convergence_at_gate_volume`, `superseded_turns_are_fenced_across_profiles_volume`,
+  100,000 seeds per profile) were ignored and started by no workflow, although their comments said
+  scheduled CI would run them. `nightly.yml` now runs each as its own job (`volume-convergence`,
+  `volume-fencing`; 240-minute limit, listed in `report-failure`), with `--ignored` and the test name,
+  and uploads the log as `volume-*`. Their run time on a hosted runner has not been measured, so a
+  timeout on the first nights is possible, and they use fixed seeds, so every night repeats the same
+  100,000. `tools/check_ignored_tests.py` (pull request gate) fails when an `#[ignore]` test is not a
+  pending `phase N:` specification, is not started with `--ignored` by a workflow (by name, or by
+  `--test <file>`) and has no reasoned entry in `tools/ignored-tests.toml`; the row fault volume tests
+  are listed there because nightly covers them through the `row_fault_runner` example.
 - **SQL reference check.** `.github/workflows/sql-reference.yml` is the single definition of the check of
   the sqllogictest scripts against PostgreSQL 17 (pinned by digest). Pull requests that touch the scripts
   or `tools/slt_reference.py` run it, and `nightly.yml` calls it as a reusable workflow, so the digest, the

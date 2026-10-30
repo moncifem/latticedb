@@ -1,0 +1,14 @@
+# Ignored tests that no workflow starts with `--ignored`, each with the reason. The pull request
+# gate (tools/check_ignored_tests.py) fails for an ignored test that is neither run by a workflow nor
+# listed here, and for an entry here that matches no ignored test or whose test a workflow now runs.
+# Pending specifications (`#[ignore = "phase N: ..."]`) need no entry.
+
+[[allow]]
+path = "crates/lattice-engines/tests/row_faults.rs"
+name = "row_fault_profiles_at_gate_volume"
+reason = "the nightly row-faults jobs run the same 25,000-history shards through the row_fault_runner example (1,000,000 histories per night, a new window each day) instead of this test; it stays for a manual run of 10,000 histories per profile"
+
+[[allow]]
+path = "crates/lattice-engines/tests/row_faults.rs"
+name = "$test"
+reason = "macro-generated 2,500-seed slices of row_fault_profiles_at_gate_volume; nightly covers the same histories through the row_fault_runner example, these exist for a manual run of one slice"

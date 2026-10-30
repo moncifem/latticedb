@@ -78,7 +78,7 @@ simulated disk for 200 seeds under each of the five fault profiles (clean, crash
 everything), 2,000 runs in all. One local run: 0 assertion failures, 12 runs censored by bit rot (all in
 `everything`), 19,656 superseded writes submitted, 18,809 answered `Fenced`. The test uses the kernel and not
 the plugin contract reference plugin, because `layers.toml` does not let `lattice-testkit` depend on
-`lattice-sdk`. A 100,000 seed per profile volume test exists as an ignored test and has not been run.
+`lattice-sdk`. A 100,000 seed per profile volume test is an ignored test; `nightly.yml` runs it as the job `volume-fencing`. The job has not been observed yet, so no result and no run time is recorded here, and it uses the same fixed seeds every night.
 The kernel checks the fence before the duplicate check (issue #304), so a late retry of an already stored write
 is answered `Fenced`, as the plugin contract says; the test `late_retry_of_a_stored_write_is_fenced_per_the_contract`
 runs by default and the planted bug `DuplicateBeforeFence` is caught by the fencing race sweep.
@@ -90,7 +90,7 @@ One local run of `cargo test -p lattice-testkit --test convergence_replicas`: 20
 acknowledged write and an acyclic tree. Seven planted defects in harness wrapper replicas (overwriting merge,
 lost local write, lost remote operation, missing duplicate detection, skipped cycle check, for the three
 families) were each detected within the same 200 seeds. The 100,000-seed volume test is `#[ignore]` and was not
-run locally. Not wired into the nightly shards, ledger or scorecard yet.
+run locally; `nightly.yml` runs it as the job `volume-convergence` with the same fixed seeds every night. That job has not been observed yet, and it is not wired into the ledger or scorecard.
 Verification evidence, not an exit criterion: principal binding of the sync subscription host (threat model G-03,
 issue #359, sync part only). `SubscriptionHost::new` now takes the authenticated `Principal` and
 `EventSource::read_after` receives it on every read, so a source can refuse a scope per principal; the free-text
