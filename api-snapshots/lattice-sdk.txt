@@ -652,4 +652,143 @@ pub fn lattice_sdk::mcp::encode_result(&lattice_sdk::mcp::Id, &str) -> alloc::st
 pub fn lattice_sdk::mcp::is_valid_scope(&str) -> bool
 pub fn lattice_sdk::mcp::parse_json(&[u8]) -> core::result::Result<lattice_sdk::mcp::Json, lattice_sdk::mcp::ParseError>
 pub fn lattice_sdk::mcp::validate_args(lattice_sdk::mcp::Tool, &lattice_sdk::mcp::Json) -> core::result::Result<lattice_sdk::mcp::ToolCall, lattice_sdk::mcp::RpcError>
+pub mod lattice_sdk::outbox
+pub enum lattice_sdk::outbox::DecodeError
+pub lattice_sdk::outbox::DecodeError::BadChecksum
+pub lattice_sdk::outbox::DecodeError::BadMagic
+pub lattice_sdk::outbox::DecodeError::InvalidConfig
+pub lattice_sdk::outbox::DecodeError::NonCanonical(&'static str)
+pub lattice_sdk::outbox::DecodeError::OverLimit
+pub lattice_sdk::outbox::DecodeError::TooLarge
+pub lattice_sdk::outbox::DecodeError::TooShort
+pub lattice_sdk::outbox::DecodeError::TrailingBytes
+pub lattice_sdk::outbox::DecodeError::Truncated
+pub lattice_sdk::outbox::DecodeError::UnsupportedVersion(u8)
+impl core::clone::Clone for lattice_sdk::outbox::DecodeError
+pub fn lattice_sdk::outbox::DecodeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::outbox::DecodeError
+impl core::cmp::PartialEq for lattice_sdk::outbox::DecodeError
+pub fn lattice_sdk::outbox::DecodeError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_sdk::outbox::DecodeError
+impl core::fmt::Debug for lattice_sdk::outbox::DecodeError
+pub fn lattice_sdk::outbox::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sdk::outbox::DecodeError
+pub fn lattice_sdk::outbox::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::outbox::DecodeError
+pub enum lattice_sdk::outbox::OutboxError
+pub lattice_sdk::outbox::OutboxError::BodyExceedsBudget
+pub lattice_sdk::outbox::OutboxError::BodyTooLarge
+pub lattice_sdk::outbox::OutboxError::CounterExhausted
+pub lattice_sdk::outbox::OutboxError::Full
+pub lattice_sdk::outbox::OutboxError::Full::bytes: usize
+pub lattice_sdk::outbox::OutboxError::Full::items: usize
+pub lattice_sdk::outbox::OutboxError::InvalidClientId
+pub lattice_sdk::outbox::OutboxError::InvalidConfig
+pub lattice_sdk::outbox::OutboxError::TurnFenced(u64)
+pub lattice_sdk::outbox::OutboxError::TurnTooLarge
+impl core::clone::Clone for lattice_sdk::outbox::OutboxError
+pub fn lattice_sdk::outbox::OutboxError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::outbox::OutboxError
+impl core::cmp::PartialEq for lattice_sdk::outbox::OutboxError
+pub fn lattice_sdk::outbox::OutboxError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_sdk::outbox::OutboxError
+impl core::fmt::Debug for lattice_sdk::outbox::OutboxError
+pub fn lattice_sdk::outbox::OutboxError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sdk::outbox::OutboxError
+pub fn lattice_sdk::outbox::OutboxError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::outbox::OutboxError
+pub struct lattice_sdk::outbox::Batch
+pub lattice_sdk::outbox::Batch::attempt: u32
+pub lattice_sdk::outbox::Batch::records: alloc::vec::Vec<lattice_sdk::contract::Record>
+pub lattice_sdk::outbox::Batch::turn: u64
+impl core::clone::Clone for lattice_sdk::outbox::Batch
+pub fn lattice_sdk::outbox::Batch::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::outbox::Batch
+impl core::cmp::PartialEq for lattice_sdk::outbox::Batch
+pub fn lattice_sdk::outbox::Batch::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::outbox::Batch
+pub fn lattice_sdk::outbox::Batch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::outbox::Batch
+pub struct lattice_sdk::outbox::Outbox
+impl lattice_sdk::outbox::Outbox
+pub fn lattice_sdk::outbox::Outbox::bytes(&self) -> usize
+pub fn lattice_sdk::outbox::Outbox::client_id(&self) -> &str
+pub fn lattice_sdk::outbox::Outbox::connection_lost(&mut self)
+pub fn lattice_sdk::outbox::Outbox::enqueue(&mut self, u64, lattice_sdk::contract::Kind, &str) -> core::result::Result<alloc::string::String, lattice_sdk::outbox::OutboxError>
+pub fn lattice_sdk::outbox::Outbox::fenced_turns(&self) -> impl core::iter::traits::iterator::Iterator<Item = u64> + '_
+pub fn lattice_sdk::outbox::Outbox::from_bytes(&[u8], lattice_sdk::outbox::OutboxConfig) -> core::result::Result<Self, lattice_sdk::outbox::DecodeError>
+pub fn lattice_sdk::outbox::Outbox::is_empty(&self) -> bool
+pub fn lattice_sdk::outbox::Outbox::len(&self) -> usize
+pub fn lattice_sdk::outbox::Outbox::mark_persisted(&mut self, &lattice_sdk::outbox::Snapshot)
+pub fn lattice_sdk::outbox::Outbox::new(&str, lattice_sdk::outbox::OutboxConfig) -> core::result::Result<Self, lattice_sdk::outbox::OutboxError>
+pub fn lattice_sdk::outbox::Outbox::next_deadline(&self) -> core::option::Option<u64>
+pub fn lattice_sdk::outbox::Outbox::on_receipts(&mut self, &[lattice_sdk::contract::Receipt]) -> lattice_sdk::outbox::Outcome
+pub fn lattice_sdk::outbox::Outbox::pending(&self) -> alloc::vec::Vec<lattice_sdk::outbox::Pending>
+pub fn lattice_sdk::outbox::Outbox::poll(&mut self, u64, u64) -> core::option::Option<lattice_sdk::outbox::Batch>
+pub fn lattice_sdk::outbox::Outbox::snapshot(&self) -> lattice_sdk::outbox::Snapshot
+impl core::clone::Clone for lattice_sdk::outbox::Outbox
+pub fn lattice_sdk::outbox::Outbox::clone(&self) -> Self
+impl core::fmt::Debug for lattice_sdk::outbox::Outbox
+pub fn lattice_sdk::outbox::Outbox::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_sdk::outbox::OutboxConfig
+pub lattice_sdk::outbox::OutboxConfig::base_delay: u64
+pub lattice_sdk::outbox::OutboxConfig::max_batch: usize
+pub lattice_sdk::outbox::OutboxConfig::max_bytes: usize
+pub lattice_sdk::outbox::OutboxConfig::max_delay: u64
+pub lattice_sdk::outbox::OutboxConfig::max_items: usize
+impl core::clone::Clone for lattice_sdk::outbox::OutboxConfig
+pub fn lattice_sdk::outbox::OutboxConfig::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::outbox::OutboxConfig
+impl core::cmp::PartialEq for lattice_sdk::outbox::OutboxConfig
+pub fn lattice_sdk::outbox::OutboxConfig::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_sdk::outbox::OutboxConfig
+pub fn lattice_sdk::outbox::OutboxConfig::default() -> Self
+impl core::fmt::Debug for lattice_sdk::outbox::OutboxConfig
+pub fn lattice_sdk::outbox::OutboxConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::outbox::OutboxConfig
+impl core::marker::StructuralPartialEq for lattice_sdk::outbox::OutboxConfig
+pub struct lattice_sdk::outbox::Outcome
+pub lattice_sdk::outbox::Outcome::done: alloc::vec::Vec<alloc::string::String>
+pub lattice_sdk::outbox::Outcome::fenced: alloc::vec::Vec<lattice_sdk::outbox::Pending>
+pub lattice_sdk::outbox::Outcome::unknown: usize
+impl core::clone::Clone for lattice_sdk::outbox::Outcome
+pub fn lattice_sdk::outbox::Outcome::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::outbox::Outcome
+impl core::cmp::PartialEq for lattice_sdk::outbox::Outcome
+pub fn lattice_sdk::outbox::Outcome::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_sdk::outbox::Outcome
+pub fn lattice_sdk::outbox::Outcome::default() -> Self
+impl core::fmt::Debug for lattice_sdk::outbox::Outcome
+pub fn lattice_sdk::outbox::Outcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::outbox::Outcome
+pub struct lattice_sdk::outbox::Pending
+pub lattice_sdk::outbox::Pending::body: alloc::string::String
+pub lattice_sdk::outbox::Pending::kind: lattice_sdk::contract::Kind
+pub lattice_sdk::outbox::Pending::rid: alloc::string::String
+pub lattice_sdk::outbox::Pending::turn: u64
+impl core::clone::Clone for lattice_sdk::outbox::Pending
+pub fn lattice_sdk::outbox::Pending::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::outbox::Pending
+impl core::cmp::PartialEq for lattice_sdk::outbox::Pending
+pub fn lattice_sdk::outbox::Pending::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::outbox::Pending
+pub fn lattice_sdk::outbox::Pending::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::outbox::Pending
+pub struct lattice_sdk::outbox::Snapshot
+impl lattice_sdk::outbox::Snapshot
+pub fn lattice_sdk::outbox::Snapshot::as_bytes(&self) -> &[u8]
+pub fn lattice_sdk::outbox::Snapshot::into_bytes(self) -> alloc::vec::Vec<u8>
+impl core::clone::Clone for lattice_sdk::outbox::Snapshot
+pub fn lattice_sdk::outbox::Snapshot::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::outbox::Snapshot
+impl core::cmp::PartialEq for lattice_sdk::outbox::Snapshot
+pub fn lattice_sdk::outbox::Snapshot::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::outbox::Snapshot
+pub fn lattice_sdk::outbox::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::outbox::Snapshot
+pub const lattice_sdk::outbox::MAX_BYTES_LIMIT: usize
+pub const lattice_sdk::outbox::MAX_CLIENT_ID_BYTES: usize
+pub const lattice_sdk::outbox::MAX_FENCED_TURNS: usize
+pub const lattice_sdk::outbox::MAX_ITEMS_LIMIT: usize
+pub const lattice_sdk::outbox::MAX_STORED_BYTES: usize
 pub const lattice_sdk::LAYER: u8
