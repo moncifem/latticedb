@@ -22,9 +22,6 @@ between minor versions; format changes are called out explicitly.
   and planted kernel bugs proving each assertion can fail. Test only; no exit criterion is claimed.
 
 - `lattice_core::crdt_text`: operation based sequence CRDT for text (stable element ids, tombstones, parked out-of-order operations, canonical bounded encoding) with tombstone compaction that keeps declared revert points. ADR 0010 gains Phase 3 data; the Phase 1 decision is provisionally kept and E3-6 is not claimed.
-- Public API snapshots for the ten library crates (`api-snapshots/`, `tools/check_public_api.sh`, a `public-api`
-  job in `pr.yml`): a public API change now shows as a snapshot diff in review. See
-  `docs/api-snapshots.md`.
 - `RowStore::try_snapshot_as_of_hlc`: strict full-HLC predecessor resolution returns
   `SnapshotTooOld` for expired history while the existing helper retains its floor clamp.
   This is a storage API; SQL timestamp execution and SQLSTATE mapping remain pending.

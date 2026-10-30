@@ -21,6 +21,7 @@ tools/check_public_api.sh                       # check all crates that have a s
 tools/check_public_api.sh lattice-core          # check one crate
 tools/check_public_api.sh --update lattice-core # rewrite one snapshot
 tools/check_public_api.sh --update              # rewrite all snapshots
+tools/check_public_api.sh --update-affected     # rewrite only crates whose crates/<crate>/ differs from origin/main
 ```
 
 A covered crate without a snapshot file fails the check; `--update <crate>` creates it. The covered
@@ -55,3 +56,8 @@ Updating the snapshot is part of any pull request that changes a public API. Sev
 requests change APIs at the same time, so a merge conflict in `api-snapshots/` is expected: resolve it
 by rebasing and re-running `tools/check_public_api.sh --update` for the affected crates, never by
 merging the text by hand.
+
+After a rebase, `git fetch && tools/check_public_api.sh --update-affected` regenerates only the crates
+your branch touches. It looks at `crates/<crate>/` only, so if you change a crate that another covered
+crate re-exports, run the full `--update` as well. Because this PR-side flow cannot stop other PRs from
+changing the API first, expect to re-run it after a rebase when the check fails.

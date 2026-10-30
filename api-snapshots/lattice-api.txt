@@ -2,7 +2,7 @@ pub mod lattice_api
 pub mod lattice_api::auth
 pub struct lattice_api::auth::Accounts
 impl lattice_api::auth::Accounts
-pub fn lattice_api::auth::Accounts::exchange(&self, &str, &mut impl lattice_seams::Rng + ?core::marker::Sized) -> core::result::Result<(lattice_api::scram::ScramServer, bool), lattice_api::scram::ScramError>
+pub fn lattice_api::auth::Accounts::exchange(&self, &str, &mut impl lattice_seams::Rng + ?core::marker::Sized) -> core::result::Result<(lattice_api::scram::ScramServer, core::option::Option<lattice_api::principal::Principal>), lattice_api::scram::ScramError>
 pub fn lattice_api::auth::Accounts::parse(&str, lattice_api::auth::DecoySecret) -> core::result::Result<Self, lattice_api::scram::ScramError>
 impl core::fmt::Debug for lattice_api::auth::Accounts
 pub fn lattice_api::auth::Accounts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -13,6 +13,147 @@ impl core::fmt::Debug for lattice_api::auth::DecoySecret
 pub fn lattice_api::auth::DecoySecret::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const lattice_api::auth::MAX_ACCOUNTS: usize
 pub const lattice_api::auth::MAX_CREDENTIAL_BYTES: usize
+pub mod lattice_api::backpressure
+pub enum lattice_api::backpressure::AckError
+pub lattice_api::backpressure::AckError::Closed
+pub lattice_api::backpressure::AckError::OutOfRange
+impl core::clone::Clone for lattice_api::backpressure::AckError
+pub fn lattice_api::backpressure::AckError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::AckError
+impl core::cmp::PartialEq for lattice_api::backpressure::AckError
+pub fn lattice_api::backpressure::AckError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::backpressure::AckError
+pub fn lattice_api::backpressure::AckError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::backpressure::AckError
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::AckError
+pub enum lattice_api::backpressure::Offer
+pub lattice_api::backpressure::Offer::Disconnected
+pub lattice_api::backpressure::Offer::Overflowed
+pub lattice_api::backpressure::Offer::Overflowed::resume: u64
+pub lattice_api::backpressure::Offer::Queued
+pub lattice_api::backpressure::Offer::Stale
+impl core::clone::Clone for lattice_api::backpressure::Offer
+pub fn lattice_api::backpressure::Offer::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::Offer
+impl core::cmp::PartialEq for lattice_api::backpressure::Offer
+pub fn lattice_api::backpressure::Offer::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::backpressure::Offer
+pub fn lattice_api::backpressure::Offer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::backpressure::Offer
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::Offer
+pub enum lattice_api::backpressure::PublishError
+pub lattice_api::backpressure::PublishError::OutOfOrder
+impl core::clone::Clone for lattice_api::backpressure::PublishError
+pub fn lattice_api::backpressure::PublishError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::PublishError
+impl core::cmp::PartialEq for lattice_api::backpressure::PublishError
+pub fn lattice_api::backpressure::PublishError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::backpressure::PublishError
+pub fn lattice_api::backpressure::PublishError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::backpressure::PublishError
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::PublishError
+pub enum lattice_api::backpressure::State
+pub lattice_api::backpressure::State::Live
+pub lattice_api::backpressure::State::Overflowed
+pub lattice_api::backpressure::State::Overflowed::dropped: u64
+pub lattice_api::backpressure::State::Overflowed::resume: u64
+impl core::clone::Clone for lattice_api::backpressure::State
+pub fn lattice_api::backpressure::State::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::State
+impl core::cmp::PartialEq for lattice_api::backpressure::State
+pub fn lattice_api::backpressure::State::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::backpressure::State
+pub fn lattice_api::backpressure::State::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::backpressure::State
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::State
+pub struct lattice_api::backpressure::Event
+pub lattice_api::backpressure::Event::payload: alloc::rcs::arc::Arc<[u8]>
+pub lattice_api::backpressure::Event::seq: u64
+impl core::clone::Clone for lattice_api::backpressure::Event
+pub fn lattice_api::backpressure::Event::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::Event
+impl core::cmp::PartialEq for lattice_api::backpressure::Event
+pub fn lattice_api::backpressure::Event::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::backpressure::Event
+pub fn lattice_api::backpressure::Event::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::Event
+pub struct lattice_api::backpressure::FanOut
+pub lattice_api::backpressure::FanOut::overflowed_now: usize
+pub lattice_api::backpressure::FanOut::queued: usize
+pub lattice_api::backpressure::FanOut::skipped: usize
+impl core::clone::Clone for lattice_api::backpressure::FanOut
+pub fn lattice_api::backpressure::FanOut::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::FanOut
+impl core::cmp::PartialEq for lattice_api::backpressure::FanOut
+pub fn lattice_api::backpressure::FanOut::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_api::backpressure::FanOut
+pub fn lattice_api::backpressure::FanOut::default() -> Self
+impl core::fmt::Debug for lattice_api::backpressure::FanOut
+pub fn lattice_api::backpressure::FanOut::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::backpressure::FanOut
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::FanOut
+pub struct lattice_api::backpressure::Hub
+impl lattice_api::backpressure::Hub
+pub fn lattice_api::backpressure::Hub::add(&mut self, lattice_api::backpressure::Limits, u64) -> usize
+pub fn lattice_api::backpressure::Hub::get(&self, usize) -> core::option::Option<&lattice_api::backpressure::SubscriberQueue>
+pub fn lattice_api::backpressure::Hub::get_mut(&mut self, usize) -> core::option::Option<&mut lattice_api::backpressure::SubscriberQueue>
+pub fn lattice_api::backpressure::Hub::is_empty(&self) -> bool
+pub fn lattice_api::backpressure::Hub::len(&self) -> usize
+pub fn lattice_api::backpressure::Hub::memory(&self) -> usize
+pub fn lattice_api::backpressure::Hub::new() -> Self
+pub fn lattice_api::backpressure::Hub::publish(&mut self, u64, &[u8]) -> core::result::Result<lattice_api::backpressure::FanOut, lattice_api::backpressure::PublishError>
+pub fn lattice_api::backpressure::Hub::publish_shared(&mut self, u64, alloc::rcs::arc::Arc<[u8]>) -> core::result::Result<lattice_api::backpressure::FanOut, lattice_api::backpressure::PublishError>
+pub fn lattice_api::backpressure::Hub::stats(&self) -> lattice_api::backpressure::Stats
+impl core::default::Default for lattice_api::backpressure::Hub
+pub fn lattice_api::backpressure::Hub::default() -> Self
+impl core::fmt::Debug for lattice_api::backpressure::Hub
+pub fn lattice_api::backpressure::Hub::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_api::backpressure::Limits
+pub lattice_api::backpressure::Limits::max_bytes: usize
+pub lattice_api::backpressure::Limits::max_events: usize
+pub lattice_api::backpressure::Limits::max_in_flight: usize
+impl lattice_api::backpressure::Limits
+pub fn lattice_api::backpressure::Limits::worst_case_memory(&self) -> usize
+impl core::clone::Clone for lattice_api::backpressure::Limits
+pub fn lattice_api::backpressure::Limits::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::Limits
+impl core::cmp::PartialEq for lattice_api::backpressure::Limits
+pub fn lattice_api::backpressure::Limits::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::backpressure::Limits
+pub fn lattice_api::backpressure::Limits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::backpressure::Limits
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::Limits
+pub struct lattice_api::backpressure::Stats
+pub lattice_api::backpressure::Stats::offers: u64
+pub lattice_api::backpressure::Stats::payload_copies: u64
+pub lattice_api::backpressure::Stats::publishes: u64
+pub lattice_api::backpressure::Stats::shares: u64
+impl core::clone::Clone for lattice_api::backpressure::Stats
+pub fn lattice_api::backpressure::Stats::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::backpressure::Stats
+impl core::cmp::PartialEq for lattice_api::backpressure::Stats
+pub fn lattice_api::backpressure::Stats::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_api::backpressure::Stats
+pub fn lattice_api::backpressure::Stats::default() -> Self
+impl core::fmt::Debug for lattice_api::backpressure::Stats
+pub fn lattice_api::backpressure::Stats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::backpressure::Stats
+impl core::marker::StructuralPartialEq for lattice_api::backpressure::Stats
+pub struct lattice_api::backpressure::SubscriberQueue
+impl lattice_api::backpressure::SubscriberQueue
+pub fn lattice_api::backpressure::SubscriberQueue::ack(&mut self, u64) -> core::result::Result<(), lattice_api::backpressure::AckError>
+pub fn lattice_api::backpressure::SubscriberQueue::acked(&self) -> u64
+pub fn lattice_api::backpressure::SubscriberQueue::drain_into(&mut self, &mut alloc::vec::Vec<lattice_api::backpressure::Event>, usize) -> usize
+pub fn lattice_api::backpressure::SubscriberQueue::is_empty(&self) -> bool
+pub fn lattice_api::backpressure::SubscriberQueue::len(&self) -> usize
+pub fn lattice_api::backpressure::SubscriberQueue::limits(&self) -> lattice_api::backpressure::Limits
+pub fn lattice_api::backpressure::SubscriberQueue::memory(&self) -> usize
+pub fn lattice_api::backpressure::SubscriberQueue::new(lattice_api::backpressure::Limits, u64) -> Self
+pub fn lattice_api::backpressure::SubscriberQueue::offer(&mut self, lattice_api::backpressure::Event) -> lattice_api::backpressure::Offer
+pub fn lattice_api::backpressure::SubscriberQueue::queued_bytes(&self) -> usize
+pub fn lattice_api::backpressure::SubscriberQueue::state(&self) -> lattice_api::backpressure::State
+impl core::fmt::Debug for lattice_api::backpressure::SubscriberQueue
+pub fn lattice_api::backpressure::SubscriberQueue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod lattice_api::cancel
 pub enum lattice_api::cancel::CancelError
 pub lattice_api::cancel::CancelError::ExpiryOverflow
@@ -232,6 +373,41 @@ pub const lattice_api::pgwire::PROTOCOL_3_0: i32
 pub fn lattice_api::pgwire::decode_frontend(&[u8]) -> core::result::Result<core::option::Option<(lattice_api::pgwire::Frontend, usize)>, lattice_api::pgwire::ProtoError>
 pub fn lattice_api::pgwire::decode_frontend_sasl(&[u8], lattice_api::pgwire::SaslPhase) -> core::result::Result<core::option::Option<(lattice_api::pgwire::Frontend, usize)>, lattice_api::pgwire::ProtoError>
 pub fn lattice_api::pgwire::decode_startup(&[u8]) -> core::result::Result<core::option::Option<(lattice_api::pgwire::Startup, usize)>, lattice_api::pgwire::ProtoError>
+pub mod lattice_api::principal
+pub enum lattice_api::principal::PrincipalKind
+pub lattice_api::principal::PrincipalKind::Account
+pub lattice_api::principal::PrincipalKind::LocalDevelopment
+impl core::clone::Clone for lattice_api::principal::PrincipalKind
+pub fn lattice_api::principal::PrincipalKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::principal::PrincipalKind
+impl core::cmp::PartialEq for lattice_api::principal::PrincipalKind
+pub fn lattice_api::principal::PrincipalKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::principal::PrincipalKind
+pub fn lattice_api::principal::PrincipalKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::principal::PrincipalKind
+impl core::marker::StructuralPartialEq for lattice_api::principal::PrincipalKind
+pub struct lattice_api::principal::Principal
+impl lattice_api::principal::Principal
+pub fn lattice_api::principal::Principal::kind(&self) -> lattice_api::principal::PrincipalKind
+pub fn lattice_api::principal::Principal::name(&self) -> &str
+impl core::clone::Clone for lattice_api::principal::Principal
+pub fn lattice_api::principal::Principal::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::principal::Principal
+impl core::cmp::PartialEq for lattice_api::principal::Principal
+pub fn lattice_api::principal::Principal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::principal::Principal
+pub fn lattice_api::principal::Principal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_api::principal::Principal
+pub fn lattice_api::principal::Principal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::principal::Principal
+#[non_exhaustive] pub struct lattice_api::principal::QueryContext<'a>
+pub lattice_api::principal::QueryContext::principal: &'a lattice_api::principal::Principal
+impl<'a> core::clone::Clone for lattice_api::principal::QueryContext<'a>
+pub fn lattice_api::principal::QueryContext<'a>::clone(&self) -> Self
+impl<'a> core::fmt::Debug for lattice_api::principal::QueryContext<'a>
+pub fn lattice_api::principal::QueryContext<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for lattice_api::principal::QueryContext<'a>
+pub const lattice_api::principal::LOCAL_DEVELOPMENT_NAME: &str
 pub mod lattice_api::scram
 pub enum lattice_api::scram::ScramError
 pub lattice_api::scram::ScramError::Crypto
@@ -322,22 +498,23 @@ impl<H: lattice_api::session::QueryHandler> lattice_api::session::Session<H>
 pub fn lattice_api::session::Session<H>::awaiting_startup(&self) -> bool
 pub fn lattice_api::session::Session<H>::handler(&self) -> &H
 pub fn lattice_api::session::Session<H>::is_closed(&self) -> bool
-pub fn lattice_api::session::Session<H>::new(H, i32, i32) -> Self
+pub fn lattice_api::session::Session<H>::local_trust(H, i32, i32) -> Self
 pub fn lattice_api::session::Session<H>::on_message(&mut self, lattice_api::pgwire::Frontend) -> lattice_api::session::Outcome
 pub fn lattice_api::session::Session<H>::on_message_with_cancellation(&mut self, lattice_api::pgwire::Frontend, &lattice_api::cancel::CancellationToken) -> lattice_api::session::Outcome
 pub fn lattice_api::session::Session<H>::on_protocol_error(&mut self, &lattice_api::pgwire::ProtoError) -> lattice_api::session::Outcome
 pub fn lattice_api::session::Session<H>::on_startup(&mut self, lattice_api::pgwire::Startup) -> lattice_api::session::Outcome
+pub fn lattice_api::session::Session<H>::principal(&self) -> core::option::Option<&lattice_api::principal::Principal>
 pub fn lattice_api::session::Session<H>::sasl_phase(&self) -> core::option::Option<lattice_api::pgwire::SaslPhase>
 pub fn lattice_api::session::Session<H>::tx_status(&self) -> lattice_api::pgwire::TxStatus
-pub fn lattice_api::session::Session<H>::with_scram(H, i32, i32, lattice_api::scram::ScramServer, bool) -> Self
+pub fn lattice_api::session::Session<H>::with_scram(H, i32, i32, lattice_api::scram::ScramServer, core::option::Option<lattice_api::principal::Principal>) -> Self
 pub const lattice_api::session::MAX_PORTALS: usize
 pub const lattice_api::session::MAX_STATEMENTS: usize
 pub const lattice_api::session::SERVER_VERSION: &str
 pub trait lattice_api::session::QueryHandler
-pub fn lattice_api::session::QueryHandler::describe(&mut self, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
-pub fn lattice_api::session::QueryHandler::describe_cancellable(&mut self, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
-pub fn lattice_api::session::QueryHandler::execute(&mut self, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
-pub fn lattice_api::session::QueryHandler::execute_cancellable(&mut self, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub fn lattice_api::session::QueryHandler::describe(&mut self, &lattice_api::principal::QueryContext<'_>, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::session::QueryHandler::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::session::QueryHandler::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub fn lattice_api::session::QueryHandler::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub type lattice_api::session::Row = alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>
 pub mod lattice_api::subscribe
 pub enum lattice_api::subscribe::CloseReason

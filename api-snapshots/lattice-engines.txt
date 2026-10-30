@@ -307,6 +307,87 @@ pub fn &P::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
 pub fn &P::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
 pub fn lattice_engines::limits::authorize_read(&impl lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized, lattice_engines::limits::RowRef<'_>) -> core::result::Result<(), lattice_engines::limits::LimitError>
 pub fn lattice_engines::limits::authorize_write(&impl lattice_engines::limits::PolicyEvaluator + ?core::marker::Sized, lattice_engines::limits::RowWriteRef<'_>) -> core::result::Result<(), lattice_engines::limits::LimitError>
+pub mod lattice_engines::merge
+pub enum lattice_engines::merge::CellView
+pub lattice_engines::merge::CellView::Elements(alloc::vec::Vec<alloc::vec::Vec<u8>>)
+pub lattice_engines::merge::CellView::Value(core::option::Option<alloc::vec::Vec<u8>>)
+impl core::clone::Clone for lattice_engines::merge::CellView
+pub fn lattice_engines::merge::CellView::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::merge::CellView
+impl core::cmp::PartialEq for lattice_engines::merge::CellView
+pub fn lattice_engines::merge::CellView::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::merge::CellView
+pub fn lattice_engines::merge::CellView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::merge::CellView
+pub enum lattice_engines::merge::MergeError
+pub lattice_engines::merge::MergeError::Incompatible(alloc::string::String)
+pub lattice_engines::merge::MergeError::NoSuchColumn(usize)
+pub lattice_engines::merge::MergeError::SetTooLarge(usize)
+pub lattice_engines::merge::MergeError::Shape
+pub lattice_engines::merge::MergeError::TooManyColumns
+pub lattice_engines::merge::MergeError::UnknownColumn(alloc::string::String)
+pub lattice_engines::merge::MergeError::ValueTooLarge(usize)
+pub lattice_engines::merge::MergeError::WrongKind(usize)
+impl core::clone::Clone for lattice_engines::merge::MergeError
+pub fn lattice_engines::merge::MergeError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::merge::MergeError
+impl core::cmp::PartialEq for lattice_engines::merge::MergeError
+pub fn lattice_engines::merge::MergeError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::merge::MergeError
+pub fn lattice_engines::merge::MergeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::merge::MergeError
+pub enum lattice_engines::merge::MergeKind
+pub lattice_engines::merge::MergeKind::Lww
+pub lattice_engines::merge::MergeKind::None
+pub lattice_engines::merge::MergeKind::OrSet
+impl core::clone::Clone for lattice_engines::merge::MergeKind
+pub fn lattice_engines::merge::MergeKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::merge::MergeKind
+impl core::cmp::PartialEq for lattice_engines::merge::MergeKind
+pub fn lattice_engines::merge::MergeKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::merge::MergeKind
+pub fn lattice_engines::merge::MergeKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lattice_engines::merge::MergeKind
+pub fn lattice_engines::merge::MergeKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lattice_engines::merge::MergeKind
+impl core::marker::StructuralPartialEq for lattice_engines::merge::MergeKind
+pub struct lattice_engines::merge::MergeRow
+impl lattice_engines::merge::MergeRow
+pub fn lattice_engines::merge::MergeRow::delete(&mut self, lattice_abi::hlc::Hlc)
+pub fn lattice_engines::merge::MergeRow::deleted_at(&self) -> core::option::Option<lattice_abi::hlc::Hlc>
+pub fn lattice_engines::merge::MergeRow::empty(&[lattice_engines::merge::MergeKind]) -> core::result::Result<Self, lattice_engines::merge::MergeError>
+pub fn lattice_engines::merge::MergeRow::plain_stamp(&self) -> core::option::Option<lattice_abi::hlc::Hlc>
+pub fn lattice_engines::merge::MergeRow::set_add(&mut self, usize, alloc::vec::Vec<u8>, lattice_abi::hlc::Hlc) -> core::result::Result<(), lattice_engines::merge::MergeError>
+pub fn lattice_engines::merge::MergeRow::set_remove(&mut self, usize, &[u8]) -> core::result::Result<(), lattice_engines::merge::MergeError>
+pub fn lattice_engines::merge::MergeRow::set_remove_tags(&mut self, usize, impl core::iter::traits::collect::IntoIterator<Item = lattice_abi::hlc::Hlc>) -> core::result::Result<(), lattice_engines::merge::MergeError>
+pub fn lattice_engines::merge::MergeRow::view(&self, &[lattice_engines::merge::MergeKind]) -> core::result::Result<lattice_engines::merge::RowView, lattice_engines::merge::MergeError>
+pub fn lattice_engines::merge::MergeRow::write_lww(&mut self, usize, lattice_abi::hlc::Hlc, alloc::vec::Vec<u8>) -> core::result::Result<(), lattice_engines::merge::MergeError>
+pub fn lattice_engines::merge::MergeRow::write_plain(&mut self, lattice_abi::hlc::Hlc, alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>) -> core::result::Result<bool, lattice_engines::merge::MergeError>
+impl core::clone::Clone for lattice_engines::merge::MergeRow
+pub fn lattice_engines::merge::MergeRow::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::merge::MergeRow
+impl core::cmp::PartialEq for lattice_engines::merge::MergeRow
+pub fn lattice_engines::merge::MergeRow::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::merge::MergeRow
+pub fn lattice_engines::merge::MergeRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::merge::MergeRow
+pub struct lattice_engines::merge::RowView
+pub lattice_engines::merge::RowView::cells: alloc::vec::Vec<lattice_engines::merge::CellView>
+pub lattice_engines::merge::RowView::live: bool
+impl core::clone::Clone for lattice_engines::merge::RowView
+pub fn lattice_engines::merge::RowView::clone(&self) -> Self
+impl core::cmp::Eq for lattice_engines::merge::RowView
+impl core::cmp::PartialEq for lattice_engines::merge::RowView
+pub fn lattice_engines::merge::RowView::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_engines::merge::RowView
+pub fn lattice_engines::merge::RowView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_engines::merge::RowView
+pub const lattice_engines::merge::MAX_COLUMNS: usize
+pub const lattice_engines::merge::MAX_SET_ELEMENTS: usize
+pub const lattice_engines::merge::MAX_SET_TAGS: usize
+pub const lattice_engines::merge::MAX_VALUE_LEN: usize
+pub fn lattice_engines::merge::kinds_for_layout(&lattice_engines::typed::TableLayout, &alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_engines::merge::MergeKind>) -> core::result::Result<alloc::vec::Vec<lattice_engines::merge::MergeKind>, lattice_engines::merge::MergeError>
+pub fn lattice_engines::merge::merge_rows(&[lattice_engines::merge::MergeKind], &lattice_engines::merge::MergeRow, &lattice_engines::merge::MergeRow) -> core::result::Result<lattice_engines::merge::MergeRow, lattice_engines::merge::MergeError>
 pub mod lattice_engines::mvcc
 pub enum lattice_engines::mvcc::MvccError
 pub lattice_engines::mvcc::MvccError::Conflict

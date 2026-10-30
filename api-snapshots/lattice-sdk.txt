@@ -386,4 +386,270 @@ pub const lattice_sdk::contract::MAX_SOURCE_BYTES: usize
 pub const lattice_sdk::contract::VERSION: u64
 pub fn lattice_sdk::contract::decode_line(&[u8]) -> core::result::Result<lattice_sdk::contract::Message, lattice_sdk::contract::ContractError>
 pub fn lattice_sdk::contract::encode_line(&lattice_sdk::contract::Message) -> core::result::Result<alloc::string::String, lattice_sdk::contract::ContractError>
+pub mod lattice_sdk::mcp
+pub mod lattice_sdk::mcp::code
+pub const lattice_sdk::mcp::code::BACKEND_UNAVAILABLE: i64
+pub const lattice_sdk::mcp::code::INTERNAL_ERROR: i64
+pub const lattice_sdk::mcp::code::INVALID_PARAMS: i64
+pub const lattice_sdk::mcp::code::INVALID_REQUEST: i64
+pub const lattice_sdk::mcp::code::METHOD_NOT_FOUND: i64
+pub const lattice_sdk::mcp::code::PARSE_ERROR: i64
+pub const lattice_sdk::mcp::code::SCOPE_DENIED: i64
+pub const lattice_sdk::mcp::code::TOOL_NOT_GRANTED: i64
+pub const lattice_sdk::mcp::code::UNSUPPORTED_PROTOCOL_VERSION: i64
+pub enum lattice_sdk::mcp::BackendError
+pub lattice_sdk::mcp::BackendError::Conflict
+pub lattice_sdk::mcp::BackendError::PolicyDenied
+pub lattice_sdk::mcp::BackendError::Unavailable
+impl core::clone::Clone for lattice_sdk::mcp::BackendError
+pub fn lattice_sdk::mcp::BackendError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::BackendError
+impl core::cmp::PartialEq for lattice_sdk::mcp::BackendError
+pub fn lattice_sdk::mcp::BackendError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::BackendError
+pub fn lattice_sdk::mcp::BackendError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::mcp::BackendError
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::BackendError
+pub enum lattice_sdk::mcp::Denial
+pub lattice_sdk::mcp::Denial::ScopeDenied
+pub lattice_sdk::mcp::Denial::ToolNotGranted
+impl core::clone::Clone for lattice_sdk::mcp::Denial
+pub fn lattice_sdk::mcp::Denial::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::Denial
+impl core::cmp::PartialEq for lattice_sdk::mcp::Denial
+pub fn lattice_sdk::mcp::Denial::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Denial
+pub fn lattice_sdk::mcp::Denial::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::mcp::Denial
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Denial
+pub enum lattice_sdk::mcp::Id
+pub lattice_sdk::mcp::Id::Num(i64)
+pub lattice_sdk::mcp::Id::Str(alloc::string::String)
+impl core::clone::Clone for lattice_sdk::mcp::Id
+pub fn lattice_sdk::mcp::Id::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::Id
+impl core::cmp::PartialEq for lattice_sdk::mcp::Id
+pub fn lattice_sdk::mcp::Id::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Id
+pub fn lattice_sdk::mcp::Id::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Id
+pub enum lattice_sdk::mcp::Incoming
+pub lattice_sdk::mcp::Incoming::Notification(lattice_sdk::mcp::Notification)
+pub lattice_sdk::mcp::Incoming::Request(lattice_sdk::mcp::Request)
+impl core::clone::Clone for lattice_sdk::mcp::Incoming
+pub fn lattice_sdk::mcp::Incoming::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sdk::mcp::Incoming
+pub fn lattice_sdk::mcp::Incoming::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Incoming
+pub fn lattice_sdk::mcp::Incoming::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Incoming
+pub enum lattice_sdk::mcp::Json
+pub lattice_sdk::mcp::Json::Arr(alloc::vec::Vec<lattice_sdk::mcp::Json>)
+pub lattice_sdk::mcp::Json::Bool(bool)
+pub lattice_sdk::mcp::Json::Float(f64)
+pub lattice_sdk::mcp::Json::Int(i64)
+pub lattice_sdk::mcp::Json::Null
+pub lattice_sdk::mcp::Json::Obj(alloc::vec::Vec<(alloc::string::String, lattice_sdk::mcp::Json)>)
+pub lattice_sdk::mcp::Json::Str(alloc::string::String)
+impl lattice_sdk::mcp::Json
+pub fn lattice_sdk::mcp::Json::get(&self, &str) -> core::option::Option<&lattice_sdk::mcp::Json>
+impl core::clone::Clone for lattice_sdk::mcp::Json
+pub fn lattice_sdk::mcp::Json::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sdk::mcp::Json
+pub fn lattice_sdk::mcp::Json::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Json
+pub fn lattice_sdk::mcp::Json::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Json
+pub enum lattice_sdk::mcp::Mode
+pub lattice_sdk::mcp::Mode::Legacy
+pub lattice_sdk::mcp::Mode::Stateless
+impl core::clone::Clone for lattice_sdk::mcp::Mode
+pub fn lattice_sdk::mcp::Mode::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::Mode
+impl core::cmp::PartialEq for lattice_sdk::mcp::Mode
+pub fn lattice_sdk::mcp::Mode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Mode
+pub fn lattice_sdk::mcp::Mode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::mcp::Mode
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Mode
+pub enum lattice_sdk::mcp::ParseError
+pub lattice_sdk::mcp::ParseError::DuplicateKey
+pub lattice_sdk::mcp::ParseError::InvalidUtf8
+pub lattice_sdk::mcp::ParseError::Syntax
+pub lattice_sdk::mcp::ParseError::TooDeep
+pub lattice_sdk::mcp::ParseError::TooLarge
+pub lattice_sdk::mcp::ParseError::TooMany
+impl core::clone::Clone for lattice_sdk::mcp::ParseError
+pub fn lattice_sdk::mcp::ParseError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::ParseError
+impl core::cmp::PartialEq for lattice_sdk::mcp::ParseError
+pub fn lattice_sdk::mcp::ParseError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::ParseError
+pub fn lattice_sdk::mcp::ParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::mcp::ParseError
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::ParseError
+pub enum lattice_sdk::mcp::Tool
+pub lattice_sdk::mcp::Tool::Read
+pub lattice_sdk::mcp::Tool::Subscribe
+pub lattice_sdk::mcp::Tool::Write
+impl lattice_sdk::mcp::Tool
+pub const lattice_sdk::mcp::Tool::ALL: [lattice_sdk::mcp::Tool; 3]
+pub fn lattice_sdk::mcp::Tool::input_schema(self) -> alloc::string::String
+pub fn lattice_sdk::mcp::Tool::name(self) -> &'static str
+pub fn lattice_sdk::mcp::Tool::parse(&str) -> core::option::Option<lattice_sdk::mcp::Tool>
+impl core::clone::Clone for lattice_sdk::mcp::Tool
+pub fn lattice_sdk::mcp::Tool::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::Tool
+impl core::cmp::PartialEq for lattice_sdk::mcp::Tool
+pub fn lattice_sdk::mcp::Tool::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Tool
+pub fn lattice_sdk::mcp::Tool::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::mcp::Tool
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Tool
+pub enum lattice_sdk::mcp::ToolCall
+pub lattice_sdk::mcp::ToolCall::Read
+pub lattice_sdk::mcp::ToolCall::Read::key: core::option::Option<alloc::string::String>
+pub lattice_sdk::mcp::ToolCall::Read::limit: u32
+pub lattice_sdk::mcp::ToolCall::Read::scope: alloc::string::String
+pub lattice_sdk::mcp::ToolCall::Read::table: alloc::string::String
+pub lattice_sdk::mcp::ToolCall::Subscribe
+pub lattice_sdk::mcp::ToolCall::Subscribe::after: u64
+pub lattice_sdk::mcp::ToolCall::Subscribe::scope: alloc::string::String
+pub lattice_sdk::mcp::ToolCall::Subscribe::table: alloc::string::String
+pub lattice_sdk::mcp::ToolCall::Write
+pub lattice_sdk::mcp::ToolCall::Write::expected_version: core::option::Option<u64>
+pub lattice_sdk::mcp::ToolCall::Write::key: alloc::string::String
+pub lattice_sdk::mcp::ToolCall::Write::scope: alloc::string::String
+pub lattice_sdk::mcp::ToolCall::Write::table: alloc::string::String
+pub lattice_sdk::mcp::ToolCall::Write::value: alloc::string::String
+impl lattice_sdk::mcp::ToolCall
+pub fn lattice_sdk::mcp::ToolCall::scope(&self) -> &str
+pub fn lattice_sdk::mcp::ToolCall::tool(&self) -> lattice_sdk::mcp::Tool
+impl core::clone::Clone for lattice_sdk::mcp::ToolCall
+pub fn lattice_sdk::mcp::ToolCall::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::ToolCall
+impl core::cmp::PartialEq for lattice_sdk::mcp::ToolCall
+pub fn lattice_sdk::mcp::ToolCall::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::ToolCall
+pub fn lattice_sdk::mcp::ToolCall::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::ToolCall
+pub struct lattice_sdk::mcp::Caller
+pub lattice_sdk::mcp::Caller::grants: alloc::vec::Vec<lattice_sdk::mcp::Grant>
+pub lattice_sdk::mcp::Caller::id: alloc::string::String
+impl lattice_sdk::mcp::Caller
+pub fn lattice_sdk::mcp::Caller::check(&self, lattice_sdk::mcp::Tool, &str) -> core::result::Result<(), lattice_sdk::mcp::Denial>
+pub fn lattice_sdk::mcp::Caller::may_use(&self, lattice_sdk::mcp::Tool) -> bool
+impl core::clone::Clone for lattice_sdk::mcp::Caller
+pub fn lattice_sdk::mcp::Caller::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::Caller
+impl core::cmp::PartialEq for lattice_sdk::mcp::Caller
+pub fn lattice_sdk::mcp::Caller::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Caller
+pub fn lattice_sdk::mcp::Caller::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Caller
+pub struct lattice_sdk::mcp::Failure
+pub lattice_sdk::mcp::Failure::error: lattice_sdk::mcp::RpcError
+pub lattice_sdk::mcp::Failure::id: core::option::Option<lattice_sdk::mcp::Id>
+impl core::clone::Clone for lattice_sdk::mcp::Failure
+pub fn lattice_sdk::mcp::Failure::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::Failure
+impl core::cmp::PartialEq for lattice_sdk::mcp::Failure
+pub fn lattice_sdk::mcp::Failure::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Failure
+pub fn lattice_sdk::mcp::Failure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Failure
+pub struct lattice_sdk::mcp::Grant
+impl lattice_sdk::mcp::Grant
+pub fn lattice_sdk::mcp::Grant::new(lattice_sdk::mcp::Tool, &str) -> core::option::Option<lattice_sdk::mcp::Grant>
+impl core::clone::Clone for lattice_sdk::mcp::Grant
+pub fn lattice_sdk::mcp::Grant::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::Grant
+impl core::cmp::PartialEq for lattice_sdk::mcp::Grant
+pub fn lattice_sdk::mcp::Grant::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Grant
+pub fn lattice_sdk::mcp::Grant::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Grant
+pub struct lattice_sdk::mcp::Notification
+pub lattice_sdk::mcp::Notification::method: alloc::string::String
+pub lattice_sdk::mcp::Notification::params: core::option::Option<lattice_sdk::mcp::Json>
+impl core::clone::Clone for lattice_sdk::mcp::Notification
+pub fn lattice_sdk::mcp::Notification::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sdk::mcp::Notification
+pub fn lattice_sdk::mcp::Notification::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Notification
+pub fn lattice_sdk::mcp::Notification::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Notification
+pub struct lattice_sdk::mcp::OutputTooLarge
+impl core::clone::Clone for lattice_sdk::mcp::OutputTooLarge
+pub fn lattice_sdk::mcp::OutputTooLarge::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::OutputTooLarge
+impl core::cmp::PartialEq for lattice_sdk::mcp::OutputTooLarge
+pub fn lattice_sdk::mcp::OutputTooLarge::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::OutputTooLarge
+pub fn lattice_sdk::mcp::OutputTooLarge::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sdk::mcp::OutputTooLarge
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::OutputTooLarge
+pub struct lattice_sdk::mcp::Request
+pub lattice_sdk::mcp::Request::id: lattice_sdk::mcp::Id
+pub lattice_sdk::mcp::Request::method: alloc::string::String
+pub lattice_sdk::mcp::Request::params: core::option::Option<lattice_sdk::mcp::Json>
+impl core::clone::Clone for lattice_sdk::mcp::Request
+pub fn lattice_sdk::mcp::Request::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sdk::mcp::Request
+pub fn lattice_sdk::mcp::Request::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::Request
+pub fn lattice_sdk::mcp::Request::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::Request
+pub struct lattice_sdk::mcp::RpcError
+pub lattice_sdk::mcp::RpcError::code: i64
+pub lattice_sdk::mcp::RpcError::data: core::option::Option<alloc::string::String>
+pub lattice_sdk::mcp::RpcError::message: &'static str
+impl core::clone::Clone for lattice_sdk::mcp::RpcError
+pub fn lattice_sdk::mcp::RpcError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::RpcError
+impl core::cmp::PartialEq for lattice_sdk::mcp::RpcError
+pub fn lattice_sdk::mcp::RpcError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::RpcError
+pub fn lattice_sdk::mcp::RpcError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::RpcError
+pub struct lattice_sdk::mcp::Server<B>
+impl<B: lattice_sdk::mcp::ToolBackend> lattice_sdk::mcp::Server<B>
+pub fn lattice_sdk::mcp::Server<B>::backend(&self) -> &B
+pub fn lattice_sdk::mcp::Server<B>::handle(&mut self, &lattice_sdk::mcp::Caller, &[u8]) -> core::option::Option<alloc::string::String>
+pub fn lattice_sdk::mcp::Server<B>::into_backend(self) -> B
+pub fn lattice_sdk::mcp::Server<B>::mode(&self) -> lattice_sdk::mcp::Mode
+pub fn lattice_sdk::mcp::Server<B>::new(B) -> Self
+impl<B: core::fmt::Debug> core::fmt::Debug for lattice_sdk::mcp::Server<B>
+pub fn lattice_sdk::mcp::Server<B>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_sdk::mcp::ToolOutput
+impl lattice_sdk::mcp::ToolOutput
+pub fn lattice_sdk::mcp::ToolOutput::new(alloc::string::String) -> core::result::Result<Self, lattice_sdk::mcp::OutputTooLarge>
+pub fn lattice_sdk::mcp::ToolOutput::or_notice(alloc::string::String) -> Self
+pub fn lattice_sdk::mcp::ToolOutput::text(&self) -> &str
+impl core::clone::Clone for lattice_sdk::mcp::ToolOutput
+pub fn lattice_sdk::mcp::ToolOutput::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sdk::mcp::ToolOutput
+impl core::cmp::PartialEq for lattice_sdk::mcp::ToolOutput
+pub fn lattice_sdk::mcp::ToolOutput::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sdk::mcp::ToolOutput
+pub fn lattice_sdk::mcp::ToolOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sdk::mcp::ToolOutput
+pub const lattice_sdk::mcp::LEGACY_PROTOCOL_VERSION: &str
+pub const lattice_sdk::mcp::MAX_DEPTH: usize
+pub const lattice_sdk::mcp::MAX_ITEMS: usize
+pub const lattice_sdk::mcp::MAX_MESSAGE_BYTES: usize
+pub const lattice_sdk::mcp::MAX_NODES: usize
+pub const lattice_sdk::mcp::MAX_OUTPUT_BYTES: usize
+pub const lattice_sdk::mcp::MAX_SCOPE_BYTES: usize
+pub const lattice_sdk::mcp::MAX_VALUE_CHARS: usize
+pub const lattice_sdk::mcp::OUTPUT_OMITTED: &str
+pub const lattice_sdk::mcp::PROTOCOL_VERSION: &str
+pub trait lattice_sdk::mcp::ToolBackend
+pub fn lattice_sdk::mcp::ToolBackend::call(&mut self, &lattice_sdk::mcp::Caller, &lattice_sdk::mcp::ToolCall) -> core::result::Result<lattice_sdk::mcp::ToolOutput, lattice_sdk::mcp::BackendError>
+pub fn lattice_sdk::mcp::decode(&[u8]) -> core::result::Result<lattice_sdk::mcp::Incoming, lattice_sdk::mcp::Failure>
+pub fn lattice_sdk::mcp::encode_error(core::option::Option<&lattice_sdk::mcp::Id>, &lattice_sdk::mcp::RpcError) -> alloc::string::String
+pub fn lattice_sdk::mcp::encode_result(&lattice_sdk::mcp::Id, &str) -> alloc::string::String
+pub fn lattice_sdk::mcp::is_valid_scope(&str) -> bool
+pub fn lattice_sdk::mcp::parse_json(&[u8]) -> core::result::Result<lattice_sdk::mcp::Json, lattice_sdk::mcp::ParseError>
+pub fn lattice_sdk::mcp::validate_args(lattice_sdk::mcp::Tool, &lattice_sdk::mcp::Json) -> core::result::Result<lattice_sdk::mcp::ToolCall, lattice_sdk::mcp::RpcError>
 pub const lattice_sdk::LAYER: u8

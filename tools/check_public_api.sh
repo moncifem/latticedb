@@ -4,6 +4,9 @@
 #
 #   tools/check_public_api.sh                 check every covered crate (a missing snapshot fails)
 #   tools/check_public_api.sh --update        rewrite the snapshots (creates missing ones)
+#   tools/check_public_api.sh --update-affected   rewrite only crates whose crates/<crate>/ differs from
+#                                             origin/main (git fetch first; a changed dependency that a
+#                                             covered crate re-exports is not detected, use --update)
 #   tools/check_public_api.sh [--update] lattice-abi lattice-core   only these crates
 #
 # Pins: cargo-public-api $CPA_VERSION and nightly $API_NIGHTLY (rustdoc JSON needs nightly).
@@ -24,14 +27,23 @@ cd "$root"
 mkdir -p api-snapshots
 
 update=0
+affected=0
 selected=()
 for arg in "$@"; do
   case "$arg" in
     --update) update=1 ;;
+    --update-affected) update=1; affected=1 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) selected+=("$arg") ;;
   esac
 done
+if [ "$affected" -eq 1 ] && [ ${#selected[@]} -eq 0 ]; then
+  for crate in "${CRATES[@]}"; do
+    if [ -n "$(git diff --name-only origin/main -- "crates/$crate")" ]; then selected+=("$crate"); fi
+  done
+  if [ ${#selected[@]} -eq 0 ]; then echo "no covered crate differs from origin/main"; exit 0; fi
+  echo "affected crates: ${selected[*]}"
+fi
 [ ${#selected[@]} -gt 0 ] || selected=("${CRATES[@]}")
 for crate in "${selected[@]}"; do
   case " ${CRATES[*]} " in
