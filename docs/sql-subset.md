@@ -72,6 +72,28 @@ isolation and reports the effective level (a documented difference: `SERIALIZABL
 Conflicting commits fail with `40001` and are safe to retry. Prepared statements and the extended query
 protocol are supported (P2-11). `SET statement_timeout` and query cancellation are supported (P2-18).
 
+The writes a transaction stages (a `BEGIN` block, or one autocommit statement) are capped as a whole by
+`ExecLimits::transaction_bytes` (256 MiB by default, both copies of each key and value counted): the
+write that crosses it fails with `53200`, fails the block, and nothing is committed.
+
+### Session settings
+
+`SET` accepts a setting that changes behaviour only for the value the executor honours, and answers
+`22023` (invalid value for parameter) for any other:
+
+| Setting | Accepted | Why |
+|---|---|---|
+| `timezone` | `UTC`, `Etc/UTC`, `GMT`, `Etc/GMT`, `+00`, `+00:00`, `DEFAULT` (case-insensitive) | Timestamps and day buckets are UTC; another zone would silently change results |
+| `client_encoding` | `UTF8`, `UTF-8`, `DEFAULT` | Replies are always UTF-8 |
+| `datestyle` | `ISO`, optionally with `MDY`/`DMY`/`YMD`, `DEFAULT` | Output is always ISO and other input styles are refused |
+| `application_name`, `extra_float_digits` | any value | No effect on results |
+
+`SHOW timezone`, `SHOW client_encoding` and `SHOW datestyle` answer `UTC`, `UTF8` and `ISO, MDY`. The
+PostgreSQL wire startup packet is held to the same rule: a `TimeZone`, `client_encoding` or `DateStyle`
+parameter with another value is a `FATAL 22023` and the connection is closed, instead of being accepted
+and ignored. A driver that always sends the host's zone (the JDBC driver does) must be set to UTC.
+Other startup parameters, including those inside `options`, are still ignored.
+
 ## Types
 
 | Type | Notes |

@@ -85,6 +85,19 @@ impl PolicyEvaluator for ActorPolicy {
 pub(crate) struct TxState {
     pub(crate) tx: RowTx<ActorPolicy>,
     overlay: BTreeMap<RowKey, Option<Vec<u8>>>,
+    /// Bytes the staged writes hold, both copies counted (see [`staged_cost`]).
+    staged: u64,
+    /// The most `staged` may reach before a write fails with `53200`.
+    pub(crate) cap: u64,
+}
+
+/// Bookkeeping per staged entry beyond its key and value bytes (map node, `Vec` headers).
+const STAGED_ENTRY_OVERHEAD: u64 = 96;
+
+/// What one staged write holds: its key and value live in the engine transaction and in the overlay.
+fn staged_cost(key: &[u8], value: Option<&[u8]>) -> u64 {
+    let bytes = (key.len() + value.map_or(0, <[u8]>::len)) as u64;
+    2 * (bytes + STAGED_ENTRY_OVERHEAD)
 }
 
 impl TxState {
@@ -95,17 +108,53 @@ impl TxState {
         TxState {
             tx: db.store.begin_with_policy(policy.clone()),
             overlay: BTreeMap::new(),
+            staged: 0,
+            cap: u64::MAX,
         }
     }
 
-    fn put(&mut self, table: u32, key: Vec<u8>, value: Vec<u8>) {
-        self.tx.put((table, key.clone()), value.clone());
-        self.overlay.insert((table, key), Some(value));
+    /// Accounts for a write before it is staged, replacing what the same key held. The count spans
+    /// every statement of the block, so a client cannot grow the staged state one statement at a time.
+    fn charge_staged(
+        &mut self,
+        table: u32,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), ExecError> {
+        let replaced = self
+            .overlay
+            .get(&(table, key.to_vec()))
+            .map_or(0, |old| staged_cost(key, old.as_deref()));
+        let total = self
+            .staged
+            .saturating_sub(replaced)
+            .saturating_add(staged_cost(key, value));
+        if total > self.cap {
+            return Err(ExecError::new(
+                ErrorKind::Limit,
+                "53200",
+                format!(
+                    "the transaction's staged writes ({total} bytes) exceed the transaction budget of {} bytes",
+                    self.cap
+                ),
+            ));
+        }
+        self.staged = total;
+        Ok(())
     }
 
-    fn delete(&mut self, table: u32, key: Vec<u8>) {
+    fn put(&mut self, table: u32, key: Vec<u8>, value: Vec<u8>) -> Result<(), ExecError> {
+        self.charge_staged(table, &key, Some(&value))?;
+        self.tx.put((table, key.clone()), value.clone());
+        self.overlay.insert((table, key), Some(value));
+        Ok(())
+    }
+
+    fn delete(&mut self, table: u32, key: Vec<u8>) -> Result<(), ExecError> {
+        self.charge_staged(table, &key, None)?;
         self.tx.delete((table, key.clone()));
         self.overlay.insert((table, key), None);
+        Ok(())
     }
 
     pub(crate) fn has_writes(&self) -> bool {
@@ -647,9 +696,9 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             }
         }
         let bytes = def.encode_row(row)?;
-        self.txs.put(def.id, key.clone(), bytes);
+        self.txs.put(def.id, key.clone(), bytes)?;
         for (table, mk) in markers {
-            self.txs.put(table, mk, key.clone());
+            self.txs.put(table, mk, key.clone())?;
         }
         Ok(())
     }
@@ -657,10 +706,10 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
     fn remove_row(&mut self, def: &TableDef, row: &[Datum], key: &[u8]) -> Result<(), ExecError> {
         for k in 0..def.uniques.len() {
             if let Some(mk) = def.unique_key(row, k)? {
-                self.txs.delete(def.marker_table(k), mk);
+                self.txs.delete(def.marker_table(k), mk)?;
             }
         }
-        self.txs.delete(def.id, key.to_vec());
+        self.txs.delete(def.id, key.to_vec())?;
         Ok(())
     }
 

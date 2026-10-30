@@ -605,6 +605,7 @@ mod tests {
         h.set_limits(ExecLimits {
             timeout_ms: Some(50),
             memory_bytes: 1 << 20,
+            transaction_bytes: 64 << 20,
             max_timeout_ms: Some(50),
         });
         h.execute(&ctx, "SET statement_timeout = 0", &[]).unwrap();

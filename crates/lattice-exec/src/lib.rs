@@ -47,7 +47,10 @@ pub use decimal::Decimal;
 pub use error::{ErrorKind, ExecError};
 pub use exec::ActorPolicy;
 pub use schema::{ColumnDef, ExecCatalog, Schema, TableDef, is_marker_table, owning_table};
-pub use session::{ExecLimits, ExecResult, ExecSession, ResultColumn, TxStatus, decode_params};
+pub use session::{
+    ExecLimits, ExecResult, ExecSession, ResultColumn, TxStatus, decode_params,
+    setting_value_supported,
+};
 pub use value::Datum;
 
 /// Layer marker used by the layer check. Do not remove.

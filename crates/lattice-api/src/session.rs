@@ -390,6 +390,17 @@ impl<H: QueryHandler> Session<H> {
                         )
                     };
                 }
+                // A startup parameter that changes behaviour is refused when the executor cannot honour
+                // it, as `SET` refuses it, instead of being accepted and ignored. The answer depends
+                // on the parameter alone, so it does not tell known accounts from unknown ones.
+                for (key, value) in &params {
+                    if !lattice_exec::setting_value_supported(key, value) {
+                        return self.fatal(
+                            "22023",
+                            format!("invalid value for parameter \"{key}\": \"{value}\""),
+                        );
+                    }
+                }
                 // A name that is not the account the exchange was built for can never authenticate.
                 // Drop the pending principal and let the exchange run and fail at its end, exactly
                 // like an unknown account, instead of answering at once (no known-vs-unknown oracle
@@ -1119,6 +1130,39 @@ mod tests {
         let out = s.on_startup(Startup::Params(vec![("database".into(), "d".into())]));
         assert_eq!(err_code(&out.messages[0]), "28000");
         assert!(out.close && s.is_closed());
+    }
+
+    #[test]
+    fn startup_parameters_the_executor_cannot_honour_are_refused() {
+        let params = |extra: (&str, &str)| {
+            Startup::Params(vec![
+                ("user".into(), "u".into()),
+                (extra.0.into(), extra.1.into()),
+            ])
+        };
+        for ok in [
+            ("TimeZone", "UTC"),
+            ("TimeZone", "Etc/UTC"),
+            ("client_encoding", "UTF8"),
+            ("DateStyle", "ISO, MDY"),
+            ("application_name", "psql"),
+            ("extra_float_digits", "3"),
+            ("database", "d"),
+        ] {
+            let mut s = Session::local_trust(Fake::default(), 1, 2);
+            let out = s.on_startup(params(ok));
+            assert!(!out.close && !s.is_closed(), "{ok:?} should connect");
+        }
+        for bad in [
+            ("TimeZone", "America/New_York"),
+            ("client_encoding", "LATIN1"),
+            ("DateStyle", "SQL, DMY"),
+        ] {
+            let mut s = Session::local_trust(Fake::default(), 1, 2);
+            let out = s.on_startup(params(bad));
+            assert_eq!(err_code(&out.messages[0]), "22023", "{bad:?}");
+            assert!(out.close && s.is_closed());
+        }
     }
 
     #[test]

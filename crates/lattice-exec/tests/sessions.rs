@@ -596,6 +596,7 @@ fn the_memory_budget_is_reserved_before_rows_are_kept() {
     s.set_limits(ExecLimits {
         timeout_ms: None,
         memory_bytes: 8 * 1024,
+        transaction_bytes: u64::MAX,
         max_timeout_ms: None,
     });
     let e = s
@@ -614,6 +615,7 @@ fn the_memory_budget_is_reserved_before_rows_are_kept() {
     s.set_limits(ExecLimits {
         timeout_ms: None,
         memory_bytes: 1024,
+        transaction_bytes: u64::MAX,
         max_timeout_ms: None,
     });
     assert_eq!(
@@ -955,6 +957,7 @@ fn the_host_ceiling_on_the_statement_timeout_cannot_be_lifted_by_the_client() {
     s.set_limits(ExecLimits {
         timeout_ms: Some(900),
         memory_bytes: 1 << 20,
+        transaction_bytes: u64::MAX,
         max_timeout_ms: Some(100),
     });
     assert_eq!(
@@ -1203,4 +1206,141 @@ fn create_table_with_every_served_id_used_is_a_clear_limit_error() {
     let e = err(&mut db, &mut s, "CREATE TABLE t (a INT)");
     assert_eq!(e.sqlstate(), "53400");
     assert_eq!(e.kind(), ErrorKind::Limit);
+}
+
+#[test]
+fn staged_writes_are_capped_across_the_statements_of_a_block() {
+    let (mut f, mut s) = accounts();
+    s.set_limits(ExecLimits {
+        transaction_bytes: 8 * 1024,
+        ..ExecLimits::default()
+    });
+    ok(&mut f.db, &mut s, "BEGIN");
+    // Each statement stages one small row, far below the statement budget; only the block as a
+    // whole grows.
+    let mut staged = 0;
+    let failure = loop {
+        let sql = format!(
+            "INSERT INTO acct VALUES ({}, 1, 'tag{}')",
+            1000 + staged,
+            staged
+        );
+        match s.execute(&mut f.db, &sql) {
+            Ok(_) => staged += 1,
+            Err(e) => break e,
+        }
+        assert!(staged < 200, "the block never hit its cap");
+    };
+    assert_eq!(
+        (failure.sqlstate(), failure.kind()),
+        ("53200", ErrorKind::Limit)
+    );
+    assert!(staged >= 3, "a few rows fit before the cap: {staged}");
+    assert_eq!(s.status(), TxStatus::Failed, "the block fails");
+    ok(&mut f.db, &mut s, "ROLLBACK");
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT id FROM acct ORDER BY id"),
+        strs(&[&["1"], &["2"]]),
+        "nothing from the block was committed"
+    );
+    // The cap is per transaction: a new block starts from zero.
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(
+        &mut f.db,
+        &mut s,
+        "INSERT INTO acct VALUES (500, 1, 'fresh')",
+    );
+    ok(&mut f.db, &mut s, "COMMIT");
+}
+
+#[test]
+fn rewriting_one_row_in_a_block_does_not_grow_the_staged_count() {
+    let (mut f, mut s) = accounts();
+    s.set_limits(ExecLimits {
+        transaction_bytes: 4 * 1024,
+        ..ExecLimits::default()
+    });
+    ok(&mut f.db, &mut s, "BEGIN");
+    for i in 0..200 {
+        ok(
+            &mut f.db,
+            &mut s,
+            &format!("UPDATE acct SET bal = {i} WHERE id = 1"),
+        );
+    }
+    ok(&mut f.db, &mut s, "COMMIT");
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["199"]])
+    );
+}
+
+#[test]
+fn one_autocommit_statement_cannot_stage_more_than_the_transaction_cap() {
+    let (mut f, mut s) = accounts();
+    s.set_limits(ExecLimits {
+        transaction_bytes: 2 * 1024,
+        ..ExecLimits::default()
+    });
+    let values: Vec<String> = (10..110).map(|i| format!("({i}, 1, NULL)")).collect();
+    let e = err(
+        &mut f.db,
+        &mut s,
+        &format!("INSERT INTO acct VALUES {}", values.join(", ")),
+    );
+    assert_eq!((e.sqlstate(), e.kind()), ("53200", ErrorKind::Limit));
+    assert_eq!(rows(&mut f.db, &mut s, "SELECT id FROM acct").len(), 2);
+}
+
+#[test]
+fn settings_that_change_behaviour_are_accepted_only_for_the_supported_value() {
+    let (mut f, mut s) = accounts();
+    for sql in [
+        "SET timezone = 'UTC'",
+        "SET timezone = 'utc'",
+        "SET timezone TO 'Etc/UTC'",
+        "SET timezone = '+00'",
+        "SET timezone = DEFAULT",
+        "SET client_encoding = 'UTF8'",
+        "SET client_encoding TO utf8",
+        "SET client_encoding = 'UTF-8'",
+        "SET datestyle = 'ISO, MDY'",
+        "SET datestyle = 'ISO'",
+        "SET application_name = 'psql'",
+        "SET extra_float_digits = 3",
+    ] {
+        ok(&mut f.db, &mut s, sql);
+    }
+    for sql in [
+        "SET timezone = 'America/New_York'",
+        "SET timezone = '+05:30'",
+        "SET timezone = 3",
+        "SET client_encoding = 'LATIN1'",
+        "SET client_encoding = 'SQL_ASCII'",
+        "SET datestyle = 'SQL, DMY'",
+        "SET datestyle = 'German'",
+    ] {
+        let e = err(&mut f.db, &mut s, sql);
+        assert_eq!(
+            (e.sqlstate(), e.kind()),
+            ("22023", ErrorKind::Bind),
+            "{sql}"
+        );
+    }
+    assert_eq!(rows(&mut f.db, &mut s, "SHOW timezone"), strs(&[&["UTC"]]));
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SHOW client_encoding"),
+        strs(&[&["UTF8"]])
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SHOW datestyle"),
+        strs(&[&["ISO, MDY"]])
+    );
+    // A refused SET inside a block fails the block, like any error.
+    ok(&mut f.db, &mut s, "BEGIN");
+    assert!(
+        s.execute(&mut f.db, "SET timezone = 'Europe/Paris'")
+            .is_err()
+    );
+    assert_eq!(s.status(), TxStatus::Failed);
 }

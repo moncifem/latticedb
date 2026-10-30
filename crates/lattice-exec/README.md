@@ -76,8 +76,14 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
   or a larger value fall back to it. Memory is reserved after a row is decoded and before it is kept, so a statement can exceed its
   budget by one row. `scan_at` materialises the table's borrowed row references before any poll or
   charge, so that step is neither cancellable nor counted; a sort polls once per key evaluation and its
-  comparison pass is not interruptible. Write amplification (staged copies of rows and entries) is not
-  charged. `LIKE` polls the deadline and cancellation every 1,024 characters it steps through (its
+  comparison pass is not interruptible. Staged writes are not charged to the statement budget; they are
+  capped per transaction instead: `ExecLimits::transaction_bytes` (256 MiB by default) counts the key and
+  value of every staged entry twice (the engine transaction and the scan overlay), keeps counting across
+  the statements of a `BEGIN` block (a rewrite of the same key replaces its earlier count), and the write
+  that crosses it fails with `53200` and fails the block. One autocommit statement is a transaction, so
+  it is capped the same way. `SET timezone`, `client_encoding` and `datestyle` accept only the supported
+  value (UTC, UTF8, ISO) and refuse the rest with `22023`; `setting_value_supported` shares the rule with
+  the wire startup packet. `LIKE` polls the deadline and cancellation every 1,024 characters it steps through (its
   worst case is still O(text x pattern), as in PostgreSQL, but a timeout or cancel stops it), and
   admits its token and character copies against the budget first. `||` on text or bytea,
   `lower`/`upper` (admitted at three times the input) and a bytea-to-text cast (two hex characters per

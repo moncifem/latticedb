@@ -210,6 +210,7 @@ pub struct lattice_exec::ExecLimits
 pub lattice_exec::ExecLimits::max_timeout_ms: core::option::Option<u64>
 pub lattice_exec::ExecLimits::memory_bytes: u64
 pub lattice_exec::ExecLimits::timeout_ms: core::option::Option<u64>
+pub lattice_exec::ExecLimits::transaction_bytes: u64
 impl core::clone::Clone for lattice_exec::ExecLimits
 pub fn lattice_exec::ExecLimits::clone(&self) -> Self
 impl core::cmp::Eq for lattice_exec::ExecLimits
@@ -300,3 +301,4 @@ pub const lattice_exec::LAYER: u8
 pub fn lattice_exec::decode_params(&[lattice_sql::plan::SqlType], &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<alloc::vec::Vec<lattice_exec::Datum>, lattice_exec::ExecError>
 pub fn lattice_exec::is_marker_table(u32) -> bool
 pub fn lattice_exec::owning_table(u32) -> u32
+pub fn lattice_exec::setting_value_supported(&str, &str) -> bool

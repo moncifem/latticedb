@@ -211,6 +211,7 @@ impl HostLimits {
         ExecLimits {
             timeout_ms: self.max_timeout_ms,
             memory_bytes: self.memory_bytes,
+            transaction_bytes: ExecLimits::default().transaction_bytes,
             max_timeout_ms: self.max_timeout_ms,
         }
     }

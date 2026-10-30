@@ -401,8 +401,14 @@ value is `23505` even when a hidden row holds it, as in PostgreSQL row-level sec
 carries only the constraint name, and a test pins that. `UNIQUE` entries live in derived physical tables
 whose id has bit 31 set; evaluators must follow the owning table (`lattice_exec::owning_table`), and a
 test covers a restrictive policy that does. `RETURNING` does not re-check the read policy. A scan is not
-polled while the engine materialises row references, and write amplification is not charged against the
-memory budget. Expression evaluation is bounded (#461, #462): `LIKE` polls the deadline and
+polled while the engine materialises row references. Staged writes are not charged to the statement
+budget but are capped per transaction (#463): `ExecLimits::transaction_bytes`, 256 MiB by default,
+counts both copies of every staged key and value across the statements of a block, and the crossing
+write is `53200` and fails the block (tests: a block of single-row inserts stops after a few rows
+under an 8 KiB cap, 200 rewrites of one row stay under 4 KiB, one 100-row autocommit insert under a
+2 KiB cap fails). The 256 MiB default is a chosen ceiling, not a measured one. `SET timezone`,
+`client_encoding` and `datestyle` accept only UTC, UTF8 and ISO and answer `22023` otherwise (#464);
+the wire startup packet applies the same rule, so a driver that sends another `TimeZone` is refused. Expression evaluation is bounded (#461, #462): `LIKE` polls the deadline and
 cancellation every 1,024 steps (a test cancels a 40,000 x 20,000 pattern at the third poll, and a
 session test times one out on the tick clock), and `||`/`lower`/`upper` refuse a result over 16 MiB
 (`54000`) or over the remaining statement budget (`53200`) before building it (a 2^16-leaf balanced

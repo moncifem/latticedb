@@ -129,6 +129,10 @@ pub struct ExecLimits {
     pub timeout_ms: Option<u64>,
     /// Bytes a statement may hold in result and working rows.
     pub memory_bytes: u64,
+    /// Bytes the writes staged by one transaction (a `BEGIN` block, or one autocommit statement) may
+    /// hold, counted across all its statements with both the engine copy and the scan overlay. A
+    /// write past it fails with `53200` and fails the block.
+    pub transaction_bytes: u64,
     /// The host's ceiling for the timeout. A client's `SET statement_timeout` is clamped to it, and
     /// `0`, `DEFAULT` or a larger value fall back to it. `None` leaves the client free.
     pub max_timeout_ms: Option<u64>,
@@ -139,6 +143,7 @@ impl Default for ExecLimits {
         ExecLimits {
             timeout_ms: None,
             memory_bytes: 64 << 20,
+            transaction_bytes: 256 << 20,
             max_timeout_ms: None,
         }
     }
@@ -152,14 +157,49 @@ pub struct ExecSession {
     failed: bool,
 }
 
-/// Settings `SET` accepts and ignores, because drivers send them at startup.
-const IGNORED_SETTINGS: &[&str] = &[
-    "client_encoding",
-    "application_name",
-    "extra_float_digits",
-    "datestyle",
-    "timezone",
-];
+/// Settings `SET` accepts and ignores, because drivers send them at startup and they change nothing
+/// this executor does.
+const IGNORED_SETTINGS: &[&str] = &["application_name", "extra_float_digits"];
+
+/// Whether `value` is one this executor honours for a setting that changes behaviour. Time zone is
+/// UTC only (every timestamp is stored and shown in UTC), `client_encoding` is UTF8 only (replies are
+/// always UTF-8) and `datestyle` is ISO output only (input in other styles is refused anyway). Any
+/// other setting name answers `true`: a name this does not know is not its call.
+pub fn setting_value_supported(name: &str, value: &str) -> bool {
+    let v = value.trim().to_ascii_lowercase();
+    match name.to_ascii_lowercase().as_str() {
+        "timezone" => matches!(
+            v.as_str(),
+            "utc"
+                | "etc/utc"
+                | "gmt"
+                | "etc/gmt"
+                | "+00"
+                | "+00:00"
+                | "-00"
+                | "0"
+                | "default"
+                | "local"
+        ),
+        "client_encoding" => matches!(v.as_str(), "utf8" | "utf-8" | "default"),
+        "datestyle" => {
+            let mut parts = v.split(',').map(str::trim);
+            v == "default"
+                || (parts.next() == Some("iso")
+                    && parts.all(|p| matches!(p, "mdy" | "dmy" | "ymd")))
+        }
+        _ => true,
+    }
+}
+
+/// The name PostgreSQL prints for a setting in its errors.
+fn setting_label(name: &str) -> &str {
+    match name {
+        "timezone" => "TimeZone",
+        "datestyle" => "DateStyle",
+        other => other,
+    }
+}
 
 fn no_cancel() -> bool {
     false
@@ -350,6 +390,9 @@ impl ExecSession {
                 let key = name.value.to_lowercase();
                 let value = match key.as_str() {
                     "transaction_isolation" => "repeatable read".to_string(),
+                    "timezone" => "UTC".to_string(),
+                    "client_encoding" => "UTF8".to_string(),
+                    "datestyle" => "ISO, MDY".to_string(),
                     "statement_timeout" => match self.limits.timeout_ms {
                         Some(ms) => format!("{ms}ms"),
                         None => "0".to_string(),
@@ -428,6 +471,27 @@ impl ExecSession {
         if IGNORED_SETTINGS.contains(&name) {
             return Ok(ExecResult::command("SET"));
         }
+        if matches!(name, "timezone" | "client_encoding" | "datestyle") {
+            // `SET x TO DEFAULT` carries no value and restores the (only) supported one.
+            if let Some(SetValue::Number(v) | SetValue::String(v) | SetValue::Word(v)) = &value
+                && !setting_value_supported(name, v)
+            {
+                return Err(ExecError::new(
+                    ErrorKind::Bind,
+                    "22023",
+                    format!(
+                        "invalid value for parameter \"{}\": \"{v}\"; only {} is supported",
+                        setting_label(name),
+                        match name {
+                            "timezone" => "UTC",
+                            "client_encoding" => "UTF8",
+                            _ => "ISO",
+                        }
+                    ),
+                ));
+            }
+            return Ok(ExecResult::command("SET"));
+        }
         Err(ExecError::new(
             ErrorKind::Bind,
             "42704",
@@ -475,7 +539,9 @@ impl ExecSession {
             .unwrap_or(i64::MAX / 1000)
             .saturating_mul(1000);
         let policy = self.policy.clone();
+        let txn_cap = self.limits.transaction_bytes;
         if let Some(state) = self.txn.as_mut() {
+            state.cap = txn_cap;
             let mut ex = Exec {
                 db: &*db,
                 txs: state,
@@ -487,6 +553,7 @@ impl ExecSession {
             return ex.run(&bound.plan).map(ExecResult::from);
         }
         let mut state = TxState::begin(&*db, &policy);
+        state.cap = txn_cap;
         let out = {
             let mut ex = Exec {
                 db: &*db,
