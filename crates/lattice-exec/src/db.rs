@@ -89,16 +89,16 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         ExecCatalog {
             schema: &self.schema,
             version: self.catalog_version(),
-            hidden: false,
+            actor: None,
         }
     }
 
-    /// The id of the table called `name` in the engine catalog, as `policy`'s actor may see it.
-    /// `None` for a table that does not exist and, identically, for any table when the policy hides
-    /// the catalog, so a denied actor cannot tell the two apart. Tables whose columns SQL does not
+    /// The id of the table called `name` in the engine catalog, as `policy`'s actor may read it.
+    /// `None` for a table that does not exist and, identically, for any table the actor may not read
+    /// (the whole catalog when the policy hides it), so a denied actor cannot tell the two apart. Tables whose columns SQL does not
     /// know (recovered from the log) are included: the change feed carries raw rows.
     pub fn visible_table_id(&self, policy: &ActorPolicy, name: &str) -> Option<u32> {
-        if !policy.sees_catalog() {
+        if !policy.can_read_table(name) {
             return None;
         }
         self.store
@@ -108,12 +108,18 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
             .find_map(|(id, n)| (n == name).then_some(id))
     }
 
-    /// The binder's view for one actor: empty when the actor's policy hides the catalog.
-    pub fn catalog_view_for(&self, policy: &ActorPolicy) -> ExecCatalog<'_> {
+    /// The binder's view for one actor: only the tables its policy lets it see (none when the policy
+    /// hides the catalog).
+    pub fn catalog_view_for<'a>(&'a self, policy: &'a ActorPolicy) -> ExecCatalog<'a> {
         ExecCatalog {
-            hidden: !policy.sees_catalog(),
+            actor: Some(policy),
             ..self.catalog_view()
         }
+    }
+
+    /// `policy` resolved against the catalog as it is now (see [`ActorPolicy::bound`]).
+    fn bind_policy(&self, policy: &ActorPolicy) -> ActorPolicy {
+        policy.bound(&self.store.catalog().current())
     }
 
     /// Creates a table: commits the name to the engine catalog and registers its columns.
@@ -126,6 +132,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         ct: &CreateTable,
         policy: &ActorPolicy,
     ) -> Result<bool, ExecError> {
+        let policy = &self.bind_policy(policy);
         let name = object_name(&ct.name)?;
         // Ask first, so a denied actor cannot probe which names exist. The ids here are placeholders:
         // the engine asks again with the real change at commit.
@@ -249,6 +256,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         if_exists: bool,
         policy: &ActorPolicy,
     ) -> Result<bool, ExecError> {
+        let policy = &self.bind_policy(policy);
         let known = self.schema.table(name).map_or(0, |d| d.id);
         authorize_ddl(policy, &[CatalogOp::Drop { table: known }])?;
         let Some(def) = self.schema.table(name) else {

@@ -224,7 +224,7 @@ Not done here: channel binding / `SCRAM-SHA-256-PLUS`, the decoy-secret length-o
 # loopback development trust: the row policy of the development principal is always explicit
 cargo run -p latticed -- --data-dir ./data --development-policy allow-all
 
-# SCRAM over TLS: one 'account<TAB>allow-all|deny-all' per line; an unlisted account is denied
+# SCRAM over TLS: one 'account<TAB>policy' per line (allow-all, deny-all or tables: ...); an unlisted account is denied
 cargo run -p latticed -- --auth scram-tls --data-dir /var/lib/lattice --account-policies /secure/policies.txt \
   --tls-cert ... --tls-key ... --scram-verifiers ... --scram-decoy-secret ...
 ```
@@ -235,8 +235,31 @@ refused), replays it, then serves the single-table SQL executor (`lattice-exec`)
 connection. Startup fails before binding if the log cannot be recovered or the policy options are
 inconsistent: `--development-policy` is required in trust mode and rejected in SCRAM mode, and
 `--account-policies` is required in SCRAM mode and rejected in trust mode. There is no allow-all
-default for anyone. `deny-all` refuses `CREATE TABLE` and `DROP TABLE` (`42501`) before looking at any name, and it also hides the catalog: for that principal every table reference in `SELECT`, `INSERT`, `UPDATE`, `DELETE` and in `Parse`/`Describe` is `42P01` with the same message as for a table that does not exist, so a denied account cannot learn table or column names (it never sees `42703` or `42501` on DML). The account policy file and the key and decoy files must be regular files with no group or other permission bits, and a data directory that already exists must be mode 0700 (a new one is created 0700). Only these two
-grants exist until the Phase 4 policy language lands.
+default for anyone. `deny-all` refuses `CREATE TABLE` and `DROP TABLE` (`42501`) before looking at any name, and it also hides the catalog: for that principal every table reference in `SELECT`, `INSERT`, `UPDATE`, `DELETE` and in `Parse`/`Describe` is `42P01` with the same message as for a table that does not exist, so a denied account cannot learn table or column names (it never sees `42703` or `42501` on DML). The account policy file and the key and decoy files must be regular files with no group or other permission bits, and a data directory that already exists must be mode 0700 (a new one is created 0700). Besides `allow-all` and
+`deny-all`, an account line can carry per-table grants (below). Nothing else exists until the Phase 4
+policy language lands.
+
+**Per-table grants (interim).** `account<TAB>tables: notes=rw, logs=r, *=r` gives the account the listed bits on
+the listed tables: `r` reads (and makes the table visible), `w` writes (`INSERT`, `UPDATE`, `DELETE`), `d` changes
+the catalog for that table (`CREATE`, `DROP`, rename). Bits go in any order; `-` means none. `*` stands for every
+table, including tables created later. The most specific entry decides and entries are not merged: `notes=r, *=rw`
+leaves `notes` read-only and `secret=-` carves a table out of a wider `*`. Names match exactly (case-sensitive, no
+prefix or pattern); a grant follows the name, so a dropped and re-created table keeps it. `UPDATE` and `DELETE`
+need `r` and `w`, and `RETURNING` needs `r`. `CREATE TABLE x` needs `d` on `x` (or on `*`); `DROP TABLE` needs
+`d` on that table (or on `*`, which is also what `IF EXISTS` on a table that does not exist needs). `d` does not
+imply `r` or `w`, but a `d` holder can build an index over rows it cannot read. A table the account holds no bit on
+is invisible: `42P01` with the missing-table message in `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `Parse` and
+`Describe`, and `UnknownScope` for its change feed (`table/<name>` needs `r`, so a write-only or ddl-only table is
+not served either, and a bad cursor on a hidden table gets the same answer as on a missing one). A visible table
+with a missing bit answers `42501` before any row is touched, whether or not rows exist. The file is strict and
+fails startup on: an empty list, an entry that is not `name=bits`, a repeated table or `*`, a name with a space,
+control character, `=`, `,` or `*` inside it, bits other than `r`, `w`, `d` (each at most once) or `-`, more than 256
+entries per account, a repeated account, or a file over 64 KiB; the error names the line, never the content.
+An account that is not in the file is `deny-all`. There are no row predicates, roles, groups or expressions, and
+no `presence` bit (presence is not in the alpha, issue #626). A transaction resolves names to tables when it
+begins, so a table created by another connection during an open block is denied to that block. Tables are
+named by catalog name, so a table created through a quoted identifier with spaces or punctuation can only be
+covered by `*`.
 
 **One database thread, and what bounds a wait.** The executor is single-threaded, so one thread owns the
 database (`lattice_api::exec_host`) and each connection forwards its statements to it; a connection has

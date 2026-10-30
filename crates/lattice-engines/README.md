@@ -26,6 +26,10 @@ rebuilt on open. A nonempty list selects legacy callback mode, where the caller 
 definitions on every open. `RowStore::vacuum` drops versions below a horizon in memory. The SQL
 executor is the separate `lattice-exec` crate. There is no index planner integration and no
 checkpoint-based recovery start yet.
+`grants` holds the interim per-table grants (read, write and ddl bits per table name, `*` for the rest, most
+specific entry wins, deny by default) and `TableGrantPolicy`, the `PolicyEvaluator` that resolves them against a
+catalog snapshot. It is table-level only: no row predicates, roles or expressions, and it is replaced by the Phase 4
+policy language. The text format and its semantics are in the [latticed README](../latticed/README.md).
 See [the Phase 2 status](../../docs/gates/phase-2.md).
 
 ## Testing the checks

@@ -116,6 +116,8 @@ pub(crate) fn read_feed<I: Io, C: Clock + Clone, R: Rng>(
         .strip_prefix(TABLE_PREFIX)
         .and_then(|name| db.visible_table_id(&policy, name))
         .ok_or(SourceError::UnknownScope)?;
+    // Grants name tables, rows carry ids: resolve against the catalog the read is served from.
+    let policy = policy.bound(&db.store().catalog().current());
     feed_page(db.store(), &policy, table, after, limit)
 }
 

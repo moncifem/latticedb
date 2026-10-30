@@ -33,3 +33,6 @@ mod conformance;
 
 /// The WebSocket codec and connection state machine, see [`sync`].
 pub use lattice_proto::websocket;
+
+#[cfg(test)]
+mod table_grants_tests;

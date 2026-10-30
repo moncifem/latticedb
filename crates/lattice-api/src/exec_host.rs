@@ -44,6 +44,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use lattice_core::Config;
+use lattice_engines::grants::{GrantSpecError, TableGrants};
 use lattice_engines::limits::{AllowAll, DenyAll};
 use lattice_exec::{ActorPolicy, Database, ExecError, ExecLimits, TxStatus};
 use lattice_seams::{Clock, Io, OsRng, Rng, StdIo, SystemClock};
@@ -61,38 +62,76 @@ pub const MAX_POLICY_ENTRIES: usize = 1024;
 /// Largest policy file in bytes.
 pub const MAX_POLICY_BYTES: usize = 64 * 1024;
 
-/// The row policy granted to a principal. Only two exist until the Phase 4 policy language lands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The permission granted to a principal. Per-table grants are interim: they stand in until the
+/// Phase 4 policy language lands, and they have no row predicates, roles or groups.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Grant {
     /// Every row may be read and written, and the catalog may be changed.
     AllowAll,
-    /// No row may be read or written, and the catalog may not be changed.
+    /// No row may be read or written, the catalog may not be changed, and no table is visible.
     DenyAll,
+    /// Read, write and ddl bits on named tables and, optionally, on every table (`*`). A table the
+    /// grants give no bit on is invisible: it reads as one that does not exist.
+    Tables(TableGrants),
 }
 
 impl Grant {
-    pub(crate) fn policy(self) -> ActorPolicy {
+    pub(crate) fn policy(&self) -> ActorPolicy {
         match self {
             Grant::AllowAll => ActorPolicy::new(Rc::new(AllowAll)),
             // A denied actor also gets an empty catalog, so it cannot probe names or columns.
             Grant::DenyAll => ActorPolicy::new(Rc::new(DenyAll)).hiding_catalog(),
+            Grant::Tables(g) => ActorPolicy::with_table_grants(g.clone()),
         }
     }
 
-    /// `allow-all` or `deny-all`.
-    pub fn name(self) -> &'static str {
+    /// `allow-all`, `deny-all` or `tables`.
+    pub fn name(&self) -> &'static str {
         match self {
             Grant::AllowAll => "allow-all",
             Grant::DenyAll => "deny-all",
+            Grant::Tables(_) => "tables",
         }
     }
 
-    /// Parses `allow-all` or `deny-all`.
+    /// Parses `allow-all` or `deny-all`: the two words the `--development-policy` flag takes.
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "allow-all" => Some(Grant::AllowAll),
             "deny-all" => Some(Grant::DenyAll),
             _ => None,
+        }
+    }
+
+    /// Parses the policy column of an account line: `allow-all`, `deny-all` or
+    /// `tables: name=bits, ...` (see [`TableGrants::parse`]).
+    pub fn parse_account(text: &str) -> Result<Self, GrantParseError> {
+        match text.strip_prefix(TABLES_PREFIX) {
+            Some(spec) => TableGrants::parse(spec)
+                .map(Grant::Tables)
+                .map_err(GrantParseError::Tables),
+            None => Grant::parse(text).ok_or(GrantParseError::Unknown),
+        }
+    }
+}
+
+/// The word that starts a table grant list in an account policy line.
+pub const TABLES_PREFIX: &str = "tables:";
+
+/// Why the policy column of an account line was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantParseError {
+    /// Not `allow-all`, `deny-all` or a `tables:` list.
+    Unknown,
+    /// A `tables:` list that is not valid.
+    Tables(GrantSpecError),
+}
+
+impl std::fmt::Display for GrantParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => f.write_str("the policy is not allow-all, deny-all or tables: ..."),
+            Self::Tables(e) => e.fmt(f),
         }
     }
 }
@@ -102,11 +141,19 @@ impl Grant {
 pub enum PolicyFileError {
     /// The file is larger than [`MAX_POLICY_BYTES`] or lists more than [`MAX_POLICY_ENTRIES`] accounts.
     OutOfBounds,
-    /// The 1-based line is not `account<TAB>allow-all|deny-all`, or repeats an account. The content
-    /// is never echoed.
+    /// The 1-based line is not `account<TAB>policy`, names an invalid account, has a policy that is
+    /// not `allow-all`, `deny-all` or a `tables:` list, or repeats an account. The content is never
+    /// echoed.
     Malformed {
         /// 1-based line number.
         line: usize,
+    },
+    /// The 1-based line has a `tables:` list that is not valid.
+    BadGrant {
+        /// 1-based line number.
+        line: usize,
+        /// What is wrong with it.
+        reason: GrantSpecError,
     },
 }
 
@@ -137,7 +184,7 @@ impl PolicyTable {
 
     /// The grant of the development principal.
     pub fn development(&self) -> Grant {
-        self.development
+        self.development.clone()
     }
 
     /// The grant of a principal: the development grant for the local-development principal, the
@@ -145,18 +192,20 @@ impl PolicyTable {
     /// mapping the SQL handler uses; there is no allow-all fallback.
     pub fn grant_for(&self, principal: &Principal) -> Grant {
         match principal.kind() {
-            PrincipalKind::LocalDevelopment => self.development,
+            PrincipalKind::LocalDevelopment => self.development(),
             PrincipalKind::Account => self.account(principal.name()),
         }
     }
 
     /// The grant of an account: the listed one, or [`Grant::DenyAll`].
     pub fn account(&self, name: &str) -> Grant {
-        self.accounts.get(name).copied().unwrap_or(Grant::DenyAll)
+        self.accounts.get(name).cloned().unwrap_or(Grant::DenyAll)
     }
 
-    /// Parses `account<TAB>allow-all|deny-all` lines. Blank lines are skipped; duplicates, unknown
-    /// grants, names over 63 bytes or with control characters, and oversize files are refused.
+    /// Parses `account<TAB>policy` lines, where the policy is `allow-all`, `deny-all` or
+    /// `tables: name=bits, ...`. Blank lines are skipped. Duplicate accounts, unknown policies,
+    /// malformed table grants, names over 63 bytes or with control characters, and oversize files are
+    /// refused, each with the 1-based line it is on; nothing partial is returned.
     pub fn parse_accounts(text: &str) -> Result<BTreeMap<String, Grant>, PolicyFileError> {
         if text.len() > MAX_POLICY_BYTES {
             return Err(PolicyFileError::OutOfBounds);
@@ -166,12 +215,19 @@ impl PolicyTable {
             if line.is_empty() {
                 continue;
             }
-            let bad = PolicyFileError::Malformed { line: index + 1 };
+            let line_no = index + 1;
+            let bad = PolicyFileError::Malformed { line: line_no };
             let (name, grant) = line.split_once('\t').ok_or(bad)?;
-            let grant = Grant::parse(grant).ok_or(bad)?;
             if name.is_empty() || name.len() > 63 || name.chars().any(char::is_control) {
                 return Err(bad);
             }
+            let grant = Grant::parse_account(grant).map_err(|e| match e {
+                GrantParseError::Unknown => bad,
+                GrantParseError::Tables(reason) => PolicyFileError::BadGrant {
+                    line: line_no,
+                    reason,
+                },
+            })?;
             if accounts.len() == MAX_POLICY_ENTRIES {
                 return Err(PolicyFileError::OutOfBounds);
             }

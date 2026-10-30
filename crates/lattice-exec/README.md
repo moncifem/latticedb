@@ -43,6 +43,14 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
   actor, so every table reference is `42P01` with the message used for a missing table, and `Parse`/`Describe`
   discloses no names or columns. `latticed` uses it for `deny-all` principals. Without it, `describe` and
   binding errors (`42703` versus `42P01`) reveal names to any actor that may connect.
+- **Per-table grants.** `ActorPolicy::with_table_grants(TableGrants)` (issue 522) limits an actor to read,
+  write and ddl bits per named table, with `*` for the rest (`lattice_engines::grants`). The binder shows the actor
+  only tables it holds a bit on, so any other is `42P01` as if missing; a visible table the statement lacks a bit
+  on is `42501` from a plan check (`SELECT` and `RETURNING` need read, `INSERT`/`UPDATE`/`DELETE` write,
+  `UPDATE`/`DELETE` both) on top of the engine's per-row check. `ActorPolicy::bound` resolves names to physical ids
+  (derived `UNIQUE` entry tables follow their owner) when a transaction or catalog change starts; an unresolved
+  grant policy denies everything, and an id it does not know is denied. `Database::visible_table_id` (the change
+  feed) requires the read bit.
 - **DDL follows the policy too.** `CREATE TABLE` and `DROP TABLE` commit through a transaction bound to
   the actor's policy, and `ActorPolicy` forwards `authorize_ddl` to it: an actor without that grant gets
   `42501` before anything about the catalog (which names exist) is revealed. Row access never implies

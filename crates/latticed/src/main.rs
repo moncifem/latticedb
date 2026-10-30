@@ -225,6 +225,9 @@ fn run() -> Result<Exit, String> {
                     PolicyFileError::Malformed { line } => {
                         format!("invalid account policy configuration (line {line})")
                     }
+                    PolicyFileError::BadGrant { line, reason } => {
+                        format!("invalid account policy configuration (line {line}): {reason}")
+                    }
                     PolicyFileError::OutOfBounds => {
                         "account policy configuration exceeds bounds".to_string()
                     }

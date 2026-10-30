@@ -51,13 +51,14 @@ does not exist yet (threat model G-03).
 
 `feed_source::FeedSource` is the kernel-backed `EventSource`: `ExecHost::feed_source(max_events)` returns a reader
 that asks the executor's actor thread for `RowStore::events_since_as` as the principal's grant
-(`PolicyTable::grant_for`, deny by default). The scope is `table/<name>`; a denied principal, an unknown table and any
+(`PolicyTable::grant_for`, deny by default). The scope is `table/<name>` and needs the read bit on that table; a
+denied principal, a table it holds no read grant on, an unknown table and any
 other scope are all `SourceError::UnknownScope`, decided before the cursor is read. The wire cursor is the 12-byte feed
 cursor, `Event::data` the `change-feed-v1` encoding. A cursor below the vacuum floor is `TooOld`. A legacy oversize
 key is skipped by reading again from the last cursor, so a reader is never wedged. One read returns at most
 `max_events` events, which bounds what is returned and not the cost: each read visits every key of every table plus the
 versions after the cursor, builds events for hidden tables before the policy filter (memory O(history after the
-cursor)), is never interrupted once running, and a reader that is not caught up scans twice. Only allow-all principals
-reach the scan today; the engine-side limit is issue #543. No wake-on-commit and no transport exist yet.
+cursor)), is never interrupted once running, and a reader that is not caught up scans twice. Only principals with a read
+grant on the table reach the scan today; the engine-side limit is issue #543. No wake-on-commit and no transport exist yet.
 
 `websocket` is a sans-I/O RFC 6455 server-side codec for the future sync gateway: the HTTP upgrade request (strict, bounded, origin hook, `lattice.sync.v1` subprotocol), the accept key, frame decode and encode, message reassembly with size caps and UTF-8 checks, ping/pong and close handling, and timers on a caller-supplied logical clock. It does no I/O and is not connected to a listener, TLS or authentication yet ([ADR 0027](../../docs/adr/0027-sync-transport-websocket-first.md), proposed).

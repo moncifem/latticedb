@@ -22,9 +22,10 @@ use std::rc::Rc;
 use lattice_abi::Hlc;
 use lattice_core::bugs::{self, Bug};
 use lattice_core::changeset::ChangeSetId;
-use lattice_engines::catalog::DdlRef;
+use lattice_engines::catalog::{DdlRef, Tables};
+use lattice_engines::grants::{TableGrantPolicy, TableGrants};
 use lattice_engines::limits::{
-    AllowAll, MemoryReservation, PolicyEvaluator, RowRef, RowWriteRef, StatementLimits,
+    AllowAll, DenyAll, MemoryReservation, PolicyEvaluator, RowRef, RowWriteRef, StatementLimits,
 };
 use lattice_engines::mvcc::Snapshot;
 use lattice_engines::rowops::{MAX_KEY_BYTES, RowKey};
@@ -38,17 +39,140 @@ use crate::access::{self, Access};
 use crate::db::Database;
 use crate::error::{ErrorKind, ExecError};
 use crate::eval::{EvalCtx, cast, eval, truthy};
-use crate::schema::{ColumnDef, TableDef};
+use crate::schema::{ColumnDef, TableDef, owning_table};
 use crate::value::{Datum, total_order};
 
 /// The policy a transaction is bound to: the actor's row policy, shared by the session.
+///
+/// A policy built from [`TableGrants`] ([`ActorPolicy::with_table_grants`]) knows tables by name,
+/// while the row hooks see physical ids. It denies every row until [`ActorPolicy::bound`] resolves it
+/// against the catalog, which every transaction and catalog change does; an unresolved grant policy
+/// therefore fails closed.
 #[derive(Clone)]
-pub struct ActorPolicy(pub(crate) Rc<dyn PolicyEvaluator>, pub(crate) bool);
+pub struct ActorPolicy(
+    pub(crate) Rc<dyn PolicyEvaluator>,
+    pub(crate) bool,
+    pub(crate) Option<Rc<TableGrants>>,
+);
 
 impl ActorPolicy {
     /// Wraps an evaluator supplied by a trusted host.
     pub fn new(policy: Rc<dyn PolicyEvaluator>) -> Self {
-        ActorPolicy(policy, true)
+        ActorPolicy(policy, true, None)
+    }
+
+    /// An actor limited to per-table grants (the interim permission model, issue 522). Tables the
+    /// actor holds no bit on are absent from its catalog: binding, `Describe` and the change feed
+    /// answer for them exactly as for a table that does not exist.
+    pub fn with_table_grants(grants: TableGrants) -> Self {
+        ActorPolicy(Rc::new(DenyAll), true, Some(Rc::new(grants)))
+    }
+
+    /// Whether the actor sees the table called `name` when binding and describing: with grants, when
+    /// it holds any bit on it; otherwise whenever the catalog is not hidden.
+    pub fn sees_table(&self, name: &str) -> bool {
+        match &self.2 {
+            Some(g) => self.1 && g.access(name).any(),
+            None => self.1,
+        }
+    }
+
+    /// Whether the actor may read the table called `name` (the change feed serves only these).
+    pub fn can_read_table(&self, name: &str) -> bool {
+        match &self.2 {
+            Some(g) => self.1 && g.access(name).read,
+            None => self.1,
+        }
+    }
+
+    /// Whether a statement may write the table called `name`: a plan-level check in addition to the
+    /// engine's per-row check. Policies without grants decide per row.
+    fn can_write_table(&self, name: &str) -> bool {
+        self.2.as_ref().is_none_or(|g| g.access(name).can_write())
+    }
+
+    /// This policy resolved against the catalog `tables`, so that grants by name reach the physical
+    /// ids the row hooks see. Policies without grants are returned as they are.
+    #[must_use]
+    pub fn bound(&self, tables: &Tables) -> ActorPolicy {
+        match &self.2 {
+            None => self.clone(),
+            Some(g) => ActorPolicy(
+                Rc::new(TableGrantPolicy::resolve(g, tables, owning_table)),
+                self.1,
+                self.2.clone(),
+            ),
+        }
+    }
+
+    /// Refuses a plan that touches a table the actor holds too few bits on: a read of a table it
+    /// may not read, a write of one it may not write. The engine checks every row as well; this
+    /// check makes the answer independent of which rows exist and keeps a write-only table from
+    /// reading as empty. Binding already failed for tables the actor does not see, so a name that
+    /// reaches here is one it may know.
+    pub(crate) fn check_plan(&self, plan: &LogicalPlan) -> Result<(), ExecError> {
+        if self.2.is_none() {
+            return Ok(());
+        }
+        let denied = |table: &str, what: &str| {
+            ExecError::new(
+                ErrorKind::Permission,
+                "42501",
+                format!("permission denied: no {what} access to table \"{table}\""),
+            )
+        };
+        let mut stack = vec![plan];
+        while let Some(node) = stack.pop() {
+            match node {
+                LogicalPlan::OneRow => {}
+                LogicalPlan::Scan { table, .. } => {
+                    if !self.can_read_table(table) {
+                        return Err(denied(table, "read"));
+                    }
+                }
+                LogicalPlan::Filter { input, .. }
+                | LogicalPlan::Project { input, .. }
+                | LogicalPlan::Sort { input, .. }
+                | LogicalPlan::Limit { input, .. } => stack.push(input),
+                LogicalPlan::Insert {
+                    table,
+                    source,
+                    returning,
+                    ..
+                } => {
+                    if !self.can_write_table(table) {
+                        return Err(denied(table, "write"));
+                    }
+                    if !returning.is_empty() && !self.can_read_table(table) {
+                        return Err(denied(table, "read"));
+                    }
+                    if let InsertSource::Query(q) = source {
+                        stack.push(q);
+                    }
+                }
+                LogicalPlan::Update {
+                    table,
+                    input,
+                    returning,
+                    ..
+                }
+                | LogicalPlan::Delete {
+                    table,
+                    input,
+                    returning,
+                    ..
+                } => {
+                    if !self.can_write_table(table) {
+                        return Err(denied(table, "write"));
+                    }
+                    if !returning.is_empty() && !self.can_read_table(table) {
+                        return Err(denied(table, "read"));
+                    }
+                    stack.push(input);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Hides the catalog from this actor: binding and describing see no tables, so every table
@@ -59,10 +183,6 @@ impl ActorPolicy {
     pub fn hiding_catalog(mut self) -> Self {
         self.1 = false;
         self
-    }
-
-    pub(crate) fn sees_catalog(&self) -> bool {
-        self.1
     }
 }
 
@@ -84,6 +204,9 @@ impl PolicyEvaluator for ActorPolicy {
 /// policy) and a copy of the staged writes that scans can merge in.
 pub(crate) struct TxState {
     pub(crate) tx: RowTx<ActorPolicy>,
+    /// The actor's policy resolved against the catalog as it was when the block began. A table
+    /// created afterwards is unknown to it, so its rows are denied until the next block.
+    pub(crate) policy: ActorPolicy,
     overlay: BTreeMap<RowKey, Option<Vec<u8>>>,
     /// Bytes the staged writes hold, both copies counted (see [`staged_cost`]).
     staged: u64,
@@ -114,8 +237,10 @@ impl TxState {
         db: &Database<I, C, R>,
         policy: &ActorPolicy,
     ) -> Self {
+        let policy = policy.bound(&db.store.catalog().current());
         TxState {
             tx: db.store.begin_with_policy(policy.clone()),
+            policy,
             overlay: BTreeMap::new(),
             staged: 0,
             cap: u64::MAX,

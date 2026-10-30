@@ -161,6 +161,12 @@ planted_bugs! {
     /// The kernel-backed event source reads the feed with an allow-all policy instead of the
     /// principal's, so a denied principal sees rows and tables it may not (authorization).
     FeedSourcePolicyDropped,
+    /// A table grant that only reads also authorizes writes, so a read-only account changes data
+    /// (authorization).
+    GrantReadOnlyTreatedAsWrite,
+    /// A table grant is matched by name prefix instead of exactly, so a grant on `notes` also
+    /// covers `notes_private` (authorization).
+    GrantTableMatchByPrefix,
 }
 
 impl Bug {
@@ -230,6 +236,13 @@ impl Bug {
     /// Feed-source authorization defect, detected by the principal witness in
     /// `lattice-api::feed_source`.
     pub const FEED_SOURCE: [Bug; 1] = [Bug::FeedSourcePolicyDropped];
+
+    /// Per-table grant defects, detected by the grant matrix in `lattice-engines::grants` and
+    /// `lattice-api`.
+    pub const TABLE_GRANTS: [Bug; 2] = [
+        Bug::GrantReadOnlyTreatedAsWrite,
+        Bug::GrantTableMatchByPrefix,
+    ];
     /// Guarded-WAL admission defects, exercised by independent context witnesses.
     pub const ADMISSION: [Bug; 2] = [Bug::RequiredGuardOmitted, Bug::GuardRewriteUnstaged];
 
@@ -277,6 +290,7 @@ impl Bug {
         &Bug::CRDT,
         &Bug::PRINCIPAL,
         &Bug::FEED_SOURCE,
+        &Bug::TABLE_GRANTS,
         &Bug::EXEC_INDEX,
         &Bug::CRDT_PEER,
         &Bug::ADMISSION,

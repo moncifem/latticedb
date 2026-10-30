@@ -308,6 +308,7 @@ impl ExecSession {
             | Statement::Update(_)
             | Statement::Delete(_) => {
                 let bound = bind_statement(&stmt, &db.catalog_view_for(&self.policy))?;
+                self.policy.check_plan(&bound.plan)?;
                 Ok(bound
                     .plan
                     .output()
@@ -427,6 +428,7 @@ impl ExecSession {
             | Statement::Update(_)
             | Statement::Delete(_)) => {
                 let bound = bind_statement(&stmt, &db.catalog_view_for(&self.policy))?;
+                self.policy.check_plan(&bound.plan)?;
                 let values = decode_params(&bound.param_types, params)?;
                 self.run_bound(db, &bound, &values, cancel)
             }
@@ -530,10 +532,10 @@ impl ExecSession {
         let now_micros = i64::try_from(db.clock.now_ms())
             .unwrap_or(i64::MAX / 1000)
             .saturating_mul(1000);
-        let policy = self.policy.clone();
         let txn_cap = self.limits.transaction_bytes;
         if let Some(state) = self.txn.as_mut() {
             state.cap = txn_cap;
+            let policy = state.policy.clone();
             let mut ex = Exec {
                 db: &*db,
                 txs: state,
@@ -544,8 +546,9 @@ impl ExecSession {
             };
             return ex.run(&bound.plan).map(ExecResult::from);
         }
-        let mut state = TxState::begin(&*db, &policy);
+        let mut state = TxState::begin(&*db, &self.policy);
         state.cap = txn_cap;
+        let policy = state.policy.clone();
         let out = {
             let mut ex = Exec {
                 db: &*db,

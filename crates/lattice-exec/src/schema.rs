@@ -16,6 +16,7 @@ use lattice_sql::plan::{CatalogView, ColumnInfo, IndexInfo, SqlType, TableInfo};
 use crate::decimal::Decimal;
 use crate::error::{ErrorKind, ExecError};
 use crate::eval::cast;
+use crate::exec::ActorPolicy;
 use crate::value::{Datum, parse_text};
 
 /// Most `UNIQUE` constraints on one table (each needs its own marker table).
@@ -557,13 +558,14 @@ impl Schema {
 pub struct ExecCatalog<'a> {
     pub(crate) schema: &'a Schema,
     pub(crate) version: u64,
-    /// True for an actor that may not see the catalog: every table lookup misses.
-    pub(crate) hidden: bool,
+    /// The actor the view is for: a table it may not see is a lookup that misses, exactly like a
+    /// table that does not exist. `None` shows every table.
+    pub(crate) actor: Option<&'a ActorPolicy>,
 }
 
 impl CatalogView for ExecCatalog<'_> {
     fn table(&self, name: &str) -> Option<TableInfo> {
-        if self.hidden {
+        if self.actor.is_some_and(|a| !a.sees_table(name)) {
             return None;
         }
         self.schema.table(name).map(TableDef::info)

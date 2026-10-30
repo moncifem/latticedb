@@ -6,6 +6,8 @@
 #[cfg(feature = "row")]
 pub mod catalog;
 #[cfg(feature = "row")]
+pub mod grants;
+#[cfg(feature = "row")]
 pub mod index;
 #[cfg(feature = "row")]
 pub mod mvcc;

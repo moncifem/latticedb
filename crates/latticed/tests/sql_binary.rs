@@ -913,6 +913,79 @@ fn a_malformed_account_policy_file_is_refused_before_binding() {
 }
 
 #[test]
+fn a_malformed_table_grant_list_is_refused_with_its_line_and_never_echoed() {
+    let fixture = scram_fixture(
+        "badgrants",
+        "writer\tallow-all\nreader\ttables: ledger=rx, topsecret=r\n",
+    );
+    let error = start(&refs(&fixture.args)).err().unwrap();
+    assert_eq!(
+        error,
+        "latticed: invalid account policy configuration (line 2): a table grant has invalid bits (use r, w, d or -)\n"
+    );
+    assert!(!error.contains("topsecret"));
+    assert!(!fixture.scratch.path("data").exists());
+}
+
+#[test]
+fn table_grants_decide_per_table_over_scram() {
+    let fixture = scram_fixture(
+        "tablegrants",
+        "writer\ttables: *=rwd\nreader\ttables: ledger=r\n",
+    );
+    let server = start(&refs(&fixture.args)).unwrap();
+    let mut writer = scram_connect(server.address, &fixture.roots, "writer", b"pencil").unwrap();
+    for sql in [
+        "CREATE TABLE ledger (id INT PRIMARY KEY, amount INT)",
+        "CREATE TABLE payroll (id INT PRIMARY KEY, amount INT)",
+        "INSERT INTO ledger VALUES (1, 10)",
+        "INSERT INTO payroll VALUES (1, 99)",
+    ] {
+        assert_eq!(query(&mut writer, sql).error, None, "{sql}");
+    }
+    let mut reader = scram_connect(server.address, &fixture.roots, "reader", b"pencil").unwrap();
+    // Read-only table: visible and readable, writes are refused, and the answer does not depend on rows.
+    assert_eq!(query(&mut reader, "SELECT id FROM ledger").rows.len(), 1);
+    assert_eq!(
+        query(&mut reader, "INSERT INTO ledger VALUES (2, 20)").code(),
+        Some("42501")
+    );
+    assert_eq!(
+        query(&mut reader, "DELETE FROM ledger WHERE id = 404").code(),
+        Some("42501")
+    );
+    // The other table is not there for this account, exactly like a table that was never created.
+    let hidden = query(&mut reader, "SELECT id FROM payroll");
+    let missing = query(&mut reader, "SELECT id FROM nothing");
+    assert_eq!(
+        (hidden.code(), missing.code()),
+        (Some("42P01"), Some("42P01"))
+    );
+    let norm = |r: &Reply, name: &str| {
+        r.error
+            .as_ref()
+            .map(|(c, m)| (c.clone(), m.replace(name, "X")))
+    };
+    assert_eq!(norm(&hidden, "payroll"), norm(&missing, "nothing"));
+    assert_eq!(
+        query(&mut reader, "DROP TABLE ledger").code(),
+        Some("42501")
+    );
+    // Nothing changed, and an account with credentials but no entry sees nothing.
+    assert_eq!(query(&mut writer, "SELECT id FROM ledger").rows.len(), 1);
+    let mut stranger =
+        scram_connect(server.address, &fixture.roots, "stranger", b"pencil").unwrap();
+    assert_eq!(
+        query(&mut stranger, "SELECT id FROM ledger").code(),
+        Some("42P01")
+    );
+    for client in [writer, reader, stranger] {
+        terminate(client);
+    }
+    assert_eq!(server.stop(), "");
+}
+
+#[test]
 fn without_a_data_directory_the_placeholder_still_answers_select_one_only() {
     let server = start(&[]).unwrap();
     assert!(server.banner.contains("(development-trust; SELECT 1 only)"));

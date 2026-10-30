@@ -43,7 +43,7 @@ write-ahead log that survives crashes.
   definitions do not, so a recovered table cannot be queried ([#379](https://github.com/moncifem/latticedb/issues/379)).
 - Joins, aggregates, `DISTINCT`, subqueries (they return `0A000`) and binary result formats.
 - A PostgreSQL driver compatibility matrix ([#413](https://github.com/moncifem/latticedb/issues/413)).
-- Authenticated agent permissions: row policy is a per-account allow-all or deny-all, supplied by the host.
+- Authenticated agent permissions: each account is allow-all, deny-all or a list of read, write and ddl bits per table, supplied by the host in a file. No row predicates, roles or policy language yet (Phase 4).
 - A sync server. The sync and SDK pieces are not connected to the listener yet.
 - The connected team workspace (work items, docs, specs and the links between them) and everything after it.
 - A release. Nightly builds exist, with checksums, SBOMs and build provenance, but the first alpha tag

@@ -135,14 +135,33 @@ the same `Output` as for an unknown table through a `SubscriptionHost`; a live t
 `(lsn, index)` cursors, the vacuum floor, the oversize-key skip at every page size, and a bounded read racing a writer
 on the same actor. Planted bug `Bug::FeedSourcePolicyDropped` (policy replaced by allow-all) is caught by
 `a_dropped_policy_is_caught_by_the_witness`, with a clean control; two hand mutants (no skip of the blocked event, and a
-reader that stops after one answer or ignores the table) each failed the oversize or model test. Not done: Cost of a read: `MvccTable::history_from` visits every key of every table (a `partition_point` per key, then collect and sort), so each read is O(total rows) even when the reader is caught up, plus O(versions after the cursor); `events_since_as` then builds events and clones values for every write after the cursor, including tables the reader may not see, before the policy filter, so memory per read is O(history after the cursor), not O(`max_events`). `max_events` bounds only what is returned and encoded. A running scan is never interrupted (cancellation is checked only before it starts), and a reader that is not caught up scans twice (a second read from the last cursor confirms the end). Only principals with an allow-all grant reach the scan today. The engine-side limit, a per-principal cap and an LSN index are issue #543. Open follow-up: issue #543. A table-level read check does not
-exist in `PolicyEvaluator` (row level only), so with today's two grants a table is denied exactly when the catalog is
-hidden; that check is a precondition for issue #522 and for any first row- or table-level policy, because a policy that
-shows the catalog but denies a table would otherwise read as an empty feed, distinguishable from an unserved scope. The
+reader that stops after one answer or ignores the table) each failed the oversize or model test. Not done: Cost of a read: `MvccTable::history_from` visits every key of every table (a `partition_point` per key, then collect and sort), so each read is O(total rows) even when the reader is caught up, plus O(versions after the cursor); `events_since_as` then builds events and clones values for every write after the cursor, including tables the reader may not see, before the policy filter, so memory per read is O(history after the cursor), not O(`max_events`). `max_events` bounds only what is returned and encoded. A running scan is never interrupted (cancellation is checked only before it starts), and a reader that is not caught up scans twice (a second read from the last cursor confirms the end). Only principals with an allow-all grant reach the scan today. The engine-side limit, a per-principal cap and an LSN index are issue #543. Open follow-up: issue #543. Table-level read check (issue #522, interim): the
+precondition recorded here earlier is met for per-table grants. `ActorPolicy::can_read_table` is the one check the feed
+(`Database::visible_table_id`) and the binder (`ExecCatalog`, `sees_table`) share, so a table the account holds no bit
+on is `UnknownScope` for the feed and `42P01` for SQL, and a table it may see but not read is not served by the feed
+either (write-only and ddl-only tables are `UnknownScope`). The two cannot drift: a denied table never reads as an empty
+feed. The precondition still binds the Phase 4 policy language and any row-level policy. The
 `BadCursor` check against the newest applied LSN lets a principal who can read one table binary-search the global commit
 position, and gaps between cursor LSNs show activity on tables it cannot read (same class as issue #363, unchanged); a
 denied request still occupies an actor queue slot. The filtered-feed gap question (issue #363) is unchanged; column definitions are not recovered across a restart
 (#379); no transport supplies the principal and no wake-on-commit exists, so nothing here is live end to end.
+Verification evidence, not an exit criterion: interim per-table grants (issue #522, part of #567, threat-model G-01).
+An account in the policy file can be `allow-all`, `deny-all` or `tables: name=bits, ...` with bits `r`, `w`, `d` per
+table and `*` for the rest; the most specific entry wins, nothing is merged, names match exactly, an unlisted account
+is `deny-all` (semantics and limits: `crates/latticed/README.md`). `lattice-engines::grants` holds the grant set, its
+parser and the `TableGrantPolicy` evaluator; `ActorPolicy::with_table_grants` / `bound` (`lattice-exec`) resolve names
+to table ids per transaction, so every `begin_with_policy` transaction and catalog change of an authenticated principal
+carries the grants (the `begin()`/`commit_catalog` `AllowAll` paths are not reachable from the executor or the feed).
+Tests (`cargo test -p lattice-engines --lib grants`, `cargo test -p lattice-api --lib table_grants`, run locally once with
+default proptest settings): a hand-written account x table x operation matrix with literal expectations, at run time and
+at `Describe` (`table_grants_gate_reads_writes_and_feed_alike`), the feed for the same matrix, hidden tables equal to missing
+ones for SQL messages and for feed cursors, DDL by name and by `*`, `RETURNING`, blocks, `UNIQUE` entry tables, a table
+created after the grants, the file parser's bounds and line numbers, and two property tests against bit models
+(32 SQL cases; the resolver). Planted bugs `GrantReadOnlyTreatedAsWrite` and `GrantTableMatchByPrefix` are caught by
+the SQL matrix, and the prefix bug by the feed matrix. Not done: no row predicates, roles, groups or policy language; no
+`presence` bit (issue #626); the MCP backend (#526) has not been built so "alike for SQL, feed and MCP" is shown for SQL and
+the feed only; grants live in a file that the operator edits and restarts for, not in the database; a transaction block
+does not see tables created after it began; the BadCursor/LSN-gap side channel of the feed (#363) is unchanged.
 Verification evidence, not an exit criterion: `lattice-engines::feed_emit` (WP36, issue #238) emits the change feed
 from the row store's retained committed versions. One local run of `cargo test -p lattice-engines --lib feed_emit`
 (6 tests, default settings): the feed from every cursor of 12 seeded 14-commit histories equals an independently
