@@ -86,7 +86,23 @@
 //!   another replica's operations (hub or gossip topologies). A relay uses the trusting
 //!   [`Tree::apply`] after its own admission policy, or a future relay entry point; quotas are per
 //!   direct peer and so differ between replicas.
-//! - **Permanent divergence**: a refusal by the op, node or origin cap is local. The refused
+//! - **Replay cost**: an operation ordered before many live ops undoes and redoes every one of
+//!   them (the late-op cost, [#308](https://github.com/moncifem/latticedb/issues/308)), and a
+//!   move carries no causal constraint on its id, so a peer with a valid node binding could stamp
+//!   moves `wall_ms = 1` and make each cost the whole log. [`Tree::apply_from`] therefore refuses
+//!   an operation that is ordered before more than [`DEFAULT_PEER_REPLAY_LIMIT`] live ops
+//!   ([`Tree::with_peer_replay_limit`]) with [`TreeError::ReplayTooDeep`], counted before anything
+//!   is undone and in O(limit). [`Tree::apply_batch_from`] also charges the ops it undoes to one
+//!   budget of [`crate::crdt_peer::MAX_BATCH_REPLAY_OPS`] per batch ([`TreeError::BatchReplayBudget`]),
+//!   so a batch of [`crate::crdt_peer::MAX_BATCH_OPS`] such operations stays bounded too.
+//!   [`Tree::apply`] and [`Tree::apply_local`] have no such bound: they are for trusted input.
+//!   The refusal depends on this replica's log, so it is replica-local like the caps below: a
+//!   replica that has already seen many newer ops refuses an op that a replica that received it
+//!   earlier applied. Resending to the replica that refused it for being too deep never helps
+//!   (compaction cannot lower the count without making the op [`Outcome::BelowFrontier`]); the
+//!   ways out are the caller's trusted [`Tree::apply`] after its own policy, or a resync from a
+//!   snapshot. A batch refused for its budget can simply be resent from the refused operation on.
+//! - **Permanent divergence**: a refusal by the op, node, origin or replay limit is local. The refused
 //!   operation is lost on this replica unless it is sent again, so replicas whose caps differ, or
 //!   that received operations in a different mix, can differ for good until a resync.
 //!
@@ -103,7 +119,7 @@
 //! Decoding rejects any other length, any other version and reserved node ids.
 
 use crate::bugs::{self, Bug};
-use crate::crdt_peer::{BatchError, PeerContext, PeerError};
+use crate::crdt_peer::{BatchError, MAX_BATCH_REPLAY_OPS, PeerContext, PeerError};
 use lattice_abi::Hlc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
@@ -177,6 +193,22 @@ pub enum TreeError {
         /// The configured cap.
         limit: usize,
     },
+    /// The operation is ordered before more live ops than the replay limit, so applying it would
+    /// undo and redo them all. Local to this replica and not cured by resending; see the module
+    /// docs.
+    #[error(
+        "operation is ordered before more than {limit} live ops; applying it would replay them all"
+    )]
+    ReplayTooDeep {
+        /// The configured per-operation limit.
+        limit: usize,
+    },
+    /// The batch has no replay budget left for this operation. Resend it in a later batch.
+    #[error("batch replay budget of {limit} undone ops would be exceeded")]
+    BatchReplayBudget {
+        /// The budget of one batch.
+        limit: usize,
+    },
     /// One origin node already has its share of the live op log.
     #[error("node {node} already has {limit} live ops in the log")]
     OriginQuota {
@@ -215,6 +247,10 @@ pub const DEFAULT_NODE_LIMIT: usize = 1 << 20;
 /// Deepest position a node may hold, counting the roots as depth 0. A move that would put the node,
 /// or anything in its subtree, deeper is a no-op everywhere ([`Outcome::Skipped`]), like a cycle.
 pub const MAX_TREE_DEPTH: usize = 256;
+/// Most live ops a single operation from [`Tree::apply_from`] may be ordered before, unless set
+/// with [`Tree::with_peer_replay_limit`]. Each one is undone and redone, a few map updates and an
+/// O(depth) walk apiece, so this bounds one operation to a few milliseconds.
+pub const DEFAULT_PEER_REPLAY_LIMIT: usize = 4096;
 /// Share of the live op log one origin node may fill through [`Tree::apply_from`] when no share was
 /// set with [`Tree::with_origin_quota`]: a quarter of [`DEFAULT_OP_LIMIT`]. [`Tree::apply`] has no
 /// share unless one was set.
@@ -327,6 +363,9 @@ pub struct Tree {
     origin_limit: usize,
     /// Deepest position allowed; `0` means [`MAX_TREE_DEPTH`].
     max_depth: usize,
+    /// Most live ops an operation from a peer may be ordered before; `None` means
+    /// [`DEFAULT_PEER_REPLAY_LIMIT`].
+    peer_replay_limit: Option<usize>,
     /// Height of each node's subtree (0 for a leaf, absent for a leaf), kept in step with
     /// `parents` by `set`.
     heights: BTreeMap<NodeId, usize>,
@@ -404,6 +443,18 @@ impl Tree {
         self
     }
 
+    /// Sets how many live ops an operation from [`Tree::apply_from`] may be ordered before (the
+    /// ops it would undo and redo). `0` accepts only an operation newer than every live op.
+    #[must_use]
+    pub fn with_peer_replay_limit(mut self, limit: usize) -> Self {
+        self.peer_replay_limit = Some(limit);
+        self
+    }
+
+    fn peer_replay_cap(&self) -> usize {
+        self.peer_replay_limit.unwrap_or(DEFAULT_PEER_REPLAY_LIMIT)
+    }
+
     fn node_cap(&self) -> usize {
         if self.node_limit == 0 {
             DEFAULT_NODE_LIMIT
@@ -450,7 +501,7 @@ impl Tree {
 
     /// Total ops undone and redone by late arrivals so far.
     #[cfg(test)]
-    fn replayed_ops(&self) -> u64 {
+    pub(crate) fn replayed_ops(&self) -> u64 {
         self.replayed
     }
 
@@ -486,7 +537,8 @@ impl Tree {
     pub fn apply(&mut self, op: Op) -> Result<Outcome, TreeError> {
         let room = self.cap().saturating_sub(self.reserved());
         let share = (self.origin_limit != 0).then_some(self.origin_limit);
-        self.apply_within(op, room.max(1), share)
+        self.apply_within(op, room.max(1), share, None)
+            .map(|(outcome, _)| outcome)
     }
 
     /// Applies an operation from an authenticated peer. The id must carry the node bound to the
@@ -495,10 +547,23 @@ impl Tree {
     /// [`Tree::apply`] with the per-origin share always enforced, which the node binding makes
     /// meaningful. It cannot relay another replica's operations (see the module docs).
     pub fn apply_from(&mut self, peer: &PeerContext, op: Op) -> Result<Outcome, TreeError> {
+        self.apply_from_budgeted(peer, op, usize::MAX)
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// `apply_from` with `batch_left` undone ops still available to the batch it belongs to;
+    /// returns the outcome and how many ops it undid.
+    fn apply_from_budgeted(
+        &mut self,
+        peer: &PeerContext,
+        op: Op,
+        batch_left: usize,
+    ) -> Result<(Outcome, usize), TreeError> {
         peer.admit(op.id).map_err(TreeError::Peer)?;
         let room = self.cap().saturating_sub(self.reserved());
         let share = Some(self.peer_origin_cap());
-        self.apply_within(op, room.max(1), share)
+        let replay = Some((self.peer_replay_cap(), batch_left));
+        self.apply_within(op, room.max(1), share, replay)
     }
 
     /// Applies a batch from an authenticated peer. The batch length
@@ -520,9 +585,14 @@ impl Tree {
             peer.admit(op.id).map_err(|e| refuse(TreeError::Peer(e)))?;
         }
         let mut out = Vec::with_capacity(ops.len());
+        let mut spent = 0usize;
         for op in ops {
-            match self.apply_from(peer, *op) {
-                Ok(o) => out.push(o),
+            let left = MAX_BATCH_REPLAY_OPS.saturating_sub(spent);
+            match self.apply_from_budgeted(peer, *op, left) {
+                Ok((o, replayed)) => {
+                    spent = spent.saturating_add(replayed);
+                    out.push(o);
+                }
                 Err(error) => {
                     return Err(BatchError {
                         applied: out.len(),
@@ -541,21 +611,25 @@ impl Tree {
 
     /// Applies an operation issued by this replica; may use the headroom reserved for local ops.
     pub fn apply_local(&mut self, op: Op) -> Result<Outcome, TreeError> {
-        self.apply_within(op, self.cap(), None)
+        self.apply_within(op, self.cap(), None, None)
+            .map(|(outcome, _)| outcome)
     }
 
+    /// The one apply path. `replay` is `(per operation limit, left in the batch)` for peer input
+    /// and `None` for trusted input. Returns the outcome and the number of ops undone and redone.
     fn apply_within(
         &mut self,
         op: Op,
         room: usize,
         share: Option<usize>,
-    ) -> Result<Outcome, TreeError> {
+        replay: Option<(usize, usize)>,
+    ) -> Result<(Outcome, usize), TreeError> {
         if op.node.is_reserved() {
             return Err(TreeError::ReservedNode);
         }
         if let Some(seen) = self.log.get(&op.id) {
             return if seen.op == op {
-                Ok(Outcome::Duplicate)
+                Ok((Outcome::Duplicate, 0))
             } else {
                 Err(TreeError::ConflictingOpId)
             };
@@ -563,7 +637,7 @@ impl Tree {
         if self.floor.is_some_and(|f| op.id <= f) {
             // Dropped by compaction: a re-delivery, or a contract violation (see the module docs).
             self.below += 1;
-            return Ok(Outcome::BelowFrontier);
+            return Ok((Outcome::BelowFrontier, 0));
         }
         if self.log.len() >= room {
             return Err(TreeError::OpLimitReached { limit: self.cap() });
@@ -585,11 +659,33 @@ impl Tree {
                 limit: self.node_cap(),
             });
         }
+        if let Some((op_limit, batch_left)) = replay
+            && !bugs::active(Bug::TreeReplayBudgetSkipped)
+        {
+            // Count at most one past the smaller limit, so the check itself is O(limit) however
+            // long the log is.
+            let allowed = op_limit.min(batch_left);
+            let ordered_after = self
+                .log
+                .range((Bound::Excluded(op.id), Bound::Unbounded))
+                .take(allowed.saturating_add(1))
+                .count();
+            if ordered_after > allowed {
+                return Err(if ordered_after > op_limit {
+                    TreeError::ReplayTooDeep { limit: op_limit }
+                } else {
+                    TreeError::BatchReplayBudget {
+                        limit: MAX_BATCH_REPLAY_OPS,
+                    }
+                });
+            }
+        }
         let later: Vec<Hlc> = self
             .log
             .range((Bound::Excluded(op.id), Bound::Unbounded))
             .map(|(k, _)| *k)
             .collect();
+        let replayed = later.len();
         #[cfg(test)]
         {
             self.replayed += later.len() as u64;
@@ -604,11 +700,12 @@ impl Tree {
         for k in later {
             self.redo(k);
         }
-        Ok(if applied {
+        let outcome = if applied {
             Outcome::Applied
         } else {
             Outcome::Skipped
-        })
+        };
+        Ok((outcome, replayed))
     }
 
     fn undo(&mut self, id: Hlc) {

@@ -57,8 +57,6 @@ pub lattice_core::bugs::Bug::DdlPolicySkipped
 pub lattice_core::bugs::Bug::DedupeNotRebuilt
 pub lattice_core::bugs::Bug::DuplicateBeforeFence
 pub lattice_core::bugs::Bug::DurableLsnOvershoot
-pub lattice_core::bugs::Bug::ExecIndexPolicySkipped
-pub lattice_core::bugs::Bug::ExecIndexUpperBoundOpen
 pub lattice_core::bugs::Bug::FenceIgnored
 pub lattice_core::bugs::Bug::FenceNotRebuilt
 pub lattice_core::bugs::Bug::FsyncErrorSwallowed
@@ -97,14 +95,14 @@ pub lattice_core::bugs::Bug::TreeCycleCheckSkipped
 pub lattice_core::bugs::Bug::TreeDepthLimitSkipped
 pub lattice_core::bugs::Bug::TreeNodeLimitSkipped
 pub lattice_core::bugs::Bug::TreeOriginQuotaSkipped
+pub lattice_core::bugs::Bug::TreeReplayBudgetSkipped
 pub lattice_core::bugs::Bug::VacuumDropsVisibleVersion
 impl lattice_core::bugs::Bug
 pub const lattice_core::bugs::Bug::ADMISSION: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::ALL: [lattice_core::bugs::Bug; 21]
 pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
-pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 8]
-pub const lattice_core::bugs::Bug::EXEC_INDEX: [lattice_core::bugs::Bug; 2]
+pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 9]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::KEY_LIMIT: [lattice_core::bugs::Bug; 1]
@@ -397,6 +395,7 @@ pub fn lattice_core::crdt_peer::PeerContext::fmt(&self, &mut core::fmt::Formatte
 impl core::marker::Copy for lattice_core::crdt_peer::PeerContext
 impl core::marker::StructuralPartialEq for lattice_core::crdt_peer::PeerContext
 pub const lattice_core::crdt_peer::MAX_BATCH_OPS: usize
+pub const lattice_core::crdt_peer::MAX_BATCH_REPLAY_OPS: usize
 pub const lattice_core::crdt_peer::MAX_SET_TAGS: usize
 pub mod lattice_core::crdt_text
 pub enum lattice_core::crdt_text::CompactError
@@ -632,6 +631,8 @@ pub fn lattice_core::crdt_tree::TreeDecodeError::fmt(&self, &mut core::fmt::Form
 impl core::marker::Copy for lattice_core::crdt_tree::TreeDecodeError
 impl core::marker::StructuralPartialEq for lattice_core::crdt_tree::TreeDecodeError
 pub enum lattice_core::crdt_tree::TreeError
+pub lattice_core::crdt_tree::TreeError::BatchReplayBudget
+pub lattice_core::crdt_tree::TreeError::BatchReplayBudget::limit: usize
 pub lattice_core::crdt_tree::TreeError::ConflictingOpId
 pub lattice_core::crdt_tree::TreeError::FrontierBeyondLog
 pub lattice_core::crdt_tree::TreeError::NodeLimitReached
@@ -642,6 +643,8 @@ pub lattice_core::crdt_tree::TreeError::OriginQuota
 pub lattice_core::crdt_tree::TreeError::OriginQuota::limit: usize
 pub lattice_core::crdt_tree::TreeError::OriginQuota::node: u32
 pub lattice_core::crdt_tree::TreeError::Peer(lattice_core::crdt_peer::PeerError)
+pub lattice_core::crdt_tree::TreeError::ReplayTooDeep
+pub lattice_core::crdt_tree::TreeError::ReplayTooDeep::limit: usize
 pub lattice_core::crdt_tree::TreeError::ReservedNode
 impl core::clone::Clone for lattice_core::crdt_tree::TreeError
 pub fn lattice_core::crdt_tree::TreeError::clone(&self) -> Self
@@ -729,6 +732,7 @@ pub fn lattice_core::crdt_tree::Tree::with_node_limit(self, usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_op_limit(usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_op_limit_and_reserve(usize, usize) -> Self
 pub fn lattice_core::crdt_tree::Tree::with_origin_quota(self, usize) -> Self
+pub fn lattice_core::crdt_tree::Tree::with_peer_replay_limit(self, usize) -> Self
 impl core::clone::Clone for lattice_core::crdt_tree::Tree
 pub fn lattice_core::crdt_tree::Tree::clone(&self) -> Self
 impl core::default::Default for lattice_core::crdt_tree::Tree
@@ -738,6 +742,7 @@ pub fn lattice_core::crdt_tree::Tree::fmt(&self, &mut core::fmt::Formatter<'_>) 
 pub const lattice_core::crdt_tree::DEFAULT_NODE_LIMIT: usize
 pub const lattice_core::crdt_tree::DEFAULT_OP_LIMIT: usize
 pub const lattice_core::crdt_tree::DEFAULT_ORIGIN_OP_LIMIT: usize
+pub const lattice_core::crdt_tree::DEFAULT_PEER_REPLAY_LIMIT: usize
 pub const lattice_core::crdt_tree::MAX_TREE_DEPTH: usize
 pub mod lattice_core::feed
 pub enum lattice_core::feed::ChangeOp

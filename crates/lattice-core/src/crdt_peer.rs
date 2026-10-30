@@ -20,6 +20,10 @@ use lattice_abi::Hlc;
 
 /// Most operations one batch from a peer may carry; a longer batch is refused whole.
 pub const MAX_BATCH_OPS: usize = 1024;
+/// Most live ops one batch from a peer may make a [`crate::crdt_tree::Tree`] undo and redo in all.
+/// A late operation replays every op ordered after it, so the cost of a batch is not bounded by
+/// its length; [`crate::crdt_tree::Tree::apply_batch_from`] stops a batch that would pass this.
+pub const MAX_BATCH_REPLAY_OPS: usize = 1 << 16;
 /// Most tags (live adds plus removed tags) an [`crate::crdt::OrSet`] accepts through its
 /// `*_from` entry points.
 pub const MAX_SET_TAGS: usize = 1 << 20;

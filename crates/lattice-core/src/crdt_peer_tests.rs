@@ -204,13 +204,14 @@ fn every_limit_holds() {
     assert!(depth_limit_holds(), "tree depth limit");
     assert!(origin_quota_holds(), "tree origin quota");
     assert!(set_tag_limit_holds(), "set tag limit");
+    assert!(replay_budget_holds(), "tree replay budget");
 }
 
 #[cfg(feature = "planted-bugs")]
 #[test]
 fn every_planted_peer_defect_is_noticed() {
     use crate::bugs::{self, Bug};
-    let scenarios: [(Bug, fn() -> bool); 8] = [
+    let scenarios: [(Bug, fn() -> bool); 9] = [
         (Bug::CrdtNodeBindingSkipped, node_binding_holds),
         (Bug::CrdtDriftNotChecked, drift_holds),
         (Bug::CrdtBatchLimitSkipped, batch_limit_holds),
@@ -219,6 +220,7 @@ fn every_planted_peer_defect_is_noticed() {
         (Bug::TreeDepthLimitSkipped, depth_limit_holds),
         (Bug::TreeOriginQuotaSkipped, origin_quota_holds),
         (Bug::SetTagLimitSkipped, set_tag_limit_holds),
+        (Bug::TreeReplayBudgetSkipped, replay_budget_holds),
     ];
     assert_eq!(scenarios.len(), Bug::CRDT_PEER.len());
     for (bug, scenario) in scenarios {
@@ -800,4 +802,164 @@ fn the_default_origin_share_is_pinned() {
         trusted.apply(op(i)).unwrap();
     }
     assert_eq!(trusted.op_count(), DEFAULT_ORIGIN_OP_LIMIT + 1);
+}
+
+// ---- replay cost of old timestamps (issue 450) -----------------------------------------------
+
+/// Honest ops from node 2, stamped 1000 + i, applied as trusted input; they sit after any ancient id.
+fn tree_with_honest_tail(len: u64) -> tree::Tree {
+    let mut t = tree::Tree::new();
+    for i in 0..len {
+        t.apply(mv(1000 + i, 2, 10 + i % 40, 0)).unwrap();
+    }
+    t
+}
+
+fn replay_budget_holds() -> bool {
+    use crate::crdt_peer::MAX_BATCH_REPLAY_OPS;
+    // Per operation: a limit of 3 admits an id ordered before 3 live ops and refuses one before 4.
+    let mut t = tree_with_honest_tail(5).with_peer_replay_limit(3);
+    let before = t.snapshot();
+    let ops_before = t.op_count();
+    let ancient = t.apply_from(&ctx(1), mv(1, 1, 90, 0));
+    let unchanged = t.snapshot() == before && t.op_count() == ops_before && !t.contains(NodeId(90));
+    let edge_ok = t.apply_from(&ctx(1), mv(1002, 1, 91, 0));
+    let per_op = ancient == Err(TreeError::ReplayTooDeep { limit: 3 })
+        && unchanged
+        && edge_ok == Ok(tree::Outcome::Applied);
+
+    // Per batch: three ancient ops, each before a tail of 40,000, cannot all be paid for.
+    let mut t = tree_with_honest_tail(40_000).with_peer_replay_limit(50_000);
+    let ops: Vec<tree::Op> = (1..=3).map(|w| mv(w, 1, 100 + w, 0)).collect();
+    let batch = t.apply_batch_from(&ctx(1), &ops);
+    let per_batch = matches!(
+        batch,
+        Err(BatchError {
+            applied: 1,
+            error: TreeError::BatchReplayBudget {
+                limit: MAX_BATCH_REPLAY_OPS
+            }
+        })
+    ) && t.contains(NodeId(101))
+        && !t.contains(NodeId(102));
+    per_op && per_batch
+}
+
+#[test]
+fn the_replay_budget_holds() {
+    assert!(replay_budget_holds(), "tree replay budget");
+}
+
+#[test]
+fn a_peer_cannot_make_one_old_operation_replay_the_log() {
+    let mut t = tree_with_honest_tail(5000);
+    let snapshot = t.snapshot();
+    // Ordered before 5000 live ops, more than the default of 4096.
+    assert_eq!(
+        t.apply_from(&ctx(1), mv(1, 1, 10_000, 0)),
+        Err(TreeError::ReplayTooDeep {
+            limit: tree::DEFAULT_PEER_REPLAY_LIMIT
+        })
+    );
+    assert_eq!(t.snapshot(), snapshot);
+    assert_eq!(t.op_count(), 5000);
+    assert_eq!(t.replayed_ops(), 0, "nothing was undone");
+    // The trusted path has no such limit and converges to the same tree as a replica that
+    // received the op first.
+    t.apply(mv(1, 1, 10_000, 0)).unwrap();
+    let mut early = tree::Tree::new();
+    early.apply(mv(1, 1, 10_000, 0)).unwrap();
+    for i in 0..5000u64 {
+        early.apply(mv(1000 + i, 2, 10 + i % 40, 0)).unwrap();
+    }
+    assert_eq!(t.snapshot(), early.snapshot());
+}
+
+#[test]
+fn a_batch_of_ancient_operations_is_charged_to_one_budget_and_can_be_resumed() {
+    use crate::crdt_peer::MAX_BATCH_REPLAY_OPS;
+    let mut t = tree_with_honest_tail(100);
+    // MAX_BATCH_OPS ancient moves, ascending, each ordered before the 100 honest ops only.
+    let ops: Vec<tree::Op> = (1..=MAX_BATCH_OPS as u64)
+        .map(|w| mv(w, 1, 10_000 + w, 0))
+        .collect();
+    let err = t.apply_batch_from(&ctx(1), &ops).unwrap_err();
+    // 65,536 / 100 = 655 operations fit, and they replayed exactly 100 each.
+    assert_eq!(err.applied, 655);
+    assert_eq!(
+        err.error,
+        TreeError::BatchReplayBudget {
+            limit: MAX_BATCH_REPLAY_OPS
+        }
+    );
+    assert_eq!(t.replayed_ops(), 65_500);
+    assert!(t.replayed_ops() <= MAX_BATCH_REPLAY_OPS as u64);
+    // Resending from the refused operation on starts a fresh budget.
+    let rest = t.apply_batch_from(&ctx(1), &ops[err.applied..]).unwrap();
+    assert_eq!(
+        rest.len(),
+        MAX_BATCH_OPS - 655,
+        "the rest fits a fresh budget"
+    );
+    // Walls from 1000 up share a millisecond with the honest ops, so the honest ones stamped
+    // below the move's wall are not replayed: 100 - (wall - 1000) of them are.
+    let cost: u64 = (656..=MAX_BATCH_OPS as u64)
+        .map(|wall| 100 - wall.saturating_sub(1000))
+        .sum();
+    assert_eq!(t.replayed_ops(), 65_500 + cost);
+    // Resending the applied prefix too is harmless: those are duplicates and replay nothing.
+    let before = t.replayed_ops();
+    let dup = t.apply_batch_from(&ctx(1), &ops[..655]).unwrap();
+    assert_eq!(dup, vec![tree::Outcome::Duplicate; 655]);
+    assert_eq!(t.replayed_ops(), before);
+}
+
+#[test]
+fn a_limit_of_zero_admits_only_the_newest_operation() {
+    let mut t = tree_with_honest_tail(3).with_peer_replay_limit(0);
+    assert_eq!(
+        t.apply_from(&ctx(1), mv(1002, 1, 80, 0)),
+        Err(TreeError::ReplayTooDeep { limit: 0 })
+    );
+    assert_eq!(
+        t.apply_from(&ctx(1), mv(1003, 1, 80, 0)),
+        Ok(tree::Outcome::Applied)
+    );
+}
+
+proptest! {
+    /// A hostile peer stamping ids anywhere in the past never makes one operation undo more than
+    /// the limit, and a refusal changes nothing. The expected verdict is counted from the ids the
+    /// test itself applied, not from the tree.
+    #[test]
+    fn a_hostile_peer_cannot_force_more_replay_than_the_limit(
+        limit in 0usize..12,
+        honest in 0u64..30,
+        walls in proptest::collection::vec(1u64..1100, 1..60),
+    ) {
+        let mut t = tree_with_honest_tail(honest).with_peer_replay_limit(limit);
+        let mut live: Vec<Hlc> = (0..honest).map(|i| h(1000 + i, 2)).collect();
+        for (i, wall) in walls.iter().enumerate() {
+            let op = tree::Op::new(
+                Hlc { wall_ms: *wall, counter: i as u32, node: 1 },
+                NodeId(10 + (i as u64 % 7)),
+                NodeId::ROOT,
+                0,
+            );
+            let before_snapshot = t.snapshot();
+            let before_replayed = t.replayed_ops();
+            let after = live.iter().filter(|id| **id > op.id).count();
+            let r = t.apply_from(&ctx(1), op);
+            if after > limit {
+                prop_assert_eq!(r, Err(TreeError::ReplayTooDeep { limit }));
+                prop_assert_eq!(t.snapshot(), before_snapshot);
+                prop_assert_eq!(t.replayed_ops(), before_replayed);
+            } else {
+                prop_assert!(r.is_ok());
+                prop_assert_eq!(t.replayed_ops() - before_replayed, after as u64);
+                live.push(op.id);
+            }
+            prop_assert!(t.is_acyclic());
+        }
+    }
 }

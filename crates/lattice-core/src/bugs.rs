@@ -121,6 +121,8 @@ pub enum Bug {
     ExecIndexPolicySkipped,
     /// A row commit accepts a key longer than the change feed can carry (feed availability).
     RowOversizeKeyAccepted,
+    /// The tree CRDT replays any number of live ops for one peer operation (CPU exhaustion).
+    TreeReplayBudgetSkipped,
 }
 
 impl Bug {
@@ -166,7 +168,7 @@ impl Bug {
     pub const HLC_SNAPSHOT: [Bug; 1] = [Bug::HlcSnapshotClamped];
 
     /// Hostile-peer defects (G-08), detected by the hostile peer witnesses in `crdt_peer_tests`.
-    pub const CRDT_PEER: [Bug; 8] = [
+    pub const CRDT_PEER: [Bug; 9] = [
         Bug::CrdtNodeBindingSkipped,
         Bug::CrdtDriftNotChecked,
         Bug::CrdtBatchLimitSkipped,
@@ -175,6 +177,7 @@ impl Bug {
         Bug::TreeDepthLimitSkipped,
         Bug::TreeOriginQuotaSkipped,
         Bug::SetTagLimitSkipped,
+        Bug::TreeReplayBudgetSkipped,
     ];
 
     /// Index-scan defects in the SQL executor, detected by the differential index-scan witnesses.
@@ -302,7 +305,7 @@ mod tests {
             .chain(Bug::FENCE_ORDER)
             .chain(Bug::RECOVERY_ORDER)
             .collect();
-        assert_eq!(all.len(), 54);
+        assert_eq!(all.len(), 55);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

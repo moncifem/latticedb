@@ -34,11 +34,13 @@ which Phase 3 extends.
 Verification evidence, not an exit criterion: hostile-peer limits for the CRDTs (issue #364, threat-model gap
 G-08). `lattice-core::crdt_peer` defines `PeerContext` and the limits `MAX_BATCH_OPS` (1024) and `MAX_SET_TAGS`
 (2^20); `crdt_text::Limits::max_inserts_per_key` (2^19), `crdt_tree::DEFAULT_NODE_LIMIT` (2^20),
-`MAX_TREE_DEPTH` (256) and `DEFAULT_ORIGIN_OP_LIMIT` (2^18) bound what one peer can make a replica hold, and the
+`MAX_TREE_DEPTH` (256) and `DEFAULT_ORIGIN_OP_LIMIT` (2^18) bound what one peer can make a replica hold, an old
+id cannot make `Tree::apply_from` replay more than `DEFAULT_PEER_REPLAY_LIMIT` (4096) live ops (and
+`Tree::apply_batch_from` no more than `MAX_BATCH_REPLAY_OPS`, 65,536, per batch; replica-local refusal, issue #450), and the
 `*_from` entry points refuse a forged node id, an id past the drift bound and an oversized batch before any state
 changes. `crdt_peer_tests.rs` holds a scenario per limit, three property tests with generated hostile peers
 (refused input changes nothing, a flood cannot starve an honest peer, a hostile tree peer stays inside its share)
-and eight planted bugs (`Bug::CRDT_PEER`) that the scenarios catch. Not done: nothing in the repository calls these
+and nine planted bugs (`Bug::CRDT_PEER`) that the scenarios catch. Not done: nothing in the repository calls these
 entry points yet (no sync layer) and the compaction frontier is still trusted. The depth rule is in
 `tla/TreeMove.tla` (`MaxDepth = 2`, invariant `DepthBounded`) with `tla/negative/TreeMoveNoDepthCheck.cfg`,
 which must violate it. `tla/TreeMoveCycleOnly.cfg` checks the cycle rule alone (depth rule off). These models are

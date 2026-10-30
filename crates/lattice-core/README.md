@@ -18,5 +18,6 @@ constants documented in the module headers and in `docs/threat-model.md` (G-08).
 operations (the id's node must be the peer's), so a relay forwarding other replicas' operations uses the
 trusting `apply` after its own checks, and quotas are charged per direct peer. A refusal by a cap is local to
 the replica and the operation is lost unless sent again. `Tree::apply` has no per-origin share unless
-`with_origin_quota` is set; `Tree::apply_from` always has one. The compaction frontier is still supplied by
+`with_origin_quota` is set; `Tree::apply_from` always has one, and refuses an operation ordered before more than
+`DEFAULT_PEER_REPLAY_LIMIT` live ops (`ReplayTooDeep`), which a resend to the same replica does not cure. The compaction frontier is still supplied by
 the caller and trusted.
