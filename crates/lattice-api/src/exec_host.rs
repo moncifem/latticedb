@@ -51,8 +51,10 @@ use lattice_seams::{Clock, Io, OsRng, Rng, StdIo, SystemClock};
 use crate::cancel::CancellationToken;
 use crate::exec_handler::ExecHandler;
 use crate::pgwire::Column;
-use crate::principal::{Principal, QueryContext};
+use crate::principal::{Principal, PrincipalKind, QueryContext};
 use crate::session::{QueryError, QueryHandler, QueryOutput};
+use crate::subscribe::SourceError;
+use crate::sync::Event;
 
 /// Most account policy entries a policy file may hold (the credential store's own bound).
 pub const MAX_POLICY_ENTRIES: usize = 1024;
@@ -69,7 +71,7 @@ pub enum Grant {
 }
 
 impl Grant {
-    fn policy(self) -> ActorPolicy {
+    pub(crate) fn policy(self) -> ActorPolicy {
         match self {
             Grant::AllowAll => ActorPolicy::new(Rc::new(AllowAll)),
             // A denied actor also gets an empty catalog, so it cannot probe names or columns.
@@ -136,6 +138,16 @@ impl PolicyTable {
     /// The grant of the development principal.
     pub fn development(&self) -> Grant {
         self.development
+    }
+
+    /// The grant of a principal: the development grant for the local-development principal, the
+    /// account's listed grant otherwise, [`Grant::DenyAll`] for an unlisted account. The same
+    /// mapping the SQL handler uses; there is no allow-all fallback.
+    pub fn grant_for(&self, principal: &Principal) -> Grant {
+        match principal.kind() {
+            PrincipalKind::LocalDevelopment => self.development,
+            PrincipalKind::Account => self.account(principal.name()),
+        }
     }
 
     /// The grant of an account: the listed one, or [`Grant::DenyAll`].
@@ -242,6 +254,15 @@ enum Request {
         sql: String,
         token: CancellationToken,
         reply: SyncSender<Result<Vec<Column>, QueryError>>,
+    },
+    /// One bounded read of the change feed for a principal (see [`crate::feed_source`]).
+    FeedRead {
+        principal: Principal,
+        scope: String,
+        after: Vec<u8>,
+        limit: usize,
+        token: CancellationToken,
+        reply: SyncSender<Result<Vec<Event>, SourceError>>,
     },
     /// Makes the actor look at the list of closed connections. At most one is queued at a time.
     Wake,
@@ -574,6 +595,20 @@ impl ExecHost {
         }
     }
 
+    /// A change-feed reader that asks the actor on behalf of principals. `max_events` bounds how many
+    /// events one read returns (and so how long one read holds the actor with the returned work);
+    /// it is raised to 1.
+    pub fn feed_source(&self, max_events: usize) -> crate::feed_source::FeedSource {
+        crate::feed_source::FeedSource::new(
+            FeedHandle {
+                requests: self.requests.clone(),
+                host: Arc::clone(&self.shared),
+                wait: self.wait,
+            },
+            max_events,
+        )
+    }
+
     /// False once the database thread has ended for any reason, including a panic. A supervisor
     /// should treat an unrequested end as a failed server.
     pub fn is_alive(&self) -> bool {
@@ -815,6 +850,29 @@ fn serve<I, C, R>(
                 } else {
                     let handler = sessions.entry(conn).or_insert_with(|| make(&db));
                     handler.describe_cancellable(&QueryContext::new(&principal), &sql, &token)
+                };
+                let _ = reply.send(result);
+            }
+            Request::FeedRead {
+                principal,
+                scope,
+                after,
+                limit,
+                token,
+                reply,
+            } => {
+                let result = if token.is_cancelled() {
+                    // The reader gave up before the read started; nothing is read.
+                    Err(SourceError::Unavailable)
+                } else {
+                    crate::feed_source::read_feed(
+                        &db.borrow(),
+                        policies,
+                        &principal,
+                        &scope,
+                        &after,
+                        limit,
+                    )
                 };
                 let _ = reply.send(result);
             }
@@ -1075,6 +1133,57 @@ impl Drop for ExecProxy {
             .is_err()
         {
             self.host.wake_queued.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// The sending half of a feed reader: queues one [`Request::FeedRead`] and waits for its answer
+/// under the same budget a statement gets (ceiling plus slack). Every failure to get an answer is
+/// [`SourceError::Unavailable`], which the subscription host reports as `internal`.
+#[derive(Clone)]
+pub(crate) struct FeedHandle {
+    requests: SyncSender<Request>,
+    host: Arc<HostShared>,
+    wait: Option<Duration>,
+}
+
+impl FeedHandle {
+    pub(crate) fn read(
+        &self,
+        principal: &Principal,
+        scope: &str,
+        after: &[u8],
+        limit: usize,
+    ) -> Result<Vec<Event>, SourceError> {
+        let mut budget = Budget::new(self.wait);
+        let token = CancellationToken::default();
+        let (reply, answer) = mpsc::sync_channel(1);
+        let request = Request::FeedRead {
+            principal: principal.clone(),
+            scope: scope.to_string(),
+            after: after.to_vec(),
+            limit,
+            token: token.clone(),
+            reply,
+        };
+        enqueue(&self.requests, &self.host, request, &mut budget)
+            .map_err(|_| SourceError::Unavailable)?;
+        loop {
+            let Some(slice) = budget.next() else {
+                // Not started yet: the actor skips it. Started: it finishes and the answer is dropped.
+                token.request();
+                return Err(SourceError::Unavailable);
+            };
+            match answer.recv_timeout(slice) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Timeout) => {
+                    budget.timed_out(slice);
+                    if self.host.stopping.load(Ordering::Acquire) {
+                        return Err(SourceError::Unavailable);
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err(SourceError::Unavailable),
+            }
         }
     }
 }

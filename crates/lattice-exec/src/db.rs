@@ -93,6 +93,21 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
         }
     }
 
+    /// The id of the table called `name` in the engine catalog, as `policy`'s actor may see it.
+    /// `None` for a table that does not exist and, identically, for any table when the policy hides
+    /// the catalog, so a denied actor cannot tell the two apart. Tables whose columns SQL does not
+    /// know (recovered from the log) are included: the change feed carries raw rows.
+    pub fn visible_table_id(&self, policy: &ActorPolicy, name: &str) -> Option<u32> {
+        if !policy.sees_catalog() {
+            return None;
+        }
+        self.store
+            .catalog()
+            .current()
+            .into_iter()
+            .find_map(|(id, n)| (n == name).then_some(id))
+    }
+
     /// The binder's view for one actor: empty when the actor's policy hides the catalog.
     pub fn catalog_view_for(&self, policy: &ActorPolicy) -> ExecCatalog<'_> {
         ExecCatalog {

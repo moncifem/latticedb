@@ -163,6 +163,7 @@ pub fn lattice_exec::Database<I, C, R>::last_access_paths(&self) -> alloc::vec::
 pub fn lattice_exec::Database<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<Self, lattice_exec::ExecError>
 pub fn lattice_exec::Database<I, C, R>::schema(&self) -> &lattice_exec::schema::Schema
 pub fn lattice_exec::Database<I, C, R>::store(&self) -> &lattice_engines::store::RowStore<I, C, R>
+pub fn lattice_exec::Database<I, C, R>::visible_table_id(&self, &lattice_exec::ActorPolicy, &str) -> core::option::Option<u32>
 pub struct lattice_exec::Decimal
 impl core::clone::Clone for lattice_exec::Decimal
 pub fn lattice_exec::Decimal::clone(&self) -> Self

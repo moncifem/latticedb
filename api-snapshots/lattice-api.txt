@@ -252,6 +252,7 @@ impl core::marker::StructuralPartialEq for lattice_api::exec_host::PolicyFileErr
 pub struct lattice_api::exec_host::ExecHost
 impl lattice_api::exec_host::ExecHost
 pub fn lattice_api::exec_host::ExecHost::begin_shutdown(&self)
+pub fn lattice_api::exec_host::ExecHost::feed_source(&self, usize) -> lattice_api::feed_source::FeedSource
 pub fn lattice_api::exec_host::ExecHost::handler(&self) -> lattice_api::exec_host::ExecProxy
 pub fn lattice_api::exec_host::ExecHost::is_alive(&self) -> bool
 pub fn lattice_api::exec_host::ExecHost::shutdown(&self) -> core::result::Result<(), alloc::string::String>
@@ -291,6 +292,7 @@ pub struct lattice_api::exec_host::PolicyTable
 impl lattice_api::exec_host::PolicyTable
 pub fn lattice_api::exec_host::PolicyTable::account(&self, &str) -> lattice_api::exec_host::Grant
 pub fn lattice_api::exec_host::PolicyTable::development(&self) -> lattice_api::exec_host::Grant
+pub fn lattice_api::exec_host::PolicyTable::grant_for(&self, &lattice_api::principal::Principal) -> lattice_api::exec_host::Grant
 pub fn lattice_api::exec_host::PolicyTable::new(lattice_api::exec_host::Grant) -> Self
 pub fn lattice_api::exec_host::PolicyTable::parse_accounts(&str) -> core::result::Result<alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_api::exec_host::Grant>, lattice_api::exec_host::PolicyFileError>
 pub fn lattice_api::exec_host::PolicyTable::with_accounts(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_api::exec_host::Grant>) -> Self
@@ -304,6 +306,10 @@ pub fn lattice_api::exec_host::PolicyTable::fmt(&self, &mut core::fmt::Formatter
 impl core::marker::StructuralPartialEq for lattice_api::exec_host::PolicyTable
 pub const lattice_api::exec_host::MAX_POLICY_BYTES: usize
 pub const lattice_api::exec_host::MAX_POLICY_ENTRIES: usize
+pub mod lattice_api::feed_source
+pub struct lattice_api::feed_source::FeedSource
+impl lattice_api::subscribe::EventSource for lattice_api::feed_source::FeedSource
+pub fn lattice_api::feed_source::FeedSource::read_after(&self, &lattice_api::principal::Principal, &str, &[u8], usize) -> core::result::Result<alloc::vec::Vec<lattice_api::sync::Event>, lattice_api::subscribe::SourceError>
 pub mod lattice_api::pgwire
 pub enum lattice_api::pgwire::Backend
 pub lattice_api::pgwire::Backend::AuthenticationCleartextPassword
@@ -713,6 +719,8 @@ impl core::fmt::Debug for lattice_api::subscribe::SubscriptionHost
 pub fn lattice_api::subscribe::SubscriptionHost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub trait lattice_api::subscribe::EventSource
 pub fn lattice_api::subscribe::EventSource::read_after(&self, &lattice_api::principal::Principal, &str, &[u8], usize) -> core::result::Result<alloc::vec::Vec<lattice_api::sync::Event>, lattice_api::subscribe::SourceError>
+impl lattice_api::subscribe::EventSource for lattice_api::feed_source::FeedSource
+pub fn lattice_api::feed_source::FeedSource::read_after(&self, &lattice_api::principal::Principal, &str, &[u8], usize) -> core::result::Result<alloc::vec::Vec<lattice_api::sync::Event>, lattice_api::subscribe::SourceError>
 pub mod lattice_api::sync
 pub enum lattice_api::sync::ErrorCode
 pub lattice_api::sync::ErrorCode::Internal

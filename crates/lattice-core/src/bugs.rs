@@ -126,6 +126,9 @@ pub enum Bug {
     /// Recovery keeps a zero-filled torn tail in place instead of truncating it, so later
     /// acknowledged records land behind a damaged region (silent loss once that region is repaired).
     ZeroFilledTailKept,
+    /// The kernel-backed event source reads the feed with an allow-all policy instead of the
+    /// principal's, so a denied principal sees rows and tables it may not (authorization).
+    FeedSourcePolicyDropped,
 }
 
 impl Bug {
@@ -191,6 +194,10 @@ impl Bug {
 
     /// Principal-binding defects, detected by the subscription host witness in `lattice-api`.
     pub const PRINCIPAL: [Bug; 1] = [Bug::SubscribePrincipalDropped];
+
+    /// Feed-source authorization defect, detected by the principal witness in
+    /// `lattice-api::feed_source`.
+    pub const FEED_SOURCE: [Bug; 1] = [Bug::FeedSourcePolicyDropped];
     /// Guarded-WAL admission defects, exercised by independent context witnesses.
     pub const ADMISSION: [Bug; 2] = [Bug::RequiredGuardOmitted, Bug::GuardRewriteUnstaged];
 
@@ -284,6 +291,7 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::FEED_SOURCE)
             .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
@@ -304,6 +312,7 @@ mod tests {
             .chain(Bug::POLICY)
             .chain(Bug::CRDT)
             .chain(Bug::PRINCIPAL)
+            .chain(Bug::FEED_SOURCE)
             .chain(Bug::EXEC_INDEX)
             .chain(Bug::CRDT_PEER)
             .chain(Bug::ADMISSION)
@@ -314,7 +323,7 @@ mod tests {
             .chain(Bug::RECOVERY_ORDER)
             .chain(Bug::NON_PREFIX)
             .collect();
-        assert_eq!(all.len(), 56);
+        assert_eq!(all.len(), 57);
         for bug in all {
             assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
             clear();

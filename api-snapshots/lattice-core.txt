@@ -59,6 +59,7 @@ pub lattice_core::bugs::Bug::DuplicateBeforeFence
 pub lattice_core::bugs::Bug::DurableLsnOvershoot
 pub lattice_core::bugs::Bug::ExecIndexPolicySkipped
 pub lattice_core::bugs::Bug::ExecIndexUpperBoundOpen
+pub lattice_core::bugs::Bug::FeedSourcePolicyDropped
 pub lattice_core::bugs::Bug::FenceIgnored
 pub lattice_core::bugs::Bug::FenceNotRebuilt
 pub lattice_core::bugs::Bug::FsyncErrorSwallowed
@@ -107,6 +108,7 @@ pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 9]
 pub const lattice_core::bugs::Bug::EXEC_INDEX: [lattice_core::bugs::Bug; 2]
+pub const lattice_core::bugs::Bug::FEED_SOURCE: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::KEY_LIMIT: [lattice_core::bugs::Bug; 1]

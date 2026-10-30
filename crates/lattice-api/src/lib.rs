@@ -23,6 +23,8 @@ pub mod sync;
 
 pub mod subscribe;
 
+pub mod feed_source;
+
 pub mod backpressure;
 
 #[cfg(test)]
