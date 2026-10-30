@@ -90,7 +90,7 @@ Toolchain: the workflow pins `kani-verifier` 0.68.0, which per the Kani releases
 bundled nightly to nightly-2026-08-21. Kani builds with that nightly, not with the repository's
 pinned 1.99.1. Whether that nightly reports a rustc of at least 1.99.1 was not verified. Cargo refuses
 a package whose `rust-version` is above the compiler, so the workflow lowers the `rust-version`
-value (to 1.80) in the root `Cargo.toml` `[workspace.package]` of its throwaway checkout before
+value (to 1.85, the minimum for edition 2024) in the root `Cargo.toml` `[workspace.package]` of its throwaway checkout before
 proving, and fails if exactly one such line is not found (the member crates inherit it, so the line
 must stay defined); that is harmless if the nightly is
 new enough and the only change that lets the proofs build if it is older. The `--harness-timeout` flag
