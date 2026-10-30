@@ -1,10 +1,10 @@
 # latticed development listener
 
-`latticed` now adapts the sans-I/O PostgreSQL session to TCP. The placeholder handler answers
-`SELECT 1`; other SQL returns `0A000`. Simple and extended query framing are handled by the existing
+`latticed` adapts the sans-I/O PostgreSQL session to TCP. Without `--data-dir` the placeholder
+handler answers `SELECT 1` and other SQL returns `0A000`; with `--data-dir` it serves the
+single-table SQL executor over a durable log (see below). Simple and extended query framing are handled by the existing
 session. The default is explicit development trust on loopback. Configured SCRAM mode requires
-TLS and refuses plaintext startup or trust fallback. It does not open a database or establish the
-five-driver matrix. CancelRequest routes a cooperative token and cannot preempt blocking I/O.
+TLS and refuses plaintext startup or trust fallback. The five-driver matrix is not established (#413). CancelRequest routes a cooperative token and cannot preempt blocking I/O.
 
 ```sh
 cargo run -p latticed -- --auth development-trust --listen 127.0.0.1:5432 --max-connections 32
