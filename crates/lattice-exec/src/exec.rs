@@ -267,6 +267,14 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
 
     fn rel(&mut self, plan: &LogicalPlan) -> Result<Vec<Tuple>, ExecError> {
         match plan {
+            // No table is read, so there is no policy to apply and no snapshot to take.
+            LogicalPlan::OneRow => {
+                self.gov.check()?;
+                Ok(vec![Tuple {
+                    key: None,
+                    vals: Vec::new(),
+                }])
+            }
             LogicalPlan::Scan {
                 table_id, as_of, ..
             } => self.scan(*table_id, as_of.as_ref(), None),

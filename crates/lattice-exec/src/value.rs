@@ -194,6 +194,48 @@ fn parse_date_part(s: &str) -> Option<i64> {
     Some(days_from_civil(y, m, d))
 }
 
+/// The SQLSTATE for text that failed to parse as a date or timestamp. PostgreSQL separates text
+/// that is not shaped like a date (`22007`, invalid syntax) from text that is shaped like one but
+/// names a day, month, year, hour, minute or second that does not exist (`22008`, field value out
+/// of range), such as `2023-02-29` or `2024-01-01 25:00:00`.
+fn datetime_failure_code(s: &str) -> &'static str {
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    let t = s.trim();
+    let (date, rest) = match t.find([' ', 'T']) {
+        Some(at) => (
+            t.get(..at).unwrap_or(""),
+            t.get(at + 1..).unwrap_or("").trim(),
+        ),
+        None => (t, ""),
+    };
+    let fields: Vec<&str> = date.split('-').collect();
+    if fields.len() != 3 || !fields.iter().all(|f| digits(f)) {
+        return "22007";
+    }
+    if parse_date_part(date).is_none() {
+        return "22008";
+    }
+    // A valid date: only a clock with numeric fields that are out of range is a range error.
+    let clock = match split_offset(rest) {
+        Some((c, _)) => c,
+        None => return "22007",
+    };
+    let parts: Vec<&str> = clock.split(':').collect();
+    fn whole(p: &str) -> &str {
+        p.split_once('.').map_or(p, |(w, _)| w)
+    }
+    if !(2..=3).contains(&parts.len()) || !parts.iter().all(|p| digits(whole(p))) {
+        return "22007";
+    }
+    let num = |p: Option<&&str>| p.and_then(|p| whole(p).parse::<i64>().ok()).unwrap_or(0);
+    let (h, mi, sec) = (num(parts.first()), num(parts.get(1)), num(parts.get(2)));
+    if h > 24 || mi > 59 || sec > 60 {
+        "22008"
+    } else {
+        "22007"
+    }
+}
+
 /// Parses a `date` (a timestamp's date part is accepted, as in PostgreSQL).
 pub(crate) fn parse_date(s: &str) -> Option<i32> {
     let t = s.trim();
@@ -587,7 +629,7 @@ pub(crate) fn parse_text(s: &str, ty: SqlType) -> Result<Datum, ExecError> {
         SqlType::Date => {
             let d = parse_date(s).ok_or_else(|| {
                 ExecError::eval(
-                    "22007",
+                    datetime_failure_code(s),
                     format!("invalid input syntax for type date: \"{s}\""),
                 )
             })?;
@@ -599,7 +641,7 @@ pub(crate) fn parse_text(s: &str, ty: SqlType) -> Result<Datum, ExecError> {
         SqlType::Timestamptz => {
             let t = parse_timestamp(s).ok_or_else(|| {
                 ExecError::eval(
-                    "22007",
+                    datetime_failure_code(s),
                     format!("invalid input syntax for type timestamp with time zone: \"{s}\""),
                 )
             })?;

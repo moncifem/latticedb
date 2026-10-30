@@ -206,6 +206,11 @@ struct Scope {
 }
 
 impl Scope {
+    /// Whether this is the scope of a `SELECT` without `FROM`.
+    fn is_row_source_empty(&self) -> bool {
+        self.qualifier.is_empty()
+    }
+
     fn empty() -> Scope {
         Scope {
             info: TableInfo {
@@ -1072,20 +1077,23 @@ impl Binder<'_> {
         if !q.group_by.is_empty() || q.having.is_some() {
             return unsupported("GROUP BY and HAVING", Span::default());
         }
-        let from = match q.from.as_slice() {
-            [] => return unsupported("SELECT without FROM", Span::default()),
-            [one] if one.joins.is_empty() => one,
+        let (scope, mut plan) = match q.from.as_slice() {
+            // No FROM clause: one row with no columns, so only constants and functions bind.
+            [] => (Scope::empty(), LogicalPlan::OneRow),
+            [one] if one.joins.is_empty() => {
+                let scope = self.lookup_table_factor(&one.relation)?;
+                let as_of = match &one.relation.as_of {
+                    Some(a) => Some(self.as_of(a)?),
+                    None => None,
+                };
+                let plan = LogicalPlan::Scan {
+                    table: scope.info.name.clone(),
+                    table_id: scope.info.id,
+                    as_of,
+                };
+                (scope, plan)
+            }
             _ => return unsupported("joins and multi-table FROM", Span::default()),
-        };
-        let scope = self.lookup_table_factor(&from.relation)?;
-        let as_of = match &from.relation.as_of {
-            Some(a) => Some(self.as_of(a)?),
-            None => None,
-        };
-        let mut plan = LogicalPlan::Scan {
-            table: scope.info.name.clone(),
-            table_id: scope.info.id,
-            as_of,
         };
         if let Some(w) = &q.selection {
             let p = self.expr(w, &scope)?;
@@ -1197,6 +1205,13 @@ impl Binder<'_> {
         let mut out = Vec::new();
         for item in items {
             match item {
+                SelectItem::Wildcard if scope.is_row_source_empty() => {
+                    return err(
+                        BindErrorKind::Syntax,
+                        "SELECT * with no tables specified is not valid",
+                        Span::default(),
+                    );
+                }
                 SelectItem::Wildcard => out.extend(all_columns(scope)),
                 SelectItem::QualifiedWildcard(q) => {
                     if q.value != scope.qualifier {

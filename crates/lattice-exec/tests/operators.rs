@@ -761,7 +761,7 @@ fn every_column_type_round_trips() {
             "INSERT INTO t (id, dt) VALUES (2, '2023-02-29')"
         )
         .sqlstate(),
-        "22007"
+        "22008"
     );
     assert_eq!(
         err(

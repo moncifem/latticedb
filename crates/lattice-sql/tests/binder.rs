@@ -443,7 +443,7 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
             Some("LSQL-0002"),
         ),
         ("SELECT (SELECT 1) FROM notes", "0A000", Some("LSQL-0002")),
-        ("SELECT 1", "0A000", Some("LSQL-0002")),
+        ("SELECT a FROM notes, tags", "0A000", Some("LSQL-0002")),
         ("CREATE TABLE t (a INT)", "0A000", Some("LSQL-0002")),
         ("BEGIN", "0A000", Some("LSQL-0002")),
         ("SELECT a.b.c FROM notes", "0A000", Some("LSQL-0002")),
@@ -810,7 +810,7 @@ fn walk(e: &TypedExpr, f: &mut impl FnMut(&TypedExpr)) {
 
 fn plan_exprs(p: &LogicalPlan, f: &mut impl FnMut(&TypedExpr)) {
     match p {
-        LogicalPlan::Scan { .. } => {}
+        LogicalPlan::Scan { .. } | LogicalPlan::OneRow => {}
         LogicalPlan::Filter { input, predicate } => {
             walk(predicate, f);
             plan_exprs(input, f);
@@ -1057,4 +1057,13 @@ fn order_by_prefers_an_output_name_and_accepts_identical_duplicates() {
     // The same expression under one name twice is not ambiguous.
     plan_of("SELECT id AS x, id AS x FROM notes ORDER BY x");
     plan_of("SELECT id, id FROM notes ORDER BY id");
+}
+
+#[test]
+fn select_without_from_binds_over_a_one_row_source() {
+    let text = plan_of("SELECT 1 + 2 AS three WHERE true LIMIT 1").to_string();
+    assert!(text.contains("OneRow"), "{text}");
+    assert!(!text.contains("Scan"), "{text}");
+    assert_eq!(bind_err("SELECT *").sqlstate(), "42601");
+    assert_eq!(bind_err("SELECT nope").sqlstate(), "42703");
 }

@@ -421,18 +421,28 @@ in-process fingerprint refuses a different re-attach, see #379), and the stored 
 frozen format.
 
 **sqllogictest.** All 21 scripts in `crates/lattice-testkit/tests/slt/` (669 records) run unchanged through
-the executor: **433 pass and 236 fail**. `changes.test` (14) and `unsupported.test` (64) pass in full;
-`transactions_visibility.test` 54 of 65, `constraints.test` 38 of 45 and `basics.test` 7 of 9, for example; `types_and_casts.test` is down to 4 of 38
-because its table is declared with `numeric(p, s)`.
+the executor: **486 pass and 183 fail** (read from a local run of the executor-side test, `cargo test -p
+lattice-exec --test slt`; the CI run on the pull request confirms it; the PostgreSQL reference job is
+separate and was not run). `SELECT` without `FROM` now runs (a one-row source in the plan), which moved
+`arithmetic_errors.test` to 43 of 44 (every overflow `22003`, division by zero `22012` and cast `22P02` record
+except one aggregate), `nulls_functions.test` to 20 of 26, `strings.test` to 35 of 42 and
+`types_and_casts.test` to 12 of 38. `changes.test` (14) and `unsupported.test` (64) pass in full;
+`transactions_visibility.test` 54 of 65, `constraints.test` 38 of 45 and `basics.test` 7 of 9, for example.
+`types_and_casts.test` stays low only because its table is declared with `numeric(p, s)`, which the executor
+refuses (26 records, 28 with `constraints.test`); a Lattice-side variant of that script or enforcing
+`numeric(p, s)` is still open (#466).
 The failures are listed one by one, with a reason, in `crates/lattice-exec/tests/slt_expected_failures.txt`.
-203 are statements refused with `0A000` (aggregates 66, `SELECT` without `FROM` 34, joins 25, `GROUP BY`
-and `HAVING` 16, subqueries 10, `DISTINCT` 6, `ALTER TABLE`/`CREATE INDEX` 6, and 40 whose expected error
-is not reached because an earlier part of the statement is refused). The other 33 are not `0A000`: they
-depend on a `CREATE TABLE` with `numeric(p, s)` (refused with `0A000`, so the table does not exist, 28 of
-them in `types_and_casts.test` and `constraints.test`) or on `ALTER TABLE` or `CREATE UNIQUE INDEX` having
-run. The test compares the real SQLSTATE of each failing statement, not its message, and fails if an
-unlisted record fails or a listed one passes. This is **not** the 100 percent P2-13 asks for, and no differential run against PostgreSQL was made
-for this executor.
+150 are statements refused with `0A000` (aggregates 66, joins 25, `GROUP BY` and `HAVING` 16, subqueries 12,
+`DISTINCT` 6, `ALTER TABLE`/`CREATE INDEX` 6, `numeric(p, s)` 2, and 17 whose expected error is not reached
+because an earlier part of the statement is refused). The other 33 are not `0A000`: they depend on a
+`CREATE TABLE` with `numeric(p, s)` (refused with `0A000`, so the table does not exist, 28 of them in
+`types_and_casts.test` and `constraints.test`) or on `ALTER TABLE` or `CREATE UNIQUE INDEX` having run. Each of
+those 33 now names its expected SQLSTATE in the list (`not-0A000(42P01):` and so on) and the test asserts
+it, so a cascade that turns into a different error or a wrong result fails. The test also fails if an
+unlisted record fails or a listed one passes. Running the date records found one real executor defect,
+fixed here: text shaped like a date or timestamp but naming a field that does not exist (`2023-02-29`,
+`25:00:00`) returned `22007` instead of PostgreSQL's `22008`. This is **not** the 100 percent P2-13 asks
+for, and no differential run against PostgreSQL was made for this executor.
 
 **Evidence run locally for `lattice-exec` and the `lattice-api` adapter only, at default proptest case
 counts:** unit, operator, session, model (random workloads against an in-memory oracle, with a

@@ -217,13 +217,27 @@ fn scripts_pass_except_the_listed_records() {
         for (line, detail, code) in &failed {
             if !expected.contains_key(&(name.to_string(), *line)) {
                 problems.push(format!("{name}:{line} fails and is not listed: {detail}"));
-            } else if code.as_deref() != Some("0A000")
-                && !expected[&(name.to_string(), *line)].starts_with("not-0A000:")
-            {
-                // Every listed failure is a binder refusal; any other error is a real defect.
-                problems.push(format!(
-                    "{name}:{line} is listed but fails with something else: {detail}"
-                ));
+            } else {
+                let reason = &expected[&(name.to_string(), *line)];
+                let actual = code.as_deref().unwrap_or("none");
+                match reason
+                    .strip_prefix("not-0A000(")
+                    .and_then(|r| r.split_once("):"))
+                {
+                    // The record names the SQLSTATE it really gets: assert it.
+                    Some((want, _)) if actual != want => problems.push(format!(
+                        "{name}:{line} is listed with SQLSTATE {want} but got {actual}: {detail}"
+                    )),
+                    Some(_) => {}
+                    None if reason.starts_with("not-0A000") => problems.push(format!(
+                        "{name}:{line} must name its SQLSTATE as not-0A000(<code>):"
+                    )),
+                    // Every other listed failure is a refusal of a feature outside the subset.
+                    None if actual != "0A000" => problems.push(format!(
+                        "{name}:{line} is listed but fails with something else: {detail}"
+                    )),
+                    None => {}
+                }
             }
         }
         for ((script, line), reason) in &expected {
@@ -268,8 +282,11 @@ fn tally() {
         let (passed, failed) = run_script(text);
         let lines: Vec<usize> = failed.iter().map(|(l, _, _)| *l).collect();
         println!("{name}: {passed} passed, {} failed {lines:?}", failed.len());
-        for (l, d, _) in &failed {
-            println!("    {name}:{l} {d}");
+        for (l, d, c) in &failed {
+            println!(
+                "    {name}:{l} [{}] {d}",
+                c.as_deref().unwrap_or("no error")
+            );
         }
     }
 }

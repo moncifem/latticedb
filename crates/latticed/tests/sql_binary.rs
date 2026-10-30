@@ -553,11 +553,9 @@ fn sql_runs_over_the_wire_against_a_data_directory() {
         ["DELETE 1"]
     );
     let r = query(&mut a, "SELECT 1");
-    assert_eq!(
-        r.code(),
-        Some("0A000"),
-        "SELECT without FROM is not in the subset"
-    );
+    assert_eq!(r.code(), None, "SELECT without FROM runs on one empty row");
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.tags, ["SELECT 1"]);
 
     // A transaction block that fails stays failed until ROLLBACK.
     query(&mut a, "BEGIN");

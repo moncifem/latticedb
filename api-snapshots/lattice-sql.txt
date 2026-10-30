@@ -736,6 +736,7 @@ pub lattice_sql::plan::LogicalPlan::Limit
 pub lattice_sql::plan::LogicalPlan::Limit::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Limit::limit: core::option::Option<lattice_sql::plan::TypedExpr>
 pub lattice_sql::plan::LogicalPlan::Limit::offset: core::option::Option<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::LogicalPlan::OneRow
 pub lattice_sql::plan::LogicalPlan::Project
 pub lattice_sql::plan::LogicalPlan::Project::columns: alloc::vec::Vec<lattice_sql::plan::OutputColumn>
 pub lattice_sql::plan::LogicalPlan::Project::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>

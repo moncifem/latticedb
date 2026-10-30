@@ -140,6 +140,11 @@ Primary keys are order-preserving byte strings; a table without a key gets a pro
 `0x8000_0000 | table_id << 4 | k`, so a row policy sees them as rows too. This layout is not a
 frozen format; it needs an RFC and an ADR before any persistence claim.
 
+## Constant queries
+
+`SELECT` without `FROM` runs over a one-row source that reads no table, so it takes no row policy and
+needs only the session itself; `WHERE`, `LIMIT` and `OFFSET` apply to that one row.
+
 ## Not run
 
 Joins, `GROUP BY`, aggregates, `DISTINCT` and subqueries (refused by the binder with `0A000`);

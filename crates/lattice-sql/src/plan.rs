@@ -240,6 +240,8 @@ pub enum InsertSource {
 /// The relational and write operators of the single-table subset.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LogicalPlan {
+    /// The source of a `SELECT` without `FROM`: exactly one row with no columns. It reads no table.
+    OneRow,
     /// Every column of the table, in catalog order.
     Scan {
         table: String,
@@ -317,13 +319,14 @@ impl LogicalPlan {
                     Some(returning)
                 }
             }
-            LogicalPlan::Scan { .. } => None,
+            LogicalPlan::Scan { .. } | LogicalPlan::OneRow => None,
         }
     }
 
     fn write_tree(&self, out: &mut String, depth: usize) -> fmt::Result {
         let pad = "  ".repeat(depth);
         match self {
+            LogicalPlan::OneRow => writeln!(out, "{pad}OneRow")?,
             LogicalPlan::Scan { table, as_of, .. } => {
                 write!(out, "{pad}Scan {table}")?;
                 if let Some(a) = as_of {

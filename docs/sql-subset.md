@@ -44,7 +44,7 @@ The intended front door is PostgreSQL wire v3 (P2-11). Transaction behaviour is 
 
 | Construct | Support |
 |---|---|
-| `SELECT` list, `*`, aliases, expressions over supported types | Yes |
+| `SELECT` list, `*`, aliases, expressions over supported types | Yes. Without `FROM` the source is one row with no columns (`SELECT 1 + 2`, `SELECT 1 WHERE false`, `LIMIT`/`OFFSET` apply); `*` there is `42601` as in PostgreSQL |
 | `FROM` with one or more tables, `JOIN` (`INNER`, `LEFT`, `CROSS`) with `ON` | Yes. `RIGHT`, `FULL`, `NATURAL`, `LATERAL` no |
 | `WHERE` | Comparison, `AND`/`OR`/`NOT`, `IN (list)`, `BETWEEN`, `LIKE`, `IS [NOT] NULL`. The executor reads only a key range or one entry when `AND` terms compare the primary key or a `UNIQUE` constraint with constants; results are the same as a full scan (see the `lattice-exec` README, Access paths) |
 | `GROUP BY`, `HAVING` | Yes, with `COUNT`, `SUM`, `MIN`, `MAX`, `AVG`; `COUNT(DISTINCT x)` |
@@ -121,7 +121,7 @@ Codes never change meaning once released; new situations get new codes.
   every night `tools/slt_reference.py` checks their expected values against PostgreSQL 17 (except
   the `0A000` records, the records marked `# differs-from-postgres` and the single-session
   transaction scripts). The executor in `crates/lattice-exec` runs them; the records it cannot pass yet
-  are listed with reasons in `crates/lattice-exec/tests/slt_expected_failures.txt`. Coverage, in 21 scripts and 669 records:
+  are listed with reasons in `crates/lattice-exec/tests/slt_expected_failures.txt`: 486 of the 669 records pass, per script in the gate page `docs/gates/phase-2.md` (a script that mostly fails, such as `types_and_casts` at 12 of 38 because of `numeric(p, s)`, is not evidence for its area). Coverage, in 21 scripts and 669 records:
 
   | Area | Scripts |
   |---|---|
