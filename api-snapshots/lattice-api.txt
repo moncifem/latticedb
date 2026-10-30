@@ -217,6 +217,82 @@ pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe(&mut self, &lat
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub mod lattice_api::exec_host
+pub enum lattice_api::exec_host::Grant
+pub lattice_api::exec_host::Grant::AllowAll
+pub lattice_api::exec_host::Grant::DenyAll
+impl lattice_api::exec_host::Grant
+pub fn lattice_api::exec_host::Grant::name(self) -> &'static str
+pub fn lattice_api::exec_host::Grant::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for lattice_api::exec_host::Grant
+pub fn lattice_api::exec_host::Grant::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::exec_host::Grant
+impl core::cmp::PartialEq for lattice_api::exec_host::Grant
+pub fn lattice_api::exec_host::Grant::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::exec_host::Grant
+pub fn lattice_api::exec_host::Grant::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::exec_host::Grant
+impl core::marker::StructuralPartialEq for lattice_api::exec_host::Grant
+pub enum lattice_api::exec_host::PolicyFileError
+pub lattice_api::exec_host::PolicyFileError::Malformed
+pub lattice_api::exec_host::PolicyFileError::OutOfBounds
+impl core::clone::Clone for lattice_api::exec_host::PolicyFileError
+pub fn lattice_api::exec_host::PolicyFileError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::exec_host::PolicyFileError
+impl core::cmp::PartialEq for lattice_api::exec_host::PolicyFileError
+pub fn lattice_api::exec_host::PolicyFileError::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::exec_host::PolicyFileError
+pub fn lattice_api::exec_host::PolicyFileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::exec_host::PolicyFileError
+impl core::marker::StructuralPartialEq for lattice_api::exec_host::PolicyFileError
+pub struct lattice_api::exec_host::ExecHost
+impl lattice_api::exec_host::ExecHost
+pub fn lattice_api::exec_host::ExecHost::handler(&self) -> lattice_api::exec_host::ExecProxy
+pub fn lattice_api::exec_host::ExecHost::shutdown(&self)
+pub fn lattice_api::exec_host::ExecHost::start<I, C, R>(impl core::ops::function::FnOnce() -> core::result::Result<lattice_exec::db::Database<I, C, R>, lattice_exec::error::ExecError> + core::marker::Send + 'static, lattice_api::exec_host::PolicyTable, lattice_api::exec_host::HostLimits) -> core::result::Result<Self, alloc::string::String> where I: lattice_seams::Io + 'static, C: lattice_seams::Clock + core::clone::Clone + 'static, R: lattice_seams::Rng + 'static
+pub fn lattice_api::exec_host::ExecHost::start_dir(std::path::PathBuf, lattice_api::exec_host::PolicyTable, lattice_api::exec_host::HostLimits) -> core::result::Result<Self, alloc::string::String>
+pub fn lattice_api::exec_host::ExecHost::unattached_tables(&self) -> &[alloc::string::String]
+impl core::ops::drop::Drop for lattice_api::exec_host::ExecHost
+pub fn lattice_api::exec_host::ExecHost::drop(&mut self)
+pub struct lattice_api::exec_host::ExecProxy
+impl core::ops::drop::Drop for lattice_api::exec_host::ExecProxy
+pub fn lattice_api::exec_host::ExecProxy::drop(&mut self)
+impl lattice_api::session::QueryHandler for lattice_api::exec_host::ExecProxy
+pub fn lattice_api::exec_host::ExecProxy::describe(&mut self, &lattice_api::principal::QueryContext<'_>, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_host::ExecProxy::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_host::ExecProxy::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub fn lattice_api::exec_host::ExecProxy::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub struct lattice_api::exec_host::HostLimits
+pub lattice_api::exec_host::HostLimits::max_timeout_ms: core::option::Option<u64>
+pub lattice_api::exec_host::HostLimits::memory_bytes: u64
+impl core::clone::Clone for lattice_api::exec_host::HostLimits
+pub fn lattice_api::exec_host::HostLimits::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::exec_host::HostLimits
+impl core::cmp::PartialEq for lattice_api::exec_host::HostLimits
+pub fn lattice_api::exec_host::HostLimits::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_api::exec_host::HostLimits
+pub fn lattice_api::exec_host::HostLimits::default() -> Self
+impl core::fmt::Debug for lattice_api::exec_host::HostLimits
+pub fn lattice_api::exec_host::HostLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_api::exec_host::HostLimits
+impl core::marker::StructuralPartialEq for lattice_api::exec_host::HostLimits
+pub struct lattice_api::exec_host::PolicyTable
+impl lattice_api::exec_host::PolicyTable
+pub fn lattice_api::exec_host::PolicyTable::account(&self, &str) -> lattice_api::exec_host::Grant
+pub fn lattice_api::exec_host::PolicyTable::development(&self) -> lattice_api::exec_host::Grant
+pub fn lattice_api::exec_host::PolicyTable::new(lattice_api::exec_host::Grant) -> Self
+pub fn lattice_api::exec_host::PolicyTable::parse_accounts(&str) -> core::result::Result<alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_api::exec_host::Grant>, lattice_api::exec_host::PolicyFileError>
+pub fn lattice_api::exec_host::PolicyTable::with_accounts(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, lattice_api::exec_host::Grant>) -> Self
+impl core::clone::Clone for lattice_api::exec_host::PolicyTable
+pub fn lattice_api::exec_host::PolicyTable::clone(&self) -> Self
+impl core::cmp::Eq for lattice_api::exec_host::PolicyTable
+impl core::cmp::PartialEq for lattice_api::exec_host::PolicyTable
+pub fn lattice_api::exec_host::PolicyTable::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_api::exec_host::PolicyTable
+pub fn lattice_api::exec_host::PolicyTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_api::exec_host::PolicyTable
+pub const lattice_api::exec_host::MAX_POLICY_BYTES: usize
+pub const lattice_api::exec_host::MAX_POLICY_ENTRIES: usize
 pub mod lattice_api::pgwire
 pub enum lattice_api::pgwire::Backend
 pub lattice_api::pgwire::Backend::AuthenticationCleartextPassword
@@ -526,6 +602,11 @@ pub fn lattice_api::session::QueryHandler::describe(&mut self, &lattice_api::pri
 pub fn lattice_api::session::QueryHandler::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
 pub fn lattice_api::session::QueryHandler::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub fn lattice_api::session::QueryHandler::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+impl lattice_api::session::QueryHandler for lattice_api::exec_host::ExecProxy
+pub fn lattice_api::exec_host::ExecProxy::describe(&mut self, &lattice_api::principal::QueryContext<'_>, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_host::ExecProxy::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_host::ExecProxy::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub fn lattice_api::exec_host::ExecProxy::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng> lattice_api::session::QueryHandler for lattice_api::exec_handler::ExecHandler<I, C, R>
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe(&mut self, &lattice_api::principal::QueryContext<'_>, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>

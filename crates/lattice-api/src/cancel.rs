@@ -65,7 +65,7 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Relaxed)
     }
-    fn request(&self) {
+    pub(crate) fn request(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
 }

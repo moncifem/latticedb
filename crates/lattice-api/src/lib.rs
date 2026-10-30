@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod exec_handler;
+pub mod exec_host;
 pub mod pgwire;
 pub mod principal;
 pub mod session;

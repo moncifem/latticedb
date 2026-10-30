@@ -2,8 +2,8 @@
 //!
 //! The handler owns one [`ExecSession`] (the transaction block, the actor's row policy and the
 //! statement limits of one connection) and shares the [`Database`] with the other connections of a
-//! single-threaded host. It is **not wired into any listener**: `latticed` still answers
-//! `SELECT 1`. Cancellation is routed from the session's [`CancellationToken`] into the executor's
+//! single-threaded host. `latticed` reaches it through [`crate::exec_host`], which runs the database on
+//! one thread and gives each connection a proxy. Cancellation is routed from the session's [`CancellationToken`] into the executor's
 //! per-row poll, so a cancelled statement stops between rows and commits nothing.
 //!
 //! **Policy.** The row policy of a connection is derived from the authenticated principal in the
