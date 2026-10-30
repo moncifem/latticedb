@@ -50,10 +50,10 @@ fn would_cycle_matches_ancestry() {
     let parent: u64 = kani::any();
     kani::assume(node <= 3 && parent <= 3);
     // Ancestors of each node (inclusive) in this tree: 3 -> 2 -> 0; 1 (trash) stands alone.
-    let ancestors_inclusive = |n: u64, anc: u64| match n {
-        3 => anc == 3 || anc == 2 || anc == 0,
-        2 => anc == 2 || anc == 0,
-        other => anc == other,
+    let ancestors_inclusive = |n: u64, up: u64| match n {
+        3 => up == 3 || up == 2 || up == 0,
+        2 => up == 2 || up == 0,
+        other => up == other,
     };
     // Moving `node` under `parent` cycles when `node` is `parent` or an ancestor of it.
     assert_eq!(
