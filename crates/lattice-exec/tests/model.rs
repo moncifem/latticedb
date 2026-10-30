@@ -15,7 +15,6 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{Db, fixture};
-use lattice_exec::ExecSession;
 use proptest::prelude::*;
 
 /// `a`, `b`, `u` of one row; the key is the map key.
@@ -244,8 +243,7 @@ struct Model {
 /// Runs the workload and returns a description of the first disagreement, if any.
 fn check(ops: &[Op], mutate_oracle: bool) -> Result<(), String> {
     let f = fixture();
-    let (mut db, mut s, mut viewer): (Db, _, _) =
-        (f.db, ExecSession::allow_all(), ExecSession::allow_all());
+    let (mut db, mut s, mut viewer): (Db, _, _) = (f.db, common::admin(), common::admin());
     s.execute(
         &mut db,
         "CREATE TABLE m (id BIGINT PRIMARY KEY, a INT, b TEXT, c INT NOT NULL DEFAULT 0, u INT UNIQUE)",

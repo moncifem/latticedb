@@ -18,8 +18,8 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
 ## Contract
 
 - `Database::open` opens the log and the row store. `ExecSession::new(ActorPolicy)` binds every
-  transaction of the session to the actor's row policy; `ExecSession::allow_all()` is the explicit
-  allow-all choice. `execute` returns an `ExecResult`: typed `Datum` rows, the columns and a
+  transaction of the session to the actor's row policy; there is no default or allow-all constructor,
+  so a host that wants no restriction says so with `ActorPolicy::new(Rc::new(AllowAll))`. `execute` returns an `ExecResult`: typed `Datum` rows, the columns and a
   PostgreSQL command tag (`SELECT n`, `INSERT 0 n`, `UPDATE n`, `DELETE n`, `BEGIN`, `COMMIT`, `ROLLBACK`).
   `ExecSession::status` is `Idle`, `InTransaction` or `Failed`.
 - **Catalog and stale plans.** The statement is bound against `Database::catalog_view()`, whose
@@ -39,18 +39,36 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
 - **Row policy.** Scans only return rows the actor may read, and the engine checks every final
   old-to-new transition at commit (`42501`). The executor's own constraint probes ignore the read policy,
   as PostgreSQL does for row security, so a duplicate key reveals that a hidden row exists.
+- **Known side channel (interim rule, revisit with the Phase 4 policy).** A duplicate primary key or
+  `UNIQUE` value is `23505` even when the row that holds it is hidden from the actor, as in PostgreSQL
+  row-level security, so an actor can learn that a key exists. Nothing else is revealed: the message is
+  only `duplicate key value violates unique constraint "<name>"`, with no value and no row. A test pins this.
+- **Derived tables.** Physical table ids with bit 31 set are entry tables derived from `UNIQUE`
+  constraints (`0x8000_0000 | table_id << 4 | k`). A `PolicyEvaluator` must decide for them as it decides
+  for the owning table; `lattice_exec::owning_table(id)` (and `is_marker_table`) maps a physical id to
+  its owner. A policy that compares the raw id denies every write to a table that has a `UNIQUE`
+  constraint (`42501`); a test shows both.
+- **`RETURNING`** is evaluated over the row just written or deleted and does not consult the read policy
+  again. A policy whose write rule is wider than its read rule can show a row through `RETURNING` that
+  the actor cannot `SELECT`.
 - **Limits.** `ExecLimits` sets a statement timeout (`SET statement_timeout`, on the database clock) and a
   memory budget. Cancellation, the deadline and the budget are checked for every row; a limit error
   is `57014` (cancelled, timed out) or `53200` (memory) and an aborted statement commits nothing.
   Memory is reserved after a row is decoded and before it is kept, so a statement can exceed its
-  budget by one row; the engine's `scan_at` materialises a vector of borrowed row references first,
-  which the budget does not see.
+  budget by one row. `scan_at` materialises the table's borrowed row references before any poll or
+  charge, so that step is neither cancellable nor counted; a sort polls once per key evaluation and its
+  comparison pass is not interruptible. Write amplification (staged copies of rows and entries) is not
+  charged. A snapshot that was vacuumed away is `72000` with its own `ErrorKind::SnapshotTooOld`.
 
 ## Storage layout (experimental)
 
 The engine catalog persists table ids and names only. **Column definitions are kept in memory** (`Schema`);
 after a restart the host re-registers them with `Database::attach_table`, and until then the table is
-unknown to SQL. Rows are encoded with the engine's typed row codec (`numeric` and `jsonb` as text,
+unknown to SQL. `attach_table` checks only the id and the name against the engine catalog, so a
+different column list or constraint set is accepted after a restart and can silently stop enforcing a
+constraint (#379). Within one process it additionally refuses a definition that differs from the first
+one registered for that id (`42P17`); `detach_table` and a later `attach_table` exercise it. This guard is
+not durable. Rows are encoded with the engine's typed row codec (`numeric` and `jsonb` as text,
 `double precision` as its bit pattern, `uuid` as 16 bytes, `date` and `timestamptz` as integers).
 Primary keys are order-preserving byte strings; a table without a key gets a process-local row id.
 `UNIQUE` constraints keep their entries in separate physical tables with ids

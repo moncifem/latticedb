@@ -32,6 +32,9 @@ pub enum ErrorKind {
     TransactionAborted,
     /// A feature outside what the executor runs.
     Unsupported,
+    /// The snapshot (`AS OF`, or the transaction's own) is older than the retained history; retry on a
+    /// newer snapshot.
+    SnapshotTooOld,
     /// The storage engine failed.
     Storage,
 }
@@ -63,6 +66,11 @@ impl ExecError {
 
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         ExecError::new(ErrorKind::Storage, "XX000", message)
+    }
+
+    /// Stored data failed to decode. The detail stays out of the message a client sees.
+    pub(crate) fn corrupt() -> Self {
+        ExecError::new(ErrorKind::Storage, "XX001", "stored data is corrupt")
     }
 
     pub(crate) fn bind_type(message: impl Into<String>) -> Self {
@@ -160,15 +168,20 @@ impl From<RowError> for ExecError {
                 "40001",
                 "could not serialize access due to concurrent update",
             ),
-            RowError::SnapshotTooOld { .. } => {
-                ExecError::new(ErrorKind::Storage, "72000", e.to_string())
-            }
+            RowError::SnapshotTooOld { .. } => ExecError::new(
+                ErrorKind::SnapshotTooOld,
+                "72000",
+                "snapshot too old: the history it needs was vacuumed; retry on a newer snapshot",
+            ),
             RowError::PermissionDenied => {
                 ExecError::new(ErrorKind::Permission, "42501", "row write denied")
             }
-            RowError::InDoubt(_) => ExecError::new(ErrorKind::Storage, "40003", e.to_string()),
-            RowError::Stale => ExecError::new(ErrorKind::Storage, "XX000", e.to_string()),
-            _ => ExecError::new(ErrorKind::Storage, "XX000", e.to_string()),
+            RowError::InDoubt(_) => {
+                ExecError::new(ErrorKind::Storage, "40003", "the commit outcome is unknown")
+            }
+            // Engine detail (paths, offsets, record contents) is not for clients.
+            RowError::Corrupt(_) => ExecError::corrupt(),
+            _ => ExecError::new(ErrorKind::Storage, "XX000", "internal storage error"),
         }
     }
 }

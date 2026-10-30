@@ -17,6 +17,7 @@ use lattice_core::Config;
 use lattice_engines::limits::{DenyAll, PolicyEvaluator, RowRef, RowWriteRef};
 use lattice_exec::{
     ActorPolicy, Database, ErrorKind, ExecLimits, ExecSession, TxStatus, decode_params,
+    owning_table,
 };
 use lattice_seams::Clock;
 use lattice_sim::SeededRng;
@@ -32,7 +33,7 @@ fn strs(v: &[&[&str]]) -> Vec<Vec<String>> {
 
 fn accounts() -> (common::Fixture, ExecSession) {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     ok(
         &mut f.db,
         &mut s,
@@ -78,7 +79,7 @@ fn begin_commit_rollback_track_the_status_and_the_tags() {
 #[test]
 fn a_transaction_sees_its_own_writes_and_nobody_else_does_before_commit() {
     let (mut f, mut a) = accounts();
-    let mut b = ExecSession::allow_all();
+    let mut b = common::admin();
     ok(&mut f.db, &mut a, "BEGIN");
     ok(&mut f.db, &mut a, "INSERT INTO acct VALUES (3, 1, 'c')");
     ok(&mut f.db, &mut a, "UPDATE acct SET bal = 999 WHERE id = 2");
@@ -105,7 +106,7 @@ fn a_transaction_sees_its_own_writes_and_nobody_else_does_before_commit() {
 #[test]
 fn a_transaction_keeps_its_snapshot_while_others_commit() {
     let (mut f, mut a) = accounts();
-    let mut b = ExecSession::allow_all();
+    let mut b = common::admin();
     ok(&mut f.db, &mut a, "BEGIN");
     assert_eq!(
         rows(&mut f.db, &mut a, "SELECT bal FROM acct WHERE id = 1"),
@@ -132,7 +133,7 @@ fn a_transaction_keeps_its_snapshot_while_others_commit() {
 #[test]
 fn the_first_committer_wins_and_the_loser_gets_40001() {
     let (mut f, mut a) = accounts();
-    let mut b = ExecSession::allow_all();
+    let mut b = common::admin();
     ok(&mut f.db, &mut a, "BEGIN");
     ok(&mut f.db, &mut b, "BEGIN");
     ok(
@@ -168,7 +169,7 @@ fn the_first_committer_wins_and_the_loser_gets_40001() {
 #[test]
 fn disjoint_writes_both_commit() {
     let (mut f, mut a) = accounts();
-    let mut b = ExecSession::allow_all();
+    let mut b = common::admin();
     ok(&mut f.db, &mut a, "BEGIN");
     ok(&mut f.db, &mut b, "BEGIN");
     ok(&mut f.db, &mut a, "UPDATE acct SET bal = 0 WHERE id = 1");
@@ -184,7 +185,7 @@ fn disjoint_writes_both_commit() {
 #[test]
 fn concurrent_inserts_of_one_key_or_one_unique_value_conflict() {
     let (mut f, mut a) = accounts();
-    let mut b = ExecSession::allow_all();
+    let mut b = common::admin();
     ok(&mut f.db, &mut a, "BEGIN");
     ok(&mut f.db, &mut b, "BEGIN");
     ok(&mut f.db, &mut a, "INSERT INTO acct VALUES (5, 1, 'x')");
@@ -229,7 +230,10 @@ fn an_error_in_a_block_fails_it_until_rollback() {
     );
     // A syntax error also fails the block.
     ok(&mut f.db, &mut s, "BEGIN");
-    assert_eq!(err(&mut f.db, &mut s, "SELECT FROM FROM").sqlstate(), "42601");
+    assert_eq!(
+        err(&mut f.db, &mut s, "SELECT FROM FROM").sqlstate(),
+        "42601"
+    );
     assert_eq!(s.status(), TxStatus::Failed);
     ok(&mut f.db, &mut s, "ROLLBACK");
     assert_eq!(s.status(), TxStatus::Idle);
@@ -398,7 +402,7 @@ fn numbers_with_policy(
     policy: Rc<dyn PolicyEvaluator>,
 ) -> (common::Fixture, ExecSession, ExecSession) {
     let mut f = fixture();
-    let mut admin = ExecSession::allow_all();
+    let mut admin = common::admin();
     ok(
         &mut f.db,
         &mut admin,
@@ -519,7 +523,7 @@ fn ticking_db() -> (Database<SharedIo, TickClock, SeededRng>, ExecSession) {
         },
     )
     .unwrap();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     s.execute(&mut db, "CREATE TABLE big (id INT PRIMARY KEY, v INT)")
         .unwrap();
     let values: Vec<String> = (0..200).map(|i| format!("({i}, {i})")).collect();
@@ -631,7 +635,7 @@ fn the_memory_budget_is_reserved_before_rows_are_kept() {
 #[test]
 fn as_of_reads_an_earlier_snapshot_by_time_or_by_changeset() {
     let mut f = fixture();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     f.clock.set(2_000);
     ok(
         &mut f.db,
@@ -722,7 +726,7 @@ fn committed_rows_survive_a_restart_once_the_columns_are_attached_again() {
         &common::config(),
     )
     .unwrap();
-    let mut s = ExecSession::allow_all();
+    let mut s = common::admin();
     // The engine remembers the table's name and id, but not its columns.
     assert_eq!(
         err(&mut db, &mut s, "SELECT * FROM acct").sqlstate(),
@@ -748,4 +752,143 @@ fn committed_rows_survive_a_restart_once_the_columns_are_attached_again() {
     let mut wrong = def;
     wrong.id += 50;
     assert_eq!(db.attach_table(wrong).unwrap_err().sqlstate(), "42P01");
+}
+
+// ----- interim rules recorded in the review -----
+
+#[test]
+fn a_duplicate_key_held_by_a_hidden_row_is_23505_and_reveals_only_the_constraint_name() {
+    // Interim rule (P2-1): unique and primary-key violations keep PostgreSQL's row-security
+    // semantics, so the existence of the key leaks. Nothing else may: the message is the constraint
+    // name and no value, and the error kind is a constraint error.
+    let (mut f, _admin, mut actor) = numbers_with_policy(Rc::new(EvenIds));
+    assert!(rows(&mut f.db, &mut actor, "SELECT id FROM nums WHERE id = 1").is_empty());
+    let e = err(&mut f.db, &mut actor, "INSERT INTO nums VALUES (1, 12345)");
+    assert_eq!((e.sqlstate(), e.kind()), ("23505", ErrorKind::Constraint));
+    assert_eq!(
+        e.message(),
+        "duplicate key value violates unique constraint \"nums_pkey\""
+    );
+    // A key nobody holds is simply refused by the policy, not reported as a duplicate.
+    assert_eq!(
+        err(&mut f.db, &mut actor, "INSERT INTO nums VALUES (9, 1)").sqlstate(),
+        "42501"
+    );
+}
+
+/// Allows exactly the rows of one table, deciding for a derived `UNIQUE` entry table as it decides for
+/// its owner.
+struct OneTable {
+    table: u32,
+    follow_owner: bool,
+}
+
+impl OneTable {
+    fn ok(&self, physical: u32) -> bool {
+        let t = if self.follow_owner {
+            owning_table(physical)
+        } else {
+            physical
+        };
+        t == self.table
+    }
+}
+
+impl PolicyEvaluator for OneTable {
+    fn allows_read(&self, row: RowRef<'_>) -> bool {
+        self.ok(row.table)
+    }
+    fn allows_write(&self, row: RowWriteRef<'_>) -> bool {
+        self.ok(row.table)
+    }
+}
+
+#[test]
+fn a_restrictive_policy_must_follow_the_owning_table_of_unique_entries() {
+    let mut f = fixture();
+    let mut admin = common::admin();
+    ok(
+        &mut f.db,
+        &mut admin,
+        "CREATE TABLE u (id INT PRIMARY KEY, tag TEXT UNIQUE)",
+    );
+    let id = f.db.schema().table("u").unwrap().id;
+    // The derived entry tables have bit 31 set and map back to the table.
+    assert!(lattice_exec::is_marker_table(
+        f.db.schema().table("u").unwrap().marker_table(0)
+    ));
+    assert_eq!(
+        owning_table(f.db.schema().table("u").unwrap().marker_table(0)),
+        id
+    );
+    assert_eq!(owning_table(id), id);
+    let mut actor = ExecSession::new(ActorPolicy::new(Rc::new(OneTable {
+        table: id,
+        follow_owner: true,
+    })));
+    ok(
+        &mut f.db,
+        &mut actor,
+        "INSERT INTO u VALUES (1, 'a'), (2, 'b')",
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut actor, "SELECT id, tag FROM u"),
+        strs(&[&["1", "a"], &["2", "b"]])
+    );
+    ok(&mut f.db, &mut actor, "UPDATE u SET tag = 'c' WHERE id = 1");
+    ok(&mut f.db, &mut actor, "DELETE FROM u WHERE id = 2");
+    // A policy that compares the raw id refuses the entry table, and so every write to the table.
+    let mut naive = ExecSession::new(ActorPolicy::new(Rc::new(OneTable {
+        table: id,
+        follow_owner: false,
+    })));
+    assert_eq!(
+        err(&mut f.db, &mut naive, "INSERT INTO u VALUES (3, 'z')").sqlstate(),
+        "42501"
+    );
+}
+
+#[test]
+fn re_attaching_a_table_with_another_definition_in_the_same_process_is_refused() {
+    let (mut f, _s) = accounts();
+    let def = f.db.schema().table("acct").unwrap().clone();
+    assert!(f.db.detach_table("acct"));
+    assert_eq!(
+        common::err(&mut f.db, &mut common::admin(), "SELECT * FROM acct").sqlstate(),
+        "42P01"
+    );
+    // Dropping the UNIQUE constraint would silently stop enforcing it.
+    let mut weaker = def.clone();
+    weaker.uniques.clear();
+    let e = f.db.attach_table(weaker).unwrap_err();
+    assert_eq!(e.sqlstate(), "42P17");
+    let mut renumbered = def.clone();
+    renumbered.columns.truncate(2);
+    assert_eq!(
+        f.db.attach_table(renumbered).unwrap_err().sqlstate(),
+        "42P17"
+    );
+    // The original definition goes back in and the rows are intact.
+    f.db.attach_table(def).unwrap();
+    let mut s = common::admin();
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT id FROM acct"),
+        strs(&[&["1"], &["2"]])
+    );
+}
+
+#[test]
+fn an_expired_snapshot_is_its_own_retryable_kind() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    ok(&mut f.db, &mut s, "CREATE TABLE h (id INT PRIMARY KEY)");
+    let e = err(
+        &mut f.db,
+        &mut s,
+        "SELECT id FROM h AS OF CHANGESET '00000000000000000000000000'",
+    );
+    assert_eq!(
+        (e.sqlstate(), e.kind()),
+        ("72000", ErrorKind::SnapshotTooOld)
+    );
 }

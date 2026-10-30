@@ -172,11 +172,6 @@ impl ExecSession {
         }
     }
 
-    /// A session with the explicit allow-all policy.
-    pub fn allow_all() -> Self {
-        ExecSession::new(ActorPolicy::allow_all())
-    }
-
     /// The transaction status after the last statement.
     pub fn status(&self) -> TxStatus {
         match (&self.txn, self.failed) {

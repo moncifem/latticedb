@@ -469,7 +469,9 @@ pub(crate) fn cast(v: Datum, to: SqlType) -> Result<Datum, ExecError> {
         }
         (Datum::Numeric(d), SqlType::Numeric) => Ok(Datum::Numeric(d)),
         (Datum::Numeric(d), SqlType::DoublePrecision) => Ok(Datum::Float(d.to_f64())),
-        (Datum::Date(d), SqlType::Timestamptz) => Ok(Datum::Timestamp(date_to_micros(d))),
+        (Datum::Date(d), SqlType::Timestamptz) => {
+            date_to_micros(d).map(Datum::Timestamp).ok_or_else(range)
+        }
         (Datum::Date(d), SqlType::Date) => Ok(Datum::Date(d)),
         (Datum::Timestamp(t), SqlType::Date) => {
             micros_to_date(t).map(Datum::Date).ok_or_else(range)
@@ -613,7 +615,9 @@ fn function(name: &str, a: &[Datum], ty: SqlType, ctx: &EvalCtx<'_>) -> Result<D
 fn timestamp_arg(v: &Datum) -> Result<i64, ExecError> {
     match v {
         Datum::Timestamp(t) => Ok(*t),
-        Datum::Date(d) => Ok(date_to_micros(*d)),
+        Datum::Date(d) => {
+            date_to_micros(*d).ok_or_else(|| ExecError::eval("22008", "date out of range"))
+        }
         _ => Err(ExecError::bind_type("a date or timestamp was expected")),
     }
 }

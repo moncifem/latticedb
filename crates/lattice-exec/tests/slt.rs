@@ -100,7 +100,7 @@ fn run_script(text: &str) -> (usize, Vec<(usize, String)>) {
     let f = fixture();
     let mut runner = Runner {
         db: f.db,
-        session: ExecSession::allow_all(),
+        session: common::admin(),
     };
     let records = parse(text, "lattice").unwrap();
     let report = run(&records, &mut runner);
@@ -126,6 +126,11 @@ fn scripts_pass_except_the_listed_records() {
         for (line, detail) in &failed {
             if !expected.contains_key(&(name.to_string(), *line)) {
                 problems.push(format!("{name}:{line} fails and is not listed: {detail}"));
+            } else if !detail.contains("0A000") {
+                // Every listed failure is a binder refusal; any other error is a real defect.
+                problems.push(format!(
+                    "{name}:{line} is listed but fails with something else: {detail}"
+                ));
             }
         }
         for ((script, line), reason) in &expected {

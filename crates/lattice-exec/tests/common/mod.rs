@@ -11,7 +11,8 @@
 use std::rc::Rc;
 
 use lattice_core::Config;
-use lattice_exec::{Database, ExecError, ExecResult, ExecSession};
+use lattice_engines::limits::AllowAll;
+use lattice_exec::{ActorPolicy, Database, ExecError, ExecResult, ExecSession};
 use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
 use lattice_testkit::scenario::{SharedClock, SharedIo};
 
@@ -73,4 +74,9 @@ pub fn text(r: &ExecResult) -> Vec<Vec<String>> {
 
 pub fn rows(db: &mut Db, s: &mut ExecSession, sql: &str) -> Vec<Vec<String>> {
     text(&ok(db, s, sql))
+}
+
+/// A session for a trusted administrator: the allow-all policy is chosen explicitly here.
+pub fn admin() -> ExecSession {
+    ExecSession::new(ActorPolicy::new(Rc::new(AllowAll)))
 }

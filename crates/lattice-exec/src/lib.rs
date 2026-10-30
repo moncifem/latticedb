@@ -10,14 +10,15 @@
 //! ```
 //! use std::rc::Rc;
 //! use lattice_core::Config;
-//! use lattice_exec::{Database, ExecSession};
+//! use lattice_engines::limits::AllowAll;
+//! use lattice_exec::{ActorPolicy, Database, ExecSession};
 //! use lattice_sim::{FaultProfile, SeededRng, SimClock, SimIo};
 //! use lattice_testkit::scenario::{SharedClock, SharedIo};
 //!
 //! let disk = SharedIo::new(SimIo::new(1, FaultProfile::clean()));
 //! let clock = SharedClock(Rc::new(SimClock::new(1_000)));
 //! let mut db = Database::open(disk, clock, SeededRng::new(1), &Config::default()).unwrap();
-//! let mut session = ExecSession::allow_all();
+//! let mut session = ExecSession::new(ActorPolicy::new(Rc::new(AllowAll)));
 //! session.execute(&mut db, "CREATE TABLE notes (id INT PRIMARY KEY, title TEXT)").unwrap();
 //! let r = session.execute(&mut db, "INSERT INTO notes VALUES (1, 'a'), (2, 'b') RETURNING id").unwrap();
 //! assert_eq!(r.tag, "INSERT 0 2");
@@ -43,7 +44,7 @@ pub use db::Database;
 pub use decimal::Decimal;
 pub use error::{ErrorKind, ExecError};
 pub use exec::ActorPolicy;
-pub use schema::{ColumnDef, ExecCatalog, Schema, TableDef};
+pub use schema::{ColumnDef, ExecCatalog, Schema, TableDef, is_marker_table, owning_table};
 pub use session::{ExecLimits, ExecResult, ExecSession, ResultColumn, TxStatus, decode_params};
 pub use value::Datum;
 
