@@ -1,0 +1,1 @@
+Design note for live agent collaboration, the first product slice (`docs/design/live-collaboration.md`): the end-to-end flow of two agents sharing a live feed, what exists on `main` and what is missing for each component, the packages in dependency order (tracking issue 518), the risks and a demo script. It changes no code and accepts no format; nothing in it is implemented yet.
