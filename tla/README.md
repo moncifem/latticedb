@@ -48,6 +48,11 @@ timestamps, the members), not over the guard of the action that the switch remov
 | `HlcCounterStuck` | `CounterStuck` | `StrictlyIncreasing` | `HlcCounterStuck` |
 | `SetConvergenceNoTombstone` | `Tombstones = FALSE` | `Convergent` | none (a model-only protection) |
 
+`Commit` over-approximates recovery: `Replay` is enabled at any time, not only after a `Crash`.
+`AckedSurviveCrash` is implied by `AckedAreDurable` and `disk \subseteq cache`, so it is redundant in the
+positive config and only non-vacuous in `CommitSkipFsyncThenCrash`; `MemoryIsDurable` restates the effect of
+`Replay` and can only fail through `SkipRecoverySync`.
+
 Each config carries the violating trace in a comment. The traces were worked out by hand and checked
 with a throwaway breadth-first re-implementation of each model in Python; TLC has not yet run the
 changed models, so the first nightly run is the real check.

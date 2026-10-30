@@ -9,7 +9,9 @@
 \* them and TLC must report StrictlyIncreasing violated.
 \*
 \* LIMITS: one node, no receive/merge of remote timestamps, counter bounded by MaxC, at most MaxIssued
-\* timestamps.
+\* timestamps. Tick differs from crates/lattice-core/src/hlc.rs: on counter exhaustion the kernel moves
+\* the wall part forward by 1, the model refuses the tick. HlcClock::restore after a restart and the
+\* drift bound of observe are not modelled.
 EXTENDS Naturals, Sequences
 CONSTANTS MaxP, MaxC, MaxIssued, Regress, CounterStuck
 VARIABLES pt, l, c, hist

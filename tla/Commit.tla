@@ -17,7 +17,9 @@
 \* LIMITS (see docs/gates/phase-1.md): this is an abstraction over SETS of ids. It does not model record
 \* order, duplicate occurrences, partially written records, segment creation and directory durability,
 \* ambiguous failures, batch ownership of acknowledgements, or recovery re-syncing the way the code
-\* does. It has been checked with TLC over three ids. It is evidence for the one-line protocol only, not
+\* does. The previous version of this model was checked with TLC over three ids; this rewritten
+\* model has not been run through TLC yet. Replay is enabled at any time, not only after a Crash, which
+\* over-approximates recovery. It is evidence for the one-line protocol only, not
 \* for the code paths the simulator exercises, and there is no trace validation between the model and
 \* the code.
 EXTENDS Naturals, FiniteSets, Sequences
@@ -66,7 +68,10 @@ Spec == Init /\ [][Next]_vars
 \* Everything acknowledged is on the disk ...
 AckedAreDurable == acked \subseteq disk
 \* ... so it is still visible after a crash, which replaces the cache by the disk.
+\* (Implied by AckedAreDurable and disk \subseteq cache, so redundant in the positive config; it is
+\* non-vacuous in CommitSkipFsyncThenCrash.)
 AckedSurviveCrash == acked \subseteq cache
 \* Recovery never hands out what a power cut could still take back.
+\* (Restates the effect of Replay; it can only fail through the SkipRecoverySync switch.)
 MemoryIsDurable == memory \subseteq disk
 ====
