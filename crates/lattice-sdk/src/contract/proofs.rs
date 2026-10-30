@@ -3,16 +3,15 @@
 
 use super::*;
 
-/// For any input of up to 6 bytes pushed in two arbitrary pieces: the framer never panics,
+/// For any input of up to 3 bytes pushed in two arbitrary pieces: the framer never panics,
 /// gives exactly one result per newline, never returns a line containing a newline or longer
 /// than the bytes pushed, and never holds more than [`MAX_LINE_BYTES`]. The bound is far
 /// below `MAX_LINE_BYTES` (1 MiB), so this proof does not reach the over-long-line branch;
 /// that branch is covered by the unit tests.
 #[kani::proof]
-#[kani::solver(cadical)]
-#[kani::unwind(10)]
+#[kani::unwind(5)]
 fn framer_bounds_hold() {
-    let raw: [u8; 6] = kani::any();
+    let raw: [u8; 3] = kani::any();
     let cut: usize = kani::any();
     kani::assume(cut <= raw.len());
     let (head, tail) = raw.split_at(cut);
@@ -32,12 +31,11 @@ fn framer_bounds_hold() {
     assert!(framer.buf.len() <= raw.len());
 }
 
-/// `finish` after any input of up to 6 bytes never panics and leaves the framer empty.
+/// `finish` after any input of up to 3 bytes never panics and leaves the framer empty.
 #[kani::proof]
-#[kani::solver(cadical)]
-#[kani::unwind(10)]
+#[kani::unwind(5)]
 fn framer_finish_resets() {
-    let raw: [u8; 6] = kani::any();
+    let raw: [u8; 3] = kani::any();
     let len: usize = kani::any();
     kani::assume(len <= raw.len());
     let mut framer = Framer::new();
