@@ -21,6 +21,9 @@ simulator, fuzzing, model checking and heavier suites and report failures; they 
   (`fuzz-build` job) when one is missing, and the same job runs
   `cargo check --manifest-path fuzz/Cargo.toml --bins --locked` so a broken target fails before 02:00 UTC.
   The check compiles without the sanitizer; it is not a fuzzing run.
+  The same script requires an entry per target in `fuzz/settings.toml` (`-max_len` and its basis) and
+  `$FUZZ_FLAGS` (`-timeout`, `-rss_limit_mb`, `-max_len`) on every `fuzz run`. The nightly job also
+  restores and, on the scheduled default-branch run only, saves a merged corpus per target.
 - The scheduled weekly mutation campaign keeps its two groups: `dependent` (core, lsl) and `self`
   (abi, evalkit, sim, seams, cli, bench, sdk). Two more groups, `engines` (engines, sql, api; workspace
   tests) and `edge` (testkit, sys, latticed; package tests), are planned only by a manual dispatch with

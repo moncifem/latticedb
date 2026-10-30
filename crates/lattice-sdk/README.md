@@ -48,14 +48,18 @@ property fail.
 `outbox::Outbox` is a sans-I/O write queue for offline use (P3-04). `enqueue(turn, kind, body)` returns a stable
 record id `<client id>-<counter>` (the counter is stored with the queue; no time, no randomness). The queue is
 bounded by item count and body bytes and answers an explicit `Full` error. `poll(now, jitter)` returns the next
-`Batch` (one turn, at most `max_batch` records, in enqueue order); one batch is in flight at a time and is resent
+`Batch` (one turn, at most `max_batch` records and at most 1 MiB of encoded `append` line, in enqueue order; a body
+whose escaped line cannot fit alone is refused at `enqueue` with `BodyUnsendable`); one batch is in flight at a time and is resent
 when its deadline passes, with `base_delay << attempt` capped at `max_delay` plus a caller-supplied jitter, all on
 a logical clock. `on_receipts` clears `recorded` and `duplicate` writes; `fenced` drops every queued write of that
 turn, returns them to the application and refuses the turn from then on. `connection_lost` keeps every unacked
 write and resends it at the next poll.
 
 `snapshot` / `from_bytes` store the queue: magic, version 1, client id, next counter, fenced turns, items, CRC-32,
-with one canonical encoding, bounded sizes and no panic on any input. A write is only sent after the application
+with one canonical encoding, bounded sizes and no panic on any input. A stored write that could never be sent
+(escaped line over 1 MiB, possible only from a build before the `BodyUnsendable` check) fails `from_bytes`;
+`from_bytes_lossless` restores the rest, keeps the counter so no record id is reused, and returns those writes
+like fenced ones. A write is only sent after the application
 has stored a `Snapshot` and handed it to `mark_persisted`, so a crash can neither reuse an id for a different write
 nor lose one; a crash between persist and ack just resends under the same id and the server answers `duplicate`.
 Tests (`tests/outbox.rs`) cover scripted scenarios, a crash/restart property against a server that applies each
