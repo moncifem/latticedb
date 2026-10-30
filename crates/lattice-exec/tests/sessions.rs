@@ -1,0 +1,751 @@
+//! Sessions: transactions, snapshot isolation, conflicts, stale plans, row policy, limits, `AS OF`
+//! and restart.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
+mod common;
+
+use std::cell::Cell;
+use std::rc::Rc;
+
+use common::{Db, err, fixture, ok, rows};
+use lattice_core::Config;
+use lattice_engines::limits::{DenyAll, PolicyEvaluator, RowRef, RowWriteRef};
+use lattice_exec::{
+    ActorPolicy, Database, ErrorKind, ExecLimits, ExecSession, TxStatus, decode_params,
+};
+use lattice_seams::Clock;
+use lattice_sim::SeededRng;
+use lattice_sql::binder::bind_statement;
+use lattice_sql::parse_statement;
+use lattice_testkit::scenario::SharedIo;
+
+fn strs(v: &[&[&str]]) -> Vec<Vec<String>> {
+    v.iter()
+        .map(|r| r.iter().map(ToString::to_string).collect())
+        .collect()
+}
+
+fn accounts() -> (common::Fixture, ExecSession) {
+    let mut f = fixture();
+    let mut s = ExecSession::allow_all();
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE acct (id INT PRIMARY KEY, bal INT NOT NULL, tag TEXT UNIQUE)",
+    );
+    ok(
+        &mut f.db,
+        &mut s,
+        "INSERT INTO acct VALUES (1, 100, 'a'), (2, 50, 'b')",
+    );
+    (f, s)
+}
+
+// ----- transaction blocks -----
+
+#[test]
+fn begin_commit_rollback_track_the_status_and_the_tags() {
+    let (mut f, mut s) = accounts();
+    assert_eq!(s.status(), TxStatus::Idle);
+    assert_eq!(ok(&mut f.db, &mut s, "BEGIN").tag, "BEGIN");
+    assert_eq!(s.status(), TxStatus::InTransaction);
+    ok(
+        &mut f.db,
+        &mut s,
+        "UPDATE acct SET bal = bal - 30 WHERE id = 1",
+    );
+    assert_eq!(ok(&mut f.db, &mut s, "COMMIT").tag, "COMMIT");
+    assert_eq!(s.status(), TxStatus::Idle);
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["70"]])
+    );
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "DELETE FROM acct");
+    assert_eq!(ok(&mut f.db, &mut s, "ROLLBACK").tag, "ROLLBACK");
+    assert_eq!(s.status(), TxStatus::Idle);
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT id FROM acct"),
+        strs(&[&["1"], &["2"]])
+    );
+}
+
+#[test]
+fn a_transaction_sees_its_own_writes_and_nobody_else_does_before_commit() {
+    let (mut f, mut a) = accounts();
+    let mut b = ExecSession::allow_all();
+    ok(&mut f.db, &mut a, "BEGIN");
+    ok(&mut f.db, &mut a, "INSERT INTO acct VALUES (3, 1, 'c')");
+    ok(&mut f.db, &mut a, "UPDATE acct SET bal = 999 WHERE id = 2");
+    ok(&mut f.db, &mut a, "DELETE FROM acct WHERE id = 1");
+    // A reads its own changes: the insert, the update and the delete, merged into one view.
+    assert_eq!(
+        rows(&mut f.db, &mut a, "SELECT id, bal FROM acct"),
+        strs(&[&["2", "999"], &["3", "1"]])
+    );
+    // A statement can update a row the same transaction inserted.
+    ok(&mut f.db, &mut a, "UPDATE acct SET bal = 2 WHERE id = 3");
+    // B sees none of it.
+    assert_eq!(
+        rows(&mut f.db, &mut b, "SELECT id, bal FROM acct"),
+        strs(&[&["1", "100"], &["2", "50"]])
+    );
+    ok(&mut f.db, &mut a, "COMMIT");
+    assert_eq!(
+        rows(&mut f.db, &mut b, "SELECT id, bal FROM acct"),
+        strs(&[&["2", "999"], &["3", "2"]])
+    );
+}
+
+#[test]
+fn a_transaction_keeps_its_snapshot_while_others_commit() {
+    let (mut f, mut a) = accounts();
+    let mut b = ExecSession::allow_all();
+    ok(&mut f.db, &mut a, "BEGIN");
+    assert_eq!(
+        rows(&mut f.db, &mut a, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["100"]])
+    );
+    ok(&mut f.db, &mut b, "UPDATE acct SET bal = 1 WHERE id = 1");
+    ok(&mut f.db, &mut b, "INSERT INTO acct VALUES (9, 9, 'z')");
+    // Repeatable read: A still sees the old balance and no new row.
+    assert_eq!(
+        rows(&mut f.db, &mut a, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["100"]])
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut a, "SELECT id FROM acct"),
+        strs(&[&["1"], &["2"]])
+    );
+    ok(&mut f.db, &mut a, "ROLLBACK");
+    assert_eq!(
+        rows(&mut f.db, &mut a, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["1"]])
+    );
+}
+
+#[test]
+fn the_first_committer_wins_and_the_loser_gets_40001() {
+    let (mut f, mut a) = accounts();
+    let mut b = ExecSession::allow_all();
+    ok(&mut f.db, &mut a, "BEGIN");
+    ok(&mut f.db, &mut b, "BEGIN");
+    ok(
+        &mut f.db,
+        &mut a,
+        "UPDATE acct SET bal = bal + 1 WHERE id = 1",
+    );
+    ok(
+        &mut f.db,
+        &mut b,
+        "UPDATE acct SET bal = bal + 10 WHERE id = 1",
+    );
+    ok(&mut f.db, &mut a, "COMMIT");
+    let e = err(&mut f.db, &mut b, "COMMIT");
+    assert_eq!((e.sqlstate(), e.kind()), ("40001", ErrorKind::Conflict));
+    assert_eq!(b.status(), TxStatus::Idle, "a failed commit ends the block");
+    // Only A's change is there, and B can retry on a fresh snapshot.
+    assert_eq!(
+        rows(&mut f.db, &mut b, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["101"]])
+    );
+    ok(
+        &mut f.db,
+        &mut b,
+        "UPDATE acct SET bal = bal + 10 WHERE id = 1",
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut b, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["111"]])
+    );
+}
+
+#[test]
+fn disjoint_writes_both_commit() {
+    let (mut f, mut a) = accounts();
+    let mut b = ExecSession::allow_all();
+    ok(&mut f.db, &mut a, "BEGIN");
+    ok(&mut f.db, &mut b, "BEGIN");
+    ok(&mut f.db, &mut a, "UPDATE acct SET bal = 0 WHERE id = 1");
+    ok(&mut f.db, &mut b, "UPDATE acct SET bal = 0 WHERE id = 2");
+    ok(&mut f.db, &mut a, "COMMIT");
+    ok(&mut f.db, &mut b, "COMMIT");
+    assert_eq!(
+        rows(&mut f.db, &mut a, "SELECT bal FROM acct ORDER BY id"),
+        strs(&[&["0"], &["0"]])
+    );
+}
+
+#[test]
+fn concurrent_inserts_of_one_key_or_one_unique_value_conflict() {
+    let (mut f, mut a) = accounts();
+    let mut b = ExecSession::allow_all();
+    ok(&mut f.db, &mut a, "BEGIN");
+    ok(&mut f.db, &mut b, "BEGIN");
+    ok(&mut f.db, &mut a, "INSERT INTO acct VALUES (5, 1, 'x')");
+    ok(&mut f.db, &mut b, "INSERT INTO acct VALUES (5, 2, 'y')");
+    ok(&mut f.db, &mut a, "COMMIT");
+    assert_eq!(err(&mut f.db, &mut b, "COMMIT").sqlstate(), "40001");
+    // Different keys but the same UNIQUE value: the unique entry is the row they collide on.
+    ok(&mut f.db, &mut a, "BEGIN");
+    ok(&mut f.db, &mut b, "BEGIN");
+    ok(&mut f.db, &mut a, "INSERT INTO acct VALUES (6, 1, 'same')");
+    ok(&mut f.db, &mut b, "INSERT INTO acct VALUES (7, 2, 'same')");
+    ok(&mut f.db, &mut a, "COMMIT");
+    assert_eq!(err(&mut f.db, &mut b, "COMMIT").sqlstate(), "40001");
+    assert_eq!(
+        rows(&mut f.db, &mut a, "SELECT id FROM acct WHERE tag = 'same'"),
+        strs(&[&["6"]])
+    );
+}
+
+#[test]
+fn an_error_in_a_block_fails_it_until_rollback() {
+    let (mut f, mut s) = accounts();
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "UPDATE acct SET bal = 0 WHERE id = 1");
+    assert_eq!(
+        err(&mut f.db, &mut s, "INSERT INTO acct VALUES (1, 1, 'q')").sqlstate(),
+        "23505"
+    );
+    assert_eq!(s.status(), TxStatus::Failed);
+    let e = err(&mut f.db, &mut s, "SELECT 1 FROM acct");
+    assert_eq!(
+        (e.sqlstate(), e.kind()),
+        ("25P02", ErrorKind::TransactionAborted)
+    );
+    assert_eq!(err(&mut f.db, &mut s, "BEGIN").sqlstate(), "25P02");
+    // COMMIT of a failed block rolls it back, like PostgreSQL, and the update is gone.
+    assert_eq!(ok(&mut f.db, &mut s, "COMMIT").tag, "ROLLBACK");
+    assert_eq!(s.status(), TxStatus::Idle);
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT bal FROM acct WHERE id = 1"),
+        strs(&[&["100"]])
+    );
+    // A syntax error also fails the block.
+    ok(&mut f.db, &mut s, "BEGIN");
+    assert_eq!(err(&mut f.db, &mut s, "SELEKT").sqlstate(), "42601");
+    assert_eq!(s.status(), TxStatus::Failed);
+    ok(&mut f.db, &mut s, "ROLLBACK");
+    assert_eq!(s.status(), TxStatus::Idle);
+}
+
+#[test]
+fn a_block_commits_as_one_change_set() {
+    let (mut f, mut s) = accounts();
+    let before = f.db.store().applied_lsn();
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "INSERT INTO acct VALUES (3, 1, 'c')");
+    ok(&mut f.db, &mut s, "UPDATE acct SET bal = 0");
+    ok(&mut f.db, &mut s, "DELETE FROM acct WHERE id = 2");
+    assert_eq!(
+        f.db.store().applied_lsn(),
+        before,
+        "nothing is logged before COMMIT"
+    );
+    ok(&mut f.db, &mut s, "COMMIT");
+    assert_eq!(
+        f.db.store().applied_lsn(),
+        before + 1,
+        "three statements, one change set"
+    );
+    // A read-only block and a statement that matches nothing log nothing.
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "SELECT * FROM acct");
+    ok(&mut f.db, &mut s, "COMMIT");
+    ok(&mut f.db, &mut s, "UPDATE acct SET bal = 1 WHERE id = 404");
+    assert_eq!(f.db.store().applied_lsn(), before + 1);
+}
+
+#[test]
+fn session_statements() {
+    let (mut f, mut s) = accounts();
+    assert_eq!(
+        err(
+            &mut f.db,
+            &mut s,
+            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"
+        )
+        .sqlstate(),
+        "25P01"
+    );
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(
+        &mut f.db,
+        &mut s,
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SHOW transaction_isolation"),
+        strs(&[&["repeatable read"]]),
+        "SERIALIZABLE is requested but snapshot isolation is what runs"
+    );
+    assert_eq!(
+        err(&mut f.db, &mut s, "CREATE TABLE inner_t (a INT)").sqlstate(),
+        "25001"
+    );
+    ok(&mut f.db, &mut s, "ROLLBACK");
+    assert_eq!(
+        ok(&mut f.db, &mut s, "SET client_encoding = 'UTF8'").tag,
+        "SET"
+    );
+    assert_eq!(
+        err(&mut f.db, &mut s, "SET nonsense = 1").sqlstate(),
+        "42704"
+    );
+    assert_eq!(err(&mut f.db, &mut s, "SHOW nonsense").sqlstate(), "42704");
+    ok(&mut f.db, &mut s, "SET statement_timeout = '5s'");
+    assert_eq!(s.limits().timeout_ms, Some(5000));
+    ok(&mut f.db, &mut s, "SET statement_timeout = 0");
+    assert_eq!(s.limits().timeout_ms, None);
+}
+
+// ----- stale plans -----
+
+#[test]
+fn a_plan_bound_before_a_schema_change_is_refused_with_a_clear_error() {
+    let (mut f, mut s) = accounts();
+    let stmt = parse_statement("SELECT bal FROM acct WHERE id = 1").unwrap();
+    let bound = bind_statement(&stmt, &f.db.catalog_view()).unwrap();
+    // Same catalog: the plan runs.
+    let r = s.execute_bound(&mut f.db, &bound, &[], &|| false).unwrap();
+    assert_eq!(common::text(&r), strs(&[&["100"]]));
+    // Data changes do not move the catalog version.
+    ok(&mut f.db, &mut s, "UPDATE acct SET bal = 5");
+    assert!(s.execute_bound(&mut f.db, &bound, &[], &|| false).is_ok());
+    // Any schema change does, even one on another table.
+    ok(&mut f.db, &mut s, "CREATE TABLE other (x INT)");
+    let e = s
+        .execute_bound(&mut f.db, &bound, &[], &|| false)
+        .unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::StalePlan);
+    assert!(
+        e.message().contains("stale plan") && e.message().contains("bind the statement again"),
+        "{e}"
+    );
+    // Re-binding works, and a dropped and re-created table of the same name is stale again.
+    let again = bind_statement(&stmt, &f.db.catalog_view()).unwrap();
+    assert!(s.execute_bound(&mut f.db, &again, &[], &|| false).is_ok());
+    ok(&mut f.db, &mut s, "DROP TABLE acct");
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE acct (id INT PRIMARY KEY, bal INT NOT NULL, tag TEXT UNIQUE)",
+    );
+    let e = s
+        .execute_bound(&mut f.db, &again, &[], &|| false)
+        .unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::StalePlan);
+    // A stale error inside a block fails the block like any other error.
+    ok(&mut f.db, &mut s, "BEGIN");
+    assert!(s.execute_bound(&mut f.db, &again, &[], &|| false).is_err());
+    assert_eq!(s.status(), TxStatus::Failed);
+}
+
+#[test]
+fn bound_statements_check_their_parameters() {
+    let (mut f, mut s) = accounts();
+    let stmt = parse_statement("SELECT id FROM acct WHERE bal > $1").unwrap();
+    let bound = bind_statement(&stmt, &f.db.catalog_view()).unwrap();
+    let p = decode_params(&bound.param_types, &[Some(b"60".to_vec())]).unwrap();
+    let r = s.execute_bound(&mut f.db, &bound, &p, &|| false).unwrap();
+    assert_eq!(common::text(&r), strs(&[&["1"]]));
+    assert_eq!(
+        s.execute_bound(&mut f.db, &bound, &[], &|| false)
+            .unwrap_err()
+            .sqlstate(),
+        "08P01"
+    );
+    assert_eq!(
+        decode_params(&bound.param_types, &[Some(b"x".to_vec())])
+            .unwrap_err()
+            .sqlstate(),
+        "22P02"
+    );
+    let nulls = decode_params(&bound.param_types, &[None]).unwrap();
+    let r = s
+        .execute_bound(&mut f.db, &bound, &nulls, &|| false)
+        .unwrap();
+    assert!(r.rows.is_empty(), "a comparison with NULL is never true");
+}
+
+// ----- row policy -----
+
+/// The actor may touch rows whose integer key is even. The key bytes are the order-preserving form
+/// of the integer, so the last byte's low bit is the id's parity. Entries of unique constraints
+/// (tables with the top bit set) are not rows of the actor's and are left alone.
+struct EvenIds;
+
+fn even(table: u32, key: &[u8]) -> bool {
+    table & 0x8000_0000 != 0 || key.last().is_some_and(|b| b % 2 == 0)
+}
+
+impl PolicyEvaluator for EvenIds {
+    fn allows_read(&self, row: RowRef<'_>) -> bool {
+        even(row.table, row.key)
+    }
+    fn allows_write(&self, row: RowWriteRef<'_>) -> bool {
+        even(row.table, row.key)
+    }
+}
+
+fn numbers_with_policy(
+    policy: Rc<dyn PolicyEvaluator>,
+) -> (common::Fixture, ExecSession, ExecSession) {
+    let mut f = fixture();
+    let mut admin = ExecSession::allow_all();
+    ok(
+        &mut f.db,
+        &mut admin,
+        "CREATE TABLE nums (id INT PRIMARY KEY, v INT)",
+    );
+    ok(
+        &mut f.db,
+        &mut admin,
+        "INSERT INTO nums VALUES (1, 10), (2, 20), (3, 30), (4, 40)",
+    );
+    (f, admin, ExecSession::new(ActorPolicy::new(policy)))
+}
+
+#[test]
+fn reads_only_see_rows_the_actor_may_read() {
+    let (mut f, mut admin, mut actor) = numbers_with_policy(Rc::new(EvenIds));
+    assert_eq!(
+        rows(&mut f.db, &mut actor, "SELECT id FROM nums"),
+        strs(&[&["2"], &["4"]])
+    );
+    // Hidden rows are gone before the filter, so they cannot leak through a predicate either.
+    assert_eq!(
+        rows(&mut f.db, &mut actor, "SELECT id FROM nums WHERE v = 10"),
+        Vec::<Vec<String>>::new()
+    );
+    assert_eq!(rows(&mut f.db, &mut admin, "SELECT id FROM nums").len(), 4);
+}
+
+#[test]
+fn writes_only_reach_rows_the_actor_may_read_and_write() {
+    let (mut f, mut admin, mut actor) = numbers_with_policy(Rc::new(EvenIds));
+    assert_eq!(
+        ok(&mut f.db, &mut actor, "UPDATE nums SET v = v + 1").tag,
+        "UPDATE 2"
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut admin, "SELECT v FROM nums ORDER BY id"),
+        strs(&[&["10"], &["21"], &["30"], &["41"]])
+    );
+    assert_eq!(
+        ok(&mut f.db, &mut actor, "DELETE FROM nums").tag,
+        "DELETE 2"
+    );
+    assert_eq!(
+        rows(&mut f.db, &mut admin, "SELECT id FROM nums"),
+        strs(&[&["1"], &["3"]])
+    );
+    // Inserting a row the policy forbids is refused at commit and writes nothing.
+    let e = err(
+        &mut f.db,
+        &mut actor,
+        "INSERT INTO nums VALUES (5, 50), (6, 60)",
+    );
+    assert_eq!((e.sqlstate(), e.kind()), ("42501", ErrorKind::Permission));
+    assert_eq!(
+        rows(&mut f.db, &mut admin, "SELECT id FROM nums"),
+        strs(&[&["1"], &["3"]])
+    );
+    ok(&mut f.db, &mut actor, "INSERT INTO nums VALUES (8, 80)");
+    // A key collision with a hidden row is still reported, as PostgreSQL does for row security.
+    assert_eq!(
+        err(&mut f.db, &mut actor, "INSERT INTO nums VALUES (1, 0)").sqlstate(),
+        "23505"
+    );
+}
+
+#[test]
+fn a_transactions_own_writes_obey_the_read_policy_too() {
+    let (mut f, _admin, mut actor) = numbers_with_policy(Rc::new(EvenIds));
+    ok(&mut f.db, &mut actor, "BEGIN");
+    ok(&mut f.db, &mut actor, "INSERT INTO nums VALUES (7, 70)");
+    assert_eq!(
+        rows(&mut f.db, &mut actor, "SELECT id FROM nums"),
+        strs(&[&["2"], &["4"]]),
+        "the staged odd row is hidden from its own writer"
+    );
+    assert_eq!(err(&mut f.db, &mut actor, "COMMIT").sqlstate(), "42501");
+}
+
+#[test]
+fn deny_all_reads_nothing_and_writes_nothing() {
+    let (mut f, mut admin, mut actor) = numbers_with_policy(Rc::new(DenyAll));
+    assert!(rows(&mut f.db, &mut actor, "SELECT id FROM nums").is_empty());
+    assert_eq!(
+        err(&mut f.db, &mut actor, "INSERT INTO nums VALUES (9, 9)").sqlstate(),
+        "42501"
+    );
+    assert_eq!(rows(&mut f.db, &mut admin, "SELECT id FROM nums").len(), 4);
+}
+
+// ----- limits -----
+
+/// A clock that moves one millisecond every time it is read, so a deadline passes after a fixed
+/// amount of work and the test needs no real time.
+#[derive(Clone)]
+struct TickClock(Rc<Cell<u64>>);
+
+impl Clock for TickClock {
+    fn now_ms(&self) -> u64 {
+        self.0.set(self.0.get() + 1);
+        self.0.get()
+    }
+}
+
+fn ticking_db() -> (Database<SharedIo, TickClock, SeededRng>, ExecSession) {
+    let disk = SharedIo::new(lattice_sim::SimIo::new(
+        3,
+        lattice_sim::FaultProfile::clean(),
+    ));
+    let mut db = Database::open(
+        disk,
+        TickClock(Rc::new(Cell::new(1_000))),
+        SeededRng::new(5),
+        &Config {
+            dir: "wal".into(),
+            segment_limit: 1 << 20,
+            node: 1,
+        },
+    )
+    .unwrap();
+    let mut s = ExecSession::allow_all();
+    s.execute(&mut db, "CREATE TABLE big (id INT PRIMARY KEY, v INT)")
+        .unwrap();
+    let values: Vec<String> = (0..200).map(|i| format!("({i}, {i})")).collect();
+    s.execute(
+        &mut db,
+        &format!("INSERT INTO big VALUES {}", values.join(", ")),
+    )
+    .unwrap();
+    (db, s)
+}
+
+#[test]
+fn a_statement_timeout_aborts_the_statement_and_its_writes() {
+    let (mut db, mut s) = ticking_db();
+    s.execute(&mut db, "SET statement_timeout = 50").unwrap();
+    let e = s.execute(&mut db, "UPDATE big SET v = v + 1").unwrap_err();
+    assert_eq!((e.sqlstate(), e.kind()), ("57014", ErrorKind::Limit));
+    assert!(e.message().contains("timeout"), "{e}");
+    s.execute(&mut db, "SET statement_timeout = 0").unwrap();
+    let r = s
+        .execute(&mut db, "SELECT v FROM big WHERE id = 0")
+        .unwrap();
+    assert_eq!(
+        common::text(&r),
+        strs(&[&["0"]]),
+        "the aborted update changed nothing"
+    );
+    // A generous timeout lets the same statement finish.
+    s.execute(&mut db, "SET statement_timeout = 100000")
+        .unwrap();
+    assert_eq!(
+        s.execute(&mut db, "UPDATE big SET v = v + 1").unwrap().tag,
+        "UPDATE 200"
+    );
+}
+
+#[test]
+fn cancellation_aborts_between_rows() {
+    let (mut f, mut s) = accounts();
+    let polls = Cell::new(0u32);
+    let cancel = || {
+        polls.set(polls.get() + 1);
+        polls.get() > 1
+    };
+    let e = s
+        .execute_with(&mut f.db, "UPDATE acct SET bal = 0", &[], &cancel)
+        .unwrap_err();
+    assert_eq!((e.sqlstate(), e.kind()), ("57014", ErrorKind::Limit));
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT bal FROM acct ORDER BY id"),
+        strs(&[&["100"], &["50"]])
+    );
+    // Cancelled before it starts.
+    let e = s
+        .execute_with(&mut f.db, "SELECT 1 FROM acct", &[], &|| true)
+        .unwrap_err();
+    assert_eq!(e.sqlstate(), "57014");
+    // Inside a block, a cancelled statement fails the block.
+    ok(&mut f.db, &mut s, "BEGIN");
+    assert!(
+        s.execute_with(&mut f.db, "SELECT 1 FROM acct", &[], &|| true)
+            .is_err()
+    );
+    assert_eq!(s.status(), TxStatus::Failed);
+}
+
+#[test]
+fn the_memory_budget_is_reserved_before_rows_are_kept() {
+    let (mut db, mut s) = ticking_db();
+    s.set_limits(ExecLimits {
+        timeout_ms: None,
+        memory_bytes: 8 * 1024,
+    });
+    let e = s
+        .execute(&mut db, "SELECT * FROM big ORDER BY v DESC")
+        .unwrap_err();
+    assert_eq!((e.sqlstate(), e.kind()), ("53200", ErrorKind::Limit));
+    // A query that keeps few rows fits the same budget.
+    assert_eq!(
+        s.execute(&mut db, "SELECT id FROM big WHERE id = 7")
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+    // Writes are bounded too, and a refused write leaves the table alone.
+    s.set_limits(ExecLimits {
+        timeout_ms: None,
+        memory_bytes: 1024,
+    });
+    assert_eq!(
+        s.execute(&mut db, "DELETE FROM big")
+            .unwrap_err()
+            .sqlstate(),
+        "53200"
+    );
+    s.set_limits(ExecLimits::default());
+    assert_eq!(
+        common::text(
+            &s.execute(&mut db, "SELECT id FROM big WHERE id = 199")
+                .unwrap()
+        ),
+        strs(&[&["199"]])
+    );
+}
+
+// ----- AS OF and restart -----
+
+#[test]
+fn as_of_reads_an_earlier_snapshot_by_time_or_by_changeset() {
+    let mut f = fixture();
+    let mut s = ExecSession::allow_all();
+    f.clock.set(2_000);
+    ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE h (id INT PRIMARY KEY, v TEXT)",
+    );
+    f.clock.set(5_000);
+    ok(&mut f.db, &mut s, "INSERT INTO h VALUES (1, 'first')");
+    let first_lsn = f.db.store().applied_lsn();
+    f.clock.set(9_000);
+    ok(&mut f.db, &mut s, "UPDATE h SET v = 'second'");
+    ok(&mut f.db, &mut s, "INSERT INTO h VALUES (2, 'new')");
+    assert_eq!(
+        rows(&mut f.db, &mut s, "SELECT v FROM h ORDER BY id"),
+        strs(&[&["second"], &["new"]])
+    );
+    // 7 seconds after the epoch is between the two commits.
+    assert_eq!(
+        rows(
+            &mut f.db,
+            &mut s,
+            "SELECT v FROM h AS OF TIMESTAMP '1970-01-01 00:00:07+00'"
+        ),
+        strs(&[&["first"]])
+    );
+    // Before the first row commit the table is empty.
+    assert!(
+        rows(
+            &mut f.db,
+            &mut s,
+            "SELECT v FROM h AS OF TIMESTAMP '1970-01-01 00:00:03+00'"
+        )
+        .is_empty()
+    );
+    let id = f.db.store().changeset_id_at(first_lsn).unwrap();
+    assert_eq!(
+        rows(
+            &mut f.db,
+            &mut s,
+            &format!("SELECT v FROM h AS OF CHANGESET '{id}'")
+        ),
+        strs(&[&["first"]])
+    );
+    let e = err(
+        &mut f.db,
+        &mut s,
+        "SELECT v FROM h AS OF CHANGESET '00000000000000000000000000'",
+    );
+    assert_eq!(e.sqlstate(), "72000");
+    assert_eq!(
+        err(
+            &mut f.db,
+            &mut s,
+            "SELECT v FROM h AS OF CHANGESET 'not-an-id'"
+        )
+        .sqlstate(),
+        "22P02"
+    );
+    // A block's own uncommitted writes are not part of a historical snapshot.
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "INSERT INTO h VALUES (3, 'staged')");
+    assert_eq!(
+        rows(
+            &mut f.db,
+            &mut s,
+            "SELECT v FROM h AS OF TIMESTAMP '1970-01-01 00:00:07+00'"
+        ),
+        strs(&[&["first"]])
+    );
+    ok(&mut f.db, &mut s, "ROLLBACK");
+}
+
+#[test]
+fn committed_rows_survive_a_restart_once_the_columns_are_attached_again() {
+    let (mut f, mut s) = accounts();
+    ok(&mut f.db, &mut s, "BEGIN");
+    ok(&mut f.db, &mut s, "UPDATE acct SET bal = 7 WHERE id = 2");
+    ok(&mut f.db, &mut s, "ROLLBACK");
+    ok(&mut f.db, &mut s, "UPDATE acct SET bal = 8 WHERE id = 2");
+    let def = f.db.schema().table("acct").unwrap().clone();
+    let version_before = f.db.catalog_version();
+    drop(f.db);
+    f.disk.restart_process();
+    let mut db: Db = Database::open(
+        f.disk.clone(),
+        lattice_testkit::scenario::SharedClock(f.clock.clone()),
+        SeededRng::new(99),
+        &common::config(),
+    )
+    .unwrap();
+    let mut s = ExecSession::allow_all();
+    // The engine remembers the table's name and id, but not its columns.
+    assert_eq!(
+        err(&mut db, &mut s, "SELECT * FROM acct").sqlstate(),
+        "42P01"
+    );
+    assert_eq!(
+        err(&mut db, &mut s, "CREATE TABLE acct (a INT)").sqlstate(),
+        "42P07",
+        "the name is taken in the catalog"
+    );
+    db.attach_table(def.clone()).unwrap();
+    assert!(db.catalog_version() > 0 && version_before > 0);
+    assert_eq!(
+        rows(&mut db, &mut s, "SELECT id, bal, tag FROM acct ORDER BY id"),
+        strs(&[&["1", "100", "a"], &["2", "8", "b"]])
+    );
+    // Unique entries came back with the rows.
+    assert_eq!(
+        err(&mut db, &mut s, "INSERT INTO acct VALUES (3, 1, 'a')").sqlstate(),
+        "23505"
+    );
+    // Attaching under the wrong id or name is refused.
+    let mut wrong = def;
+    wrong.id += 50;
+    assert_eq!(db.attach_table(wrong).unwrap_err().sqlstate(), "42P01");
+}
