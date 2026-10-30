@@ -12,6 +12,9 @@ on:
       - 'crates/lattice-sim/**'
       - 'formats/corpus/wal-admission-*'
       - 'tools/wal-admission/**'
+      - 'tools/expected-tests/**'
+      - 'tools/check_expected_tests.py'
+      - 'tools/test_check_expected_tests.py'
       - '.github/workflows/wal-admission.yml'
 permissions:
   contents: read
@@ -39,7 +42,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --list > wal-admission-selection.txt
-          test "$(grep -c ': test$' wal-admission-selection.txt)" -eq 14
+          python3 -m unittest discover -s tools -p 'test_check_expected_tests.py'
+          python3 tools/check_expected_tests.py tools/expected-tests/wal-admission.txt wal-admission-selection.txt
           cargo test -p lattice-core --locked --lib --features planted-bugs admission_tests -- --nocapture 2>&1 | tee wal-admission-codec.log
           rm -rf target/wal-admission-cases
           cargo test -p lattice-core --locked --lib --features planted-bugs guarded_upgrade_at_every_observed_mutating_cut_has_no_unguarded_adoption -- --ignored --nocapture 2>&1 | tee wal-admission-crashes.log
@@ -115,7 +119,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p lattice-engines --locked --features lattice-core/planted-bugs --test managed_indexes -- --list > managed-index-selection.txt
-          test "$(grep -c ': test$' managed-index-selection.txt)" -eq 29
+          python3 tools/check_expected_tests.py tools/expected-tests/managed-indexes.txt managed-index-selection.txt
           cargo test -p lattice-engines --locked --features lattice-core/planted-bugs --test managed_indexes -- --nocapture 2>&1 | tee managed-index-semantics.log
           rm -rf target/managed-index-admission-cases
           cargo test -p lattice-engines --locked --features lattice-core/planted-bugs --test managed_indexes export_first_managed_upgrade_cuts_for_frozen_old_reader -- --ignored --nocapture 2>&1 | tee managed-index-upgrade-cuts.log
