@@ -105,6 +105,16 @@ pub trait QueryHandler {
         self.execute(ctx, sql, params)
     }
 
+    /// The wire session has failed the connection's open transaction block because of an error it
+    /// raised itself, one that never reached [`QueryHandler::execute`] or [`QueryHandler::describe`]
+    /// (a cancel seen before dispatch, an unsupported `Bind`, an unknown portal, a duplicate name).
+    /// A handler that keeps its own transaction state must fail its block too, so a later `COMMIT` is
+    /// answered `ROLLBACK` as in PostgreSQL. The default does nothing, which is right for a handler
+    /// with no state of its own. Called at most once per failed block, only on the `InTransaction`
+    /// to `Failed` transition, and also after errors the handler itself returned (it must tolerate
+    /// being told twice).
+    fn abort_transaction(&mut self, _ctx: &QueryContext<'_>) {}
+
     /// Describes with the same cooperative cancellation contract as execution.
     fn describe_cancellable(
         &mut self,
@@ -451,9 +461,7 @@ impl<H: QueryHandler> Session<H> {
             }
             other => {
                 if let Err(e) = self.extended(other, &mut out, cancellation) {
-                    if self.tx == TxStatus::InTransaction {
-                        self.tx = TxStatus::Failed;
-                    }
+                    self.fail_block();
                     out.push(error_message(&e));
                     self.discarding = true;
                 }
@@ -534,10 +542,19 @@ impl<H: QueryHandler> Session<H> {
                 Ok(result)
             }
             Err(e) => {
-                if self.tx == TxStatus::InTransaction {
-                    self.tx = TxStatus::Failed;
-                }
+                self.fail_block();
                 Err(e)
+            }
+        }
+    }
+
+    /// Fails an open transaction block and tells the handler, so both sides agree.
+    fn fail_block(&mut self) {
+        if self.tx == TxStatus::InTransaction {
+            self.tx = TxStatus::Failed;
+            if let Some(principal) = self.principal.as_ref() {
+                self.handler
+                    .abort_transaction(&QueryContext::new(principal));
             }
         }
     }

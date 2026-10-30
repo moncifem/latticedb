@@ -180,13 +180,13 @@ Inside a transaction block the timeout fails the block on the database side too,
 answers `ROLLBACK` and nothing of the block is committed. The same holds when `Parse`/`Describe` fails or
 times out inside a block. A `BEGIN` that times out leaves no block behind: if it ran late, the database
 side discards the block it opened, because the client believes it is outside one. The abort is sent
-with a blocking send, so the client's `57014` can be delayed until the request queue has room. The errors
-that fail both sides are: an error the executor raises, a timeout or a skipped statement in the
-queue, and a `Parse`/`Describe` that fails in the executor's handler. **Known gap (#419):** an error the
-wire session raises itself, which never reaches the executor, fails the session's block only: a
-`CancelRequest` that arrives before dispatch (`57014`), a `Bind` with binary formats (`0A000`), an unknown
-portal or statement, `Parse` `42P05`/`54000`, and the `28000`/`55P03` returns of `describe`. A later
-`COMMIT` after one of those is forwarded and can commit the block, where PostgreSQL answers `ROLLBACK`.
+with a blocking send, so the client's `57014` can be delayed until the request queue has room. An error the
+wire session raises itself, which never reaches the executor (a `CancelRequest` that arrives before
+dispatch, a `Bind` with binary formats, an unknown portal or statement, a duplicate or excess `Parse`, the
+`55P03` of `describe`), also fails the block on the database side: the session tells its handler
+(`QueryHandler::abort_transaction`, #419), so a later `COMMIT` answers `ROLLBACK` and nothing of the block
+is committed, as in PostgreSQL. The only wire error not covered is `28000` (a changed principal), which a
+session cannot produce.
 
 Shutdown stops the listener, which cancels every registered statement, then answers requests still
 queued with `57P01` without running them; it waits for at most the statement that is running (itself
