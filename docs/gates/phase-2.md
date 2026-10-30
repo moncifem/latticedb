@@ -446,7 +446,10 @@ crash" from issue 345 is therefore **not met**: the data survives, SQL cannot re
 ceiling plus 5 s and then gets `57014` (the statement is cancelled and skipped if not started, and an open
 transaction block is failed on the database side so a later `COMMIT` answers `ROLLBACK`; the proxy's abort, the
 thread's skip-path aborts for `Execute` and for `Describe`, the abort for a failed or timed-out `Parse`/
-`Describe`, and the discard of a late `BEGIN` are each pinned by a unit test that fails without it), but a client that disconnects mid-statement does
+`Describe`, and the discard of a late `BEGIN` are each pinned by a unit test that fails without it; a block failed by an
+error the wire session raises itself is failed on the database side too (`QueryHandler::abort_transaction`,
+#419): cancel before dispatch, binary `Bind`, unknown portal or statement, duplicate or excess `Parse` and a
+busy `describe` are each followed by `COMMIT` in a test, and removing the hook fails them), but a client that disconnects mid-statement does
 not stop it, `COMMIT`, DDL and an autocommit statement's commit are not cancelled once dequeued, so a
 `57014` after the ceiling means the outcome is unknown (an autocommit statement may have committed), and
 the backlog of abandoned work can reach `max-connections x ceiling`; a dead database thread is detected (`57P01`, non-zero exit);

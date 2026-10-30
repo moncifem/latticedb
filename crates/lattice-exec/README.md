@@ -66,7 +66,7 @@ Allowed workspace dependencies: `lattice-abi`, `lattice-core`, `lattice-engines`
 - **Aborting a block from the host.** `ExecSession::abort_transaction` fails the open block as an error in
   it would (`25P02` until `ROLLBACK`; `COMMIT` answers `ROLLBACK`). `latticed` calls it when it told the
   client a statement failed that the executor did not see fail (a timeout waiting in the queue, a
-  failed `Parse`/`Describe`). `discard_transaction` ends the block without committing, for a `BEGIN` that
+  failed `Parse`/`Describe`, an error the wire session raised itself). `discard_transaction` ends the block without committing, for a `BEGIN` that
   ran after its client was told it failed.
 - **Limits.** `ExecLimits` sets a statement timeout (`SET statement_timeout`, on the database clock) and a
   memory budget. Cancellation, the deadline and the budget are checked for every row; a limit error

@@ -216,6 +216,8 @@ enum Request {
     /// The client was told a statement failed that the executor did not see fail: fail the open
     /// transaction block so a later COMMIT rolls back, as after any error in a block.
     Abort(u64),
+    /// The wire session failed this connection's block on an error of its own: fail it here too.
+    FailBlock(u64),
     Stop,
     #[cfg(any(test, feature = "test-hooks"))]
     Stall {
@@ -523,6 +525,11 @@ fn serve<I, C, R>(
                 sessions.remove(&conn);
                 was_in_block.remove(&conn);
             }
+            Request::FailBlock(conn) => {
+                if let Some(handler) = sessions.get_mut(&conn) {
+                    handler.abort_transaction();
+                }
+            }
             Request::Abort(conn) => {
                 if let Some(handler) = sessions.get_mut(&conn) {
                     if was_in_block.get(&conn).copied().unwrap_or(false) {
@@ -654,6 +661,10 @@ impl QueryHandler for ExecProxy {
         })
     }
 
+    fn abort_transaction(&mut self, _ctx: &QueryContext<'_>) {
+        self.fail_block();
+    }
+
     fn describe_cancellable(
         &mut self,
         ctx: &QueryContext<'_>,
@@ -669,6 +680,15 @@ impl QueryHandler for ExecProxy {
             token: cancellation.clone(),
             reply,
         })
+    }
+}
+
+impl ExecProxy {
+    fn fail_block(&self) {
+        // Queued behind the connection's earlier requests and ahead of its next one.
+        if self.used {
+            let _ = self.requests.send(Request::FailBlock(self.conn));
+        }
     }
 }
 
@@ -1420,6 +1440,37 @@ reader	allow-all
         assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "COMMIT");
         assert_eq!(rows_of(&host, "SELECT id FROM t"), 1);
         drop(p);
+        drop(host);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_wire_error_in_a_block_reaches_the_database_thread_through_the_proxy() {
+        let (host, path) = quick_host("wire-error");
+        let mut s = Session::local_trust(host.handler(), 1, 2);
+        s.on_startup(Startup::Params(vec![("user".into(), "u".into())]));
+        let run = |s: &mut Session<ExecProxy>, sql: &str| {
+            s.on_message(Frontend::Query(sql.into())).messages
+        };
+        run(&mut s, "CREATE TABLE t (id INT PRIMARY KEY)");
+        run(&mut s, "BEGIN");
+        run(&mut s, "INSERT INTO t VALUES (1)");
+        // The wire session raises this itself; the database thread never sees the statement.
+        let out = s
+            .on_message(Frontend::Execute {
+                portal: "missing".into(),
+                max_rows: 0,
+            })
+            .messages;
+        assert_eq!(code(&out), Some("34000"));
+        s.on_message(Frontend::Sync);
+        let out = run(&mut s, "COMMIT");
+        assert!(
+            out.contains(&Backend::CommandComplete("ROLLBACK".into())),
+            "{out:?}"
+        );
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        drop(s);
         drop(host);
         std::fs::remove_dir_all(path).unwrap();
     }

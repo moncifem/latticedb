@@ -196,6 +196,10 @@ impl<I: Io, C: Clock + Clone, R: Rng> QueryHandler for ExecHandler<I, C, R> {
         }
     }
 
+    fn abort_transaction(&mut self, _ctx: &QueryContext<'_>) {
+        ExecHandler::abort_transaction(self);
+    }
+
     fn execute_cancellable(
         &mut self,
         ctx: &QueryContext<'_>,
@@ -606,5 +610,169 @@ mod tests {
         h.execute(&ctx, "SET statement_timeout = 0", &[]).unwrap();
         let shown = h.execute(&ctx, "SHOW statement_timeout", &[]).unwrap();
         assert_eq!(shown.rows, vec![vec![Some(b"50ms".to_vec())]]);
+    }
+
+    // ----- errors raised by the wire session itself must fail the executor's block too -----
+
+    type Wire = Session<ExecHandler<SharedIo, SharedClock, SeededRng>>;
+
+    /// A session inside a block with one staged row.
+    fn block_with_a_row(db: &Rc<RefCell<Db>>) -> Wire {
+        let mut s = ready_session(db);
+        query(&mut s, "CREATE TABLE t (id INT PRIMARY KEY)");
+        query(&mut s, "BEGIN");
+        query(&mut s, "INSERT INTO t VALUES (1)");
+        s
+    }
+
+    fn send(s: &mut Wire, msg: Frontend) -> Vec<Backend> {
+        s.on_message(msg).messages
+    }
+
+    fn parse(name: &str, sql: &str) -> Frontend {
+        Frontend::Parse {
+            name: name.into(),
+            query: sql.into(),
+            param_types: vec![],
+        }
+    }
+
+    fn bind(portal: &str, statement: &str, formats: Vec<i16>) -> Frontend {
+        Frontend::Bind {
+            portal: portal.into(),
+            statement: statement.into(),
+            param_formats: formats,
+            params: vec![],
+            result_formats: vec![],
+        }
+    }
+
+    /// After the error the wire session is Failed; COMMIT must roll back and nothing may be visible.
+    fn assert_commit_rolls_back(s: &mut Wire, db: &Rc<RefCell<Db>>) {
+        send(s, Frontend::Sync);
+        assert_eq!(s.tx_status(), WireStatus::Failed);
+        let out = query(s, "COMMIT");
+        assert!(
+            out.contains(&Backend::CommandComplete("ROLLBACK".into())),
+            "{out:?}"
+        );
+        assert_eq!(s.tx_status(), WireStatus::Idle);
+        let mut other = ready_session(db);
+        let out = query(&mut other, "SELECT id FROM t");
+        assert!(
+            out.contains(&Backend::CommandComplete("SELECT 0".into())),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn a_cancel_seen_before_dispatch_fails_the_block_on_both_sides() {
+        let db = shared_db();
+        let mut s = block_with_a_row(&db);
+        send(&mut s, parse("", "INSERT INTO t VALUES (2)"));
+        send(&mut s, bind("", "", vec![]));
+        let token = CancellationToken::default();
+        token.request();
+        let out = s
+            .on_message_with_cancellation(
+                Frontend::Execute {
+                    portal: "".into(),
+                    max_rows: 0,
+                },
+                &token,
+            )
+            .messages;
+        assert_eq!(error_code(&out).as_deref(), Some("57014"));
+        assert_commit_rolls_back(&mut s, &db);
+    }
+
+    #[test]
+    fn a_simple_query_cancelled_before_dispatch_fails_the_block_on_both_sides() {
+        let db = shared_db();
+        let mut s = block_with_a_row(&db);
+        let token = CancellationToken::default();
+        token.request();
+        let out = s
+            .on_message_with_cancellation(
+                Frontend::Query("INSERT INTO t VALUES (2)".into()),
+                &token,
+            )
+            .messages;
+        assert_eq!(error_code(&out).as_deref(), Some("57014"));
+        assert_commit_rolls_back(&mut s, &db);
+    }
+
+    #[test]
+    fn a_bind_with_binary_formats_fails_the_block_on_both_sides() {
+        let db = shared_db();
+        let mut s = block_with_a_row(&db);
+        send(&mut s, parse("s", "SELECT id FROM t"));
+        let out = send(&mut s, bind("", "s", vec![1]));
+        assert_eq!(error_code(&out).as_deref(), Some("0A000"));
+        assert_commit_rolls_back(&mut s, &db);
+    }
+
+    #[test]
+    fn an_unknown_statement_or_portal_fails_the_block_on_both_sides() {
+        for (code, msg) in [
+            ("26000", bind("", "missing", vec![])),
+            (
+                "34000",
+                Frontend::Execute {
+                    portal: "missing".into(),
+                    max_rows: 0,
+                },
+            ),
+        ] {
+            let db = shared_db();
+            let mut s = block_with_a_row(&db);
+            let out = send(&mut s, msg);
+            assert_eq!(error_code(&out).as_deref(), Some(code));
+            assert_commit_rolls_back(&mut s, &db);
+        }
+    }
+
+    #[test]
+    fn a_duplicate_or_excess_parse_fails_the_block_on_both_sides() {
+        let db = shared_db();
+        let mut s = block_with_a_row(&db);
+        send(&mut s, parse("s", "SELECT id FROM t"));
+        let out = send(&mut s, parse("s", "SELECT id FROM t"));
+        assert_eq!(error_code(&out).as_deref(), Some("42P05"));
+        assert_commit_rolls_back(&mut s, &db);
+
+        let db = shared_db();
+        let mut s = block_with_a_row(&db);
+        for i in 0..crate::session::MAX_STATEMENTS {
+            send(&mut s, parse(&format!("s{i}"), "SELECT id FROM t"));
+        }
+        let out = send(&mut s, parse("one-too-many", "SELECT id FROM t"));
+        assert_eq!(error_code(&out).as_deref(), Some("54000"));
+        assert_commit_rolls_back(&mut s, &db);
+    }
+
+    #[test]
+    fn a_describe_that_finds_the_database_busy_fails_the_block_on_both_sides() {
+        let db = shared_db();
+        let mut s = block_with_a_row(&db);
+        let out = {
+            let _busy = db.borrow_mut();
+            send(&mut s, parse("s", "SELECT id FROM t"))
+        };
+        assert_eq!(error_code(&out).as_deref(), Some("55P03"));
+        assert_commit_rolls_back(&mut s, &db);
+    }
+
+    #[test]
+    fn an_error_outside_a_block_does_not_touch_the_executor() {
+        let db = shared_db();
+        let mut s = ready_session(&db);
+        query(&mut s, "CREATE TABLE t (id INT PRIMARY KEY)");
+        let out = send(&mut s, bind("", "missing", vec![]));
+        assert_eq!(error_code(&out).as_deref(), Some("26000"));
+        send(&mut s, Frontend::Sync);
+        assert_eq!(s.tx_status(), WireStatus::Idle);
+        let out = query(&mut s, "INSERT INTO t VALUES (1)");
+        assert!(out.contains(&Backend::CommandComplete("INSERT 0 1".into())));
     }
 }
