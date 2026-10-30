@@ -177,8 +177,11 @@ statement may still have run or may run later: an autocommit `INSERT`/`UPDATE`/`
 and DDL can have committed even though the client was told `57014`. Treat it like a lost connection:
 read back before retrying. A statement that is skipped because it had not started changed nothing.
 Inside a transaction block the timeout fails the block on the database side too, so a later `COMMIT`
-answers `ROLLBACK` and nothing of the block is committed (a `BEGIN` that times out leaves the connection
-failed until `ROLLBACK`). Other errors need no such care: the executor fails the block itself.
+answers `ROLLBACK` and nothing of the block is committed. The same holds when `Parse`/`Describe` fails or
+times out inside a block. A `BEGIN` that times out leaves no block behind: if it ran late, the database
+side discards the block it opened, because the client believes it is outside one. The abort is sent
+with a blocking send, so the client's `57014` can be delayed until the request queue has room. Other
+errors need no such care: the executor fails the block itself.
 
 Shutdown stops the listener, which cancels every registered statement, then answers requests still
 queued with `57P01` without running them; it waits for at most the statement that is running (itself

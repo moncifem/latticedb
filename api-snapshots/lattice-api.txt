@@ -210,6 +210,7 @@ pub mod lattice_api::exec_handler
 pub struct lattice_api::exec_handler::ExecHandler<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>
 impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng> lattice_api::exec_handler::ExecHandler<I, C, R>
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::abort_transaction(&mut self)
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::discard_transaction(&mut self)
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::new(alloc::rcs::rc::Rc<core::cell::RefCell<lattice_exec::db::Database<I, C, R>>>, lattice_exec::exec::ActorPolicy, impl core::ops::function::Fn(&str) -> lattice_exec::exec::ActorPolicy + 'static) -> Self
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::set_limits(&mut self, lattice_exec::session::ExecLimits)
 pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::tx_status(&self) -> lattice_exec::session::TxStatus
