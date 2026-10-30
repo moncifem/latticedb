@@ -14,6 +14,7 @@
 /crates/lattice-sql/ @moncifem
 /crates/lattice-lsl/ @moncifem
 /crates/lattice-sdk/ @moncifem
+/crates/lattice-proto/ @moncifem
 /crates/lattice-abi/ @moncifem
 /crates/lattice-seams/ @moncifem
 /crates/lattice-sys/ @moncifem

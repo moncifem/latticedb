@@ -19,7 +19,8 @@ pub mod scram;
 
 pub mod auth;
 
-pub mod sync;
+/// The sync frame types and codec live in `lattice-proto` so the SDK shares them; this keeps the old path.
+pub use lattice_proto::sync;
 
 pub mod subscribe;
 
@@ -30,4 +31,5 @@ pub mod backpressure;
 #[cfg(test)]
 mod conformance;
 
-pub mod websocket;
+/// The WebSocket codec and connection state machine, see [`sync`].
+pub use lattice_proto::websocket;

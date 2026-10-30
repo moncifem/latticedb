@@ -231,7 +231,7 @@ jobs:
         with: { toolchain: nightly-2026-10-27, components: rust-src }
       - name: AddressSanitizer (memory errors and leaks) over the unit and simulator tests
         run: >
-          cargo +nightly-2026-10-27 test -p lattice-abi -p lattice-core -p lattice-sim -p lattice-engines -p lattice-api --lib
+          cargo +nightly-2026-10-27 test -p lattice-abi -p lattice-core -p lattice-sim -p lattice-engines -p lattice-api -p lattice-proto --lib
           --target x86_64-unknown-linux-gnu -Zbuild-std &&
           cargo +nightly-2026-10-27 test -p lattice-testkit --test scrub --test kernel_lifecycle --test power_cut_sweep
           --test convergence --test fuzz_lite --target x86_64-unknown-linux-gnu -Zbuild-std

@@ -1,5 +1,8 @@
 pub mod lattice_sdk
 pub mod lattice_sdk::client
+pub use lattice_sdk::client::Event
+pub use lattice_sdk::client::Frame
+pub use lattice_sdk::client::WireError
 pub enum lattice_sdk::client::Action
 pub lattice_sdk::client::Action::Close(lattice_sdk::client::CloseReason)
 pub lattice_sdk::client::Action::Deliver
@@ -9,9 +12,9 @@ pub lattice_sdk::client::Action::Deliver::sub: u32
 pub lattice_sdk::client::Action::Ready
 pub lattice_sdk::client::Action::Ready::max_payload: u32
 pub lattice_sdk::client::Action::Ready::version: u16
-pub lattice_sdk::client::Action::Send(lattice_sdk::client::Frame)
+pub lattice_sdk::client::Action::Send(lattice_proto::sync::Message)
 pub lattice_sdk::client::Action::SubscriptionFailed
-pub lattice_sdk::client::Action::SubscriptionFailed::code: lattice_sdk::client::WireError
+pub lattice_sdk::client::Action::SubscriptionFailed::code: lattice_proto::sync::ErrorCode
 pub lattice_sdk::client::Action::SubscriptionFailed::message: alloc::string::String
 pub lattice_sdk::client::Action::SubscriptionFailed::sub: u32
 impl core::clone::Clone for lattice_sdk::client::Action
@@ -48,7 +51,7 @@ pub lattice_sdk::client::CloseReason::Incompatible
 pub lattice_sdk::client::CloseReason::PingTimeout
 pub lattice_sdk::client::CloseReason::ProtocolViolation(&'static str)
 pub lattice_sdk::client::CloseReason::ServerError
-pub lattice_sdk::client::CloseReason::ServerError::code: lattice_sdk::client::WireError
+pub lattice_sdk::client::CloseReason::ServerError::code: lattice_proto::sync::ErrorCode
 pub lattice_sdk::client::CloseReason::ServerError::message: alloc::string::String
 impl core::clone::Clone for lattice_sdk::client::CloseReason
 pub fn lattice_sdk::client::CloseReason::clone(&self) -> Self
@@ -58,41 +61,6 @@ pub fn lattice_sdk::client::CloseReason::eq(&self, &Self) -> bool
 impl core::fmt::Debug for lattice_sdk::client::CloseReason
 pub fn lattice_sdk::client::CloseReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_sdk::client::CloseReason
-pub enum lattice_sdk::client::Frame
-pub lattice_sdk::client::Frame::Ack
-pub lattice_sdk::client::Frame::Ack::cursor: alloc::vec::Vec<u8>
-pub lattice_sdk::client::Frame::Ack::sub: u32
-pub lattice_sdk::client::Frame::Error
-pub lattice_sdk::client::Frame::Error::code: lattice_sdk::client::WireError
-pub lattice_sdk::client::Frame::Error::message: alloc::string::String
-pub lattice_sdk::client::Frame::Error::sub: u32
-pub lattice_sdk::client::Frame::Events
-pub lattice_sdk::client::Frame::Events::events: alloc::vec::Vec<lattice_sdk::client::Event>
-pub lattice_sdk::client::Frame::Events::sub: u32
-pub lattice_sdk::client::Frame::Hello
-pub lattice_sdk::client::Frame::Hello::agent: alloc::string::String
-pub lattice_sdk::client::Frame::Hello::max_version: u16
-pub lattice_sdk::client::Frame::Hello::min_version: u16
-pub lattice_sdk::client::Frame::Ping
-pub lattice_sdk::client::Frame::Ping::nonce: u64
-pub lattice_sdk::client::Frame::Pong
-pub lattice_sdk::client::Frame::Pong::nonce: u64
-pub lattice_sdk::client::Frame::Subscribe
-pub lattice_sdk::client::Frame::Subscribe::cursor: alloc::vec::Vec<u8>
-pub lattice_sdk::client::Frame::Subscribe::scope: alloc::string::String
-pub lattice_sdk::client::Frame::Subscribe::sub: u32
-pub lattice_sdk::client::Frame::Welcome
-pub lattice_sdk::client::Frame::Welcome::max_payload: u32
-pub lattice_sdk::client::Frame::Welcome::server: alloc::string::String
-pub lattice_sdk::client::Frame::Welcome::version: u16
-impl core::clone::Clone for lattice_sdk::client::Frame
-pub fn lattice_sdk::client::Frame::clone(&self) -> Self
-impl core::cmp::Eq for lattice_sdk::client::Frame
-impl core::cmp::PartialEq for lattice_sdk::client::Frame
-pub fn lattice_sdk::client::Frame::eq(&self, &Self) -> bool
-impl core::fmt::Debug for lattice_sdk::client::Frame
-pub fn lattice_sdk::client::Frame::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for lattice_sdk::client::Frame
 pub enum lattice_sdk::client::Phase
 pub lattice_sdk::client::Phase::Closed
 pub lattice_sdk::client::Phase::Disconnected
@@ -108,23 +76,6 @@ impl core::fmt::Debug for lattice_sdk::client::Phase
 pub fn lattice_sdk::client::Phase::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for lattice_sdk::client::Phase
 impl core::marker::StructuralPartialEq for lattice_sdk::client::Phase
-pub enum lattice_sdk::client::WireError
-pub lattice_sdk::client::WireError::Internal
-pub lattice_sdk::client::WireError::InvalidCursor
-pub lattice_sdk::client::WireError::InvalidScope
-pub lattice_sdk::client::WireError::Malformed
-pub lattice_sdk::client::WireError::TooManySubscriptions
-pub lattice_sdk::client::WireError::UnknownSubscription
-pub lattice_sdk::client::WireError::UnsupportedVersion
-impl core::clone::Clone for lattice_sdk::client::WireError
-pub fn lattice_sdk::client::WireError::clone(&self) -> Self
-impl core::cmp::Eq for lattice_sdk::client::WireError
-impl core::cmp::PartialEq for lattice_sdk::client::WireError
-pub fn lattice_sdk::client::WireError::eq(&self, &Self) -> bool
-impl core::fmt::Debug for lattice_sdk::client::WireError
-pub fn lattice_sdk::client::WireError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for lattice_sdk::client::WireError
-impl core::marker::StructuralPartialEq for lattice_sdk::client::WireError
 pub struct lattice_sdk::client::ClientConfig
 pub lattice_sdk::client::ClientConfig::ack_batch: u32
 pub lattice_sdk::client::ClientConfig::agent: alloc::string::String
@@ -142,17 +93,6 @@ pub fn lattice_sdk::client::ClientConfig::eq(&self, &Self) -> bool
 impl core::fmt::Debug for lattice_sdk::client::ClientConfig
 pub fn lattice_sdk::client::ClientConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_sdk::client::ClientConfig
-pub struct lattice_sdk::client::Event
-pub lattice_sdk::client::Event::cursor: alloc::vec::Vec<u8>
-pub lattice_sdk::client::Event::data: alloc::vec::Vec<u8>
-impl core::clone::Clone for lattice_sdk::client::Event
-pub fn lattice_sdk::client::Event::clone(&self) -> Self
-impl core::cmp::Eq for lattice_sdk::client::Event
-impl core::cmp::PartialEq for lattice_sdk::client::Event
-pub fn lattice_sdk::client::Event::eq(&self, &Self) -> bool
-impl core::fmt::Debug for lattice_sdk::client::Event
-pub fn lattice_sdk::client::Event::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for lattice_sdk::client::Event
 pub struct lattice_sdk::client::SyncClient
 impl lattice_sdk::client::SyncClient
 pub fn lattice_sdk::client::SyncClient::ack(&mut self, u32, &[u8]) -> core::result::Result<alloc::vec::Vec<lattice_sdk::client::Action>, lattice_sdk::client::ClientError>
@@ -160,7 +100,7 @@ pub fn lattice_sdk::client::SyncClient::close(&mut self) -> alloc::vec::Vec<latt
 pub fn lattice_sdk::client::SyncClient::connect(&mut self, u64) -> core::result::Result<alloc::vec::Vec<lattice_sdk::client::Action>, lattice_sdk::client::ClientError>
 pub fn lattice_sdk::client::SyncClient::disconnected(&mut self)
 pub fn lattice_sdk::client::SyncClient::flush_acks(&mut self) -> alloc::vec::Vec<lattice_sdk::client::Action>
-pub fn lattice_sdk::client::SyncClient::handle(&mut self, lattice_sdk::client::Frame, u64) -> core::result::Result<alloc::vec::Vec<lattice_sdk::client::Action>, lattice_sdk::client::ClientError>
+pub fn lattice_sdk::client::SyncClient::handle(&mut self, lattice_proto::sync::Message, u64) -> core::result::Result<alloc::vec::Vec<lattice_sdk::client::Action>, lattice_sdk::client::ClientError>
 pub fn lattice_sdk::client::SyncClient::new(lattice_sdk::client::ClientConfig) -> core::result::Result<Self, lattice_sdk::client::ClientError>
 pub fn lattice_sdk::client::SyncClient::phase(&self) -> lattice_sdk::client::Phase
 pub fn lattice_sdk::client::SyncClient::reconnect(&mut self, u64) -> core::result::Result<alloc::vec::Vec<lattice_sdk::client::Action>, lattice_sdk::client::ClientError>

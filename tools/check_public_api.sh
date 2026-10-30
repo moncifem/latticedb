@@ -20,7 +20,7 @@ API_NIGHTLY="${API_NIGHTLY:-nightly-2026-10-27}"
 # lattice-testkit (test support), lattice-identity, lattice-intel, lattice-packs and lattice-service
 # (server-side crates still changing shape in Phase 2/3, no external consumers yet; add them here
 # when their API stabilises). lattice-bench, lattice-cli and latticed are not libraries.
-CRATES=(lattice-abi lattice-seams lattice-lsl lattice-sim lattice-core lattice-engines lattice-exec lattice-api lattice-sql lattice-sdk lattice-evalkit)
+CRATES=(lattice-abi lattice-seams lattice-proto lattice-lsl lattice-sim lattice-core lattice-engines lattice-exec lattice-api lattice-sql lattice-sdk lattice-evalkit)
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"

@@ -6,7 +6,10 @@ Layer L6.
 
 **Must not.** Contain business rules.
 
-Allowed workspace dependencies: lattice-abi, lattice-seams, lattice-core, lattice-engines, lattice-identity, lattice-service, lattice-packs, lattice-lsl.
+Allowed workspace dependencies: lattice-abi, lattice-seams, lattice-core, lattice-engines, lattice-identity, lattice-service, lattice-packs, lattice-lsl, lattice-proto.
+
+The sync frame types and codec and the WebSocket codec live in `lattice-proto` so the SDK client uses the same
+code; `lattice_api::sync` and `lattice_api::websocket` re-export them.
 
 
 The proposed host integration adds `auth::Accounts` for bounded pre-provisioned verifier lookup and

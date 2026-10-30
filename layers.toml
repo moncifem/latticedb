@@ -13,6 +13,10 @@ allow = []
 layer = 1
 allow = ["lattice-abi", "lattice-sys"]
 
+[crate.lattice-proto]
+layer = 1
+allow = []
+
 [crate.lattice-lsl]
 layer = 2
 allow = ["lattice-abi"]
@@ -55,11 +59,11 @@ allow = ["lattice-abi", "lattice-seams", "lattice-core"]
 
 [crate.lattice-api]
 layer = 6
-allow = ["lattice-abi", "lattice-seams", "lattice-core", "lattice-engines", "lattice-exec", "lattice-identity", "lattice-service", "lattice-packs", "lattice-lsl"]
+allow = ["lattice-abi", "lattice-seams", "lattice-core", "lattice-engines", "lattice-exec", "lattice-identity", "lattice-service", "lattice-packs", "lattice-lsl", "lattice-proto"]
 
 [crate.lattice-sdk]
 layer = 6
-allow = ["lattice-abi", "lattice-lsl"]
+allow = ["lattice-abi", "lattice-lsl", "lattice-proto"]
 
 [crate.lattice-cli]
 layer = 7

@@ -6,7 +6,7 @@ Layer L6.
 
 **Must not.** Hold schema knowledge not generated from LSL.
 
-Allowed workspace dependencies: lattice-abi, lattice-lsl.
+Allowed workspace dependencies: lattice-abi, lattice-lsl, lattice-proto.
 
 ## Modules
 
@@ -38,8 +38,9 @@ caller owns the socket, the frame codec and the clock: it passes decoded `Frame`
 - `tick` sends `Ping` after `ping_interval` idle ticks and drops the connection after `ping_timeout`.
 - Connection errors drop the connection (reconnect allowed); subscription errors remove that subscription.
 
-`lattice-sdk` may not depend on `lattice-api`, so `Frame` mirrors `lattice_api::sync::Message`; the adapter
-that owns the codec converts. No unsafe, no panics from network input. Tests cover scripted scenarios, a
+`lattice-sdk` may not depend on `lattice-api`, so `Frame`, `Event` and `WireError` are the shared types of
+`lattice-proto` (`sync::Message`, `Event`, `ErrorCode`), the ones the server codec uses; `lattice_proto::sync::{encode, decode}`
+turns them into bytes with no conversion. No unsafe, no panics from network input. Tests cover scripted scenarios, a
 property test against a randomised cursor-honouring server, and a deliberately buggy server that makes the
 property fail.
 

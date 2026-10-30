@@ -3,7 +3,7 @@
 useDefault = true
 
 # The Sec-WebSocket-Key sample nonce from RFC 6455 section 1.3. It is public, not a credential. It
-# appears in the websocket codec tests (crates/lattice-api/src/websocket.rs) and in the fuzz seeds
+# appears in the websocket codec tests (crates/lattice-proto/src/websocket.rs) and in the fuzz seeds
 # fuzz/seeds/websocket_frame/upgrade_* (see fuzz/README.md).
 # Only this exact value is allowed, so any other key-like value in those files is still reported.
 # The singular [allowlist] table is used because the pinned scanner (8.24.3) predates [[allowlists]].

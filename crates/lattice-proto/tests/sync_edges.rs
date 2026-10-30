@@ -1,7 +1,7 @@
 //! The printed text of the sync frame error, which reaches operators and logs.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use lattice_api::sync::SyncError;
+use lattice_proto::sync::SyncError;
 
 #[test]
 fn every_sync_error_prints_its_text() {

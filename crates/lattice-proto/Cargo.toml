@@ -1,0 +1,19 @@
+[package]
+name = "lattice-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Shared wire types and codecs of the sync protocol: frames, scopes, cursors, errors, limits and the WebSocket framing."
+
+[dependencies]
+base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
+# sha1 only computes the RFC 6455 Sec-WebSocket-Accept value; it authenticates nothing.
+sha1 = { version = "=0.11.0", default-features = false }
+
+[dev-dependencies]
+proptest = "1.12.0"
+
+[lints]
+workspace = true

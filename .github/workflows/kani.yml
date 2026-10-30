@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [lattice-core, lattice-api, lattice-sdk]
+        package: [lattice-core, lattice-proto, lattice-sdk]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

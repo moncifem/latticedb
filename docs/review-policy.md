@@ -17,7 +17,7 @@ lists the same paths. Keep the three in step.
 | format | `formats/**` |
 | kernel | `crates/lattice-core/**` |
 | auth | `crates/lattice-api/**` files and directory modules named `auth*` or `scram*` |
-| api | `crates/lattice-api/**`: the executor host (`exec_host.rs`, which also holds the policy table and its file parser), handler, principal, session, subscription host, cancel-key registry (`cancel.rs`), sync, wire codec, conformance vectors and tests. Exempt: `README.md` and `src/backpressure.rs` (a pure bounded queue, read: no policy, credential or wire format) |
+| api | `crates/lattice-api/**` and `crates/lattice-proto/**` (the shared sync frame and WebSocket codec): the executor host (`exec_host.rs`, which also holds the policy table and its file parser), handler, principal, session, subscription host, cancel-key registry (`cancel.rs`), sync, wire codec, conformance vectors and tests. Exempt: `README.md` and `src/backpressure.rs` (a pure bounded queue, read: no policy, credential or wire format) |
 | server | `crates/latticed/**` (listener, TLS, startup options, credential and policy file loading, the database thread) |
 | sql-host | `crates/lattice-exec/**` |
 | engines | `crates/lattice-engines/**`. Policy enforcement is in `store.rs` (`authorize_read`, `authorize_write`, authorize-before-conflict ordering) and `index.rs` (candidate authorization), the trait is in `limits.rs`; `rowops.rs`, `catalog.rs`, `typed.rs`, `mvcc.rs` and `feed_emit.rs` implement stored and wire formats. `store.rs` is a mixed-risk file (policy plus ordinary row logic); it is listed anyway, so a pure refactor there gets a quick review, not none |

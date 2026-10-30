@@ -45,7 +45,7 @@ RISK_RULES = (
     ),
     # The protocol front door: executor host and handler (the policy table and its file parser),
     # principal, session, subscription host, cancel-key registry, sync, wire codec, conformance vectors.
-    ("api", ("crates/lattice-api/**",)),
+    ("api", ("crates/lattice-api/**", "crates/lattice-proto/**")),
     # The network server: listener, TLS, startup options, credential and policy file loading,
     # the database thread.
     ("server", ("crates/latticed/**",)),

@@ -2,8 +2,8 @@
 //! error type, control-frame limits of the client encoder, and a one-byte close payload.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use lattice_api::sync::{HEADER_LEN, MAX_PAYLOAD};
-use lattice_api::websocket::{
+use lattice_proto::sync::{HEADER_LEN, MAX_PAYLOAD};
+use lattice_proto::websocket::{
     Config, Connection, DEFAULT_MAX_FRAME_PAYLOAD, DEFAULT_MAX_HEAD, DEFAULT_MAX_MESSAGE,
     EncodeError, Event, HandshakeError, MAX_CONTROL_PAYLOAD, Opcode, SendError, Violation,
     encode_client_frame, encode_frame,

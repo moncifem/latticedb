@@ -134,7 +134,7 @@ flowchart TB
   sql["SQL: lattice-sql (parse, bind, plan) · lattice-exec (execute)"]
   eng["Row engine: lattice-engines (MVCC, AS OF, indexes, catalog)"]
   ker["Kernel: lattice-core (WAL, recovery, commit, CRDTs, scrub)"]
-  low["Foundations: lattice-seams (I/O, clock, rng traits) · lattice-lsl · lattice-abi · lattice-sys"]
+  low["Foundations: lattice-seams (I/O, clock, rng traits) · lattice-proto (sync frames and WebSocket codec) · lattice-lsl · lattice-abi · lattice-sys"]
   api --> sql --> eng --> ker --> low
   sim["lattice-sim: deterministic simulator, fake disk, fault injection"] -.-> ker
 ```

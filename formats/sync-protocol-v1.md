@@ -110,7 +110,7 @@ carrying the same nonce.
 
 ## Worked examples
 
-All bytes in hex. These are the vectors in `crates/lattice-api/src/sync.rs`.
+All bytes in hex. These are the vectors in `crates/lattice-proto/src/sync.rs`.
 
 1. Hello, versions 1 to 1, agent `sdk-rs` (payload 12 bytes):
    `01 0000000c | 0001 0001 0006 73646b2d7273`.

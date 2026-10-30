@@ -14,6 +14,7 @@ members = [
     "crates/lattice-service",
     "crates/lattice-packs",
     "crates/lattice-intel",
+    "crates/lattice-proto",
     "crates/lattice-api",
     "crates/lattice-sdk",
     "crates/lattice-cli",

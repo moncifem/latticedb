@@ -6,9 +6,10 @@
 //! There is no I/O, no thread, no real time and no panic path: every network input maps to an
 //! action or a [`ClientError`].
 //!
-//! The SDK crate may not depend on `lattice-api` (see `layers.toml`), so [`Frame`] mirrors
-//! `lattice_api::sync::Message` one to one. The adapter that owns the wire codec converts between
-//! the two; the field names, limits and error codes here are the ones in the format document.
+//! The SDK crate may not depend on `lattice-api` (see `layers.toml`), so [`Frame`], [`Event`] and
+//! [`WireError`] are the shared types of `lattice-proto`, the same ones the server codec uses;
+//! `lattice_proto::sync::{encode, decode}` turns them into bytes and back. The limits are the ones
+//! in the format document, defined once there.
 //!
 //! # Delivery guarantee
 //!
@@ -23,108 +24,23 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use lattice_proto::sync::{
+    MAX_CURSOR_LEN, MAX_ERROR_MESSAGE_LEN, MAX_NAME_LEN, MAX_SCOPE_LEN, VERSION_MAX, VERSION_MIN,
+};
+
+/// The code of an `Error` frame (format document, "Error codes"). The shared definition in
+/// `lattice_proto::sync`.
+pub use lattice_proto::sync::ErrorCode as WireError;
+/// One event: the position after it and its opaque body. The shared definition in
+/// `lattice_proto::sync`.
+pub use lattice_proto::sync::Event;
+/// A protocol message, the one the server codec uses (`lattice_proto::sync::Message`).
+pub use lattice_proto::sync::Message as Frame;
+
 /// Lowest protocol version this client can speak.
-pub const SUPPORTED_MIN_VERSION: u16 = 1;
+pub const SUPPORTED_MIN_VERSION: u16 = VERSION_MIN;
 /// Highest protocol version this client can speak.
-pub const SUPPORTED_MAX_VERSION: u16 = 1;
-
-const MAX_CURSOR_LEN: usize = 64;
-const MAX_SCOPE_LEN: usize = 512;
-const MAX_NAME_LEN: usize = 64;
-const MAX_ERROR_MESSAGE_LEN: usize = 256;
-
-/// The code of an `Error` frame (format document, "Error codes").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WireError {
-    /// 1: version ranges do not overlap.
-    UnsupportedVersion,
-    /// 2: a frame did not decode or is not allowed in this state.
-    Malformed,
-    /// 3: unknown subscription.
-    UnknownSubscription,
-    /// 4: the server does not serve this scope.
-    InvalidScope,
-    /// 5: the server cannot resume from this cursor.
-    InvalidCursor,
-    /// 6: the subscription limit is reached.
-    TooManySubscriptions,
-    /// 7: the server failed for its own reasons.
-    Internal,
-}
-
-/// One event: the position after it and its opaque body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Event {
-    /// Position after this event; subscribing with it resumes after this event.
-    pub cursor: Vec<u8>,
-    /// Opaque body.
-    pub data: Vec<u8>,
-}
-
-/// A protocol message, mirroring `lattice_api::sync::Message`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Frame {
-    /// Client to server: version range and agent name.
-    Hello {
-        /// Lowest version spoken.
-        min_version: u16,
-        /// Highest version spoken.
-        max_version: u16,
-        /// Client name.
-        agent: String,
-    },
-    /// Server to client: chosen version.
-    Welcome {
-        /// Negotiated version.
-        version: u16,
-        /// Largest payload the server accepts.
-        max_payload: u32,
-        /// Server name.
-        server: String,
-    },
-    /// Client to server: start a subscription.
-    Subscribe {
-        /// Subscription id, not zero.
-        sub: u32,
-        /// Scope text.
-        scope: String,
-        /// Resume after this cursor; empty starts from the beginning.
-        cursor: Vec<u8>,
-    },
-    /// Server to client: events for one subscription.
-    Events {
-        /// Subscription id.
-        sub: u32,
-        /// Events in delivery order.
-        events: Vec<Event>,
-    },
-    /// Client to server: everything up to this cursor is processed.
-    Ack {
-        /// Subscription id.
-        sub: u32,
-        /// Processed position.
-        cursor: Vec<u8>,
-    },
-    /// Either direction: failure; `sub` 0 means the whole connection.
-    Error {
-        /// Failure kind.
-        code: WireError,
-        /// Subscription concerned, or 0.
-        sub: u32,
-        /// Human-readable text.
-        message: String,
-    },
-    /// Either direction: liveness probe.
-    Ping {
-        /// Echoed by the answer.
-        nonce: u64,
-    },
-    /// Either direction: answer to a ping.
-    Pong {
-        /// Nonce of the ping answered.
-        nonce: u64,
-    },
-}
+pub const SUPPORTED_MAX_VERSION: u16 = VERSION_MAX;
 
 /// Connection phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

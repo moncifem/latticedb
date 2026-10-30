@@ -10,6 +10,7 @@ description = "Generated and handwritten client SDKs (Rust first)."
 [dependencies]
 lattice-abi = { path = "../lattice-abi" }
 lattice-lsl = { path = "../lattice-lsl" }
+lattice-proto = { path = "../lattice-proto" }
 
 [dev-dependencies]
 proptest = "1.12.0"
