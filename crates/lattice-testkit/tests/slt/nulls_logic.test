@@ -204,19 +204,57 @@ SELECT count(*) FROM nl WHERE s = s
 ----
 2
 
-# DIFFERS FROM POSTGRESQL BY DESIGN: PostgreSQL accepts IS [NOT] DISTINCT FROM and the boolean IS
-# forms; the subset has IS [NOT] NULL only and refuses the rest with 0A000.
-statement error 0A000
-SELECT id FROM tv WHERE a IS DISTINCT FROM b
+# IS [NOT] DISTINCT FROM and the boolean IS tests never yield NULL, so a NULL comparison is a
+# definite true or false. The row sets were taken from PostgreSQL 16.
 
-statement error 0A000
-SELECT id FROM tv WHERE a IS NOT DISTINCT FROM b
+query I nosort
+SELECT id FROM tv WHERE a IS DISTINCT FROM b ORDER BY id
+----
+2
+3
+4
+6
 
-statement error 0A000
-SELECT id FROM tv WHERE (a = b) IS TRUE
+query I nosort
+SELECT id FROM tv WHERE a IS NOT DISTINCT FROM b ORDER BY id
+----
+1
+5
 
-statement error 0A000
-SELECT id FROM tv WHERE (a = b) IS NOT UNKNOWN
+query I nosort
+SELECT id FROM tv WHERE (a = b) IS TRUE ORDER BY id
+----
+1
+
+query I nosort
+SELECT id FROM tv WHERE (a = b) IS NOT UNKNOWN ORDER BY id
+----
+1
+2
+
+query I nosort
+SELECT id FROM tv WHERE (a = b) IS NOT TRUE ORDER BY id
+----
+2
+3
+4
+5
+6
+
+query I nosort
+SELECT id FROM tv WHERE (a = b) IS FALSE ORDER BY id
+----
+2
+
+query I nosort
+SELECT id FROM tv WHERE (a = b) IS UNKNOWN ORDER BY id
+----
+3
+4
+5
+6
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: ISNULL and NOTNULL are refused with 0A000.
 
 statement error 0A000
 SELECT id FROM tv WHERE a ISNULL
