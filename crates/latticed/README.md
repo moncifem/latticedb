@@ -257,7 +257,14 @@ control character, `=`, `,` or `*` inside it, bits other than `r`, `w`, `d` (eac
 entries per account, a repeated account, or a file over 64 KiB; the error names the line, never the content.
 An account that is not in the file is `deny-all`. There are no row predicates, roles, groups or expressions, and
 no `presence` bit (presence is not in the alpha, issue #626). A transaction resolves names to tables when it
-begins, so a table created by another connection during an open block is denied to that block. Tables are
+begins, so a table created by another connection after a block began reads as empty inside that block (its rows are
+denied, no error) until the next transaction. DDL decides by name: an account without `d` on a name gets `42501` for
+`DROP`, `DROP IF EXISTS` and `CREATE` of it whether or not the table exists, so a carved-out table's existence does not
+show. `d` covers a table's name only; the internal entry tables behind `UNIQUE` columns follow the owner for rows
+(`r`, `w`) and are not a ddl target. **Known limit of `w` without `r`:** as with an INSERT-only privilege in
+PostgreSQL, an `INSERT` of a key that already exists answers `23505` naming the primary key or `UNIQUE` constraint,
+so such an account can probe key values of a table it cannot read (pinned by
+`a_write_only_account_can_probe_unique_keys_of_a_table_it_cannot_read`). Tables are
 named by catalog name, so a table created through a quoted identifier with spaces or punctuation can only be
 covered by `*`.
 

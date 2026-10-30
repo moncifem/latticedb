@@ -85,6 +85,13 @@ impl ActorPolicy {
         }
     }
 
+    /// For an actor with table grants, whether it holds the ddl bit on the table called `name`
+    /// (its own entry, else `*`, the same lookup whether or not the table exists); `None` for any
+    /// other policy, which decides on the catalog change itself.
+    pub(crate) fn ddl_on_table(&self, name: &str) -> Option<bool> {
+        self.2.as_ref().map(|g| g.access(name).ddl)
+    }
+
     /// Whether a statement may write the table called `name`: a plan-level check in addition to the
     /// engine's per-row check. Policies without grants decide per row.
     fn can_write_table(&self, name: &str) -> bool {

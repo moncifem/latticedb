@@ -161,7 +161,7 @@ created after the grants, the file parser's bounds and line numbers, and two pro
 the SQL matrix, and the prefix bug by the feed matrix. Not done: no row predicates, roles, groups or policy language; no
 `presence` bit (issue #626); the MCP backend (#526) has not been built so "alike for SQL, feed and MCP" is shown for SQL and
 the feed only; grants live in a file that the operator edits and restarts for, not in the database; a transaction block
-does not see tables created after it began; the BadCursor/LSN-gap side channel of the feed (#363) is unchanged.
+reads a table created after it began as empty; `w` without `r` can probe primary-key and `UNIQUE` values of the table through `23505` (PostgreSQL INSERT-only behaviour, pinned by a test); the BadCursor/LSN-gap side channel of the feed (#363) is unchanged.
 Verification evidence, not an exit criterion: `lattice-engines::feed_emit` (WP36, issue #238) emits the change feed
 from the row store's retained committed versions. One local run of `cargo test -p lattice-engines --lib feed_emit`
 (6 tests, default settings): the feed from every cursor of 12 seeded 14-commit histories equals an independently

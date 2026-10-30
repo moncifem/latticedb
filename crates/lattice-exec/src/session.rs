@@ -276,7 +276,8 @@ impl ExecSession {
         r
     }
 
-    /// Runs a statement that was bound earlier, after checking its catalog version.
+    /// Runs a statement that was bound earlier, after checking its catalog version and the actor's
+    /// table grants against the plan.
     pub fn execute_bound<I: Io, C: Clock + Clone, R: Rng>(
         &mut self,
         db: &mut Database<I, C, R>,
@@ -511,6 +512,9 @@ impl ExecSession {
                 ),
             ));
         }
+        // Every path that runs a plan, including a statement bound earlier, is checked against the
+        // actor's table grants before anything is read.
+        self.policy.check_plan(&bound.plan)?;
         if params.len() != bound.param_types.len() {
             return Err(ExecError::new(
                 ErrorKind::Bind,

@@ -258,7 +258,13 @@ impl<I: Io, C: Clock + Clone, R: Rng> Database<I, C, R> {
     ) -> Result<bool, ExecError> {
         let policy = &self.bind_policy(policy);
         let known = self.schema.table(name).map_or(0, |d| d.id);
-        authorize_ddl(policy, &[CatalogOp::Drop { table: known }])?;
+        // Grants decide by name, so a name the schema does not know is judged exactly like one it
+        // knows; deciding by the placeholder id would let a carved-out table's existence show.
+        match policy.ddl_on_table(name) {
+            Some(true) => {}
+            Some(false) => return Err(ddl_denied()),
+            None => authorize_ddl(policy, &[CatalogOp::Drop { table: known }])?,
+        }
         let Some(def) = self.schema.table(name) else {
             if if_exists {
                 return Ok(false);
@@ -305,12 +311,16 @@ fn authorize_ddl(policy: &ActorPolicy, tables: &[CatalogOp]) -> Result<(), ExecE
     }) {
         Ok(())
     } else {
-        Err(ExecError::new(
-            ErrorKind::Permission,
-            "42501",
-            "permission denied: the actor may not change the catalog",
-        ))
+        Err(ddl_denied())
     }
+}
+
+fn ddl_denied() -> ExecError {
+    ExecError::new(
+        ErrorKind::Permission,
+        "42501",
+        "permission denied: the actor may not change the catalog",
+    )
 }
 
 fn fingerprint(def: &TableDef) -> String {

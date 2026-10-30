@@ -158,20 +158,26 @@ impl TableGrants {
 
     /// Adds one grant. Fails on a bad or repeated name.
     pub fn insert(&mut self, name: &str, access: TableAccess) -> Result<(), GrantSpecError> {
-        if name == WILDCARD {
-            if self.wildcard.replace(access).is_some() {
-                return Err(GrantSpecError::Duplicate);
-            }
-            return Ok(());
-        }
-        if !valid_name(name) {
+        let star = name == WILDCARD;
+        if !star && !valid_name(name) {
             return Err(GrantSpecError::BadName);
+        }
+        // Check everything before changing anything, so a refused entry leaves the set as it was.
+        let duplicate = if star {
+            self.wildcard.is_some()
+        } else {
+            self.named.contains_key(name)
+        };
+        if duplicate {
+            return Err(GrantSpecError::Duplicate);
         }
         if self.named.len() + usize::from(self.wildcard.is_some()) >= MAX_GRANT_ENTRIES {
             return Err(GrantSpecError::TooManyEntries);
         }
-        if self.named.insert(name.to_string(), access).is_some() {
-            return Err(GrantSpecError::Duplicate);
+        if star {
+            self.wildcard = Some(access);
+        } else {
+            self.named.insert(name.to_string(), access);
         }
         Ok(())
     }
@@ -470,6 +476,27 @@ mod tests {
     }
 
     #[test]
+    fn insert_enforces_the_entry_cap_and_changes_nothing_when_it_refuses() {
+        let mut g = TableGrants::default();
+        for i in 0..MAX_GRANT_ENTRIES {
+            g.insert(&format!("t{i}"), R).unwrap();
+        }
+        let before = g.clone();
+        assert_eq!(g.insert("extra", R), Err(GrantSpecError::TooManyEntries));
+        assert_eq!(g.insert(WILDCARD, R), Err(GrantSpecError::TooManyEntries));
+        assert_eq!(g.insert("t0", RW), Err(GrantSpecError::Duplicate));
+        assert_eq!(g, before, "a refused entry leaves the set as it was");
+        let mut g = TableGrants::default();
+        g.insert(WILDCARD, R).unwrap();
+        assert_eq!(g.insert(WILDCARD, RW), Err(GrantSpecError::Duplicate));
+        assert_eq!(
+            g.wildcard(),
+            R,
+            "a duplicate does not replace the first entry"
+        );
+    }
+
+    #[test]
     fn most_specific_grant_wins_and_is_not_merged() {
         let g = TableGrants::parse("notes=r, secret=-, *=rw").unwrap();
         assert_eq!(g.access("notes"), R, "explicit narrows the wildcard");
@@ -549,7 +576,7 @@ mod tests {
         assert!(!ask(&p, &[CatalogOp::Drop { table: 3 }]));
         assert!(
             !ask(&p, &[CatalogOp::Drop { table: 0 }]),
-            "placeholder id needs *"
+            "an id with no name is judged by `*` (the SQL layer decides drops by name before this)"
         );
         let rename = |table, name: &str| {
             vec![CatalogOp::Rename {
@@ -639,6 +666,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
         #[test]
         fn resolver_agrees_with_a_linear_model(
             entries in prop::collection::btree_map(name_strategy(), bits_strategy(), 0..6),
@@ -671,6 +699,16 @@ mod tests {
             prop_assert_eq!(p.allows_write(write(5)), expected.1);
             prop_assert_eq!(g.access(probe).any(), expected.0 || expected.1 || expected.2);
             prop_assert_eq!(TableGrants::parse(&g.to_string()).unwrap(), g);
+            // DDL: create by name, drop and rename by the table's own entry, an id with no name by `*`.
+            let ask = |ops: &[CatalogOp]| p.authorize_ddl(DdlRef { tables: ops, indexes: &[] });
+            let star_ddl = wildcard.is_some_and(|w| w.2);
+            prop_assert_eq!(ask(&[CatalogOp::Create { table: 0, name: probe.to_string() }]), expected.2);
+            prop_assert_eq!(ask(&[CatalogOp::Drop { table: 5 }]), expected.2);
+            prop_assert_eq!(ask(&[CatalogOp::Drop { table: 99 }]), star_ddl);
+            prop_assert_eq!(
+                ask(&[CatalogOp::Rename { table: 5, name: probe.to_string() }]),
+                expected.2
+            );
         }
     }
 

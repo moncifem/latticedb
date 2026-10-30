@@ -677,3 +677,101 @@ proptest! {
         }
     }
 }
+
+/// Outcomes of the DDL statements on `secret` for one grant set, with `secret` present or absent.
+fn ddl_on_secret(grants: &str, present: bool) -> Vec<Out> {
+    let policies = file_policies(&format!("p\ttables: {grants}\n"));
+    let db = open_db();
+    let dev = Principal::local_development();
+    let mut h = handler(&db, &policies);
+    run(&mut h, &dev, "CREATE TABLE other (id INT PRIMARY KEY)").unwrap();
+    if present {
+        run(&mut h, &dev, "CREATE TABLE secret (id INT PRIMARY KEY)").unwrap();
+    }
+    let who = Principal::account("p");
+    [
+        "DROP TABLE secret",
+        "DROP TABLE IF EXISTS secret",
+        "CREATE TABLE secret (id INT PRIMARY KEY)",
+    ]
+    .iter()
+    .map(|sql| {
+        let mut h = handler(&db, &policies);
+        let r = run(&mut h, &who, sql);
+        match r {
+            Ok(()) => Out::Ok,
+            Err((c, _)) if c == "42P07" => Out::Ok, // allowed, and the name exists
+            Err(_) => outcome(&r),
+        }
+    })
+    .collect()
+}
+
+#[test]
+fn ddl_on_a_carved_out_table_does_not_show_whether_it_exists() {
+    // Without the ddl bit on the name, every DDL statement is denied whether or not the table exists.
+    for grants in [
+        "*=d, secret=-",
+        "*=d, secret=r",
+        "*=rw, secret=r",
+        "other=d",
+    ] {
+        let present = ddl_on_secret(grants, true);
+        let absent = ddl_on_secret(grants, false);
+        assert_eq!(present, absent, "{grants}");
+        assert_eq!(present, [Out::Denied; 3], "{grants}");
+    }
+    // With the bit on the name the holder may know: DROP of a missing table is the ordinary 42P01
+    // (IF EXISTS is a no-op), and nothing is denied.
+    for grants in ["*=d", "secret=d", "*=-, secret=d"] {
+        assert_eq!(ddl_on_secret(grants, true), [Out::Ok; 3], "{grants}");
+        assert_eq!(
+            ddl_on_secret(grants, false),
+            [Out::NoTable, Out::Ok, Out::Ok],
+            "{grants}"
+        );
+    }
+}
+
+#[test]
+fn a_write_only_account_can_probe_unique_keys_of_a_table_it_cannot_read() {
+    // Known limit of `w` without `r`, as with an INSERT-only privilege in PostgreSQL: a duplicate key
+    // answers 23505, so the account learns that the key exists. Pinned so a change is deliberate.
+    let policies = file_policies(FILE);
+    let db = seeded(&policies);
+    let mut h = handler(&db, &policies);
+    let erin = Principal::account("erin");
+    let dup = run(&mut h, &erin, "INSERT INTO notes VALUES (1, 'probe')").unwrap_err();
+    assert_eq!(dup.0, "23505");
+    let mut h = handler(&db, &policies);
+    assert_eq!(
+        outcome(&run(
+            &mut h,
+            &erin,
+            "INSERT INTO notes VALUES (4242, 'fresh')"
+        )),
+        Out::Ok
+    );
+}
+
+#[test]
+fn a_ddl_bit_does_not_reach_the_derived_unique_tables() {
+    // `d` is about the table's name; the derived entry tables follow the owner for rows only.
+    let policies = file_policies("p\ttables: u=d\n");
+    let db = open_db();
+    let mut h = handler(&db, &policies);
+    let p = Principal::account("p");
+    assert_eq!(
+        outcome(&run(
+            &mut h,
+            &p,
+            "CREATE TABLE u (id INT PRIMARY KEY, e TEXT UNIQUE)"
+        )),
+        Out::Ok
+    );
+    let mut h = handler(&db, &policies);
+    assert_eq!(
+        outcome(&run(&mut h, &p, "INSERT INTO u VALUES (1, 'a')")),
+        Out::Denied
+    );
+}
