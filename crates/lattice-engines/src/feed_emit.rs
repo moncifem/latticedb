@@ -31,7 +31,10 @@
 //!   that event, so nothing else is lost. A reader who may not read it is unaffected.
 //! * **Provenance.** The store commits with no author or turn, so events carry author 0 and no turn.
 //!
-//! Cost: one call reads every retained version at or after the cursor's LSN.
+//! Cost: `history_from` visits every key of every table, so a call is O(total rows) even for a
+//! caught-up reader, plus O(versions at or after the cursor's LSN); events (with cloned values) are
+//! built for every write after the cursor, hidden tables included, before the policy filter, so
+//! memory is O(history after the cursor). Nothing interrupts a running call. Issue #543.
 
 use crate::limits::{AllowAll, PolicyEvaluator, RowRef};
 use crate::rowops::MAX_KEY_BYTES;

@@ -111,7 +111,7 @@ denied principal, an unknown table, an unserved scope string and a table hidden 
 feed encoding errors are `Unavailable`; the 12-byte feed cursor is the wire cursor (empty is the origin; another length
 or a cursor past the newest commit is `BadCursor`). The prefix-then-`KeyTooLarge` rule of `feed_emit` is handled inside the
 source: it reads again from the last cursor it saw (whatever table) and skips exactly the blocked event, so a legacy
-oversize key never wedges a reader and no event is lost or repeated. 13 unit tests (`cargo test -p lattice-api --lib
+oversize key never wedges a reader and no event is lost or repeated. 14 unit tests (`cargo test -p lattice-api --lib
 feed_source`, run locally once, default proptest settings): a property test over generated two-table histories
 (inserts, updates, deletes, several rows per commit) checks that paging from the origin and from every event cursor, at
 page sizes 1 to 4, equals a model built from the commit LSNs and key ranks and not from the feed; the denied answer is
@@ -119,11 +119,13 @@ the same `Output` as for an unknown table through a `SubscriptionHost`; a live t
 `(lsn, index)` cursors, the vacuum floor, the oversize-key skip at every page size, and a bounded read racing a writer
 on the same actor. Planted bug `Bug::FeedSourcePolicyDropped` (policy replaced by allow-all) is caught by
 `a_dropped_policy_is_caught_by_the_witness`, with a clean control; two hand mutants (no skip of the blocked event, and a
-reader that stops after one answer or ignores the table) each failed the oversize or model test. Not done: a read costs
-what `events_since_as` costs, one scan of every retained version after the cursor, so `max_events` bounds what one read
-returns and encodes and not the engine scan (an engine-side limit is a follow-up); a table-level read check does not
+reader that stops after one answer or ignores the table) each failed the oversize or model test. Not done: Cost of a read: `MvccTable::history_from` visits every key of every table (a `partition_point` per key, then collect and sort), so each read is O(total rows) even when the reader is caught up, plus O(versions after the cursor); `events_since_as` then builds events and clones values for every write after the cursor, including tables the reader may not see, before the policy filter, so memory per read is O(history after the cursor), not O(`max_events`). `max_events` bounds only what is returned and encoded. A running scan is never interrupted (cancellation is checked only before it starts), and a reader that is not caught up scans twice (a second read from the last cursor confirms the end). Only principals with an allow-all grant reach the scan today. The engine-side limit, a per-principal cap and an LSN index are issue #543. Open follow-up: issue #543. A table-level read check does not
 exist in `PolicyEvaluator` (row level only), so with today's two grants a table is denied exactly when the catalog is
-hidden; the filtered-feed gap question (issue #363) is unchanged; column definitions are not recovered across a restart
+hidden; that check is a precondition for issue #522 and for any first row- or table-level policy, because a policy that
+shows the catalog but denies a table would otherwise read as an empty feed, distinguishable from an unserved scope. The
+`BadCursor` check against the newest applied LSN lets a principal who can read one table binary-search the global commit
+position, and gaps between cursor LSNs show activity on tables it cannot read (same class as issue #363, unchanged); a
+denied request still occupies an actor queue slot. The filtered-feed gap question (issue #363) is unchanged; column definitions are not recovered across a restart
 (#379); no transport supplies the principal and no wake-on-commit exists, so nothing here is live end to end.
 Verification evidence, not an exit criterion: `lattice-engines::feed_emit` (WP36, issue #238) emits the change feed
 from the row store's retained committed versions. One local run of `cargo test -p lattice-engines --lib feed_emit`

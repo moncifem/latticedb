@@ -28,10 +28,17 @@
 //! # Bounds
 //!
 //! One read returns at most `min(limit, max_events)` events, and the host asks again from the last
-//! cursor it sent. The engine reads every retained version after the cursor (its documented cost), so
-//! the bound is on what is returned and encoded, not on the engine's scan. A reader that waits longer
-//! than the statement ceiling plus slack gets [`SourceError::Unavailable`] and its queued read is
-//! skipped if it has not started.
+//! cursor it sent. That bounds only what is returned and encoded. The cost of a read is not bounded
+//! by it: `history_from` visits every key of every table (O(total rows), even when the reader is
+//! caught up) plus the versions after the cursor, and `events_since_as` builds events and clones
+//! values for every write after the cursor, hidden tables included, before the policy filter, so
+//! memory per read is O(history after the cursor). A running scan is never interrupted: a
+//! cancellation or a reader that gave up is seen only before the scan starts. A reader that is not
+//! caught up scans twice, because the source reads once more from the last cursor to confirm the end.
+//! Only principals with an allow-all grant reach the scan today. The engine-side limit, a
+//! per-principal cap and an LSN index are issue #543. A reader that waits longer than the statement
+//! ceiling plus slack gets [`SourceError::Unavailable`], and its queued read is skipped if it has not
+//! started; a denied request still takes a queue slot.
 
 use crate::exec_host::{FeedHandle, Grant, PolicyTable};
 use crate::principal::Principal;
@@ -362,10 +369,11 @@ mod tests {
         fn feed_source_equals_the_model_for_every_cursor(steps in steps(), limit in 1usize..5) {
             let (db, mut h) = writer();
             let model = run_steps(&mut h, &db, &steps);
-            let dev = Principal::local_development();
             let mut cursors: Vec<Vec<u8>> = vec![Vec::new()];
             cursors.extend(model.iter().map(|(_, c, _)| c.clone()));
-            for t in 0..2 {
+            // The development principal and a listed account with an allow-all grant read the same feed.
+            for dev in [Principal::local_development(), Principal::account("alice")] {
+              for t in 0..2 {
                 for from in &cursors {
                     // Byte order is cursor order, the order the client uses.
                     let want: Vec<(&Vec<u8>, bool)> = model
@@ -383,6 +391,7 @@ mod tests {
                     }
                 }
             }
+              }
         }
     }
 
@@ -534,6 +543,40 @@ mod tests {
     }
 
     #[test]
+    fn an_over_length_cursor_is_bad_for_a_reader_who_may_see_the_table_and_unknown_scope_otherwise()
+    {
+        let host = start_host();
+        let dev = Principal::local_development();
+        let mut sql = host.handler();
+        sql.execute(
+            &QueryContext::new(&dev),
+            "CREATE TABLE t (id BIGINT PRIMARY KEY, v BIGINT)",
+            &[],
+        )
+        .unwrap();
+        let source = host.feed_source(16);
+        let long = vec![0xff; 13];
+        let longer = vec![0u8; 4096];
+        for c in [&long, &longer] {
+            let alice = Principal::account("alice");
+            assert_eq!(
+                source.read_after(&alice, "table/t", c, 10),
+                Err(SourceError::BadCursor)
+            );
+            let bob = Principal::account("bob");
+            assert_eq!(
+                source.read_after(&bob, "table/t", c, 10),
+                Err(SourceError::UnknownScope)
+            );
+            assert_eq!(
+                source.read_after(&bob, "table/none", c, 10),
+                Err(SourceError::UnknownScope)
+            );
+        }
+        host.shutdown().unwrap();
+    }
+
+    #[test]
     fn a_live_tail_sees_a_commit_made_after_the_cursor() {
         let host = start_host();
         let dev = Principal::local_development();
@@ -600,8 +643,8 @@ mod tests {
                 seen
             });
             for i in 1..=40 {
-                // Each commit is served although a reader keeps asking: one read holds the actor
-                // for at most max_events returned events, then the queue moves on.
+                // Each commit is served although a reader keeps asking: reads are queued one at a
+                // time behind the writer's requests. This does not bound the cost of one read (#543).
                 sql.execute(
                     &QueryContext::new(&dev),
                     &format!("INSERT INTO t VALUES ({i}, 0)"),
