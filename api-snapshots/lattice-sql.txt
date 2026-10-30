@@ -550,6 +550,59 @@ pub fn lattice_sql::ast::Update::fmt(&self, &mut core::fmt::Formatter<'_>) -> co
 impl core::fmt::Display for lattice_sql::ast::Update
 pub fn lattice_sql::ast::Update::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_sql::ast::Update
+pub mod lattice_sql::binder
+pub enum lattice_sql::binder::BindErrorKind
+pub lattice_sql::binder::BindErrorKind::AmbiguousColumn
+pub lattice_sql::binder::BindErrorKind::CannotCoerce
+pub lattice_sql::binder::BindErrorKind::DatatypeMismatch
+pub lattice_sql::binder::BindErrorKind::DivisionByZero
+pub lattice_sql::binder::BindErrorKind::DuplicateColumn
+pub lattice_sql::binder::BindErrorKind::InconsistentParamTypes
+pub lattice_sql::binder::BindErrorKind::IndeterminateParam
+pub lattice_sql::binder::BindErrorKind::InvalidColumnReference
+pub lattice_sql::binder::BindErrorKind::InvalidParameterValue
+pub lattice_sql::binder::BindErrorKind::InvalidSchema
+pub lattice_sql::binder::BindErrorKind::InvalidText
+pub lattice_sql::binder::BindErrorKind::NegativeLimit
+pub lattice_sql::binder::BindErrorKind::NegativeOffset
+pub lattice_sql::binder::BindErrorKind::NotNullViolation
+pub lattice_sql::binder::BindErrorKind::NumericOutOfRange
+pub lattice_sql::binder::BindErrorKind::Syntax
+pub lattice_sql::binder::BindErrorKind::TooLarge
+pub lattice_sql::binder::BindErrorKind::UndefinedColumn
+pub lattice_sql::binder::BindErrorKind::UndefinedFunction
+pub lattice_sql::binder::BindErrorKind::UndefinedParameter
+pub lattice_sql::binder::BindErrorKind::UndefinedTable
+pub lattice_sql::binder::BindErrorKind::Unsupported
+impl core::clone::Clone for lattice_sql::binder::BindErrorKind
+pub fn lattice_sql::binder::BindErrorKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::binder::BindErrorKind
+impl core::cmp::PartialEq for lattice_sql::binder::BindErrorKind
+pub fn lattice_sql::binder::BindErrorKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::binder::BindErrorKind
+pub fn lattice_sql::binder::BindErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::binder::BindErrorKind
+impl core::marker::StructuralPartialEq for lattice_sql::binder::BindErrorKind
+pub struct lattice_sql::binder::BindError
+impl lattice_sql::binder::BindError
+pub fn lattice_sql::binder::BindError::kind(&self) -> lattice_sql::binder::BindErrorKind
+pub fn lattice_sql::binder::BindError::lattice_code(&self) -> core::option::Option<&'static str>
+pub fn lattice_sql::binder::BindError::message(&self) -> &str
+pub fn lattice_sql::binder::BindError::span(&self) -> lattice_sql::error::Span
+pub fn lattice_sql::binder::BindError::sqlstate(&self) -> &'static str
+impl core::clone::Clone for lattice_sql::binder::BindError
+pub fn lattice_sql::binder::BindError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::binder::BindError
+impl core::cmp::PartialEq for lattice_sql::binder::BindError
+pub fn lattice_sql::binder::BindError::eq(&self, &Self) -> bool
+impl core::error::Error for lattice_sql::binder::BindError
+impl core::fmt::Debug for lattice_sql::binder::BindError
+pub fn lattice_sql::binder::BindError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::binder::BindError
+pub fn lattice_sql::binder::BindError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::binder::BindError
+pub fn lattice_sql::binder::bind(&lattice_sql::ast::Statement, &dyn lattice_sql::plan::CatalogView) -> core::result::Result<lattice_sql::plan::LogicalPlan, lattice_sql::binder::BindError>
+pub fn lattice_sql::binder::bind_statement(&lattice_sql::ast::Statement, &dyn lattice_sql::plan::CatalogView) -> core::result::Result<lattice_sql::plan::BoundStatement, lattice_sql::binder::BindError>
 pub mod lattice_sql::error
 pub enum lattice_sql::error::ErrorKind
 pub lattice_sql::error::ErrorKind::Syntax
@@ -600,6 +653,244 @@ pub fn lattice_sql::error::Span::default() -> Self
 impl core::fmt::Debug for lattice_sql::error::Span
 pub fn lattice_sql::error::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for lattice_sql::error::Span
+pub mod lattice_sql::plan
+pub enum lattice_sql::plan::AsOfPlan
+pub lattice_sql::plan::AsOfPlan::Changeset(lattice_sql::plan::TypedExpr)
+pub lattice_sql::plan::AsOfPlan::Timestamp(lattice_sql::plan::TypedExpr)
+impl core::clone::Clone for lattice_sql::plan::AsOfPlan
+pub fn lattice_sql::plan::AsOfPlan::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::AsOfPlan
+pub fn lattice_sql::plan::AsOfPlan::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::AsOfPlan
+pub fn lattice_sql::plan::AsOfPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::plan::AsOfPlan
+pub fn lattice_sql::plan::AsOfPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::AsOfPlan
+pub enum lattice_sql::plan::ExprNode
+pub lattice_sql::plan::ExprNode::Between
+pub lattice_sql::plan::ExprNode::Between::expr: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Between::high: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Between::low: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Between::negated: bool
+pub lattice_sql::plan::ExprNode::Binary
+pub lattice_sql::plan::ExprNode::Binary::left: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Binary::op: lattice_sql::ast::BinaryOp
+pub lattice_sql::plan::ExprNode::Binary::right: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Cast
+pub lattice_sql::plan::ExprNode::Cast::expr: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Column
+pub lattice_sql::plan::ExprNode::Column::index: usize
+pub lattice_sql::plan::ExprNode::Column::name: alloc::string::String
+pub lattice_sql::plan::ExprNode::Const(lattice_sql::plan::Value)
+pub lattice_sql::plan::ExprNode::Function
+pub lattice_sql::plan::ExprNode::Function::args: alloc::vec::Vec<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Function::name: alloc::string::String
+pub lattice_sql::plan::ExprNode::InList
+pub lattice_sql::plan::ExprNode::InList::expr: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::InList::list: alloc::vec::Vec<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::InList::negated: bool
+pub lattice_sql::plan::ExprNode::IsNull
+pub lattice_sql::plan::ExprNode::IsNull::expr: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::IsNull::negated: bool
+pub lattice_sql::plan::ExprNode::Like
+pub lattice_sql::plan::ExprNode::Like::expr: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Like::negated: bool
+pub lattice_sql::plan::ExprNode::Like::pattern: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Param(u32)
+pub lattice_sql::plan::ExprNode::Unary
+pub lattice_sql::plan::ExprNode::Unary::expr: alloc::boxed::Box<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::ExprNode::Unary::op: lattice_sql::ast::UnaryOp
+impl core::clone::Clone for lattice_sql::plan::ExprNode
+pub fn lattice_sql::plan::ExprNode::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::ExprNode
+pub fn lattice_sql::plan::ExprNode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::ExprNode
+pub fn lattice_sql::plan::ExprNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::ExprNode
+pub enum lattice_sql::plan::InsertSource
+pub lattice_sql::plan::InsertSource::Query(alloc::boxed::Box<lattice_sql::plan::LogicalPlan>)
+pub lattice_sql::plan::InsertSource::Values(alloc::vec::Vec<alloc::vec::Vec<lattice_sql::plan::TypedExpr>>)
+impl core::clone::Clone for lattice_sql::plan::InsertSource
+pub fn lattice_sql::plan::InsertSource::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::InsertSource
+pub fn lattice_sql::plan::InsertSource::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::InsertSource
+pub fn lattice_sql::plan::InsertSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::InsertSource
+pub enum lattice_sql::plan::LogicalPlan
+pub lattice_sql::plan::LogicalPlan::Delete
+pub lattice_sql::plan::LogicalPlan::Delete::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Delete::returning: alloc::vec::Vec<lattice_sql::plan::OutputColumn>
+pub lattice_sql::plan::LogicalPlan::Delete::table: alloc::string::String
+pub lattice_sql::plan::LogicalPlan::Delete::table_id: u64
+pub lattice_sql::plan::LogicalPlan::Filter
+pub lattice_sql::plan::LogicalPlan::Filter::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Filter::predicate: lattice_sql::plan::TypedExpr
+pub lattice_sql::plan::LogicalPlan::Insert
+pub lattice_sql::plan::LogicalPlan::Insert::returning: alloc::vec::Vec<lattice_sql::plan::OutputColumn>
+pub lattice_sql::plan::LogicalPlan::Insert::source: lattice_sql::plan::InsertSource
+pub lattice_sql::plan::LogicalPlan::Insert::table: alloc::string::String
+pub lattice_sql::plan::LogicalPlan::Insert::table_id: u64
+pub lattice_sql::plan::LogicalPlan::Insert::targets: alloc::vec::Vec<usize>
+pub lattice_sql::plan::LogicalPlan::Limit
+pub lattice_sql::plan::LogicalPlan::Limit::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Limit::limit: core::option::Option<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::LogicalPlan::Limit::offset: core::option::Option<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::LogicalPlan::Project
+pub lattice_sql::plan::LogicalPlan::Project::columns: alloc::vec::Vec<lattice_sql::plan::OutputColumn>
+pub lattice_sql::plan::LogicalPlan::Project::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Scan
+pub lattice_sql::plan::LogicalPlan::Scan::as_of: core::option::Option<lattice_sql::plan::AsOfPlan>
+pub lattice_sql::plan::LogicalPlan::Scan::table: alloc::string::String
+pub lattice_sql::plan::LogicalPlan::Scan::table_id: u64
+pub lattice_sql::plan::LogicalPlan::Sort
+pub lattice_sql::plan::LogicalPlan::Sort::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Sort::keys: alloc::vec::Vec<lattice_sql::plan::SortKey>
+pub lattice_sql::plan::LogicalPlan::Update
+pub lattice_sql::plan::LogicalPlan::Update::assignments: alloc::vec::Vec<(usize, lattice_sql::plan::TypedExpr)>
+pub lattice_sql::plan::LogicalPlan::Update::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Update::returning: alloc::vec::Vec<lattice_sql::plan::OutputColumn>
+pub lattice_sql::plan::LogicalPlan::Update::table: alloc::string::String
+pub lattice_sql::plan::LogicalPlan::Update::table_id: u64
+impl lattice_sql::plan::LogicalPlan
+pub fn lattice_sql::plan::LogicalPlan::output(&self) -> core::option::Option<&[lattice_sql::plan::OutputColumn]>
+impl core::clone::Clone for lattice_sql::plan::LogicalPlan
+pub fn lattice_sql::plan::LogicalPlan::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::LogicalPlan
+pub fn lattice_sql::plan::LogicalPlan::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::LogicalPlan
+pub fn lattice_sql::plan::LogicalPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::plan::LogicalPlan
+pub fn lattice_sql::plan::LogicalPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::LogicalPlan
+pub enum lattice_sql::plan::SqlType
+pub lattice_sql::plan::SqlType::BigInt
+pub lattice_sql::plan::SqlType::Boolean
+pub lattice_sql::plan::SqlType::Bytea
+pub lattice_sql::plan::SqlType::Date
+pub lattice_sql::plan::SqlType::DoublePrecision
+pub lattice_sql::plan::SqlType::Integer
+pub lattice_sql::plan::SqlType::Jsonb
+pub lattice_sql::plan::SqlType::Numeric
+pub lattice_sql::plan::SqlType::SmallInt
+pub lattice_sql::plan::SqlType::Text
+pub lattice_sql::plan::SqlType::Timestamptz
+pub lattice_sql::plan::SqlType::Unknown
+pub lattice_sql::plan::SqlType::Uuid
+impl lattice_sql::plan::SqlType
+pub fn lattice_sql::plan::SqlType::from_data_type(lattice_sql::ast::DataType) -> lattice_sql::plan::SqlType
+pub fn lattice_sql::plan::SqlType::is_numeric(self) -> bool
+impl core::clone::Clone for lattice_sql::plan::SqlType
+pub fn lattice_sql::plan::SqlType::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::plan::SqlType
+impl core::cmp::PartialEq for lattice_sql::plan::SqlType
+pub fn lattice_sql::plan::SqlType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::SqlType
+pub fn lattice_sql::plan::SqlType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::plan::SqlType
+pub fn lattice_sql::plan::SqlType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::plan::SqlType
+impl core::marker::StructuralPartialEq for lattice_sql::plan::SqlType
+pub enum lattice_sql::plan::Value
+pub lattice_sql::plan::Value::Bool(bool)
+pub lattice_sql::plan::Value::Int(i64)
+pub lattice_sql::plan::Value::Null
+pub lattice_sql::plan::Value::Number(alloc::string::String)
+pub lattice_sql::plan::Value::Text(alloc::string::String)
+impl core::clone::Clone for lattice_sql::plan::Value
+pub fn lattice_sql::plan::Value::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::Value
+pub fn lattice_sql::plan::Value::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::Value
+pub fn lattice_sql::plan::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::plan::Value
+pub fn lattice_sql::plan::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::Value
+pub struct lattice_sql::plan::BoundStatement
+pub lattice_sql::plan::BoundStatement::catalog_version: u64
+pub lattice_sql::plan::BoundStatement::param_types: alloc::vec::Vec<lattice_sql::plan::SqlType>
+pub lattice_sql::plan::BoundStatement::plan: lattice_sql::plan::LogicalPlan
+impl core::clone::Clone for lattice_sql::plan::BoundStatement
+pub fn lattice_sql::plan::BoundStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::BoundStatement
+pub fn lattice_sql::plan::BoundStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::BoundStatement
+pub fn lattice_sql::plan::BoundStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::BoundStatement
+pub struct lattice_sql::plan::ColumnInfo
+pub lattice_sql::plan::ColumnInfo::has_default: bool
+pub lattice_sql::plan::ColumnInfo::name: alloc::string::String
+pub lattice_sql::plan::ColumnInfo::not_null: bool
+pub lattice_sql::plan::ColumnInfo::ty: lattice_sql::plan::SqlType
+impl core::clone::Clone for lattice_sql::plan::ColumnInfo
+pub fn lattice_sql::plan::ColumnInfo::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::plan::ColumnInfo
+impl core::cmp::PartialEq for lattice_sql::plan::ColumnInfo
+pub fn lattice_sql::plan::ColumnInfo::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::ColumnInfo
+pub fn lattice_sql::plan::ColumnInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::ColumnInfo
+pub struct lattice_sql::plan::IndexInfo
+pub lattice_sql::plan::IndexInfo::columns: alloc::vec::Vec<alloc::string::String>
+pub lattice_sql::plan::IndexInfo::name: alloc::string::String
+pub lattice_sql::plan::IndexInfo::unique: bool
+impl core::clone::Clone for lattice_sql::plan::IndexInfo
+pub fn lattice_sql::plan::IndexInfo::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::plan::IndexInfo
+impl core::cmp::PartialEq for lattice_sql::plan::IndexInfo
+pub fn lattice_sql::plan::IndexInfo::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::IndexInfo
+pub fn lattice_sql::plan::IndexInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::IndexInfo
+pub struct lattice_sql::plan::OutputColumn
+pub lattice_sql::plan::OutputColumn::expr: lattice_sql::plan::TypedExpr
+pub lattice_sql::plan::OutputColumn::name: alloc::string::String
+impl core::clone::Clone for lattice_sql::plan::OutputColumn
+pub fn lattice_sql::plan::OutputColumn::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::OutputColumn
+pub fn lattice_sql::plan::OutputColumn::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::OutputColumn
+pub fn lattice_sql::plan::OutputColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::OutputColumn
+pub struct lattice_sql::plan::SortKey
+pub lattice_sql::plan::SortKey::desc: bool
+pub lattice_sql::plan::SortKey::expr: lattice_sql::plan::TypedExpr
+pub lattice_sql::plan::SortKey::nulls_first: bool
+impl core::clone::Clone for lattice_sql::plan::SortKey
+pub fn lattice_sql::plan::SortKey::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::SortKey
+pub fn lattice_sql::plan::SortKey::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::SortKey
+pub fn lattice_sql::plan::SortKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::SortKey
+pub struct lattice_sql::plan::TableInfo
+pub lattice_sql::plan::TableInfo::columns: alloc::vec::Vec<lattice_sql::plan::ColumnInfo>
+pub lattice_sql::plan::TableInfo::id: u64
+pub lattice_sql::plan::TableInfo::indexes: alloc::vec::Vec<lattice_sql::plan::IndexInfo>
+pub lattice_sql::plan::TableInfo::name: alloc::string::String
+impl core::clone::Clone for lattice_sql::plan::TableInfo
+pub fn lattice_sql::plan::TableInfo::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::plan::TableInfo
+impl core::cmp::PartialEq for lattice_sql::plan::TableInfo
+pub fn lattice_sql::plan::TableInfo::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::TableInfo
+pub fn lattice_sql::plan::TableInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::TableInfo
+pub struct lattice_sql::plan::TypedExpr
+pub lattice_sql::plan::TypedExpr::kind: lattice_sql::plan::ExprNode
+pub lattice_sql::plan::TypedExpr::ty: lattice_sql::plan::SqlType
+impl core::clone::Clone for lattice_sql::plan::TypedExpr
+pub fn lattice_sql::plan::TypedExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::TypedExpr
+pub fn lattice_sql::plan::TypedExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::TypedExpr
+pub fn lattice_sql::plan::TypedExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_sql::plan::TypedExpr
+pub fn lattice_sql::plan::TypedExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::TypedExpr
+pub trait lattice_sql::plan::CatalogView
+pub fn lattice_sql::plan::CatalogView::table(&self, &str) -> core::option::Option<lattice_sql::plan::TableInfo>
+pub fn lattice_sql::plan::CatalogView::version(&self) -> u64
 pub enum lattice_sql::ErrorKind
 pub lattice_sql::ErrorKind::Syntax
 pub lattice_sql::ErrorKind::TooLarge

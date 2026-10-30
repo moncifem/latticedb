@@ -145,6 +145,11 @@ cargo xtask ci                                       # what the pull-request wor
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+If the pull request changes the public API of a covered library crate (the list is `CRATES` in
+`tools/check_public_api.sh`), run `tools/check_public_api.sh --update-affected` and commit the
+`api-snapshots/` changes; after a rebase onto a moved main, run it again. Details:
+[api-snapshots.md](api-snapshots.md).
+
 Check the exit code of the full gate itself; piping it through `grep` can hide a failure. Crate-level
 clippy is not enough, because a workspace lint has been missed that way. A new invariant or API rule
 gets a test that fails when the rule is broken (for the kernel, a planted bug), and expected values in

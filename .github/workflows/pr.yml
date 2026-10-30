@@ -162,4 +162,8 @@ jobs:
             cargo install cargo-public-api --version 0.52.0 --locked
           fi
       - name: compare public API with api-snapshots/
-        run: tools/check_public_api.sh
+        run: |
+          tools/check_public_api.sh || {
+            echo "::error title=Public API snapshot out of date::Run tools/check_public_api.sh --update-affected (full: --update) and commit api-snapshots/. See docs/api-snapshots.md."
+            exit 1
+          }

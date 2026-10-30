@@ -49,6 +49,7 @@ pub lattice_core::bugs::Bug::AckBeforeSync
 pub lattice_core::bugs::Bug::BatchDuplicateAckedEarly
 pub lattice_core::bugs::Bug::CheckpointIgnoresInFlight
 pub lattice_core::bugs::Bug::CrcSkipsPayload
+pub lattice_core::bugs::Bug::DdlPolicySkipped
 pub lattice_core::bugs::Bug::DedupeNotRebuilt
 pub lattice_core::bugs::Bug::DuplicateBeforeFence
 pub lattice_core::bugs::Bug::DurableLsnOvershoot
@@ -56,6 +57,7 @@ pub lattice_core::bugs::Bug::FenceIgnored
 pub lattice_core::bugs::Bug::FenceNotRebuilt
 pub lattice_core::bugs::Bug::FsyncErrorSwallowed
 pub lattice_core::bugs::Bug::FsyncFailureNotPoisoning
+pub lattice_core::bugs::Bug::GuardRewriteUnstaged
 pub lattice_core::bugs::Bug::HlcCounterStuck
 pub lattice_core::bugs::Bug::HlcRegress
 pub lattice_core::bugs::Bug::HlcSnapshotClamped
@@ -84,9 +86,9 @@ pub lattice_core::bugs::Bug::SkipRecoverySync
 pub lattice_core::bugs::Bug::TreeCycleCheckSkipped
 pub lattice_core::bugs::Bug::VacuumDropsVisibleVersion
 impl lattice_core::bugs::Bug
-pub const lattice_core::bugs::Bug::ADMISSION: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::ADMISSION: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::ALL: [lattice_core::bugs::Bug; 21]
-pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
