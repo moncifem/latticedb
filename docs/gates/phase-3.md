@@ -119,3 +119,12 @@ records the CPU model (best effort). The manual `bench-baseline` workflow also r
 baseline artifact; that workflow has not been run for it, no comparison runs on a schedule and no
 numbers are recorded here. Not covered: real sockets or TLS, the reconnect storm
 with stalled clients, persisted state, multi-threaded writers. E3-4 stays open.
+Verification evidence for WP51 (issue #253), second slice, not an exit criterion: `clients/python` is a hand-written Python
+port (standard library only, Python 3.10 or later, typed) of the same three parts, checked against the same
+`conformance/vectors.json`, which it does not regenerate. Local run: 80 tests passed on Python 3.10, 3.11, 3.12, 3.13 and 3.14
+(20,000 randomised cases per property on 3.14), including every vector decoded and re-encoded byte for byte with the same
+error kind and detail as Rust, the Rust client scenarios and `mypy --strict` clean. Sixteen deliberate defects were patched in one at a time (eleven
+in the codecs, five in the client; for example a loosened text length bound, a stripped byte order mark, a skipped LSN 0 check,
+cursor order without length first, resume from the delivered instead of the acknowledged cursor, ping and ack-batch off by one) and each
+made the tests fail; ten of the eleven codec defects were caught by the conformance vectors alone (a `bool` accepted as a number, which no vector contains, by the unit tests). The workflow `clients-python.yml` has not run on CI yet.
+The Go client, a generator and the agent plugin contract in Python are not done, and no client talks to a server, because none exists.

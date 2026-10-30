@@ -162,3 +162,11 @@ Gap: `clients/typescript/package.json` and `package-lock.json` are not code-owne
 `dependencies` risk area in `tools/pr_governance.py` (which lists only the root Rust files), so a change to
 them does not fail `risk-gate`. The reviewer has to read them. Adding them means changing the classifier,
 its tests, `docs/review-policy.md` and `.github/CODEOWNERS` together; that is not done here.
+
+## Python (`clients/python`)
+
+The Python client has no dependencies at all, runtime or development: it uses the standard library and its
+tests use `unittest`. The `clients-python` workflow fails if importing the package loads a module outside the
+standard library. There is no `pyproject.toml`, requirements file or lockfile, so there is nothing for
+Dependabot to track and no pip entry for `/clients/python` in `.github/dependabot.yml`. Adding a package
+means adding it to this policy, pinning it exactly and adding the Dependabot entry in the same pull request.

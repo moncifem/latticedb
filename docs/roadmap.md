@@ -12,7 +12,7 @@ disagrees with a gate page, the gate page is right and this page needs a fix.
 | 0 Repository and conventions | Workspace, CI, governance | Done | [phase-0](gates/phase-0.md) |
 | 1 Foundations and evaluation | Durable log, simulation, schema language, verification instruments | Built; evidence still accumulating (nightly history, review package) | Open: [phase-1](gates/phase-1.md), [review](gates/phase-1-review.md) |
 | 2 Storage engines and SQL | MVCC row engine, SQL over the PostgreSQL wire | In progress: storage, wire, auth and parser exist; SQL planning and execution do not | Open: [phase-2](gates/phase-2.md) |
-| 3 Sync, CRDTs and SDKs | Live subscriptions, offline merge, SDKs, agent plugin contract | Started: building blocks that do not need the server; an experimental TypeScript codec client (`clients/typescript`) exists | Open: [phase-3](gates/phase-3.md) |
+| 3 Sync, CRDTs and SDKs | Live subscriptions, offline merge, SDKs, agent plugin contract | Started: building blocks that do not need the server; experimental TypeScript and Python codec clients (`clients/typescript`, `clients/python`) exist | Open: [phase-3](gates/phase-3.md) |
 | 4 to 12 | Identity and policy, blobs and S3, schema v1 and packs, search, intelligence, role packs, cluster, optional models, 1.0 | Not started | None yet |
 
 Phases 2 and 3 run ahead of the earlier gates under a documented, owner-confirmed waiver. The waiver
