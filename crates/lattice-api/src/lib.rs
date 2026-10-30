@@ -3,6 +3,7 @@
 //! Layer L6. Must not: Contain business rules.
 #![forbid(unsafe_code)]
 
+pub mod exec_handler;
 pub mod pgwire;
 pub mod principal;
 pub mod session;

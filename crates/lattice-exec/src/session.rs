@@ -39,6 +39,42 @@ pub struct ResultColumn {
     pub ty: SqlType,
 }
 
+impl ResultColumn {
+    /// The PostgreSQL type object id a client expects for this column.
+    pub fn type_oid(&self) -> i32 {
+        match self.ty {
+            SqlType::Boolean => 16,
+            SqlType::SmallInt => 21,
+            SqlType::Integer => 23,
+            SqlType::BigInt => 20,
+            SqlType::Numeric => 1700,
+            SqlType::DoublePrecision => 701,
+            SqlType::Bytea => 17,
+            SqlType::Timestamptz => 1184,
+            SqlType::Date => 1082,
+            SqlType::Uuid => 2950,
+            SqlType::Jsonb => 3802,
+            SqlType::Text | SqlType::Unknown => 25,
+        }
+    }
+
+    /// The type size PostgreSQL reports: the width in bytes, or -1 for a variable-length type.
+    pub fn type_size(&self) -> i16 {
+        match self.ty {
+            SqlType::Boolean => 1,
+            SqlType::SmallInt => 2,
+            SqlType::Integer | SqlType::Date => 4,
+            SqlType::BigInt | SqlType::DoublePrecision | SqlType::Timestamptz => 8,
+            SqlType::Uuid => 16,
+            SqlType::Numeric
+            | SqlType::Bytea
+            | SqlType::Jsonb
+            | SqlType::Text
+            | SqlType::Unknown => -1,
+        }
+    }
+}
+
 /// The result of one statement.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExecResult {

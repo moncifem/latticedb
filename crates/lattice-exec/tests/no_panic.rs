@@ -228,7 +228,7 @@ fn the_generator_reaches_the_executor_and_its_error_paths() {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
     let mut runner = TestRunner::deterministic();
-    let strat = statement();
+    let generator = statement();
     let f = fixture();
     let (mut db, mut s) = (f.db, ExecSession::allow_all());
     for sql in SETUP {
@@ -236,7 +236,7 @@ fn the_generator_reaches_the_executor_and_its_error_paths() {
     }
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for _ in 0..400 {
-        let sql = strat.new_tree(&mut runner).unwrap().current();
+        let sql = generator.new_tree(&mut runner).unwrap().current();
         let key = match s.execute(&mut db, &sql) {
             Ok(_) => "ok".to_string(),
             Err(e) => e.sqlstate().to_string(),
