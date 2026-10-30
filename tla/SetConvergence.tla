@@ -6,13 +6,16 @@
 \*
 \* The materialised state is deliberately separate from the set of applied operations, so the property
 \* is about the apply rule, not about a function of the operations being a function. A remove that
-\* arrives before its add leaves a tombstone; without it the replicas diverge (checked by hand: delete
-\* the tombstone test in Apply and TLC reports the violation).
+\* arrives before its add leaves a tombstone; without it the replicas diverge. The switch `Tombstones`
+\* turns that rule off: tla/negative/SetConvergenceNoTombstone.cfg sets it to FALSE and TLC must report
+\* Convergent violated (run by tla/check-negative.sh, not by hand).
 \*
-\* LIMITS: two replicas, three tags, no operation is lost, only delayed. No fairness is modelled, so
-\* this checks safety and not that replicas eventually receive everything.
+\* LIMITS: two replicas; the set of tags is the constant `Tags` (two tags in the checked config, not
+\* three), no operation is lost, only delayed. A created operation is not applied anywhere until a
+\* replica takes the Apply step, the creator included. No fairness is modelled, so this checks safety
+\* and not that replicas eventually receive everything.
 EXTENDS Naturals, FiniteSets
-CONSTANTS Tags
+CONSTANTS Tags, Tombstones
 VARIABLES ops, applied, members, tombs, used
 vars == <<ops, applied, members, tombs, used>>
 Replicas == {1, 2}
@@ -28,13 +31,14 @@ Init == /\ ops = {} /\ used = {}
 Apply(r, o) == /\ o \in ops /\ o \notin applied[r]
                /\ applied' = [applied EXCEPT ![r] = @ \cup {o}]
                /\ IF o[1] = "add"
-                     THEN /\ members' = [members EXCEPT ![r] = IF o[2] \in tombs[r] THEN @ ELSE @ \cup {o[2]}]
+                     THEN /\ members' = [members EXCEPT ![r] = IF Tombstones /\ o[2] \in tombs[r] THEN @ ELSE @ \cup {o[2]}]
                           /\ UNCHANGED tombs
                      ELSE /\ members' = [members EXCEPT ![r] = @ \ {o[2]}]
                           /\ tombs' = [tombs EXCEPT ![r] = @ \cup {o[2]}]
                /\ UNCHANGED <<ops, used>>
 
-\* A replica creates an operation and applies it locally at once.
+\* A replica creates an operation; it only joins the set of operations. Every replica, the creator
+\* included, applies it later with Apply.
 Create(r, o) == /\ o \notin ops
                 /\ \/ o[1] = "add" /\ o[2] \notin used
                    \/ o[1] = "rem" /\ Op("add", o[2]) \in applied[r]

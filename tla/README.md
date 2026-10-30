@@ -4,10 +4,10 @@ TLA+ models checked by TLC. Each header states what the model covers and what it
 
 | Model | Property |
 |---|---|
-| `Commit` | an acknowledged change set is durable and survives crashes |
-| `Hlc` | timestamps strictly increase even when the physical clock goes backwards, and the counter stays bounded |
-| `Fence` | no write from an older turn is accepted once a newer turn has begun |
-| `SetConvergence` | replicas that applied the same operations, in any order, hold the same members (needs the tombstone rule) |
+| `Commit` | an acknowledged change set is on the disk and survives power cuts, and recovery only hands out what it has made durable |
+| `Hlc` | the issued timestamps strictly increase even when the physical clock goes backwards, and the counter stays bounded |
+| `Fence` | across a crash, no write from an older turn is accepted once a newer turn has begun: the turns in the log are checked, and the in-memory turn is rebuilt from the log |
+| `SetConvergence` | replicas that applied the same operations, in any order, hold the same members (needs the tombstone rule; checked with two tags) |
 | `TreeMove` | move-operation tree CRDT with delete as move to trash: no cycles at any replica, every node reaches the root or the trash, and replicas that logged the same operations hold the same tree, under delayed, reordered and duplicated delivery |
 
 `TreeMove` keeps a materialised tree per replica and updates it with the undo, perform, redo rule of
@@ -28,6 +28,29 @@ Negative tests: each config in `negative/` removes one protection from a model, 
 `Acyclic`, `TreeMoveNoUndoRedo` must violate `Convergent` and `TreeMoveNoDepthCheck` must violate
 `DepthBounded`. A negative run that passes, or fails with
 a different invariant, fails `check-all.sh`.
+
+The other four models switch a protection off with a boolean constant, one per planted bug of the
+kernel, and their properties are stated over observable state (the disk, the log, the history of issued
+timestamps, the members), not over the guard of the action that the switch removes:
+
+| Config | Switch | Must violate | Kernel planted bug |
+|---|---|---|---|
+| `CommitAckBeforeSync` | `AckBeforeSync` | `AckedAreDurable` | `AckBeforeSync` |
+| `CommitSkipFsync` | `SkipFsync` | `AckedAreDurable` | `SkipFsync` |
+| `CommitSkipFsyncThenCrash` | `SkipFsync` | `AckedSurviveCrash` | `SkipFsync` |
+| `CommitSkipRecoverySync` | `SkipRecoverySync` | `MemoryIsDurable` | `SkipRecoverySync` |
+| `FenceIgnored` | `FenceIgnored` | `AcceptOnlyCurrent` | `FenceIgnored` |
+| `FenceIgnoredGoesBack` | `FenceIgnored` | `NeverGoesBack` | `FenceIgnored` |
+| `FenceIgnoredFuture` | `FenceIgnored` | `NothingFromTheFuture` | `FenceIgnored` |
+| `FenceNotRebuilt` | `FenceNotRebuilt` | `AcceptOnlyCurrent` | `FenceNotRebuilt` |
+| `FenceNotRebuiltGoesBack` | `FenceNotRebuilt` | `NeverGoesBack` | `FenceNotRebuilt` |
+| `HlcRegress` | `Regress` | `StrictlyIncreasing` | `HlcRegress` |
+| `HlcCounterStuck` | `CounterStuck` | `StrictlyIncreasing` | `HlcCounterStuck` |
+| `SetConvergenceNoTombstone` | `Tombstones = FALSE` | `Convergent` | none (a model-only protection) |
+
+Each config carries the violating trace in a comment. The traces were worked out by hand and checked
+with a throwaway breadth-first re-implementation of each model in Python; TLC has not yet run the
+changed models, so the first nightly run is the real check.
 
 Run one with `tla/run-tlc.sh tla/<Model>.tla`, or all (models, then the negative tests) with `tla/check-all.sh`. Both need `java` and
 `TLA2TOOLS` pointing at `tla2tools.jar`. Nightly CI runs all of them.

@@ -24,5 +24,17 @@ done <<EOF
 TreeMoveNoCycleCheck TreeMove Acyclic
 TreeMoveNoUndoRedo TreeMove Convergent
 TreeMoveNoDepthCheck TreeMove DepthBounded
+CommitAckBeforeSync Commit AckedAreDurable
+CommitSkipFsync Commit AckedAreDurable
+CommitSkipFsyncThenCrash Commit AckedSurviveCrash
+CommitSkipRecoverySync Commit MemoryIsDurable
+FenceIgnored Fence AcceptOnlyCurrent
+FenceIgnoredGoesBack Fence NeverGoesBack
+FenceIgnoredFuture Fence NothingFromTheFuture
+FenceNotRebuilt Fence AcceptOnlyCurrent
+FenceNotRebuiltGoesBack Fence NeverGoesBack
+HlcRegress Hlc StrictlyIncreasing
+HlcCounterStuck Hlc StrictlyIncreasing
+SetConvergenceNoTombstone SetConvergence Convergent
 EOF
 exit "$status"
