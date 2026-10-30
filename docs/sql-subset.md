@@ -46,7 +46,7 @@ The intended front door is PostgreSQL wire v3 (P2-11). Transaction behaviour is 
 |---|---|
 | `SELECT` list, `*`, aliases, expressions over supported types | Yes. Without `FROM` the source is one row with no columns (`SELECT 1 + 2`, `SELECT 1 WHERE false`, `LIMIT`/`OFFSET` apply); `*` there is `42601` as in PostgreSQL |
 | `FROM` with one or more tables, `JOIN` (`INNER`, `LEFT`, `CROSS`) with `ON` | Yes. `RIGHT`, `FULL`, `NATURAL`, `LATERAL` no |
-| `WHERE` | Comparison, `AND`/`OR`/`NOT`, `IN (list)`, `BETWEEN`, `LIKE`, `IS [NOT] NULL`. The executor reads only a key range or one entry when `AND` terms compare the primary key or a `UNIQUE` constraint with constants; results are the same as a full scan (see the `lattice-exec` README, Access paths) |
+| `WHERE` | Comparison, `AND`/`OR`/`NOT`, `IN (list)`, `BETWEEN`, `LIKE`, `ILIKE` (case folding with `lower` on both sides), `IS [NOT] NULL`. The executor reads only a key range or one entry when `AND` terms compare the primary key or a `UNIQUE` constraint with constants; results are the same as a full scan (see the `lattice-exec` README, Access paths) |
 | `GROUP BY`, `HAVING` | Yes, with `COUNT`, `SUM`, `MIN`, `MAX`, `AVG`; `COUNT(DISTINCT x)` |
 | `ORDER BY`, `LIMIT`, `OFFSET` | Yes, with `NULLS FIRST/LAST` |
 | `DISTINCT` | Yes |
@@ -207,6 +207,7 @@ with its reason.
 | `ORDER BY name` where two outputs share the name | `42702` unless they are the same expression | `42702` unless they are the same expression | same |
 | Constant integer arithmetic | evaluated while planning, so overflow and division by zero fail the statement | folded while binding: `2147483647 + 1` is `22003`, `1 / 0` is `22012`, even inside a branch that a function such as `coalesce(1, 1 / 0)` would never evaluate | cheap and deterministic; PostgreSQL also folds constants, but the cases a short-circuit skips are not matched and are not tested |
 | `CAST` to `numeric(p, s)` or `varchar(n)` | applies the modifier | refused with `0A000` | the plan does not carry type modifiers yet |
+| `ILIKE` on non-ASCII letters | folds case by the database locale (ASCII only under the `C` collation) | folds with Unicode `lower` on both sides | `ILIKE` is written as `lower(a) LIKE lower(b)`; the collation is binary in Phase 2 |
 | Parameter typing | a parameter takes the type of its first use; a conflicting later use is `42P08` | same, and a parameter that already has a type is an operand of that type in later comparisons, arithmetic and `coalesce` | |
 | `CREATE TABLE t ()` | creates a table with no columns | refused with `42601` (a table needs at least one column) | a zero-column row has no use in the subset ([#657](https://github.com/moncifem/latticedb/issues/657)) |
 | Identifier longer than 63 bytes | truncated to 63 bytes with a notice | refused with `54001` | refusing instead of truncating looks intended; two long names could otherwise collide |

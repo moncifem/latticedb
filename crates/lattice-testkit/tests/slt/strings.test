@@ -217,10 +217,16 @@ SELECT min(w), max(w) FROM cased
 A
 é
 
-# DIFFERS FROM POSTGRESQL BY DESIGN: ILIKE, SIMILAR TO, COLLATE and the other string functions are
-# not in the subset.
-statement error 0A000
-SELECT w FROM words WHERE w ILIKE 'APP%'
+# ILIKE folds case on both sides (rows from PostgreSQL 16; the words are ASCII).
+query T nosort
+SELECT w FROM words WHERE w ILIKE 'APP%' ORDER BY w
+----
+app
+apple
+applesauce
+
+# DIFFERS FROM POSTGRESQL BY DESIGN: SIMILAR TO, COLLATE and the other string functions are not in
+# the subset.
 
 statement error 0A000
 SELECT w FROM words WHERE w SIMILAR TO 'app%'

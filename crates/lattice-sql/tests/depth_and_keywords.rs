@@ -122,3 +122,17 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn ilike_is_like_over_lower_and_round_trips() {
+    for sql in [
+        "SELECT a ILIKE 'x%'",
+        "SELECT a NOT ILIKE 'x%'",
+        "SELECT a FROM t WHERE a ILIKE b AND c ILIKE 'y'",
+    ] {
+        round_trips(sql);
+    }
+    let printed = parse_statement("SELECT a ILIKE 'X'").unwrap().to_string();
+    assert_eq!(printed, "SELECT (lower(a) LIKE lower('X'))");
+    assert_eq!(err("SELECT a ILIKE").kind(), ErrorKind::Syntax);
+}

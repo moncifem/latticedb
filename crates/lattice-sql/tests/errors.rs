@@ -111,8 +111,6 @@ fn unsupported_expressions_are_named() {
     unsupported("SELECT foo(1)", "function `foo`", "foo");
     unsupported("SELECT s.foo(1)", "schema-qualified function calls", "(1)");
     unsupported("SELECT a.b.c.d", "names qualified by a database", ".d");
-    unsupported("SELECT a ILIKE 'x'", "ILIKE", "ILIKE");
-    unsupported("SELECT a NOT ILIKE 'x'", "ILIKE", "NOT");
     unsupported("SELECT a SIMILAR TO 'x'", "SIMILAR TO", "SIMILAR");
     unsupported("SELECT a LIKE 'x' ESCAPE '!'", "LIKE ... ESCAPE", "ESCAPE");
     unsupported("SELECT a IS TRUE", "IS TRUE", "TRUE");

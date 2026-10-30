@@ -70,9 +70,6 @@ statement error 0A000
 SELECT current_timestamp
 
 statement error 0A000
-SELECT id FROM ux WHERE b ILIKE 'X'
-
-statement error 0A000
 SELECT id FROM ux WHERE b SIMILAR TO 'x'
 
 statement error 0A000
