@@ -251,6 +251,7 @@ impl core::marker::Copy for lattice_api::exec_host::PolicyFileError
 impl core::marker::StructuralPartialEq for lattice_api::exec_host::PolicyFileError
 pub struct lattice_api::exec_host::ExecHost
 impl lattice_api::exec_host::ExecHost
+pub fn lattice_api::exec_host::ExecHost::begin_shutdown(&self)
 pub fn lattice_api::exec_host::ExecHost::handler(&self) -> lattice_api::exec_host::ExecProxy
 pub fn lattice_api::exec_host::ExecHost::is_alive(&self) -> bool
 pub fn lattice_api::exec_host::ExecHost::shutdown(&self) -> core::result::Result<(), alloc::string::String>
@@ -272,6 +273,7 @@ pub struct lattice_api::exec_host::HostLimits
 pub lattice_api::exec_host::HostLimits::max_timeout_ms: core::option::Option<u64>
 pub lattice_api::exec_host::HostLimits::memory_bytes: u64
 pub lattice_api::exec_host::HostLimits::queue_depth: usize
+pub lattice_api::exec_host::HostLimits::shutdown_grace_ms: u64
 pub lattice_api::exec_host::HostLimits::wait_slack_ms: u64
 impl core::clone::Clone for lattice_api::exec_host::HostLimits
 pub fn lattice_api::exec_host::HostLimits::clone(&self) -> Self

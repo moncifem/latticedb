@@ -476,7 +476,8 @@ crash" from issue 345 is therefore **not met**: the data survives, SQL cannot re
 
 **Limits.** One database thread runs statements serially; a connection waits at most the statement
 ceiling plus 5 s and then gets `57014` (the statement is cancelled and skipped if not started, and an open
-transaction block is failed on the database side so a later `COMMIT` answers `ROLLBACK`; the proxy's abort, the
+transaction block is failed on the database side so a later `COMMIT` answers `ROLLBACK`; the proxy's abort (a mark in
+per-connection shared state, not a queue entry; the queue is bounded and no send blocks, #465), the
 thread's skip-path aborts for `Execute` and for `Describe`, the abort for a failed or timed-out `Parse`/
 `Describe`, and the discard of a late `BEGIN` are each pinned by a unit test that fails without it; a block failed by an
 error the wire session raises itself is failed on the database side too (`QueryHandler::abort_transaction`,

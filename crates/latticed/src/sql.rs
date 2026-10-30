@@ -31,9 +31,18 @@ pub struct SqlConfig {
 /// A listener serving SQL from a data directory.
 pub struct SqlServer {
     // Declared first so the listener stops (and its connections drop their proxies) before the
-    // database thread does.
-    server: ServerHandle,
+    // database thread does. `None` only while `shutdown` has taken it.
+    server: Option<ServerHandle>,
+    addr: SocketAddr,
     host: Arc<ExecHost>,
+}
+
+impl Drop for SqlServer {
+    fn drop(&mut self) {
+        // Connections waiting on a stuck database thread give up as soon as this is set, so
+        // dropping the listener handle (which joins them) cannot hang on that thread.
+        self.host.begin_shutdown();
+    }
 }
 
 /// An existing directory must not be open to group or others: it holds every committed row.
@@ -70,27 +79,31 @@ impl SqlServer {
     /// returns before any client is served, and a directory in use by another process is refused.
     pub fn start(config: ServerConfig, mut sql: SqlConfig) -> io::Result<Self> {
         create_data_dir(&sql.data_dir)?;
-        // Room for one request and one close per admitted connection, plus the control reserve.
-        sql.limits.queue_depth =
-            2 * (config.max_connections + crate::CONTROL_CONNECTION_RESERVE) + 16;
+        // A connection has at most one request in the queue; the host adds one wake-up and one stop.
+        // The rest is slack: nothing blocks when the queue is full, it answers `53300`.
+        sql.limits.queue_depth = config.max_connections + crate::CONTROL_CONNECTION_RESERVE + 16;
         let host = Arc::new(
             ExecHost::start_dir(sql.data_dir, sql.policies, sql.limits)
                 .map_err(io::Error::other)?,
         );
         let factory = Arc::clone(&host);
         let server = ServerHandle::start_with_handler(config, move || factory.handler())?;
-        Ok(Self { server, host })
+        Ok(Self {
+            addr: server.local_addr(),
+            server: Some(server),
+            host,
+        })
     }
 
     /// Actual bound address.
     pub fn local_addr(&self) -> SocketAddr {
-        self.server.local_addr()
+        self.addr
     }
 
     /// True once the listener has exited or the database thread has ended. A supervisor should treat
     /// an unrequested end as a failed server; `shutdown` then reports why.
     pub fn is_finished(&self) -> bool {
-        self.server.is_finished() || !self.host.is_alive()
+        self.server.as_ref().is_none_or(ServerHandle::is_finished) || !self.host.is_alive()
     }
 
     /// Names of recovered tables that SQL cannot address because column definitions are not
@@ -100,11 +113,15 @@ impl SqlServer {
     }
 
     /// Stops the listener, waits for its workers, then stops the database thread and releases the
-    /// directory.
-    pub fn shutdown(self) -> io::Result<()> {
-        let Self { server, host } = self;
-        let result = server.shutdown();
-        let database = host.shutdown().map_err(io::Error::other);
+    /// directory. Connections waiting on the database thread are told to give up first, so a stuck
+    /// thread delays this by at most `HostLimits::shutdown_grace_ms`, not forever.
+    pub fn shutdown(mut self) -> io::Result<()> {
+        self.host.begin_shutdown();
+        let result = match self.server.take() {
+            Some(server) => server.shutdown(),
+            None => Ok(()),
+        };
+        let database = self.host.shutdown().map_err(io::Error::other);
         result.and(database)
     }
 }

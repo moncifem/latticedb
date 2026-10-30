@@ -185,8 +185,9 @@ read back before retrying. A statement that is skipped because it had not starte
 Inside a transaction block the timeout fails the block on the database side too, so a later `COMMIT`
 answers `ROLLBACK` and nothing of the block is committed. The same holds when `Parse`/`Describe` fails or
 times out inside a block. A `BEGIN` that times out leaves no block behind: if it ran late, the database
-side discards the block it opened, because the client believes it is outside one. The abort is sent
-with a blocking send, so the client's `57014` can be delayed until the request queue has room. An error the
+side discards the block it opened, because the client believes it is outside one. The abort is not
+a queue entry: the connection records it in state it shares with the database thread, which applies it
+before it runs the connection's next request. An error the
 wire session raises itself, which never reaches the executor (a `CancelRequest` that arrives before
 dispatch, a `Bind` with binary formats, an unknown portal or statement, a duplicate or excess `Parse`, the
 `55P03` of `describe`), also fails the block on the database side: the session tells its handler
@@ -194,9 +195,34 @@ dispatch, a `Bind` with binary formats, an unknown portal or statement, a duplic
 is committed, as in PostgreSQL. The only wire error not covered is `28000` (a changed principal), which a
 session cannot produce.
 
-Shutdown stops the listener, which cancels every registered statement, then answers requests still
-queued with `57P01` without running them; it waits for at most the statement that is running (itself
-bounded as above). A connection that drops mid-transaction commits nothing.
+**The request queue is bounded and no send blocks.** A connection has at most one live request in the
+queue: a request that timed out stays queued until the database thread takes it, so the connection's
+next statement first waits for that one to leave. The wait for that, for room in the queue, and for the
+answer share one budget of the ceiling plus 5 seconds, counted in waits that ran out, so it holds unless
+the database thread keeps making progress. If the database thread is stuck (a `COMMIT`, DDL
+or a scan materialisation that does not poll) a statement gets `57014` after the budget when it was
+queued, or `53300` when it never got in, and the block is failed on the database side as for any
+other error. Queue memory is bounded by `queue_depth` (`--max-connections` plus the control reserve
+plus 16). It is not bounded by the connection count while the thread is stuck: stale entries of timed-out
+requests, including those of connections that have since closed, stay queued until the thread takes
+them, so when clients time out and reconnect the queue can fill, and a request that finds it full gets
+`53300`. A connection thread's wait is bounded unless the database thread keeps taking other
+connections' requests (a wait ended by that signal costs no budget). The abort is deferred: an idle client that got
+`57014` keeps its block open on the database side until its next request or until it closes (the
+block is then abandoned). If the database thread has died, a waiting statement gets `57P01`. Closing a connection is not a request
+either: the database thread removes the sessions of closed connections the next time it takes a
+request, and one wake-up request at most is queued to make it look sooner. While the thread is stalled,
+the list of closed connections grows by one 8-byte id per closed connection that ran SQL, and is emptied
+when the thread next takes a request. Measured by unit tests with
+a stalled thread (24 clients retrying, a queue of 4 with 20 clients), not by a load test.
+
+Shutdown stops the listener, which cancels every registered statement. Before it joins the connection
+threads it tells the waiting ones to give up (`57P01`), so a stuck database thread does not hold them.
+Requests still queued are dropped unanswered, which the connections report as `57P01`, and the
+database thread leaves at its next request. It waits for at most the statement that is running (itself
+bounded as above) and at most `shutdown_grace_ms` (10 s): past that `shutdown` returns an error that
+says the SQL thread did not stop and leaves it behind, so a supervisor sees the process end. A connection that
+drops mid-transaction commits nothing.
 
 **If the database thread dies.** A panic on that thread makes every later statement answer `57P01`
 (connections stay up), `SqlServer::is_finished` turns true, and `latticed` exits non-zero with

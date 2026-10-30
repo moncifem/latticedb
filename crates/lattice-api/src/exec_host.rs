@@ -14,6 +14,20 @@
 //! - **Row policy follows the principal.** [`PolicyTable`] maps the development principal and each
 //!   account name to a [`Grant`]. An account that the table does not list gets [`Grant::DenyAll`];
 //!   there is no allow-all fallback anywhere.
+//! - **The queue is bounded and nothing blocks on it.** A connection has at most one live request in
+//!   the queue and waits for it to leave before sending the next. The wait to get in, to be answered
+//!   and for room in a full queue share one budget (the ceiling plus slack, counted in waits that ran
+//!   out, so it holds unless the actor keeps making progress); past it the connection gets `57014`,
+//!   or `53300` if it never got in. Memory is bounded by `queue_depth`: a timed-out request stays
+//!   queued until the actor takes it, so with a stuck actor and clients that time out and reconnect
+//!   the queue can fill with stale entries, and overflow gets `53300`. A timed-out statement's abort
+//!   and a closed connection are marks in shared state that the actor reads when it takes the
+//!   connection's next request, not queue entries. That makes the abort deferred: an idle client
+//!   that got `57014` keeps its executor block open until its next request or its close. The list
+//!   of closed connections grows by one id per closed connection while the actor is stalled (it is
+//!   emptied when the actor next takes a request), and the ids are only as many as the connections
+//!   the listener admitted. Shutdown releases waiting connections and does not wait for a stuck
+//!   actor for longer than [`HostLimits::shutdown_grace_ms`].
 //! - **Connections own their transactions.** When a proxy is dropped the actor drops that
 //!   connection's session; an open transaction block is abandoned without committing.
 //! - **Persistence** is whatever the [`Database`] persists: see the `lattice-exec` README. Column
@@ -23,9 +37,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -166,11 +180,18 @@ pub struct HostLimits {
     pub max_timeout_ms: Option<u64>,
     /// Bytes one statement may hold in result and working rows.
     pub memory_bytes: u64,
-    /// Requests that may wait for the database thread. Size it above the number of connections that
-    /// can have a request outstanding (one each, plus one close each); a sender blocks when it is full.
+    /// Requests that may wait for the database thread; memory held by the queue is bounded by it.
+    /// A connection keeps at most one live request queued, but a request that timed out stays queued
+    /// until the thread takes it, even after its connection closed, so while the thread is stuck
+    /// and clients time out and reconnect the queue can fill with stale entries. A sender that finds
+    /// it full waits within its budget and then gets `53300`; no send blocks without a limit.
     pub queue_depth: usize,
-    /// Milliseconds a connection waits for its answer beyond the statement ceiling.
+    /// Milliseconds a connection waits for its answer beyond the statement ceiling. The wait covers
+    /// getting into the queue as well as the answer.
     pub wait_slack_ms: u64,
+    /// Milliseconds [`ExecHost::shutdown`] waits for the database thread to end before it gives up
+    /// and reports it, leaving the thread behind.
+    pub shutdown_grace_ms: u64,
 }
 
 impl Default for HostLimits {
@@ -180,6 +201,7 @@ impl Default for HostLimits {
             memory_bytes: 64 << 20,
             queue_depth: 256,
             wait_slack_ms: 5_000,
+            shutdown_grace_ms: 10_000,
         }
     }
 }
@@ -197,6 +219,9 @@ impl HostLimits {
 enum Request {
     Execute {
         conn: u64,
+        /// The connection's request number, rising by one per call.
+        seq: u64,
+        shared: Arc<ConnShared>,
         principal: Principal,
         sql: String,
         params: Vec<Option<Vec<u8>>>,
@@ -207,17 +232,15 @@ enum Request {
     },
     Describe {
         conn: u64,
+        seq: u64,
+        shared: Arc<ConnShared>,
         principal: Principal,
         sql: String,
         token: CancellationToken,
         reply: SyncSender<Result<Vec<Column>, QueryError>>,
     },
-    Close(u64),
-    /// The client was told a statement failed that the executor did not see fail: fail the open
-    /// transaction block so a later COMMIT rolls back, as after any error in a block.
-    Abort(u64),
-    /// The wire session failed this connection's block on an error of its own: fail it here too.
-    FailBlock(u64),
+    /// Makes the actor look at the list of closed connections. At most one is queued at a time.
+    Wake,
     Stop,
     #[cfg(any(test, feature = "test-hooks"))]
     Stall {
@@ -238,11 +261,181 @@ type Hold = (SyncSender<()>, Receiver<()>);
 #[cfg(any(test, feature = "test-hooks"))]
 pub struct Stall(#[allow(dead_code)] SyncSender<()>);
 
+/// State every connection and the actor share. Nothing in it can block a sender.
+#[derive(Default)]
+struct HostShared {
+    /// Set when shutdown begins: waits and sends give up, and the actor stops at its next request.
+    stopping: AtomicBool,
+    /// Requests in the channel. Signed because the actor can take a request before its sender has
+    /// counted it.
+    queued: AtomicIsize,
+    /// The most requests the channel held at once (tests read it).
+    peak: AtomicIsize,
+    /// Connections whose proxy was dropped; the actor removes their sessions.
+    closed: Mutex<Vec<u64>>,
+    closed_pending: AtomicBool,
+    wake_queued: AtomicBool,
+    /// Senders that found the queue full wait here; the actor signals after every request it takes.
+    space: Mutex<()>,
+    space_cv: Condvar,
+    /// Set when the actor thread has ended, however it ended.
+    exited: Mutex<bool>,
+    exited_cv: Condvar,
+}
+
+/// How long a wait may last, counted in the waits that ran out. The server code may not read a
+/// clock, so a wait that is cut short by a signal costs nothing and one that times out costs its
+/// whole slice. Every signal that ends a wait early is progress by the thread being waited on, so
+/// the bound holds unless the actor keeps progressing (and then the wait is making headway).
+struct Budget(Option<Duration>);
+
+impl Budget {
+    fn new(total: Option<Duration>) -> Self {
+        Budget(total)
+    }
+
+    fn spent() -> Self {
+        Budget(Some(Duration::ZERO))
+    }
+
+    /// The length of the next wait, or `None` when the budget is used up.
+    fn next(&self) -> Option<Duration> {
+        match self.0 {
+            None => Some(WAIT_SLICE),
+            Some(left) if left.is_zero() => None,
+            Some(left) => Some(left.min(WAIT_SLICE)),
+        }
+    }
+
+    fn timed_out(&mut self, waited: Duration) {
+        if let Some(left) = &mut self.0 {
+            *left = left.saturating_sub(waited);
+        }
+    }
+}
+
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// State one connection shares with the actor. It carries what used to be separate `Abort` and
+/// `Close` requests, so a timed-out statement queues nothing but itself.
+#[derive(Default)]
+struct ConnShared {
+    /// Requests of this connection still in the channel (0 or 1).
+    queued: Mutex<u32>,
+    left: Condvar,
+    /// Highest request number whose timeout the client was told about. The actor fails or discards
+    /// the open block before it runs any later request of this connection, which is what the queued
+    /// `Abort` request did.
+    abort_through: AtomicU64,
+    /// Highest request number that never reached the queue (`53300`). The client's block failed, so
+    /// the executor's block must too.
+    fail_through: AtomicU64,
+    closed: AtomicBool,
+}
+
+impl ConnShared {
+    fn enter(&self) {
+        *locked(&self.queued) += 1;
+    }
+
+    fn leave(&self) {
+        let mut queued = locked(&self.queued);
+        *queued = queued.saturating_sub(1);
+        self.left.notify_all();
+    }
+
+    /// Waits until the connection's earlier request has left the queue, so a client that keeps
+    /// retrying while the actor is busy cannot stack entries up.
+    fn wait_clear(&self, budget: &mut Budget, host: &HostShared) -> Result<(), QueryError> {
+        let mut queued = locked(&self.queued);
+        while *queued > 0 {
+            // A dead actor never takes the entry: answer 57P01, not a wait that ends in 53300 (or
+            // never ends, with an unbounded budget).
+            if host.stopping.load(Ordering::Acquire) || *locked(&host.exited) {
+                return Err(gone());
+            }
+            let Some(slice) = budget.next() else {
+                return Err(busy(
+                    "an earlier request of this connection is still queued",
+                ));
+            };
+            let (guard, result) = self
+                .left
+                .wait_timeout(queued, slice)
+                .unwrap_or_else(PoisonError::into_inner);
+            queued = guard;
+            if result.timed_out() {
+                budget.timed_out(slice);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// How often a waiting thread looks at the shutdown flag.
+const WAIT_SLICE: Duration = Duration::from_millis(50);
+
+fn busy(why: &str) -> QueryError {
+    QueryError::new("53300", format!("the SQL engine is busy: {why}"))
+}
+
+/// Puts a request in the channel. When the queue is full it waits for the actor to take something,
+/// as long as `budget` allows (until shutdown, for an unbounded budget). `Full` is not a reason to
+/// block for good: the actor may be stuck.
+fn enqueue(
+    requests: &SyncSender<Request>,
+    host: &HostShared,
+    request: Request,
+    budget: &mut Budget,
+) -> Result<(), QueryError> {
+    let mut request = request;
+    loop {
+        match requests.try_send(request) {
+            Ok(()) => {
+                let now = host.queued.fetch_add(1, Ordering::AcqRel) + 1;
+                host.peak.fetch_max(now, Ordering::AcqRel);
+                return Ok(());
+            }
+            Err(TrySendError::Disconnected(_)) => return Err(gone()),
+            Err(TrySendError::Full(back)) => request = back,
+        }
+        if host.stopping.load(Ordering::Acquire) {
+            return Err(gone());
+        }
+        let Some(slice) = budget.next() else {
+            return Err(busy("the request queue is full"));
+        };
+        // The actor signals while holding this lock after every request it takes, so a take between
+        // the failed send above and the wait below is seen by the retry made under the lock.
+        let guard = locked(&host.space);
+        match requests.try_send(request) {
+            Ok(()) => {
+                let now = host.queued.fetch_add(1, Ordering::AcqRel) + 1;
+                host.peak.fetch_max(now, Ordering::AcqRel);
+                return Ok(());
+            }
+            Err(TrySendError::Disconnected(_)) => return Err(gone()),
+            Err(TrySendError::Full(back)) => request = back,
+        }
+        let (_guard, result) = host
+            .space_cv
+            .wait_timeout(guard, slice)
+            .unwrap_or_else(PoisonError::into_inner);
+        if result.timed_out() {
+            budget.timed_out(slice);
+        }
+    }
+}
+
 /// Marks the actor as gone however its thread ends (normal stop, error or panic).
-struct AliveGuard(Arc<AtomicBool>);
+struct AliveGuard(Arc<AtomicBool>, Arc<HostShared>);
 impl Drop for AliveGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
+        *locked(&self.1.exited) = true;
+        self.1.exited_cv.notify_all();
     }
 }
 
@@ -253,9 +446,11 @@ pub struct ExecHost {
     thread: Mutex<Option<JoinHandle<()>>>,
     unattached: Vec<String>,
     alive: Arc<AtomicBool>,
-    stopping: Arc<AtomicBool>,
-    /// How long a connection waits for an answer: the statement ceiling plus slack, or forever.
+    shared: Arc<HostShared>,
+    /// How long a connection waits to be queued and answered: the statement ceiling plus slack, or
+    /// until shutdown.
     wait: Option<Duration>,
+    shutdown_grace: Duration,
 }
 
 impl ExecHost {
@@ -304,12 +499,12 @@ impl ExecHost {
         let (requests, inbox) = mpsc::sync_channel(limits.queue_depth.max(1));
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let alive = Arc::new(AtomicBool::new(true));
-        let stopping = Arc::new(AtomicBool::new(false));
-        let (thread_alive, thread_stopping) = (alive.clone(), stopping.clone());
+        let shared = Arc::new(HostShared::default());
+        let (thread_alive, thread_shared) = (alive.clone(), shared.clone());
         let thread = thread::Builder::new()
             .name("sql-actor".into())
             .spawn(move || {
-                let _guard = AliveGuard(thread_alive);
+                let _guard = AliveGuard(thread_alive, thread_shared.clone());
                 let db = match open() {
                     Ok(db) => db,
                     Err(e) => {
@@ -326,7 +521,7 @@ impl ExecHost {
                 if ready_tx.send(Ok(unattached)).is_err() {
                     return;
                 }
-                serve(db, inbox, &policies, limits, &thread_stopping);
+                serve(db, inbox, &policies, limits, &thread_shared);
             })
             .map_err(|e| format!("cannot start the SQL thread: {e}"))?;
         match ready_rx.recv() {
@@ -336,10 +531,11 @@ impl ExecHost {
                 thread: Mutex::new(Some(thread)),
                 unattached,
                 alive,
-                stopping,
+                shared,
                 wait: limits
                     .max_timeout_ms
                     .map(|ms| Duration::from_millis(ms.saturating_add(limits.wait_slack_ms))),
+                shutdown_grace: Duration::from_millis(limits.shutdown_grace_ms),
             }),
             Ok(Err(e)) => {
                 let _ = thread.join();
@@ -363,7 +559,10 @@ impl ExecHost {
     pub fn handler(&self) -> ExecProxy {
         ExecProxy {
             requests: self.requests.clone(),
+            host: Arc::clone(&self.shared),
+            state: Arc::new(ConnShared::default()),
             conn: self.next_connection.fetch_add(1, Ordering::Relaxed),
+            seq: 0,
             used: false,
             wait: self.wait,
             #[cfg(any(test, feature = "test-hooks"))]
@@ -383,37 +582,86 @@ impl ExecHost {
     pub fn stall_for_test(&self) -> Stall {
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
-        let _ = self.requests.send(Request::Stall {
-            entered: entered_tx,
-            release: release_rx,
-        });
+        let _ = enqueue(
+            &self.requests,
+            &self.shared,
+            Request::Stall {
+                entered: entered_tx,
+                release: release_rx,
+            },
+            &mut Budget::new(None),
+        );
         let _ = entered_rx.recv();
         Stall(release_tx)
+    }
+
+    /// The most requests the queue has held at once (tests only).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn peak_queue_for_test(&self) -> usize {
+        usize::try_from(self.shared.peak.load(Ordering::Acquire)).unwrap_or(0)
     }
 
     /// Panics the database thread (tests only).
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn crash_for_test(&self) {
-        let _ = self.requests.send(Request::Crash);
+        let _ = enqueue(
+            &self.requests,
+            &self.shared,
+            Request::Crash,
+            &mut Budget::new(None),
+        );
     }
 
-    /// Stops the actor after the statements already queued and drops the database, which releases
-    /// the directory lock. Handlers created earlier answer `57P01` afterwards. Call it after the
-    /// listener has stopped.
+    /// Tells every waiting connection to give up (`57P01`) and the actor to stop at its next
+    /// request. It returns at once; call it before the listener joins its connection threads, so a
+    /// thread waiting on a stuck actor does not hold the shutdown up.
+    pub fn begin_shutdown(&self) {
+        self.shared.stopping.store(true, Ordering::Release);
+    }
+
+    /// Stops the actor and drops the database, which releases the directory lock. Handlers created
+    /// earlier answer `57P01` afterwards. Call it after the listener has stopped.
     ///
     /// Requests still queued when this is called are answered `57P01` without running, so shutdown
-    /// waits for at most the statement that is running. Returns an error if the database thread
-    /// panicked.
+    /// waits for at most the statement that is running, and for at most
+    /// [`HostLimits::shutdown_grace_ms`]: if the database thread is stuck past that, this returns an
+    /// error and leaves the thread behind rather than hanging. Returns an error if the database
+    /// thread panicked.
     pub fn shutdown(&self) -> Result<(), String> {
-        self.stopping.store(true, Ordering::Release);
-        let _ = self.requests.send(Request::Stop);
+        self.begin_shutdown();
+        // The stop flag already makes the actor leave at its next request; the request only wakes
+        // an idle actor, so a full queue is not worth waiting long for.
+        let _ = enqueue(
+            &self.requests,
+            &self.shared,
+            Request::Stop,
+            &mut Budget::new(Some(self.shutdown_grace / 4)),
+        );
         let thread = self.thread.lock().ok().and_then(|mut t| t.take());
-        match thread {
-            Some(thread) => thread
-                .join()
-                .map_err(|_| "the SQL thread panicked".to_string()),
-            None => Ok(()),
+        let Some(thread) = thread else { return Ok(()) };
+        let mut budget = Budget::new(Some(self.shutdown_grace));
+        let mut exited = locked(&self.shared.exited);
+        while !*exited {
+            let Some(slice) = budget.next() else {
+                return Err(format!(
+                    "the SQL thread did not stop within {} ms; not waiting for it",
+                    self.shutdown_grace.as_millis()
+                ));
+            };
+            let (guard, result) = self
+                .shared
+                .exited_cv
+                .wait_timeout(exited, slice)
+                .unwrap_or_else(PoisonError::into_inner);
+            exited = guard;
+            if result.timed_out() {
+                budget.timed_out(slice);
+            }
         }
+        drop(exited);
+        thread
+            .join()
+            .map_err(|_| "the SQL thread panicked".to_string())
     }
 }
 
@@ -428,7 +676,7 @@ fn serve<I, C, R>(
     inbox: Receiver<Request>,
     policies: &PolicyTable,
     limits: HostLimits,
-    stopping: &AtomicBool,
+    host: &HostShared,
 ) where
     I: Io + 'static,
     C: Clock + Clone + 'static,
@@ -440,6 +688,8 @@ fn serve<I, C, R>(
     // statement from outside a block is a `BEGIN` or an autocommit statement: the client is outside any
     // block, so a block it left behind is discarded, not failed.
     let mut was_in_block: BTreeMap<u64, bool> = BTreeMap::new();
+    // The abort and fail marks already applied per connection.
+    let mut applied: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
     let make = |db: &Rc<RefCell<Database<I, C, R>>>| {
         let accounts = policies.clone();
         let mut handler =
@@ -450,9 +700,28 @@ fn serve<I, C, R>(
         handler
     };
     while let Ok(request) = inbox.recv() {
+        host.queued.fetch_sub(1, Ordering::AcqRel);
+        drop(locked(&host.space));
+        host.space_cv.notify_all();
+        if host.stopping.load(Ordering::Acquire) {
+            // Queued requests are dropped unanswered; their connections read that as 57P01.
+            break;
+        }
+        if matches!(request, Request::Wake) {
+            host.wake_queued.store(false, Ordering::Release);
+        }
+        if host.closed_pending.swap(false, Ordering::AcqRel) {
+            for conn in std::mem::take(&mut *locked(&host.closed)) {
+                sessions.remove(&conn);
+                was_in_block.remove(&conn);
+                applied.remove(&conn);
+            }
+        }
         match request {
             Request::Execute {
                 conn,
+                seq,
+                shared,
                 principal,
                 sql,
                 params,
@@ -463,15 +732,26 @@ fn serve<I, C, R>(
             } => {
                 #[cfg(any(test, feature = "test-hooks"))]
                 let mut token = token;
+                shared.leave();
+                if shared.closed.load(Ordering::Acquire) {
+                    let _ = reply.send(Err(gone()));
+                    continue;
+                }
+                apply_marks(
+                    &shared,
+                    conn,
+                    seq,
+                    &mut sessions,
+                    &was_in_block,
+                    &mut applied,
+                );
                 was_in_block.insert(
                     conn,
                     sessions
                         .get(&conn)
                         .is_some_and(|h| h.tx_status() != TxStatus::Idle),
                 );
-                let result = if stopping.load(Ordering::Acquire) {
-                    Err(gone())
-                } else if token.is_cancelled() {
+                let result = if token.is_cancelled() {
                     // The client is told 57014, so a block it is in must fail here too.
                     if let Some(handler) = sessions.get_mut(&conn) {
                         handler.abort_transaction();
@@ -497,20 +777,33 @@ fn serve<I, C, R>(
             }
             Request::Describe {
                 conn,
+                seq,
+                shared,
                 principal,
                 sql,
                 token,
                 reply,
             } => {
+                shared.leave();
+                if shared.closed.load(Ordering::Acquire) {
+                    let _ = reply.send(Err(gone()));
+                    continue;
+                }
+                apply_marks(
+                    &shared,
+                    conn,
+                    seq,
+                    &mut sessions,
+                    &was_in_block,
+                    &mut applied,
+                );
                 was_in_block.insert(
                     conn,
                     sessions
                         .get(&conn)
                         .is_some_and(|h| h.tx_status() != TxStatus::Idle),
                 );
-                let result = if stopping.load(Ordering::Acquire) {
-                    Err(gone())
-                } else if token.is_cancelled() {
+                let result = if token.is_cancelled() {
                     if let Some(handler) = sessions.get_mut(&conn) {
                         handler.abort_transaction();
                     }
@@ -521,27 +814,7 @@ fn serve<I, C, R>(
                 };
                 let _ = reply.send(result);
             }
-            Request::Close(conn) => {
-                sessions.remove(&conn);
-                was_in_block.remove(&conn);
-            }
-            Request::FailBlock(conn) => {
-                if let Some(handler) = sessions.get_mut(&conn) {
-                    handler.abort_transaction();
-                }
-            }
-            Request::Abort(conn) => {
-                if let Some(handler) = sessions.get_mut(&conn) {
-                    if was_in_block.get(&conn).copied().unwrap_or(false) {
-                        // The client's block saw an error: fail it so COMMIT rolls back.
-                        handler.abort_transaction();
-                    } else {
-                        // The client was outside a block and believes it still is (a `BEGIN`
-                        // that ran after its timeout): leave no block behind.
-                        handler.discard_transaction();
-                    }
-                }
-            }
+            Request::Wake => {}
             #[cfg(any(test, feature = "test-hooks"))]
             Request::Stall { entered, release } => {
                 let _ = entered.send(());
@@ -555,6 +828,52 @@ fn serve<I, C, R>(
     }
 }
 
+/// Applies the failure marks a connection left since its previous request, before its next one
+/// runs. A timed-out statement that began outside a block was a `BEGIN` or an autocommit statement:
+/// the client believes it is outside any block, so a block it left behind is discarded. Inside a
+/// block, the block fails so a later COMMIT rolls back. A request that never reached the queue
+/// always fails the block.
+fn apply_marks<I, C, R>(
+    shared: &ConnShared,
+    conn: u64,
+    seq: u64,
+    sessions: &mut BTreeMap<u64, ExecHandler<I, C, R>>,
+    was_in_block: &BTreeMap<u64, bool>,
+    applied: &mut BTreeMap<u64, (u64, u64)>,
+) where
+    I: Io + 'static,
+    C: Clock + Clone + 'static,
+    R: Rng + 'static,
+{
+    let abort = shared.abort_through.load(Ordering::Acquire);
+    let fail = shared.fail_through.load(Ordering::Acquire);
+    let (done_abort, done_fail) = applied.get(&conn).copied().unwrap_or((0, 0));
+    let abort_due = abort > done_abort && abort < seq;
+    let fail_due = fail > done_fail && fail < seq;
+    if !abort_due && !fail_due {
+        return;
+    }
+    if let Some(handler) = sessions.get_mut(&conn) {
+        if abort_due {
+            if was_in_block.get(&conn).copied().unwrap_or(false) {
+                handler.abort_transaction();
+            } else {
+                handler.discard_transaction();
+            }
+        }
+        if fail_due {
+            handler.abort_transaction();
+        }
+    }
+    applied.insert(
+        conn,
+        (
+            if abort_due { abort } else { done_abort },
+            if fail_due { fail } else { done_fail },
+        ),
+    );
+}
+
 fn cancelled() -> QueryError {
     QueryError::new("57014", "canceling statement due to user request")
 }
@@ -566,8 +885,12 @@ fn gone() -> QueryError {
 /// The `QueryHandler` of one connection: forwards to the [`ExecHost`] actor and waits.
 pub struct ExecProxy {
     requests: SyncSender<Request>,
+    host: Arc<HostShared>,
+    state: Arc<ConnShared>,
     wait: Option<Duration>,
     conn: u64,
+    /// Number of the latest request.
+    seq: u64,
     /// Set once a request was sent, so a connection that never ran SQL costs the actor nothing.
     used: bool,
     #[cfg(any(test, feature = "test-hooks"))]
@@ -590,37 +913,66 @@ impl ExecProxy {
         self.wait = wait;
     }
 
-    /// Sends a request and waits for its answer, at most the statement ceiling plus slack. On
-    /// timeout the statement's token is cancelled: the actor skips the request if it has not started
-    /// and stops it at its next row if it has, and this connection gets `57014`. The abort request
-    /// that follows is a blocking send, so the `57014` can be delayed until the queue has room.
+    /// Sends a request and waits for its answer, at most the statement ceiling plus slack in all:
+    /// the wait for the connection's earlier request to leave the queue, for room in the queue, and
+    /// for the answer share that one deadline. Nothing here blocks without it.
+    ///
+    /// On timeout the statement's token is cancelled: the actor skips the request if it has not
+    /// started and stops it at its next row if it has, and this connection gets `57014`. The actor
+    /// is told through the connection's shared state, not through the queue, so the timeout adds no
+    /// entry: it fails or discards the open block before the connection's next request runs. Without
+    /// that a later COMMIT would commit the rest of the block. A request that cannot be queued in
+    /// time gets `53300`, and marks the block failed the same way.
     fn call<T>(
         &mut self,
         token: &CancellationToken,
-        build: impl FnOnce(SyncSender<Result<T, QueryError>>) -> Request,
+        build: impl FnOnce(SyncSender<Result<T, QueryError>>, u64, Arc<ConnShared>) -> Request,
     ) -> Result<T, QueryError> {
+        let mut budget = Budget::new(self.wait);
+        self.seq += 1;
+        let seq = self.seq;
         let (reply, answer) = mpsc::sync_channel(1);
-        self.used = true;
-        self.requests.send(build(reply)).map_err(|_| gone())?;
-        let Some(wait) = self.wait else {
-            return answer.recv().map_err(|_| gone())?;
-        };
-        match answer.recv_timeout(wait) {
-            Ok(result) => result,
-            Err(RecvTimeoutError::Timeout) => {
-                token.request();
-                // The client is told the statement failed. The database thread may still run it, or
-                // skip it, without knowing that: fail the block there as well (the request queues
-                // behind the statement, so it is applied before the connection's next statement).
-                // Without this a later COMMIT would commit the rest of the block.
-                let _ = self.requests.send(Request::Abort(self.conn));
-                Err(QueryError::new(
-                    "57014",
-                    "canceling statement: no answer from the database within the statement ceiling",
-                ))
+        let queued = self
+            .state
+            .wait_clear(&mut budget, &self.host)
+            .and_then(|()| {
+                self.state.enter();
+                let request = build(reply, seq, Arc::clone(&self.state));
+                enqueue(&self.requests, &self.host, request, &mut budget).inspect_err(|_| {
+                    self.state.leave();
+                })
+            });
+        if let Err(error) = queued {
+            if error.code == "53300" {
+                self.state.fail_through.fetch_max(seq, Ordering::AcqRel);
             }
-            Err(RecvTimeoutError::Disconnected) => Err(gone()),
+            return Err(error);
         }
+        self.used = true;
+        loop {
+            let Some(slice) = budget.next() else {
+                return Err(self.timed_out(token, seq));
+            };
+            match answer.recv_timeout(slice) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Timeout) => {
+                    budget.timed_out(slice);
+                    if self.host.stopping.load(Ordering::Acquire) {
+                        return Err(gone());
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err(gone()),
+            }
+        }
+    }
+
+    fn timed_out(&self, token: &CancellationToken, seq: u64) -> QueryError {
+        token.request();
+        self.state.abort_through.fetch_max(seq, Ordering::AcqRel);
+        QueryError::new(
+            "57014",
+            "canceling statement: no answer from the database within the statement ceiling",
+        )
     }
 }
 
@@ -649,10 +1001,12 @@ impl QueryHandler for ExecProxy {
         let principal = ctx.principal.clone();
         #[cfg(any(test, feature = "test-hooks"))]
         let hold = self.hold.take();
-        self.call(cancellation, |reply| Request::Execute {
+        self.call(cancellation, |reply, seq, shared| Request::Execute {
             #[cfg(any(test, feature = "test-hooks"))]
             hold,
             conn,
+            seq,
+            shared,
             principal,
             sql: sql.to_string(),
             params: params.to_vec(),
@@ -673,8 +1027,10 @@ impl QueryHandler for ExecProxy {
     ) -> Result<Vec<Column>, QueryError> {
         let conn = self.conn;
         let principal = ctx.principal.clone();
-        self.call(cancellation, |reply| Request::Describe {
+        self.call(cancellation, |reply, seq, shared| Request::Describe {
             conn,
+            seq,
+            shared,
             principal,
             sql: sql.to_string(),
             token: cancellation.clone(),
@@ -684,18 +1040,37 @@ impl QueryHandler for ExecProxy {
 }
 
 impl ExecProxy {
+    /// Marks the connection's block failed without a queue entry: the actor applies the mark before
+    /// it runs the connection's next request, and the actor takes requests in order, so every request
+    /// already sent comes first.
     fn fail_block(&self) {
-        // Queued behind the connection's earlier requests and ahead of its next one.
-        if self.used {
-            let _ = self.requests.send(Request::FailBlock(self.conn));
-        }
+        self.state
+            .fail_through
+            .fetch_max(self.seq, Ordering::AcqRel);
     }
 }
 
 impl Drop for ExecProxy {
     fn drop(&mut self) {
-        if self.used {
-            let _ = self.requests.send(Request::Close(self.conn));
+        if !self.used {
+            return;
+        }
+        // The actor removes the session when it next looks at the list. Waking it takes a queue
+        // slot only if none is taken already; when the queue is full the actor is busy and will
+        // look soon anyway.
+        self.state.closed.store(true, Ordering::Release);
+        locked(&self.host.closed).push(self.conn);
+        self.host.closed_pending.store(true, Ordering::Release);
+        if !self.host.wake_queued.swap(true, Ordering::AcqRel)
+            && enqueue(
+                &self.requests,
+                &self.host,
+                Request::Wake,
+                &mut Budget::spent(),
+            )
+            .is_err()
+        {
+            self.host.wake_queued.store(false, Ordering::Release);
         }
     }
 }
@@ -1205,6 +1580,8 @@ reader	allow-all
         host.requests
             .send(Request::Execute {
                 conn: proxy_conn,
+                seq: u64::MAX,
+                shared: Arc::new(ConnShared::default()),
                 principal: Principal::local_development(),
                 sql: sql.to_string(),
                 params: Vec::new(),
@@ -1223,6 +1600,8 @@ reader	allow-all
         host.requests
             .send(Request::Describe {
                 conn: proxy_conn,
+                seq: u64::MAX,
+                shared: Arc::new(ConnShared::default()),
                 principal: Principal::local_development(),
                 sql: sql.to_string(),
                 token,
@@ -1473,5 +1852,301 @@ reader	allow-all
         drop(s);
         drop(host);
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Waits without a sleep call: a receive on a channel nobody sends to.
+    fn pause(ms: u64) {
+        let (tx, rx) = mpsc::channel::<()>();
+        let _ = rx.recv_timeout(Duration::from_millis(ms));
+        drop(tx);
+    }
+
+    fn limited_host(name: &str, limits: HostLimits) -> (ExecHost, PathBuf) {
+        let path = dir(name);
+        let host =
+            ExecHost::start_dir(path.clone(), PolicyTable::new(Grant::AllowAll), limits).unwrap();
+        (host, path)
+    }
+
+    /// `clients` connections each run `rounds` statements one after the other against a stalled
+    /// actor. Returns every error code, once all of them have finished.
+    fn hammer(host: &ExecHost, clients: usize, rounds: usize) -> Vec<String> {
+        let (done, results) = mpsc::channel();
+        for _ in 0..clients {
+            let mut proxy = host.handler();
+            let done = done.clone();
+            thread::Builder::new()
+                .spawn(move || {
+                    let principal = Principal::local_development();
+                    let ctx = QueryContext::new(&principal);
+                    for _ in 0..rounds {
+                        let code = match proxy.execute(&ctx, "SELECT 1", &[]) {
+                            Ok(_) => "ok".to_string(),
+                            Err(e) => e.code,
+                        };
+                        let _ = done.send(code);
+                    }
+                })
+                .unwrap();
+        }
+        drop(done);
+        let mut codes = Vec::new();
+        // A regression that blocks a sender forever shows up here as a timeout, not a hung suite.
+        while codes.len() < clients * rounds {
+            codes.push(
+                results
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("a client is stuck"),
+            );
+        }
+        codes
+    }
+
+    #[test]
+    fn a_timeout_queues_nothing_but_the_statement_itself() {
+        let (host, path) = limited_host(
+            "one-entry",
+            HostLimits {
+                max_timeout_ms: Some(150),
+                wait_slack_ms: 0,
+                ..HostLimits::default()
+            },
+        );
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        let stall = host.stall_for_test();
+        // The first statement times out in the queue and stays there. The retries do not add entries
+        // (the earlier one has not left), and neither does the abort the timeout owes.
+        assert_eq!(p.execute(&ctx, "SELECT 1", &[]).unwrap_err().code, "57014");
+        for _ in 0..3 {
+            assert_eq!(p.execute(&ctx, "SELECT 1", &[]).unwrap_err().code, "53300");
+        }
+        assert!(
+            host.peak_queue_for_test() <= 1,
+            "queue peaked at {}",
+            host.peak_queue_for_test()
+        );
+        drop(stall);
+        drop(p);
+        drop(host);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn many_clients_timing_out_against_a_stalled_actor_never_exceed_one_entry_each() {
+        let (host, path) = limited_host(
+            "stalled-many",
+            HostLimits {
+                max_timeout_ms: Some(100),
+                wait_slack_ms: 0,
+                queue_depth: 256,
+                shutdown_grace_ms: 400,
+                ..HostLimits::default()
+            },
+        );
+        let stall = host.stall_for_test();
+        let clients = 24;
+        let codes = hammer(&host, clients, 4);
+        assert!(
+            codes.iter().all(|c| c == "57014" || c == "53300"),
+            "{codes:?}"
+        );
+        // Each client has a stale statement queued; the 3 extra are the stall, a wake-up and a stop.
+        assert!(
+            host.peak_queue_for_test() <= clients + 3,
+            "queue peaked at {}",
+            host.peak_queue_for_test()
+        );
+        // Shutdown does not wait for the stuck thread forever: it reports it and returns.
+        let error = host.shutdown().unwrap_err();
+        assert!(error.contains("did not stop"), "{error}");
+        drop(stall);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn a_full_queue_answers_busy_instead_of_blocking_a_connection() {
+        let (host, path) = limited_host(
+            "full-queue",
+            HostLimits {
+                max_timeout_ms: Some(100),
+                wait_slack_ms: 0,
+                queue_depth: 4,
+                shutdown_grace_ms: 400,
+                ..HostLimits::default()
+            },
+        );
+        let stall = host.stall_for_test();
+        // 20 connections, a queue of 4: the rest cannot get in and must still be answered.
+        let codes = hammer(&host, 20, 2);
+        assert!(
+            codes.iter().all(|c| c == "57014" || c == "53300"),
+            "{codes:?}"
+        );
+        assert!(codes.iter().any(|c| c == "53300"));
+        assert!(host.peak_queue_for_test() <= 4);
+        assert!(host.shutdown().is_err());
+        drop(stall);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn beginning_shutdown_releases_connections_waiting_on_a_stuck_actor() {
+        // A long ceiling: only the shutdown signal can end these waits in time.
+        let (host, path) = limited_host(
+            "release-waiters",
+            HostLimits {
+                max_timeout_ms: Some(600_000),
+                wait_slack_ms: 0,
+                shutdown_grace_ms: 400,
+                ..HostLimits::default()
+            },
+        );
+        let stall = host.stall_for_test();
+        let (done, results) = mpsc::channel();
+        for _ in 0..6 {
+            let mut proxy = host.handler();
+            let done = done.clone();
+            thread::Builder::new()
+                .spawn(move || {
+                    let principal = Principal::local_development();
+                    let ctx = QueryContext::new(&principal);
+                    let _ = done.send(proxy.execute(&ctx, "SELECT 1", &[]).unwrap_err().code);
+                })
+                .unwrap();
+        }
+        drop(done);
+        while host.peak_queue_for_test() < 6 {
+            pause(10);
+        }
+        host.begin_shutdown();
+        for _ in 0..6 {
+            assert_eq!(
+                results.recv_timeout(Duration::from_secs(10)).unwrap(),
+                "57P01"
+            );
+        }
+        assert!(host.shutdown().is_err());
+        drop(stall);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn closed_connections_are_forgotten_without_a_request_of_their_own() {
+        let (host, path) = quick_host("sweep");
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        p.execute(&ctx, "CREATE TABLE t (id INT PRIMARY KEY)", &[])
+            .unwrap();
+        p.execute(&ctx, "BEGIN", &[]).unwrap();
+        p.execute(&ctx, "INSERT INTO t VALUES (1)", &[]).unwrap();
+        // Closing mid-block abandons the block: nothing of it is visible to another connection.
+        drop(p);
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        // With the actor stalled the wake-up cannot be queued behind a full queue forever: dropping
+        // many proxies leaves at most one wake-up in the queue.
+        let stall = host.stall_for_test();
+        for _ in 0..50 {
+            let mut q = host.handler();
+            q.used = true;
+            drop(q);
+        }
+        assert!(host.peak_queue_for_test() <= 2);
+        drop(stall);
+        drop(host);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn a_statement_that_never_got_into_the_queue_fails_the_block_so_commit_rolls_back() {
+        // A queue of one: another connection's timed-out statement fills it while the thread is
+        // stalled, so the block's next statement cannot get in and answers 53300. Nothing of it ever
+        // reaches the thread, so only the failure mark can fail the executor's block.
+        let (host, path) = limited_host(
+            "never-queued",
+            HostLimits {
+                max_timeout_ms: Some(150),
+                wait_slack_ms: 0,
+                queue_depth: 1,
+                ..HostLimits::default()
+            },
+        );
+        let mut p = open_block(&host);
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let stall = host.stall_for_test();
+        let mut filler = host.handler();
+        assert_eq!(
+            filler.execute(&ctx, "SELECT 1", &[]).unwrap_err().code,
+            "57014"
+        );
+        assert_eq!(
+            p.execute(&ctx, "INSERT INTO t VALUES (2)", &[])
+                .unwrap_err()
+                .code,
+            "53300"
+        );
+        drop(stall);
+        assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
+        assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);
+        drop(filler);
+        drop(p);
+        drop(host);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn a_dead_actor_answers_57p01_even_with_an_entry_stuck_in_the_queue() {
+        let (host, path) = limited_host(
+            "dead-stuck-entry",
+            HostLimits {
+                max_timeout_ms: Some(100),
+                wait_slack_ms: 0,
+                ..HostLimits::default()
+            },
+        );
+        let principal = Principal::local_development();
+        let ctx = QueryContext::new(&principal);
+        let mut p = host.handler();
+        let stall = host.stall_for_test();
+        host.crash_for_test();
+        // Queued behind the crash, so the thread never takes it.
+        assert_eq!(p.execute(&ctx, "SELECT 1", &[]).unwrap_err().code, "57014");
+        drop(stall);
+        while host.is_alive() {
+            pause(10);
+        }
+        assert_eq!(p.execute(&ctx, "SELECT 1", &[]).unwrap_err().code, "57P01");
+        let _ = host.shutdown();
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn marks_apply_once_and_only_to_a_later_request() {
+        let shared = ConnShared::default();
+        let mut sessions: BTreeMap<u64, ExecHandler<StdIo, SystemClock, OsRng>> = BTreeMap::new();
+        let was_in_block = BTreeMap::new();
+        let mut applied = BTreeMap::new();
+        let mut apply = |seq| {
+            apply_marks(&shared, 1, seq, &mut sessions, &was_in_block, &mut applied);
+            applied.get(&1).copied()
+        };
+        // Request 5 timed out. It is not "later" than itself.
+        shared.abort_through.store(5, Ordering::Release);
+        assert_eq!(apply(5), None);
+        assert_eq!(apply(6), Some((5, 0)));
+        // Applied: a request after that does nothing more.
+        assert_eq!(apply(7), Some((5, 0)));
+        // A second abort, for a later request, applies again; a failure mark is tracked apart.
+        shared.abort_through.store(7, Ordering::Release);
+        assert_eq!(apply(7), Some((5, 0)));
+        assert_eq!(apply(8), Some((7, 0)));
+        shared.fail_through.store(8, Ordering::Release);
+        assert_eq!(apply(8), Some((7, 0)));
+        assert_eq!(apply(9), Some((7, 8)));
     }
 }
