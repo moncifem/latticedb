@@ -853,6 +853,7 @@ fn run(ops: &[Op], flaw: Flaw) -> Result<Stats, String> {
                         counter: t.1,
                         node: t.2,
                     })
+                    .map_err(|e| at(format!("AS OF TIMESTAMP {t:?}: {e}")))?
                     .as_of;
                 let want = model.as_of_time(t);
                 ensure!(

@@ -280,7 +280,7 @@ fn write_policy_checks_original_and_final_values_including_inserts_and_deletes()
 }
 
 #[test]
-fn floor_and_conflict_errors_win_before_authorization_or_any_append() {
+fn floor_errors_win_before_authorization_and_denial_wins_before_conflict() {
     struct Audit(Rc<Cell<u64>>);
     impl PolicyEvaluator for Audit {
         fn allows_write(&self, _: RowWriteRef<'_>) -> bool {
@@ -296,12 +296,13 @@ fn floor_and_conflict_errors_win_before_authorization_or_any_append() {
     other.put((1, b"a".to_vec()), vec![2, 11]);
     let winner = f.store.commit(other).unwrap();
     let before = wal(&f.disk);
-    assert_eq!(
-        f.store.commit(stale),
-        Err(RowError::Conflict { newer_lsn: winner })
-    );
-    assert_eq!(calls.get(), 0);
+    // Authorization runs before the conflict check: the denied actor learns nothing about the
+    // newer write at `winner`.
+    let _ = winner;
+    assert_eq!(f.store.commit(stale), Err(RowError::PermissionDenied));
+    assert_eq!(calls.get(), 1);
     assert_eq!(wal(&f.disk), before);
+    calls.set(0);
     let old = Snapshot { as_of: 0 };
     let mut expired = f.store.begin_with_policy(Audit(calls.clone()));
     expired.put((1, b"x".to_vec()), vec![9]);
@@ -633,5 +634,215 @@ proptest! {
         }
         prop_assert!(rows(&f.store, snap, &DenyAll).is_empty());
         f.store.check_indexes().unwrap();
+    }
+}
+
+#[test]
+fn denied_actor_never_learns_a_hidden_row_was_written_but_allowed_actor_still_conflicts() {
+    let mut f = Fixture::populated();
+    // Owner(1) reads "a" ([1, 10]). Owner(2) is not allowed to touch it.
+    let mut hidden_writer = f.store.begin_with_policy(Owner(1));
+    hidden_writer.put((1, b"a".to_vec()), vec![1, 11]);
+    let mut denied = f.store.begin_with_policy(Owner(2));
+    denied.put((1, b"a".to_vec()), vec![2, 99]);
+    let mut racer = f.store.begin();
+    racer.put((1, b"a".to_vec()), vec![1, 12]);
+    let newer = f.store.commit(racer).unwrap();
+    let before = wal(&f.disk);
+    assert_eq!(f.store.commit(denied), Err(RowError::PermissionDenied));
+    assert_eq!(wal(&f.disk), before);
+    // The permitted actor still gets the retryable conflict.
+    assert_eq!(
+        f.store.commit(hidden_writer),
+        Err(RowError::Conflict { newer_lsn: newer })
+    );
+}
+
+#[test]
+fn blind_insert_on_a_hidden_key_is_denied_or_conflicts_depending_on_the_policy() {
+    let mut f = Fixture::populated();
+    // Owner(2) blind-inserts at "n" while a row it cannot see appears there.
+    let mut blind_ok = f.store.begin_with_policy(Owner(2));
+    blind_ok.put((1, b"n".to_vec()), vec![2, 1]);
+    let mut blind_bad = f.store.begin_with_policy(Owner(2));
+    blind_bad.put((1, b"n".to_vec()), vec![1, 1]);
+    let mut other = f.store.begin();
+    other.put((1, b"n".to_vec()), vec![1, 7]);
+    let newer = f.store.commit(other).unwrap();
+    // Against its own snapshot "n" is absent and the insert is allowed, so first-committer-wins
+    // reports the conflict. This reveals that the key now exists (documented in the module docs).
+    assert_eq!(
+        f.store.commit(blind_ok),
+        Err(RowError::Conflict { newer_lsn: newer })
+    );
+    // An insert the policy denies is rejected before the conflict can leak anything.
+    assert_eq!(f.store.commit(blind_bad), Err(RowError::PermissionDenied));
+}
+
+#[test]
+fn a_failure_after_the_durable_commit_marks_the_store_stale() {
+    let mut f = Fixture::populated();
+    // Plant an applied position far ahead of the log so the in-memory apply fails after the
+    // kernel has acknowledged the change set as durable.
+    f.store
+        .table
+        .apply(
+            1_000_000,
+            lattice_core::changeset::ChangeSetId::from_parts(9, 9, 9),
+            Vec::new(),
+        )
+        .unwrap();
+    let mut tx = f.store.begin();
+    tx.put((1, b"durable".to_vec()), vec![1, 1]);
+    assert!(matches!(f.store.commit(tx), Err(RowError::Corrupt(_))));
+    let mut next = f.store.begin();
+    next.put((1, b"after".to_vec()), vec![1, 2]);
+    assert_eq!(f.store.commit(next), Err(RowError::Stale));
+    // The log decides: a reopen sees the acknowledged write and not the refused one.
+    let Fixture {
+        disk,
+        clock,
+        calls,
+        store,
+    } = f;
+    drop(store);
+    let reopened = open(&disk, &clock, &calls);
+    let snap = reopened.snapshot();
+    assert_eq!(
+        reopened.get_at(snap, 1, b"durable", &AllowAll),
+        Ok(Some(&vec![1, 1]))
+    );
+    assert_eq!(reopened.get_at(snap, 1, b"after", &AllowAll), Ok(None));
+}
+
+mod limited_reads {
+    use super::*;
+    use crate::limits::{CancellationFlag, LimitError, StatementLimits};
+
+    fn many(n: u8) -> Fixture {
+        let mut f = Fixture::empty();
+        let mut tx = f.store.begin();
+        for i in 0..n {
+            tx.put((1, vec![i]), vec![1, i]);
+        }
+        f.store.commit(tx).unwrap();
+        f
+    }
+
+    /// Counts policy calls and runs a hook on each one, so a limit trips mid-scan.
+    struct Hook<F: Fn(u64)>(Cell<u64>, F);
+    impl<F: Fn(u64)> PolicyEvaluator for Hook<F> {
+        fn allows_read(&self, _: RowRef<'_>) -> bool {
+            self.0.set(self.0.get() + 1);
+            (self.1)(self.0.get());
+            true
+        }
+    }
+
+    #[test]
+    fn unlimited_results_match_the_plain_reads_and_hold_their_charge_until_dropped() {
+        let f = many(5);
+        let limits =
+            StatementLimits::new(&*f.clock, None, 1 << 20, CancellationFlag::default()).unwrap();
+        let snap = f.store.snapshot();
+        let got = f
+            .store
+            .scan_at_limited(snap, 1, .., &AllowAll, &limits, &*f.clock)
+            .unwrap();
+        let plain = f.store.scan_at(snap, 1, .., &AllowAll).unwrap();
+        assert_eq!(got.value, plain);
+        let (_, used, _) = limits.memory();
+        assert!(used >= 5 * 4, "each row is charged, got {used}");
+        drop(got);
+        assert_eq!(limits.memory().1, 0);
+        let keys = f
+            .store
+            .lookup_at_limited(snap, 9, b"all", &AllowAll, &limits, &*f.clock)
+            .unwrap();
+        assert_eq!(
+            keys.value,
+            f.store.lookup_at(snap, 9, b"all", &AllowAll).unwrap()
+        );
+    }
+
+    #[test]
+    fn cancellation_stops_a_long_scan_and_lookup_midway() {
+        let f = many(50);
+        let flag = CancellationFlag::default();
+        let limits = StatementLimits::new(&*f.clock, None, 1 << 20, flag.clone()).unwrap();
+        let hook = Hook(Cell::new(0), |n| {
+            if n == 3 {
+                flag.cancel();
+            }
+        });
+        let snap = f.store.snapshot();
+        assert_eq!(
+            f.store
+                .scan_at_limited(snap, 1, .., &hook, &limits, &*f.clock)
+                .map(|r| r.value.len()),
+            Err(RowError::Limit(LimitError::Cancelled))
+        );
+        assert_eq!(hook.0.get(), 3, "the scan polled before the next row");
+        assert_eq!(limits.memory().1, 0, "a stopped scan holds no charge");
+        let hook = Hook(Cell::new(0), |_| ());
+        assert_eq!(
+            f.store
+                .lookup_at_limited(snap, 9, b"all", &hook, &limits, &*f.clock)
+                .map(|r| r.value.len()),
+            Err(RowError::Limit(LimitError::Cancelled))
+        );
+        assert_eq!(hook.0.get(), 0);
+    }
+
+    #[test]
+    fn a_deadline_stops_a_long_scan_and_lookup() {
+        let f = many(50);
+        let limits =
+            StatementLimits::new(&*f.clock, Some(5), 1 << 20, CancellationFlag::default()).unwrap();
+        let hook = Hook(Cell::new(0), |_| f.clock.advance(1));
+        let snap = f.store.snapshot();
+        assert_eq!(
+            f.store
+                .scan_at_limited(snap, 1, .., &hook, &limits, &*f.clock)
+                .map(|r| r.value.len()),
+            Err(RowError::Limit(LimitError::DeadlineExceeded))
+        );
+        assert_eq!(hook.0.get(), 5);
+        assert_eq!(
+            f.store
+                .lookup_at_limited(snap, 9, b"all", &AllowAll, &limits, &*f.clock)
+                .map(|r| r.value.len()),
+            Err(RowError::Limit(LimitError::DeadlineExceeded))
+        );
+    }
+
+    #[test]
+    fn the_memory_budget_stops_a_scan_and_a_failed_scan_releases_its_charge() {
+        let f = many(50);
+        let snap = f.store.snapshot();
+        let limits =
+            StatementLimits::new(&*f.clock, None, 200, CancellationFlag::default()).unwrap();
+        let err = f
+            .store
+            .scan_at_limited(snap, 1, .., &AllowAll, &limits, &*f.clock)
+            .map(|r| r.value.len())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            RowError::Limit(LimitError::MemoryExceeded { limit: 200, .. })
+        ));
+        let (limit, used, peak) = limits.memory();
+        assert_eq!((limit, used), (200, 0));
+        assert!(peak > 0 && peak <= 200);
+        let err = f
+            .store
+            .lookup_at_limited(snap, 9, b"all", &AllowAll, &limits, &*f.clock)
+            .map(|r| r.value.len())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            RowError::Limit(LimitError::MemoryExceeded { .. })
+        ));
+        assert_eq!(limits.memory().1, 0);
     }
 }

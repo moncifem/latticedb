@@ -6,11 +6,24 @@
 //! kernel acknowledges it durable are its writes applied to the in-memory versions at the commit LSN,
 //! in one call, so every reader sees all of the change set or none of it. Recovery replays the log's
 //! row change sets through the same apply, so a restart reproduces exactly the acknowledged state.
+//!
+//! Commit order is: stale and floor checks, authorization of every final transition under the
+//! transaction's policy, then the conflict check. Authorizing first means an actor that may not
+//! touch a row gets `PermissionDenied` and never learns from a `Conflict` that someone else wrote
+//! it. A blind write is judged against the actor's own snapshot, where a hidden concurrent row is
+//! absent: if the policy admits that insert, `Conflict` can still reveal that the key now exists,
+//! as any unique-key violation does. Policies that must hide existence should deny such inserts.
+//!
+//! The commit-metadata accessors (`changeset_id_at`, `commit_time_at`, `snapshot_as_of_changeset`,
+//! `snapshot_as_of_hlc`) are unfiltered host-trusted APIs: they take no policy and reveal that and
+//! when a change set committed, whatever rows it touched. A request handler must not expose them
+//! to an actor without its own authorization.
 
 use crate::catalog::{self, Catalog, CatalogError, CatalogOp, CompoundChange, IndexOp};
 use crate::index::{IndexDef, Indexes, ManagedIndexes};
 use crate::limits::{
-    AllowAll, PolicyEvaluator, RowRef, RowWriteRef, authorize_read, authorize_write,
+    AllowAll, LimitError, MemoryReservation, PolicyEvaluator, RowRef, RowWriteRef, StatementLimits,
+    authorize_read, authorize_write,
 };
 use crate::mvcc::{MvccError, Snapshot, Table, Tx};
 use crate::rowops::{self, RowKey, RowOpsError};
@@ -92,6 +105,9 @@ pub enum RowError {
     InvalidCatalog(CatalogError),
     /// The writes do not fit the payload format.
     Encode(RowOpsError),
+    /// A statement limit (cancellation, deadline or memory budget) stopped a read; nothing was
+    /// changed and the read can be retried with fresh limits.
+    Limit(LimitError),
 }
 
 impl fmt::Display for RowError {
@@ -114,6 +130,7 @@ impl fmt::Display for RowError {
             RowError::InvalidCatalog(error) => write!(f, "invalid catalog change: {error}"),
             RowError::Encode(e) => write!(f, "cannot encode writes: {e:?}"),
             RowError::PermissionDenied => f.write_str("row write denied"),
+            RowError::Limit(e) => write!(f, "statement limit: {e}"),
         }
     }
 }
@@ -126,6 +143,7 @@ impl Classify for RowError {
             RowError::SnapshotTooOld { .. } => ErrorClass::Rejected,
             RowError::Corrupt(_) => ErrorClass::Fatal,
             RowError::Encode(_)
+            | RowError::Limit(_)
             | RowError::InvalidIndexes(_)
             | RowError::PermissionDenied
             | RowError::InvalidCatalog(_) => ErrorClass::Rejected,
@@ -149,6 +167,34 @@ fn may_read(
 ) -> bool {
     bugs::active(Bug::RowPolicyReadSkipped)
         || authorize_read(policy, RowRef { table, key, value }).is_ok()
+}
+
+/// A result whose memory charge stays reserved on the statement's budget until it is dropped.
+#[derive(Debug)]
+pub struct Charged<'l, T> {
+    /// The rows or keys read.
+    pub value: T,
+    _held: Vec<MemoryReservation<'l>>,
+}
+
+fn scan_bounds<B: RangeBounds<Vec<u8>>>(table: u32, range: &B) -> (Bound<RowKey>, Bound<RowKey>) {
+    let lo = match range.start_bound() {
+        Bound::Included(k) => Bound::Included((table, k.clone())),
+        Bound::Excluded(k) => Bound::Excluded((table, k.clone())),
+        Bound::Unbounded => Bound::Included((table, Vec::new())),
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(k) => Bound::Included((table, k.clone())),
+        Bound::Excluded(k) if bugs::active(Bug::RowScanUpperBoundIncluded) => {
+            Bound::Included((table, k.clone()))
+        }
+        Bound::Excluded(k) => Bound::Excluded((table, k.clone())),
+        Bound::Unbounded => match table.checked_add(1) {
+            Some(next) => Bound::Excluded((next, Vec::new())),
+            None => Bound::Unbounded,
+        },
+    };
+    (lo, hi)
 }
 
 /// What one [`RowStore::vacuum`] removed.
@@ -322,6 +368,32 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         }
     }
 
+    /// Checks every staged final transition against the transaction's bound policy, with `before`
+    /// read at the transaction's snapshot. Runs before the conflict check on purpose.
+    fn authorize_staged<P: PolicyEvaluator>(&self, tx: &RowTx<P>) -> Result<(), RowError> {
+        if bugs::active(Bug::RowPolicyWriteSkipped) {
+            return Ok(());
+        }
+        let snapshot = tx.snapshot();
+        for ((table, key), after) in tx.inner.staged() {
+            let before = self
+                .table
+                .get(snapshot, &(*table, key.clone()))
+                .map_err(mvcc_error)?;
+            authorize_write(
+                &tx.policy,
+                RowWriteRef {
+                    table: *table,
+                    key,
+                    before: before.map(Vec::as_slice),
+                    after: after.as_deref(),
+                },
+            )
+            .map_err(|_| RowError::PermissionDenied)?;
+        }
+        Ok(())
+    }
+
     /// Versioned table and managed-index definitions recovered from the shared WAL.
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
@@ -360,6 +432,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
             ));
         }
         self.check_snapshot(tx.snapshot())?;
+        self.authorize_staged(&tx)?;
         if !bugs::active(Bug::RowConflictCheckSkipped) {
             tx.inner.check(&self.table).map_err(mvcc_error)?;
         }
@@ -367,27 +440,8 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
             .catalog
             .check_change(&tables, &indexes)
             .map_err(RowError::InvalidCatalog)?;
-        let snapshot = tx.snapshot();
-        let RowTx { inner, policy } = tx;
+        let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
-        if !bugs::active(Bug::RowPolicyWriteSkipped) {
-            for ((table, key), after) in &writes {
-                let before = self
-                    .table
-                    .get(snapshot, &(*table, key.clone()))
-                    .map_err(mvcc_error)?;
-                authorize_write(
-                    &policy,
-                    RowWriteRef {
-                        table: *table,
-                        key,
-                        before: before.map(Vec::as_slice),
-                        after: after.as_deref(),
-                    },
-                )
-                .map_err(|_| RowError::PermissionDenied)?;
-            }
-        }
         let changes = self
             .indexes
             .catalog_changes_for(&self.table, &writes, &definitions)
@@ -500,30 +554,94 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         policy: &(impl PolicyEvaluator + ?Sized),
     ) -> Result<ScanRows<'_>, RowError> {
         self.check_snapshot(snap)?;
-        let lo = match range.start_bound() {
-            Bound::Included(k) => Bound::Included((table, k.clone())),
-            Bound::Excluded(k) => Bound::Excluded((table, k.clone())),
-            Bound::Unbounded => Bound::Included((table, Vec::new())),
-        };
-        let hi = match range.end_bound() {
-            Bound::Included(k) => Bound::Included((table, k.clone())),
-            Bound::Excluded(k) if bugs::active(Bug::RowScanUpperBoundIncluded) => {
-                Bound::Included((table, k.clone()))
-            }
-            Bound::Excluded(k) => Bound::Excluded((table, k.clone())),
-            Bound::Unbounded => match table.checked_add(1) {
-                Some(next) => Bound::Excluded((next, Vec::new())),
-                None => Bound::Unbounded,
-            },
-        };
+        let bounds = scan_bounds(table, &range);
         Ok(self
             .table
-            .range(snap, (lo, hi))
+            .range(snap, bounds)
             .map_err(mvcc_error)?
             .into_iter()
             .filter(|((_, k), v)| may_read(policy, table, k, v))
             .map(|((_, k), v)| (k.as_slice(), v))
             .collect())
+    }
+
+    /// [`RowStore::scan_at`] under statement limits. The cancellation flag and deadline are polled
+    /// before every candidate row, hidden or not, and each returned row is charged to the memory
+    /// budget (key, value and the row reference) before it is kept. The charge is held by the
+    /// returned [`Charged`] until it is dropped. A stop returns [`RowError::Limit`] and no rows.
+    pub fn scan_at_limited<'l, B: RangeBounds<Vec<u8>>>(
+        &self,
+        snap: Snapshot,
+        table: u32,
+        range: B,
+        policy: &(impl PolicyEvaluator + ?Sized),
+        limits: &'l StatementLimits,
+        clock: &(impl Clock + ?Sized),
+    ) -> Result<Charged<'l, ScanRows<'_>>, RowError> {
+        self.check_snapshot(snap)?;
+        limits.check(clock).map_err(RowError::Limit)?;
+        let mut rows = Vec::new();
+        let mut held = Vec::new();
+        for ((_, k), v) in self
+            .table
+            .range_iter(snap, scan_bounds(table, &range))
+            .map_err(mvcc_error)?
+        {
+            limits.check(clock).map_err(RowError::Limit)?;
+            if !may_read(policy, table, k, v) {
+                continue;
+            }
+            let bytes = (k.len() + v.len() + std::mem::size_of::<(&[u8], &Vec<u8>)>()) as u64;
+            held.push(limits.reserve(clock, bytes).map_err(RowError::Limit)?);
+            rows.push((k.as_slice(), v));
+        }
+        Ok(Charged {
+            value: rows,
+            _held: held,
+        })
+    }
+
+    /// [`RowStore::lookup_at`] under statement limits: polls before each candidate and charges each
+    /// returned key. The index layer still materializes the candidate key list before this loop
+    /// starts; only the row fetch, authorization and result are bounded here.
+    pub fn lookup_at_limited<'l>(
+        &self,
+        snap: Snapshot,
+        index: u32,
+        key: &[u8],
+        policy: &(impl PolicyEvaluator + ?Sized),
+        limits: &'l StatementLimits,
+        clock: &(impl Clock + ?Sized),
+    ) -> Result<Charged<'l, Vec<Vec<u8>>>, RowError> {
+        self.check_snapshot(snap)?;
+        limits.check(clock).map_err(RowError::Limit)?;
+        let Some(table) = self.indexes.table_for(snap, index) else {
+            return Ok(Charged {
+                value: Vec::new(),
+                _held: Vec::new(),
+            });
+        };
+        let candidates = self.indexes.lookup(snap, index, key).map_err(mvcc_error)?;
+        let mut allowed = Vec::new();
+        let mut held = Vec::new();
+        for primary in candidates {
+            limits.check(clock).map_err(RowError::Limit)?;
+            let value = self
+                .table
+                .get(snap, &(table, primary.clone()))
+                .map_err(mvcc_error)?;
+            let value =
+                value.ok_or_else(|| RowError::Corrupt("index references an absent row".into()))?;
+            if may_read(policy, table, &primary, value) {
+                let bytes = (primary.len() + std::mem::size_of::<Vec<u8>>()) as u64;
+                held.push(limits.reserve(clock, bytes).map_err(RowError::Limit)?);
+                allowed.push(primary);
+            }
+        }
+        Ok(Charged {
+            value: allowed,
+            _held: held,
+        })
     }
 
     /// Primary keys whose index key equals `key` at `snap` and whose visible row is authorized.
@@ -674,9 +792,16 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     }
 
     /// `AS OF TIMESTAMP t`: the snapshot at the newest row change set whose timestamp is not after
-    /// `t`, clamped to the vacuum floor when that history has expired. Before any vacuum it is
-    /// the empty snapshot if `t` is before the first commit.
-    pub fn snapshot_as_of_hlc(&self, t: Hlc) -> Snapshot {
+    /// `t`, or `SnapshotTooOld` when that history has been vacuumed. Same as
+    /// [`RowStore::try_snapshot_as_of_hlc`]. Use [`RowStore::snapshot_as_of_hlc_clamped`] only
+    /// when silently reading newer data than asked for is acceptable.
+    pub fn snapshot_as_of_hlc(&self, t: Hlc) -> Result<Snapshot, RowError> {
+        self.try_snapshot_as_of_hlc(t)
+    }
+
+    /// Explicit opt-in clamp: like [`RowStore::snapshot_as_of_hlc`], but a timestamp older than
+    /// the vacuum floor yields the floor snapshot, which shows newer data than the timestamp names.
+    pub fn snapshot_as_of_hlc_clamped(&self, t: Hlc) -> Snapshot {
         Snapshot {
             as_of: self.hlc_predecessor(t).as_of.max(self.table.floor()),
         }
@@ -689,7 +814,7 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
     /// This is an HLC storage API, not SQL timestamp parsing or precision conversion.
     pub fn try_snapshot_as_of_hlc(&self, t: Hlc) -> Result<Snapshot, RowError> {
         if bugs::active(Bug::HlcSnapshotClamped) {
-            return Ok(self.snapshot_as_of_hlc(t));
+            return Ok(self.snapshot_as_of_hlc_clamped(t));
         }
         let snap = self.hlc_predecessor(t);
         self.check_snapshot(snap)?;
@@ -751,34 +876,14 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
         if tx.is_read_only() {
             return Ok(tx.snapshot().as_of);
         }
+        // Authorize before the conflict check: a denied actor must not learn from `Conflict`
+        // that a hidden row was written after its snapshot.
+        self.authorize_staged(&tx)?;
         if !bugs::active(Bug::RowConflictCheckSkipped) {
-            tx.inner.check(&self.table).map_err(|e| match e {
-                MvccError::Conflict { newer_lsn } => RowError::Conflict { newer_lsn },
-                MvccError::SnapshotTooOld { floor } => RowError::SnapshotTooOld { floor },
-                MvccError::OutOfOrder { .. } => RowError::Stale,
-            })?;
+            tx.inner.check(&self.table).map_err(mvcc_error)?;
         }
-        let snapshot = tx.snapshot();
-        let RowTx { inner, policy } = tx;
+        let RowTx { inner, .. } = tx;
         let writes = inner.into_writes();
-        if !bugs::active(Bug::RowPolicyWriteSkipped) {
-            for ((table, key), after) in &writes {
-                let before = self
-                    .table
-                    .get(snapshot, &(*table, key.clone()))
-                    .map_err(mvcc_error)?;
-                authorize_write(
-                    &policy,
-                    RowWriteRef {
-                        table: *table,
-                        key,
-                        before: before.map(Vec::as_slice),
-                        after: after.as_deref(),
-                    },
-                )
-                .map_err(|_| RowError::PermissionDenied)?;
-            }
-        }
         let payload = rowops::encode(&writes).map_err(RowError::Encode)?;
         let id = self.kernel.new_id();
         match self.kernel.commit(ChangeSet::new(id, payload)) {
@@ -788,14 +893,20 @@ impl<I: Io, C: Clock, R: Rng> RowStore<I, C, R> {
                 } else {
                     writes
                 };
-                let changes = self
+                // The change set is durable. Any failure from here leaves memory behind the log,
+                // so the store must refuse further use until it is reopened.
+                let applied = self
                     .indexes
                     .changes_for(&self.table, &writes)
-                    .map_err(mvcc_error)?;
-                self.table
-                    .apply(lsn, id, writes)
-                    .and_then(|()| self.indexes.apply(lsn, id, changes))
-                    .map_err(|e| RowError::Corrupt(format!("apply after commit: {e:?}")))?;
+                    .and_then(|changes| {
+                        self.table
+                            .apply(lsn, id, writes)
+                            .and_then(|()| self.indexes.apply(lsn, id, changes))
+                    });
+                if let Err(e) = applied {
+                    self.stale = true;
+                    return Err(RowError::Corrupt(format!("apply after commit: {e:?}")));
+                }
                 self.commit_lsn.insert(id, lsn);
                 self.commit_times.push((hlc, lsn, id));
                 Ok(lsn)
@@ -890,21 +1001,21 @@ mod vacuum_tests {
         assert_eq!(store.snapshot_as_of_changeset(commits[0].2), None);
         assert_eq!(store.commit_time_at(3), Some(commits[2].0));
         assert_eq!(store.changeset_id_at(4), Some(commits[3].2));
-        assert_eq!(
-            store.snapshot_as_of_hlc(Hlc::default()),
-            Snapshot { as_of: 3 }
-        );
-        assert_eq!(
-            store.snapshot_as_of_hlc(commits[0].0),
-            Snapshot { as_of: 3 }
-        );
+        let expired = Err(RowError::SnapshotTooOld { floor: 3 });
+        assert_eq!(store.snapshot_as_of_hlc(Hlc::default()), expired);
+        assert_eq!(store.snapshot_as_of_hlc(commits[0].0), expired);
         assert_eq!(
             store.snapshot_as_of_hlc(commits[2].0),
-            Snapshot { as_of: 3 }
+            Ok(Snapshot { as_of: 3 })
         );
         assert_eq!(
             store.snapshot_as_of_hlc(commits[3].0),
-            Snapshot { as_of: 4 }
+            Ok(Snapshot { as_of: 4 })
+        );
+        // The explicit opt-in clamp keeps the old floor behavior.
+        assert_eq!(
+            store.snapshot_as_of_hlc_clamped(commits[0].0),
+            Snapshot { as_of: 3 }
         );
         assert_eq!(
             store.get_at(Snapshot { as_of: 3 }, 1, b"a", &AllowAll),

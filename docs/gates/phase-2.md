@@ -173,7 +173,10 @@ Focused tests cover actor separation, generated actor/reopen models, whole-batch
 unchanged WAL/RNG witnesses and both planted policy bypasses. Independent review found no blocking
 defect. Evaluator identity remains bound, but interior-mutable authorization state is controlled by
 the trusted host and is not snapshotted. This is not authenticated PostgreSQL session isolation,
-SQL grants, executor deadline/memory enforcement or completion of P2-17/P2-18.
+SQL grants, executor deadline/memory enforcement or completion of P2-17/P2-18. The limit
+primitives are now wired into `RowStore::scan_at_limited`/`lookup_at_limited` (polled per row,
+charged per returned row); the plain `scan_at`/`lookup_at` and the index candidate list remain
+unbounded, and no executor uses them yet.
 
 Principal propagation (#357, [ADR 0026](../adr/0026-principal-propagation.md), proposed): the
 authenticated SCRAM account, or the fixed `local-development` principal in loopback trust mode, now
@@ -289,7 +292,8 @@ downgrade, online backfill, accepted checkpoint composition, release or phase ga
 ## Strict HLC history resolver (P2-14 foundation)
 
 `RowStore::try_snapshot_as_of_hlc` adds a checked full-HLC predecessor lookup: expired requests fail
-with `SnapshotTooOld`; `snapshot_as_of_hlc` retains its deliberate floor clamp. The focused
+with `SnapshotTooOld`; `snapshot_as_of_hlc` is now the same strict lookup and `snapshot_as_of_hlc_clamped` is the explicit
+opt-in clamp. The focused
 `strict_hlc` tests cover literal wall/counter/node boundaries, gaps created by non-row WAL records,
 empty/pre-first/future snapshots, retention floors, recovery and reapplied vacuum. A separate
 `Bug::HLC_SNAPSHOT` witness exercises the clamping defect without changing `Bug::ALL` or

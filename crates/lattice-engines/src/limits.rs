@@ -100,7 +100,7 @@ pub enum LimitError {
     Cancelled,
     /// The statement reached its deadline.
     DeadlineExceeded,
-    /// The requested absolute deadline cannot be represented.
+    /// Retained for compatibility; deadline overflow now saturates and is never returned.
     DeadlineOverflow,
     /// A reservation would exceed the statement's live-byte ceiling.
     MemoryExceeded {
@@ -187,27 +187,31 @@ impl CancellationFlag {
 #[derive(Debug)]
 pub struct Deadline {
     at_ms: u64,
+    never: bool,
     expired: Cell<bool>,
 }
 impl Deadline {
-    /// Starts a statement timeout. Zero expires immediately; overflow is rejected, not wrapped.
-    pub fn after(clock: &(impl Clock + ?Sized), timeout_ms: u64) -> Result<Self, LimitError> {
-        let at_ms = clock
-            .now_ms()
-            .checked_add(timeout_ms)
-            .ok_or(LimitError::DeadlineOverflow)?;
-        Ok(Self {
+    /// Starts a statement timeout. Zero expires immediately. A timeout so large that the absolute
+    /// deadline would overflow `u64` milliseconds saturates to "never expires" (it is not wrapped
+    /// and not an error), because a caller asking for a huge timeout wants no timeout.
+    pub fn after(clock: &(impl Clock + ?Sized), timeout_ms: u64) -> Self {
+        let (at_ms, never) = match clock.now_ms().checked_add(timeout_ms) {
+            Some(at_ms) => (at_ms, false),
+            None => (u64::MAX, true),
+        };
+        Self {
             at_ms,
+            never,
             expired: Cell::new(false),
-        })
+        }
     }
-    /// Configured absolute deadline, in seam-clock milliseconds.
+    /// Configured absolute deadline, in seam-clock milliseconds (`u64::MAX` when it never expires).
     pub fn at_ms(&self) -> u64 {
         self.at_ms
     }
     /// Checks the deadline without reading a real clock.
     pub fn check(&self, clock: &(impl Clock + ?Sized)) -> Result<(), LimitError> {
-        if self.expired.get() || clock.now_ms() >= self.at_ms {
+        if self.expired.get() || (!self.never && clock.now_ms() >= self.at_ms) {
             self.expired.set(true);
             Err(LimitError::DeadlineExceeded)
         } else {
@@ -296,6 +300,8 @@ pub struct StatementLimits {
 }
 impl StatementLimits {
     /// Captures the start clock once when a timeout is configured; `None` disables only the deadline.
+    /// An overflowing timeout means the deadline never expires. Currently never fails; the result
+    /// type is kept so a future fallible limit does not change the signature.
     pub fn new(
         clock: &(impl Clock + ?Sized),
         timeout_ms: Option<u64>,
@@ -304,9 +310,7 @@ impl StatementLimits {
     ) -> Result<Self, LimitError> {
         Ok(Self {
             cancellation,
-            deadline: timeout_ms
-                .map(|ms| Deadline::after(clock, ms))
-                .transpose()?,
+            deadline: timeout_ms.map(|ms| Deadline::after(clock, ms)),
             memory: MemoryBudget::new(memory_bytes),
         })
     }
@@ -458,7 +462,7 @@ mod tests {
     #[test]
     fn deadline_boundary_overflow_and_backwards_clock_are_explicit() {
         let clock = TestClock(Cell::new(10));
-        let deadline = Deadline::after(&clock, 5).unwrap();
+        let deadline = Deadline::after(&clock, 5);
         clock.0.set(14);
         assert_eq!(deadline.check(&clock), Ok(()));
         clock.0.set(15);
@@ -466,15 +470,21 @@ mod tests {
         clock.0.set(0);
         assert_eq!(deadline.check(&clock), Err(LimitError::DeadlineExceeded));
         assert_eq!(
-            Deadline::after(&clock, 0).unwrap().check(&clock),
+            Deadline::after(&clock, 0).check(&clock),
             Err(LimitError::DeadlineExceeded)
         );
         clock.0.set(u64::MAX);
-        assert!(matches!(
-            Deadline::after(&clock, 1),
-            Err(LimitError::DeadlineOverflow)
-        ));
-        assert_eq!(Deadline::after(&clock, 0).unwrap().at_ms(), u64::MAX);
+        // Overflow saturates to "never expires", even when the clock later reads u64::MAX.
+        let never = Deadline::after(&clock, 1);
+        assert_eq!(never.at_ms(), u64::MAX);
+        assert_eq!(never.check(&clock), Ok(()));
+        let huge = Deadline::after(&TestClock(Cell::new(10)), u64::MAX);
+        assert_eq!(huge.check(&clock), Ok(()));
+        assert_eq!(Deadline::after(&clock, 0).at_ms(), u64::MAX);
+        assert_eq!(
+            Deadline::after(&clock, 0).check(&clock),
+            Err(LimitError::DeadlineExceeded)
+        );
     }
 
     #[test]
@@ -534,15 +544,14 @@ mod tests {
         assert_eq!(limits.check(&clock), Err(LimitError::DeadlineExceeded));
         drop(live);
         assert_eq!(limits.memory(), (8, 0, 3));
-        assert!(matches!(
-            StatementLimits::new(
-                &TestClock(Cell::new(u64::MAX)),
-                Some(1),
-                8,
-                CancellationFlag::default()
-            ),
-            Err(LimitError::DeadlineOverflow)
-        ));
+        let saturated = StatementLimits::new(
+            &TestClock(Cell::new(u64::MAX)),
+            Some(1),
+            8,
+            CancellationFlag::default(),
+        )
+        .unwrap();
+        assert_eq!(saturated.check(&clock), Ok(()));
     }
 
     #[test]
@@ -625,16 +634,14 @@ mod tests {
         #[test]
         fn deadline_never_revives_after_observed_expiration(start in any::<u64>(), timeout in any::<u64>(), readings in prop::collection::vec(any::<u64>(), 0..50)) {
             let clock = TestClock(Cell::new(start));
-            match Deadline::after(&clock, timeout) {
-                Err(error) => { prop_assert!(u128::from(start) + u128::from(timeout) > u128::from(u64::MAX)); prop_assert_eq!(error, LimitError::DeadlineOverflow); }
-                Ok(deadline) => {
-                    let absolute = u128::from(start) + u128::from(timeout);
-                    let mut expired = false;
-                    for now in readings {
-                        clock.0.set(now); expired |= u128::from(now) >= absolute;
-                        prop_assert_eq!(deadline.check(&clock), if expired { Err(LimitError::DeadlineExceeded) } else { Ok(()) });
-                    }
-                }
+            let deadline = Deadline::after(&clock, timeout);
+            let absolute = u128::from(start) + u128::from(timeout);
+            let never = absolute > u128::from(u64::MAX);
+            let mut expired = false;
+            for now in readings {
+                clock.0.set(now);
+                expired |= !never && u128::from(now) >= absolute;
+                prop_assert_eq!(deadline.check(&clock), if expired { Err(LimitError::DeadlineExceeded) } else { Ok(()) });
             }
         }
     }

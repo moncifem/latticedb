@@ -238,19 +238,31 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
         snap: Snapshot,
         range: R,
     ) -> Result<Vec<(&K, &V)>, MvccError> {
+        Ok(self.range_iter(snap, range)?.collect())
+    }
+
+    /// Lazy form of [`Table::range`]: same checks and order, but rows are produced one at a time,
+    /// so a caller can poll a deadline or charge a budget between rows instead of after a full
+    /// materialization.
+    pub fn range_iter<R: RangeBounds<K>>(
+        &self,
+        snap: Snapshot,
+        range: R,
+    ) -> Result<impl Iterator<Item = (&K, &V)>, MvccError> {
         self.check_readable(snap)?;
-        if is_empty_range(range.start_bound(), range.end_bound()) {
-            return Ok(Vec::new());
-        }
-        Ok(self
-            .rows
-            .range(range)
-            .filter_map(|(k, versions)| {
+        let inner = if is_empty_range(range.start_bound(), range.end_bound()) {
+            None
+        } else {
+            Some(self.rows.range(range))
+        };
+        Ok(inner
+            .into_iter()
+            .flatten()
+            .filter_map(move |(k, versions)| {
                 Self::visible(versions, snap)
                     .and_then(|v| v.value.as_ref())
                     .map(|v| (k, v))
-            })
-            .collect())
+            }))
     }
 
     /// Every retained version written at or after `from_lsn`, ordered by `(lsn, key)`, each with the
@@ -338,6 +350,11 @@ impl<K: Ord + Clone, V: Clone> Tx<K, V> {
             }
         }
         Ok(())
+    }
+
+    /// The buffered writes in key order without consuming the transaction; `None` is a deletion.
+    pub fn staged(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
+        self.writes.iter()
     }
 
     /// The buffered writes in key order; `None` is a deletion.

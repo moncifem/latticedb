@@ -507,32 +507,39 @@ fn check_history(store: &Store, lsns: &[u64]) {
         );
         // By timestamp: exactly at the commit, the commit is visible; a tick before, it is not.
         let t = store.commit_time_at(*lsn).unwrap();
-        assert_eq!(store.snapshot_as_of_hlc(t).as_of, *lsn);
+        assert_eq!(store.snapshot_as_of_hlc(t).unwrap().as_of, *lsn);
         let earlier = lattice_abi::Hlc {
             counter: t.counter.saturating_sub(1),
             ..t
         };
-        let before = store.snapshot_as_of_hlc(if t.counter == 0 {
-            lattice_abi::Hlc {
-                wall_ms: t.wall_ms - 1,
-                counter: u32::MAX,
-                node: t.node,
-            }
-        } else {
-            earlier
-        });
+        let before = store
+            .snapshot_as_of_hlc(if t.counter == 0 {
+                lattice_abi::Hlc {
+                    wall_ms: t.wall_ms - 1,
+                    counter: u32::MAX,
+                    node: t.node,
+                }
+            } else {
+                earlier
+            })
+            .unwrap();
         assert!(before.as_of < *lsn);
     }
     // Before the first commit there is nothing; after the last, everything.
     assert_eq!(
-        store.snapshot_as_of_hlc(lattice_abi::Hlc::default()).as_of,
+        store
+            .snapshot_as_of_hlc(lattice_abi::Hlc::default())
+            .unwrap()
+            .as_of,
         0
     );
-    let latest = store.snapshot_as_of_hlc(lattice_abi::Hlc {
-        wall_ms: u64::MAX,
-        counter: u32::MAX,
-        node: u32::MAX,
-    });
+    let latest = store
+        .snapshot_as_of_hlc(lattice_abi::Hlc {
+            wall_ms: u64::MAX,
+            counter: u32::MAX,
+            node: u32::MAX,
+        })
+        .unwrap();
     assert_eq!(latest.as_of, *lsns.last().unwrap());
     // A change set that was never committed is not a point in history.
     assert!(

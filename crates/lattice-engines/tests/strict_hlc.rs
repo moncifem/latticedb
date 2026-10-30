@@ -185,7 +185,7 @@ fn check_cases(store: &Store, floor: u64) {
         );
         // Pin the independently specified old clamping contract alongside the strict API.
         assert_eq!(
-            store.snapshot_as_of_hlc(time),
+            store.snapshot_as_of_hlc_clamped(time),
             Snapshot {
                 as_of: predecessor.max(floor)
             }
