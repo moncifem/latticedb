@@ -106,7 +106,7 @@ including every vector decoded and re-encoded byte for byte with the same error 
 (encode/decode identity, canonical form of mutated input, client exactly-once against a model server). Checking the
 tests against deliberate defects in the compiled client (a byte order mark dropped from text, a loosened text length
 bound, a skipped LSN 0 check) made the conformance tests fail each time. The workflow `clients-typescript.yml` has not run
-on CI yet. The Go and Python clients, a generator and the agent plugin contract in TypeScript are not done, and no client
+on CI yet. The Go client, a generator and the agent plugin contract in TypeScript are not done, and no client
 talks to a server, because none exists.
 `cargo run --release -p lattice-bench --example phase3_bench` covers tree CRDT apply (in order, late, and
 late before and after `Tree::compact`), `Tree::compact` itself, the text CRDT (replay of a fixed-seed

@@ -115,8 +115,9 @@ CI runs the same steps in `.github/workflows/clients-typescript.yml`.
 - No authentication, no scope grammar, no query language, no flow control beyond `Ack`.
 - It does not interpret event bodies as anything but bytes; `decodeEvent` reads the change feed event
   layout if your bodies use it.
-- No Go or Python client, no generator and no schema-derived types. WP51 asks for generated clients; this
-  slice is the hand-written TypeScript codec those would be checked against.
+- No Go client, no generator and no schema-derived types. WP51 asks for generated clients; this slice is
+  the hand-written TypeScript codec those would be checked against. A hand-written Python client with the same
+  vectors is in [`clients/python`](../python).
 - Not the agent plugin contract (`formats/plugin-contract-v1.md`, a line-delimited JSON format); that
   codec exists only in Rust so far.
 - No cross-version compatibility promise: the formats are unaccepted candidates.
