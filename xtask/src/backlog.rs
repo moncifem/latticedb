@@ -325,6 +325,24 @@ fn adr_entries() -> Result<Vec<(String, String, String)>, String> {
     Ok(out)
 }
 
+/// Messages for numbers (the first four characters of a file name) used by more than one file.
+/// Two branches can each pick the next free number; this catches it once they meet.
+pub fn duplicate_numbers(kind: &str, names: &[&str]) -> Vec<String> {
+    let mut seen: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for name in names {
+        if let Some(number) = name
+            .get(..4)
+            .filter(|n| n.bytes().all(|b| b.is_ascii_digit()))
+        {
+            seen.entry(number).or_default().push(name);
+        }
+    }
+    seen.into_iter()
+        .filter(|(_, files)| files.len() > 1)
+        .map(|(number, files)| format!("{kind} number {number} is used by {}", files.join(", ")))
+        .collect()
+}
+
 pub fn adr_lint() -> Result<(), String> {
     let dir = repo_root()?.join("docs/adr");
     let mut bad = Vec::new();
@@ -333,6 +351,11 @@ pub fn adr_lint() -> Result<(), String> {
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
         bad.extend(adr_problems(name, &read(p)?));
     }
+    let names: Vec<&str> = files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+        .collect();
+    bad.extend(duplicate_numbers("ADR", &names));
     let expected = render_adr_index(&adr_entries()?);
     if fs::read_to_string(dir.join("README.md")).ok().as_deref() != Some(expected.as_str()) {
         bad.push("docs/adr/README.md is stale: run `cargo xtask adr index`".into());
@@ -384,6 +407,11 @@ pub fn rfc_lint() -> Result<(), String> {
             &read(p)?,
         ));
     }
+    let names: Vec<&str> = files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+        .collect();
+    bad.extend(duplicate_numbers("RFC", &names));
     if bad.is_empty() {
         println!("rfc lint: ok ({} rfcs)", files.len());
         Ok(())
@@ -463,6 +491,13 @@ mod tests {
                 && !is_adr_file_name("0001-X.md")
                 && is_adr_file_name("0001-x.md")
         );
+    }
+
+    #[test]
+    fn two_files_with_one_number_are_reported() {
+        assert!(duplicate_numbers("ADR", &["0001-a.md", "0002-b.md"]).is_empty());
+        let dup = duplicate_numbers("ADR", &["0025-a.md", "0025-b.md", "0026-c.md"]);
+        assert_eq!(dup, ["ADR number 0025 is used by 0025-a.md, 0025-b.md"]);
     }
 
     #[test]
