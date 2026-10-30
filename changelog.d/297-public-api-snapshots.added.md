@@ -1,1 +1,1 @@
-- Public API snapshots for the ten library crates (`api-snapshots/`, `tools/check_public_api.sh`, a `public-api` job in `pr.yml`): a public API change now shows as a snapshot diff in review. See `docs/api-snapshots.md`.
+Public API snapshots for the ten library crates (`api-snapshots/`, `tools/check_public_api.sh`, a `public-api` job in `pr.yml`): a public API change now shows as a snapshot diff in review. See `docs/api-snapshots.md`.
