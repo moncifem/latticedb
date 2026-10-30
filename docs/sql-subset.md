@@ -2,8 +2,9 @@
 
 Status: draft (Phase 2, requirement P2-09). This is the **target** SQL subset, declared before
 implementation. A bounded parser and AST, PostgreSQL wire session state machine and development
-listener exist; the listener still uses a `SELECT 1` placeholder. SQL binding, planning, storage-backed
-execution and full Lattice conformance remain pending. The constructs below describe the intended
+listener exist; the listener still uses a `SELECT 1` placeholder. The single-table subset binds and executes in
+`lattice-exec` (not yet reachable from the listener); joins, aggregates, `DISTINCT`, subqueries,
+indexes and full Lattice conformance remain pending. The constructs below describe the intended
 contract, not commands available today.
 
 Once implemented, each accepted construct must be tested; everything outside the subset must fail
@@ -113,7 +114,8 @@ Codes never change meaning once released; new situations get new codes.
   runner (`lattice_testkit::slt`), every statement of them is parsed by the SQL crate's tests, and
   every night `tools/slt_reference.py` checks their expected values against PostgreSQL 17 (except
   the `0A000` records, the records marked `# differs-from-postgres` and the single-session
-  transaction scripts). No Lattice engine runs them yet. Coverage, in 21 scripts and 669 records:
+  transaction scripts). The executor in `crates/lattice-exec` runs them; the records it cannot pass yet
+  are listed with reasons in `crates/lattice-exec/tests/slt_expected_failures.txt`. Coverage, in 21 scripts and 669 records:
 
   | Area | Scripts |
   |---|---|

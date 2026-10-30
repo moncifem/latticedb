@@ -357,3 +357,36 @@ numeric reopen trigger. ADR 0013 stays proposed because its effort-days (C1) and
 baseline (C4) are unresolved. **Open before the Phase 2 gate review:** binary size, memory bounds and
 effort-days are not measured and must be recorded on this page. P2-10 is not complete and the subset
 document stays draft.
+
+## SQL executor for the single-table subset (P2-10, P2-13, P2-17, P2-18)
+
+PR [336](https://github.com/moncifem/latticedb/pull/336) adds `lattice-exec`
+([README](../../crates/lattice-exec/README.md)). **What runs.** Bound `SELECT` (`WHERE`, `ORDER BY`,
+`LIMIT`, `OFFSET`, `AS OF`), `INSERT` (values and `SELECT`), `UPDATE` and `DELETE` with `RETURNING`
+execute against snapshot-isolated row-store transactions: `BEGIN`, `COMMIT`, `ROLLBACK` at session
+level, first-committer-wins as `40001`, `NOT NULL` and key violations as `23502` and `23505`, integer
+overflow `22003`, division by zero `22012`. Plans bound at an older catalog version are refused. The
+actor's row policy applies to scans and commits; the statement deadline, memory budget and cancellation
+are polled for every row. `CREATE TABLE` and `DROP TABLE` register tables, with the engine catalog
+persisting ids and names only. A `QueryHandler` adapter exists in `lattice-api` and is **not wired**
+into `latticed`, which still answers `SELECT 1`.
+
+**What does not run.** Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, `ALTER TABLE`, indexes
+(`CREATE INDEX`, and no scan uses an index), the `jsonb` operators, and DDL inside a transaction block.
+Column definitions are in memory and are not recovered after a restart (the host re-attaches them), and
+the stored row layout is not a frozen format.
+
+**sqllogictest.** The five scripts in `crates/lattice-testkit/tests/slt/` run unchanged through the
+executor. By record: `basics.test` 7 passed and 2 failed, `joins.test` 7 and 4, `aggregates.test` 9 and
+5, `changes.test` 14 and 0, `transactions.test` 15 and 1; 52 passed, 12 failed. All 12 failures are
+statements the binder refuses with `0A000` (aggregates, joins, `GROUP BY`, `DISTINCT`) and are listed
+with reasons in `crates/lattice-exec/tests/slt_expected_failures.txt`; the test fails if a listed
+record starts passing. This is **not** the 100 percent P2-13 asks for, and no differential run against
+PostgreSQL was made for this executor.
+
+**Evidence run locally for `lattice-exec` and the `lattice-api` adapter only, at default proptest case
+counts:** unit, operator, session, model (random workloads against an in-memory oracle, with a
+negative control), planted-engine-bug, no-panic and sqllogictest tests, `clippy -D warnings`, `cargo xtask
+check-layers`. Not run locally: the workspace tests, Miri, sanitizers, mutation testing, larger proptest
+case counts, benchmarks and the simulator workloads; those are left to CI. No Phase 2 exit criterion is
+claimed, and P2-10, P2-13, P2-17 and P2-18 remain open.
