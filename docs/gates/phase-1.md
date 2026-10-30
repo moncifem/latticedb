@@ -71,6 +71,14 @@ the harness before the kernel fixes in PR 61; the nightly run is the current evi
 | E1-15 | Scorecard from a results ledger | Partial: runs append to a ledger stored in Lattice's own log; `cargo xtask scorecard` prints the entries and the pending specs, then `lattice ledger check` fails when the latest simulation run has violations, no runs or mostly unverified runs and reports the streak and trend over the last seven simulation runs; nightly artifact/ledger ingestion and ten observed-or-missing sections are implemented, with retained-history provenance and completed-fuzz summaries. Integrated nightly validation is still pending; mutation/eval ingestion is implemented with exact producer fields, but completed project producer evidence, reviewed risk/coverage classifications and product dogfood measures remain incomplete |
 | E1-16 | Gate review package | Review not met: `cargo xtask gate --phase 1` now collects declared criteria, source/document provenance, invariant traceability and optional raw/verified ledger snapshots. Every criterion stays unverified until reviewed; no signature or phase-pass decision is generated |
 
+## Kani bounded proofs (not a gate criterion)
+
+Kani harnesses for the change feed cursor, the sync frame decoder, the plugin line splitter and the
+tree CRDT cycle check are merged (PR 296) and run only through the `kani` workflow (weekly and on
+demand, results uploaded as artifacts). Written, not proven: no run has completed yet, so no harness
+is claimed to pass and the broken-variant demonstration has not been run. Scope, bounds and status
+are in [docs/verification.md](../verification.md); first-run follow-up is #353.
+
 ## Not built
 
 Snapshot cursors over derived state and checkpoint-based recovery start (both need engine state from

@@ -52,4 +52,26 @@ jobs:
       - name: prove ${{ matrix.package }}
         env:
           PACKAGE: ${{ matrix.package }}
-        run: cargo kani -p "${PACKAGE}" --harness-timeout 20m
+        # bash runs with -eo pipefail, so a failed proof still fails the step after tee.
+        run: |
+          mkdir -p kani-results
+          cargo kani -p "${PACKAGE}" --harness-timeout 20m 2>&1 | tee "kani-results/${PACKAGE}.log"
+      # The log is the only record of which harness passed, failed or timed out; keep it even when the
+      # proof step fails. A proof counts as passing only when this log says VERIFICATION:- SUCCESSFUL.
+      - name: summarise the result
+        if: always()
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          {
+            echo "### kani ${PACKAGE} (${KANI_VERSION})"
+            grep -E 'Checking harness|VERIFICATION:-|Complete - ' "kani-results/${PACKAGE}.log" || echo "no result lines; see the artifact"
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: upload the proof log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kani-${{ matrix.package }}
+          path: kani-results/
+          retention-days: 30
+          if-no-files-found: warn

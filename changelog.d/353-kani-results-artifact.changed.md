@@ -1,0 +1,1 @@
+The `kani` workflow now keeps each package's proof log as a 30 day artifact and prints the verdict lines in the job summary; `docs/verification.md` and the Phase 1 gate page state that no proof has run yet.

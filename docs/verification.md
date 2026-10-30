@@ -60,13 +60,26 @@ cargo kani -p lattice-core --harness cursor_round_trips
 
 ## Status of the runs
 
-The harnesses have never been compiled or run. Kani was not executed on the machine they were written
-on (it is heavy, and the owner's rule is to leave long jobs to CI), and because they sit behind
-`cfg(kani)` no normal check, test or clippy run compiles them. The first run of the `kani` workflow is
-the first compile and the first execution. A harness that fails to compile, fails, or exceeds its 20
+**Proven: nothing yet.** The harnesses are written, but no run of the `kani` workflow has completed,
+so none is claimed to pass (tracked in #353). The harnesses have never been compiled by Kani: they sit
+behind `cfg(kani)`, no normal check, test or clippy run compiles them, and Kani is never run on the
+maintainers' laptops (it is heavy; the rule is to leave long jobs to CI). The first run of the workflow
+is the first compile and the first execution. A harness that fails to compile, fails, or exceeds its 20
 minute timeout there needs fixing or a lower bound. `event_decode_never_panics` (80 bytes, unwind 82) is
 the likeliest to need one; going below 73 bytes (the smallest valid event) makes its `cover!` of a
 successful decode unreachable, so it would then only show that refusals do not panic.
+
+Each job tees the Kani output to `kani-results/<package>.log`, uploads it as the artifact
+`kani-<package>` (kept 30 days, uploaded even when the proof step fails) and prints the harness and
+`VERIFICATION:-` lines in the job summary. Read the result from there. To record a result, trigger the
+run with `gh workflow run kani.yml`, then copy the run URL, the harness list and each verdict into the
+table below and into the phase gate page. Until a row names a run, it is only written, not proven.
+
+| Package | Last run | Result |
+| --- | --- | --- |
+| `lattice-core` | none | not run |
+| `lattice-api` | none | not run |
+| `lattice-sdk` | none | not run |
 
 There is no cheap compile check: the harnesses need the `kani` crate's `proof` and `unwind` attributes
 and `any`, `assume` and `cover!`, which only Kani's own compiler driver supplies. A stand-in
