@@ -269,6 +269,26 @@ fn go(e: &TypedExpr, row: &[Datum], ctx: &EvalCtx<'_>, depth: usize) -> Result<D
                     }
                     Ok(Datum::Null)
                 }
+                // PostgreSQL's greatest and least skip NULLs and are NULL only when every argument is.
+                "greatest" | "least" => {
+                    let want = if name == "greatest" {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Less
+                    };
+                    let mut best: Option<Datum> = None;
+                    for a in args {
+                        let v = sub(a)?;
+                        if v.is_null() {
+                            continue;
+                        }
+                        best = match best {
+                            Some(b) if compare(&v, &b) != Some(want) => Some(b),
+                            _ => Some(v),
+                        };
+                    }
+                    Ok(best.unwrap_or(Datum::Null))
+                }
                 "nullif" => {
                     let (Some(a), Some(b)) = (args.first(), args.get(1)) else {
                         return Err(ExecError::internal("nullif takes two arguments"));
