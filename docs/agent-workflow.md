@@ -154,7 +154,8 @@ If the pull request changes the public API of a covered library crate (the list 
 
 Check the exit code of the full gate itself; piping it through `grep` can hide a failure. Crate-level
 clippy is not enough, because a workspace lint has been missed that way. A new invariant or API rule
-gets a test that fails when the rule is broken (for the kernel, a planted bug), and expected values in
+gets a test that fails when the rule is broken (for the kernel, a planted bug: add the variant to the `planted_bugs!` list and its
+entry in one group array of `bugs.rs`, with no total to bump, see the header of that file), and expected values in
 tests are derived independently, never by running the code under test. Format and wire changes need an
 RFC and an ADR first (`docs/rfc`, `docs/adr`).
 

@@ -3,11 +3,43 @@
 //! With the `planted-bugs` feature a test can switch on a deliberate defect and then prove that
 //! the simulation and invariant checkers notice it. Without the feature every check compiles to
 //! `false`, so production builds contain none of this.
+//!
+//! # Adding a planted bug
+//!
+//! A new bug is two lines: its variant in the `planted_bugs!` list, and its entry in the array of the group that
+//! describes how it is detected (extend that array's length, or add a new group const and list it
+//! in [`Bug::GROUPS`]). There is no total to bump. The registry test in this file derives
+//! everything else from [`Bug::GROUPS`]: every variant is in exactly one group, discriminants are
+//! distinct and below `MASK_BITS` (the thread-local mask width). A variant without a group, or in
+//! two groups, fails that test. Add the variant to the `planted_bugs!` list; that list also
+//! generates [`Bug::VARIANTS`].
 
-/// A deliberate defect that can be switched on in test builds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum Bug {
+/// The integer type of the per-thread mask: one bit per planted bug.
+#[cfg(any(test, feature = "planted-bugs"))]
+type Mask = u64;
+/// How many bugs the mask can hold; discriminants must stay below it.
+#[cfg(test)]
+const MASK_BITS: u32 = Mask::BITS;
+
+/// Generates [`Bug`] and [`Bug::VARIANTS`] from one list, so the list of all variants cannot
+/// drift from the enum. Doc comments and attributes on a variant pass through.
+macro_rules! planted_bugs {
+    ($($(#[$m:meta])* $name:ident,)*) => {
+        /// A deliberate defect that can be switched on in test builds.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[non_exhaustive]
+        pub enum Bug {
+            $($(#[$m])* $name,)*
+        }
+
+        impl Bug {
+            /// Every variant, in declaration order (generated from the enum's own list).
+            pub const VARIANTS: &'static [Bug] = &[$(Bug::$name,)*];
+        }
+    };
+}
+
+planted_bugs! {
     /// `Log::sync` skips the fsync (durability).
     SkipFsync,
     /// Duplicate change set ids are recorded again (idempotency).
@@ -233,18 +265,40 @@ impl Bug {
         Bug::HlcCounterStuck,
         Bug::CheckpointIgnoresInFlight,
     ];
+
+    /// Every group, the single registry of planted bugs: each variant belongs to exactly one of
+    /// these. `ROW` is a subset view of `STORAGE` (the seeded row simulation's contract) and is
+    /// deliberately not listed. Add a new group const here.
+    pub const GROUPS: &'static [&'static [Bug]] = &[
+        &Bug::ALL,
+        &Bug::STORAGE,
+        &Bug::VACUUM,
+        &Bug::POLICY,
+        &Bug::CRDT,
+        &Bug::PRINCIPAL,
+        &Bug::FEED_SOURCE,
+        &Bug::EXEC_INDEX,
+        &Bug::CRDT_PEER,
+        &Bug::ADMISSION,
+        &Bug::CATALOG_INDEX,
+        &Bug::HLC_SNAPSHOT,
+        &Bug::KEY_LIMIT,
+        &Bug::FENCE_ORDER,
+        &Bug::RECOVERY_ORDER,
+        &Bug::NON_PREFIX,
+    ];
 }
 
 #[cfg(feature = "planted-bugs")]
 mod imp {
-    use super::Bug;
+    use super::{Bug, Mask};
     use std::cell::Cell;
 
     thread_local! {
-        static MASK: Cell<u64> = const { Cell::new(0) };
+        static MASK: Cell<Mask> = const { Cell::new(0) };
     }
 
-    fn bit(b: Bug) -> u64 {
+    fn bit(b: Bug) -> Mask {
         1 << (b as u32)
     }
 
@@ -278,54 +332,86 @@ pub use imp::active;
 #[cfg(feature = "planted-bugs")]
 pub use imp::{clear, enable};
 
+#[cfg(test)]
+mod registry_tests {
+    use super::{Bug, MASK_BITS};
+    use std::collections::BTreeSet;
+
+    /// Checks that `groups` partition `variants` and that every discriminant fits a mask of
+    /// `limit` bits.
+    fn check_registry(groups: &[&[Bug]], variants: &[Bug], limit: u32) -> Result<(), String> {
+        let mut seen = BTreeSet::new();
+        for bug in groups.iter().flat_map(|g| g.iter().copied()) {
+            if !seen.insert(bug as u32) {
+                return Err(format!("{bug:?} appears in more than one group"));
+            }
+            if (bug as u32) >= limit {
+                return Err(format!("guard mask exhausted: {bug:?}"));
+            }
+        }
+        for bug in variants {
+            if !seen.contains(&(*bug as u32)) {
+                return Err(format!("{bug:?} is declared but in no group"));
+            }
+        }
+        if seen.len() != variants.len() {
+            return Err(format!(
+                "{} grouped bugs but {} declared variants",
+                seen.len(),
+                variants.len()
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_groups_partition_every_variant_below_the_mask_bound() {
+        assert_eq!(
+            check_registry(Bug::GROUPS, Bug::VARIANTS, MASK_BITS),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_registry_with_a_missing_duplicate_or_overflowing_bug_is_refused() {
+        let declared = Bug::VARIANTS;
+        let skip = [Bug::SkipFsync];
+        let fence = [Bug::DuplicateBeforeFence];
+
+        let missing: Vec<&[Bug]> = Bug::GROUPS
+            .iter()
+            .copied()
+            .filter(|g| *g != &fence[..])
+            .collect();
+        let err = check_registry(&missing, declared, MASK_BITS).unwrap_err();
+        assert!(err.contains("DuplicateBeforeFence"), "{err}");
+
+        let mut duplicated = Bug::GROUPS.to_vec();
+        duplicated.push(&skip);
+        let err = check_registry(&duplicated, declared, MASK_BITS).unwrap_err();
+        assert!(err.contains("more than one group"), "{err}");
+
+        let err = check_registry(Bug::GROUPS, declared, 8).unwrap_err();
+        assert!(err.contains("mask exhausted"), "{err}");
+
+        // A bug listed twice inside one group is refused as well.
+        let twice = [Bug::SkipFsync, Bug::SkipFsync];
+        let err = check_registry(&[&twice], declared, MASK_BITS).unwrap_err();
+        assert!(err.contains("more than one group"), "{err}");
+    }
+}
+
 #[cfg(all(test, feature = "planted-bugs"))]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
 
     fn all_bugs() -> impl Iterator<Item = Bug> {
-        Bug::ALL
-            .into_iter()
-            .chain(Bug::STORAGE)
-            .chain(Bug::VACUUM)
-            .chain(Bug::POLICY)
-            .chain(Bug::CRDT)
-            .chain(Bug::PRINCIPAL)
-            .chain(Bug::FEED_SOURCE)
-            .chain(Bug::EXEC_INDEX)
-            .chain(Bug::CRDT_PEER)
-            .chain(Bug::ADMISSION)
-            .chain(Bug::CATALOG_INDEX)
-            .chain(Bug::HLC_SNAPSHOT)
-            .chain(Bug::KEY_LIMIT)
-            .chain(Bug::FENCE_ORDER)
-            .chain(Bug::RECOVERY_ORDER)
-            .chain(Bug::NON_PREFIX)
+        Bug::GROUPS.iter().flat_map(|g| g.iter().copied())
     }
 
     #[test]
     fn every_log_and_storage_guard_has_a_distinct_mask_bit() {
-        let all: BTreeSet<_> = Bug::ALL
-            .into_iter()
-            .chain(Bug::STORAGE)
-            .chain(Bug::VACUUM)
-            .chain(Bug::POLICY)
-            .chain(Bug::CRDT)
-            .chain(Bug::PRINCIPAL)
-            .chain(Bug::FEED_SOURCE)
-            .chain(Bug::EXEC_INDEX)
-            .chain(Bug::CRDT_PEER)
-            .chain(Bug::ADMISSION)
-            .chain(Bug::CATALOG_INDEX)
-            .chain(Bug::HLC_SNAPSHOT)
-            .chain(Bug::KEY_LIMIT)
-            .chain(Bug::FENCE_ORDER)
-            .chain(Bug::RECOVERY_ORDER)
-            .chain(Bug::NON_PREFIX)
-            .collect();
-        assert_eq!(all.len(), 57);
-        for bug in all {
-            assert!((bug as u32) < u64::BITS, "guard mask exhausted: {bug:?}");
+        for bug in all_bugs() {
             clear();
             enable(bug);
             assert!(active(bug));

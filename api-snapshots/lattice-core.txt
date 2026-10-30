@@ -110,6 +110,7 @@ pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 9]
 pub const lattice_core::bugs::Bug::EXEC_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::FEED_SOURCE: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::FENCE_ORDER: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::GROUPS: &'static [&'static [lattice_core::bugs::Bug]]
 pub const lattice_core::bugs::Bug::HLC_SNAPSHOT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::KEY_LIMIT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::NON_PREFIX: [lattice_core::bugs::Bug; 1]
@@ -119,6 +120,8 @@ pub const lattice_core::bugs::Bug::RECOVERY_ORDER: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::ROW: [lattice_core::bugs::Bug; 4]
 pub const lattice_core::bugs::Bug::STORAGE: [lattice_core::bugs::Bug; 10]
 pub const lattice_core::bugs::Bug::VACUUM: [lattice_core::bugs::Bug; 1]
+impl lattice_core::bugs::Bug
+pub const lattice_core::bugs::Bug::VARIANTS: &'static [lattice_core::bugs::Bug]
 impl core::clone::Clone for lattice_core::bugs::Bug
 pub fn lattice_core::bugs::Bug::clone(&self) -> Self
 impl core::cmp::Eq for lattice_core::bugs::Bug

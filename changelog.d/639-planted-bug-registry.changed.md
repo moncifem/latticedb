@@ -1,0 +1,1 @@
+Planted bug registry: `Bug::GROUPS` lists every group of planted bugs, and the tests derive the distinct-discriminant check, the mask bound and the every-variant-in-exactly-one-group check from it, so adding a planted bug no longer edits a hand-kept total (#639).
