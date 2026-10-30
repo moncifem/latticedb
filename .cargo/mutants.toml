@@ -87,6 +87,9 @@ exclude_re = [
     # the same persisted point twice (`>` versus `>=`) sets the same value.
     "outbox\\.rs:402:\\d+: replace .* in Outbox::counter_of",
     "outbox\\.rs:424:\\d+: replace > with >= in Outbox::mark_persisted",
+    # Sync client `clip` shortens a protocol-violation rule to the error-message limit, but every rule passed
+    # to it is a short ASCII literal, so the loop that backs up to a character boundary never runs.
+    "client\\.rs:306:\\d+: replace -= with (\\+=|/=) in clip",
     "sim_cli\\.rs:96:\\d+: replace \\+= with (-=|\\*=) in execute_with",
     # The binary only wires `execute_with` to stdout, stderr and the ledger file; the testkit may not
     # spawn a process, so its exit-code plumbing is exercised by `cargo xtask sim` in the nightly.
