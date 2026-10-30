@@ -101,7 +101,30 @@ issue #359, sync part only). `SubscriptionHost::new` now takes the authenticated
 answered like an unserved one (the host maps only `SourceError::UnknownScope` to `invalid_scope`, so a source must return `UnknownScope` for a denied scope; `TooOld`, `BadCursor` or `Unavailable` would leak existence, and that is a contract on the source until a kernel-backed one exists), live polls, and the planted bug `SubscribePrincipalDropped`. This is an API change
 (`SubscriptionHost::new` gained a parameter, `SubscriptionHost::local_development` is the loopback stand-in,
 `EventSource::read_after` gained one). No transport supplies a principal yet, the plugin sessions and the MCP caller
-are not bound, and no kernel-backed `EventSource` exists, so no end-to-end authorization claim is made.
+are not bound, so no end-to-end authorization claim is made. The kernel-backed source is the next paragraph.
+Verification evidence, not an exit criterion: kernel-backed `EventSource` (issue #519, part of #518, sync part of
+threat model G-03). `lattice-api::feed_source::FeedSource` (made by `ExecHost::feed_source`) serves `table/<name>` from
+`RowStore::events_since_as` through the SQL executor's actor thread, as the principal's policy: the same
+`PolicyTable` mapping the SQL handler uses (`PolicyTable::grant_for`), deny by default, no allow-all fallback. A
+denied principal, an unknown table, an unserved scope string and a table hidden by `hiding_catalog` are all
+`SourceError::UnknownScope`, decided before the cursor is looked at. `CursorTooOld` is `TooOld`; `MissingCommitTime` and
+feed encoding errors are `Unavailable`; the 12-byte feed cursor is the wire cursor (empty is the origin; another length
+or a cursor past the newest commit is `BadCursor`). The prefix-then-`KeyTooLarge` rule of `feed_emit` is handled inside the
+source: it reads again from the last cursor it saw (whatever table) and skips exactly the blocked event, so a legacy
+oversize key never wedges a reader and no event is lost or repeated. 13 unit tests (`cargo test -p lattice-api --lib
+feed_source`, run locally once, default proptest settings): a property test over generated two-table histories
+(inserts, updates, deletes, several rows per commit) checks that paging from the origin and from every event cursor, at
+page sizes 1 to 4, equals a model built from the commit LSNs and key ranks and not from the feed; the denied answer is
+the same `Output` as for an unknown table through a `SubscriptionHost`; a live tail, multi-row change sets with
+`(lsn, index)` cursors, the vacuum floor, the oversize-key skip at every page size, and a bounded read racing a writer
+on the same actor. Planted bug `Bug::FeedSourcePolicyDropped` (policy replaced by allow-all) is caught by
+`a_dropped_policy_is_caught_by_the_witness`, with a clean control; two hand mutants (no skip of the blocked event, and a
+reader that stops after one answer or ignores the table) each failed the oversize or model test. Not done: a read costs
+what `events_since_as` costs, one scan of every retained version after the cursor, so `max_events` bounds what one read
+returns and encodes and not the engine scan (an engine-side limit is a follow-up); a table-level read check does not
+exist in `PolicyEvaluator` (row level only), so with today's two grants a table is denied exactly when the catalog is
+hidden; the filtered-feed gap question (issue #363) is unchanged; column definitions are not recovered across a restart
+(#379); no transport supplies the principal and no wake-on-commit exists, so nothing here is live end to end.
 Verification evidence, not an exit criterion: `lattice-engines::feed_emit` (WP36, issue #238) emits the change feed
 from the row store's retained committed versions. One local run of `cargo test -p lattice-engines --lib feed_emit`
 (6 tests, default settings): the feed from every cursor of 12 seeded 14-commit histories equals an independently
