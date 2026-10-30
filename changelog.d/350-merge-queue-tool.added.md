@@ -1,0 +1,1 @@
+Merge queue and auto-rebase tools: `tools/merge_queue.py` merges a batch of ready pull requests one at a time and parks the ones that fail, and `tools/rebase_pr.py` rebases a pull request branch in a private worktree, resolving only prose list conflicts. `tools/merge-pr.sh` stays for single, human-driven merges.
