@@ -1,0 +1,281 @@
+pub mod lattice_exec
+pub mod lattice_exec::schema
+pub struct lattice_exec::schema::ColumnDef
+pub lattice_exec::schema::ColumnDef::default: core::option::Option<lattice_exec::Datum>
+pub lattice_exec::schema::ColumnDef::name: alloc::string::String
+pub lattice_exec::schema::ColumnDef::not_null: bool
+pub lattice_exec::schema::ColumnDef::ty: lattice_sql::plan::SqlType
+pub lattice_exec::schema::ColumnDef::varchar_len: core::option::Option<u32>
+impl core::clone::Clone for lattice_exec::schema::ColumnDef
+pub fn lattice_exec::schema::ColumnDef::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_exec::schema::ColumnDef
+pub fn lattice_exec::schema::ColumnDef::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::schema::ColumnDef
+pub fn lattice_exec::schema::ColumnDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::schema::ColumnDef
+pub struct lattice_exec::schema::ExecCatalog<'a>
+impl lattice_sql::plan::CatalogView for lattice_exec::schema::ExecCatalog<'_>
+pub fn lattice_exec::schema::ExecCatalog<'_>::table(&self, &str) -> core::option::Option<lattice_sql::plan::TableInfo>
+pub fn lattice_exec::schema::ExecCatalog<'_>::version(&self) -> u64
+pub struct lattice_exec::schema::Schema
+impl lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::by_id(&self, u32) -> core::option::Option<&lattice_exec::schema::TableDef>
+pub fn lattice_exec::schema::Schema::generation(&self) -> u64
+pub fn lattice_exec::schema::Schema::new() -> Self
+pub fn lattice_exec::schema::Schema::table(&self, &str) -> core::option::Option<&lattice_exec::schema::TableDef>
+pub fn lattice_exec::schema::Schema::tables(&self) -> impl core::iter::traits::iterator::Iterator<Item = &lattice_exec::schema::TableDef>
+impl core::clone::Clone for lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::clone(&self) -> Self
+impl core::default::Default for lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::default() -> Self
+impl core::fmt::Debug for lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_exec::schema::TableDef
+pub lattice_exec::schema::TableDef::columns: alloc::vec::Vec<lattice_exec::schema::ColumnDef>
+pub lattice_exec::schema::TableDef::id: u32
+pub lattice_exec::schema::TableDef::name: alloc::string::String
+pub lattice_exec::schema::TableDef::primary_key: alloc::vec::Vec<usize>
+pub lattice_exec::schema::TableDef::uniques: alloc::vec::Vec<alloc::vec::Vec<usize>>
+impl lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::decode_row(&self, &[u8]) -> core::result::Result<alloc::vec::Vec<lattice_exec::Datum>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::encode_row(&self, &[lattice_exec::Datum]) -> core::result::Result<alloc::vec::Vec<u8>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::from_create(u32, &lattice_sql::ast::CreateTable) -> core::result::Result<lattice_exec::schema::TableDef, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::info(&self) -> lattice_sql::plan::TableInfo
+pub fn lattice_exec::schema::TableDef::marker_table(&self, usize) -> u32
+pub fn lattice_exec::schema::TableDef::row_key(&self, &[lattice_exec::Datum], u64) -> core::result::Result<alloc::vec::Vec<u8>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::unique_key(&self, &[lattice_exec::Datum], usize) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::unique_name(&self, usize) -> alloc::string::String
+impl core::clone::Clone for lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::schema::TableDef
+pub const lattice_exec::schema::MAX_TABLE_ID: u32
+pub const lattice_exec::schema::MAX_UNIQUES: usize
+pub fn lattice_exec::schema::is_marker_table(u32) -> bool
+pub fn lattice_exec::schema::owning_table(u32) -> u32
+pub enum lattice_exec::Datum
+pub lattice_exec::Datum::Bool(bool)
+pub lattice_exec::Datum::Bytes(alloc::vec::Vec<u8>)
+pub lattice_exec::Datum::Date(i32)
+pub lattice_exec::Datum::Float(f64)
+pub lattice_exec::Datum::Int(i64)
+pub lattice_exec::Datum::Json(alloc::string::String)
+pub lattice_exec::Datum::Null
+pub lattice_exec::Datum::Numeric(lattice_exec::Decimal)
+pub lattice_exec::Datum::Text(alloc::string::String)
+pub lattice_exec::Datum::Timestamp(i64)
+pub lattice_exec::Datum::Uuid(u128)
+impl lattice_exec::Datum
+pub fn lattice_exec::Datum::is_null(&self) -> bool
+pub fn lattice_exec::Datum::to_pg_text(&self) -> core::option::Option<alloc::string::String>
+impl core::clone::Clone for lattice_exec::Datum
+pub fn lattice_exec::Datum::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_exec::Datum
+pub fn lattice_exec::Datum::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::Datum
+pub fn lattice_exec::Datum::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::Datum
+pub enum lattice_exec::ErrorKind
+pub lattice_exec::ErrorKind::Bind
+pub lattice_exec::ErrorKind::Conflict
+pub lattice_exec::ErrorKind::Constraint
+pub lattice_exec::ErrorKind::Evaluation
+pub lattice_exec::ErrorKind::Limit
+pub lattice_exec::ErrorKind::Permission
+pub lattice_exec::ErrorKind::SnapshotTooOld
+pub lattice_exec::ErrorKind::StalePlan
+pub lattice_exec::ErrorKind::Storage
+pub lattice_exec::ErrorKind::Syntax
+pub lattice_exec::ErrorKind::TransactionAborted
+pub lattice_exec::ErrorKind::Unsupported
+impl core::clone::Clone for lattice_exec::ErrorKind
+pub fn lattice_exec::ErrorKind::clone(&self) -> Self
+impl core::cmp::Eq for lattice_exec::ErrorKind
+impl core::cmp::PartialEq for lattice_exec::ErrorKind
+pub fn lattice_exec::ErrorKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::ErrorKind
+pub fn lattice_exec::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_exec::ErrorKind
+impl core::marker::StructuralPartialEq for lattice_exec::ErrorKind
+pub enum lattice_exec::TxStatus
+pub lattice_exec::TxStatus::Failed
+pub lattice_exec::TxStatus::Idle
+pub lattice_exec::TxStatus::InTransaction
+impl core::clone::Clone for lattice_exec::TxStatus
+pub fn lattice_exec::TxStatus::clone(&self) -> Self
+impl core::cmp::Eq for lattice_exec::TxStatus
+impl core::cmp::PartialEq for lattice_exec::TxStatus
+pub fn lattice_exec::TxStatus::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::TxStatus
+pub fn lattice_exec::TxStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_exec::TxStatus
+impl core::marker::StructuralPartialEq for lattice_exec::TxStatus
+pub struct lattice_exec::ActorPolicy(_)
+impl lattice_exec::ActorPolicy
+pub fn lattice_exec::ActorPolicy::new(alloc::rcs::rc::Rc<dyn lattice_engines::limits::PolicyEvaluator>) -> Self
+impl core::clone::Clone for lattice_exec::ActorPolicy
+pub fn lattice_exec::ActorPolicy::clone(&self) -> Self
+impl lattice_engines::limits::PolicyEvaluator for lattice_exec::ActorPolicy
+pub fn lattice_exec::ActorPolicy::allows_read(&self, lattice_engines::limits::RowRef<'_>) -> bool
+pub fn lattice_exec::ActorPolicy::allows_write(&self, lattice_engines::limits::RowWriteRef<'_>) -> bool
+pub struct lattice_exec::ColumnDef
+pub lattice_exec::ColumnDef::default: core::option::Option<lattice_exec::Datum>
+pub lattice_exec::ColumnDef::name: alloc::string::String
+pub lattice_exec::ColumnDef::not_null: bool
+pub lattice_exec::ColumnDef::ty: lattice_sql::plan::SqlType
+pub lattice_exec::ColumnDef::varchar_len: core::option::Option<u32>
+impl core::clone::Clone for lattice_exec::schema::ColumnDef
+pub fn lattice_exec::schema::ColumnDef::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_exec::schema::ColumnDef
+pub fn lattice_exec::schema::ColumnDef::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::schema::ColumnDef
+pub fn lattice_exec::schema::ColumnDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::schema::ColumnDef
+pub struct lattice_exec::Database<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng> lattice_exec::Database<I, C, R>
+pub fn lattice_exec::Database<I, C, R>::attach_table(&mut self, lattice_exec::schema::TableDef) -> core::result::Result<(), lattice_exec::ExecError>
+pub fn lattice_exec::Database<I, C, R>::catalog_version(&self) -> u64
+pub fn lattice_exec::Database<I, C, R>::catalog_view(&self) -> lattice_exec::schema::ExecCatalog<'_>
+pub fn lattice_exec::Database<I, C, R>::create_table(&mut self, &lattice_sql::ast::CreateTable) -> core::result::Result<bool, lattice_exec::ExecError>
+pub fn lattice_exec::Database<I, C, R>::detach_table(&mut self, &str) -> bool
+pub fn lattice_exec::Database<I, C, R>::drop_table(&mut self, &str, bool) -> core::result::Result<bool, lattice_exec::ExecError>
+pub fn lattice_exec::Database<I, C, R>::open(I, C, R, &lattice_core::kernel::Config) -> core::result::Result<Self, lattice_exec::ExecError>
+pub fn lattice_exec::Database<I, C, R>::schema(&self) -> &lattice_exec::schema::Schema
+pub fn lattice_exec::Database<I, C, R>::store(&self) -> &lattice_engines::store::RowStore<I, C, R>
+pub struct lattice_exec::Decimal
+impl core::clone::Clone for lattice_exec::Decimal
+pub fn lattice_exec::Decimal::clone(&self) -> Self
+impl core::cmp::Eq for lattice_exec::Decimal
+impl core::cmp::Ord for lattice_exec::Decimal
+pub fn lattice_exec::Decimal::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lattice_exec::Decimal
+pub fn lattice_exec::Decimal::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for lattice_exec::Decimal
+pub fn lattice_exec::Decimal::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lattice_exec::Decimal
+pub fn lattice_exec::Decimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_exec::Decimal
+pub fn lattice_exec::Decimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_exec::Decimal
+pub struct lattice_exec::ExecCatalog<'a>
+impl lattice_sql::plan::CatalogView for lattice_exec::schema::ExecCatalog<'_>
+pub fn lattice_exec::schema::ExecCatalog<'_>::table(&self, &str) -> core::option::Option<lattice_sql::plan::TableInfo>
+pub fn lattice_exec::schema::ExecCatalog<'_>::version(&self) -> u64
+pub struct lattice_exec::ExecError
+impl lattice_exec::ExecError
+pub fn lattice_exec::ExecError::kind(&self) -> lattice_exec::ErrorKind
+pub fn lattice_exec::ExecError::message(&self) -> &str
+pub fn lattice_exec::ExecError::sqlstate(&self) -> &'static str
+impl core::clone::Clone for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::clone(&self) -> Self
+impl core::cmp::Eq for lattice_exec::ExecError
+impl core::cmp::PartialEq for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::eq(&self, &Self) -> bool
+impl core::convert::From<lattice_engines::limits::LimitError> for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::from(lattice_engines::limits::LimitError) -> Self
+impl core::convert::From<lattice_engines::store::RowError> for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::from(lattice_engines::store::RowError) -> Self
+impl core::convert::From<lattice_sql::binder::BindError> for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::from(lattice_sql::binder::BindError) -> Self
+impl core::convert::From<lattice_sql::error::ParseError> for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::from(lattice_sql::error::ParseError) -> Self
+impl core::error::Error for lattice_exec::ExecError
+impl core::fmt::Debug for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for lattice_exec::ExecError
+pub fn lattice_exec::ExecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::ExecError
+pub struct lattice_exec::ExecLimits
+pub lattice_exec::ExecLimits::memory_bytes: u64
+pub lattice_exec::ExecLimits::timeout_ms: core::option::Option<u64>
+impl core::clone::Clone for lattice_exec::ExecLimits
+pub fn lattice_exec::ExecLimits::clone(&self) -> Self
+impl core::cmp::Eq for lattice_exec::ExecLimits
+impl core::cmp::PartialEq for lattice_exec::ExecLimits
+pub fn lattice_exec::ExecLimits::eq(&self, &Self) -> bool
+impl core::default::Default for lattice_exec::ExecLimits
+pub fn lattice_exec::ExecLimits::default() -> Self
+impl core::fmt::Debug for lattice_exec::ExecLimits
+pub fn lattice_exec::ExecLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_exec::ExecLimits
+impl core::marker::StructuralPartialEq for lattice_exec::ExecLimits
+pub struct lattice_exec::ExecResult
+pub lattice_exec::ExecResult::columns: alloc::vec::Vec<lattice_exec::ResultColumn>
+pub lattice_exec::ExecResult::rows: alloc::vec::Vec<alloc::vec::Vec<lattice_exec::Datum>>
+pub lattice_exec::ExecResult::rows_affected: u64
+pub lattice_exec::ExecResult::tag: alloc::string::String
+impl lattice_exec::ExecResult
+pub fn lattice_exec::ExecResult::text_rows(&self) -> alloc::vec::Vec<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+impl core::clone::Clone for lattice_exec::ExecResult
+pub fn lattice_exec::ExecResult::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_exec::ExecResult
+pub fn lattice_exec::ExecResult::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::ExecResult
+pub fn lattice_exec::ExecResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::ExecResult
+pub struct lattice_exec::ExecSession
+impl lattice_exec::ExecSession
+pub fn lattice_exec::ExecSession::describe<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&self, &lattice_exec::Database<I, C, R>, &str) -> core::result::Result<alloc::vec::Vec<lattice_exec::ResultColumn>, lattice_exec::ExecError>
+pub fn lattice_exec::ExecSession::execute<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&mut self, &mut lattice_exec::Database<I, C, R>, &str) -> core::result::Result<lattice_exec::ExecResult, lattice_exec::ExecError>
+pub fn lattice_exec::ExecSession::execute_bound<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&mut self, &mut lattice_exec::Database<I, C, R>, &lattice_sql::plan::BoundStatement, &[lattice_exec::Datum], &dyn core::ops::function::Fn() -> bool) -> core::result::Result<lattice_exec::ExecResult, lattice_exec::ExecError>
+pub fn lattice_exec::ExecSession::execute_with<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>(&mut self, &mut lattice_exec::Database<I, C, R>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &dyn core::ops::function::Fn() -> bool) -> core::result::Result<lattice_exec::ExecResult, lattice_exec::ExecError>
+pub fn lattice_exec::ExecSession::limits(&self) -> lattice_exec::ExecLimits
+pub fn lattice_exec::ExecSession::new(lattice_exec::ActorPolicy) -> Self
+pub fn lattice_exec::ExecSession::set_limits(&mut self, lattice_exec::ExecLimits)
+pub fn lattice_exec::ExecSession::status(&self) -> lattice_exec::TxStatus
+pub struct lattice_exec::ResultColumn
+pub lattice_exec::ResultColumn::name: alloc::string::String
+pub lattice_exec::ResultColumn::ty: lattice_sql::plan::SqlType
+impl lattice_exec::ResultColumn
+pub fn lattice_exec::ResultColumn::type_oid(&self) -> i32
+pub fn lattice_exec::ResultColumn::type_size(&self) -> i16
+impl core::clone::Clone for lattice_exec::ResultColumn
+pub fn lattice_exec::ResultColumn::clone(&self) -> Self
+impl core::cmp::Eq for lattice_exec::ResultColumn
+impl core::cmp::PartialEq for lattice_exec::ResultColumn
+pub fn lattice_exec::ResultColumn::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::ResultColumn
+pub fn lattice_exec::ResultColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::ResultColumn
+pub struct lattice_exec::Schema
+impl lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::by_id(&self, u32) -> core::option::Option<&lattice_exec::schema::TableDef>
+pub fn lattice_exec::schema::Schema::generation(&self) -> u64
+pub fn lattice_exec::schema::Schema::new() -> Self
+pub fn lattice_exec::schema::Schema::table(&self, &str) -> core::option::Option<&lattice_exec::schema::TableDef>
+pub fn lattice_exec::schema::Schema::tables(&self) -> impl core::iter::traits::iterator::Iterator<Item = &lattice_exec::schema::TableDef>
+impl core::clone::Clone for lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::clone(&self) -> Self
+impl core::default::Default for lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::default() -> Self
+impl core::fmt::Debug for lattice_exec::schema::Schema
+pub fn lattice_exec::schema::Schema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct lattice_exec::TableDef
+pub lattice_exec::TableDef::columns: alloc::vec::Vec<lattice_exec::schema::ColumnDef>
+pub lattice_exec::TableDef::id: u32
+pub lattice_exec::TableDef::name: alloc::string::String
+pub lattice_exec::TableDef::primary_key: alloc::vec::Vec<usize>
+pub lattice_exec::TableDef::uniques: alloc::vec::Vec<alloc::vec::Vec<usize>>
+impl lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::decode_row(&self, &[u8]) -> core::result::Result<alloc::vec::Vec<lattice_exec::Datum>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::encode_row(&self, &[lattice_exec::Datum]) -> core::result::Result<alloc::vec::Vec<u8>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::from_create(u32, &lattice_sql::ast::CreateTable) -> core::result::Result<lattice_exec::schema::TableDef, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::info(&self) -> lattice_sql::plan::TableInfo
+pub fn lattice_exec::schema::TableDef::marker_table(&self, usize) -> u32
+pub fn lattice_exec::schema::TableDef::row_key(&self, &[lattice_exec::Datum], u64) -> core::result::Result<alloc::vec::Vec<u8>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::unique_key(&self, &[lattice_exec::Datum], usize) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, lattice_exec::ExecError>
+pub fn lattice_exec::schema::TableDef::unique_name(&self, usize) -> alloc::string::String
+impl core::clone::Clone for lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_exec::schema::TableDef
+pub fn lattice_exec::schema::TableDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_exec::schema::TableDef
+pub const lattice_exec::LAYER: u8
+pub fn lattice_exec::decode_params(&[lattice_sql::plan::SqlType], &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<alloc::vec::Vec<lattice_exec::Datum>, lattice_exec::ExecError>
+pub fn lattice_exec::is_marker_table(u32) -> bool
+pub fn lattice_exec::owning_table(u32) -> u32

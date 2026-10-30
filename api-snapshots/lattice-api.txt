@@ -206,6 +206,16 @@ pub fn lattice_api::cancel::CancellationToken::clone(&self) -> Self
 impl core::default::Default for lattice_api::cancel::CancellationToken
 pub fn lattice_api::cancel::CancellationToken::default() -> Self
 pub const lattice_api::cancel::MAX_ENTRIES: usize
+pub mod lattice_api::exec_handler
+pub struct lattice_api::exec_handler::ExecHandler<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng> lattice_api::exec_handler::ExecHandler<I, C, R>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::new(alloc::rcs::rc::Rc<core::cell::RefCell<lattice_exec::db::Database<I, C, R>>>, lattice_exec::exec::ActorPolicy, impl core::ops::function::Fn(&str) -> lattice_exec::exec::ActorPolicy + 'static) -> Self
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::tx_status(&self) -> lattice_exec::session::TxStatus
+impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng> lattice_api::session::QueryHandler for lattice_api::exec_handler::ExecHandler<I, C, R>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe(&mut self, &lattice_api::principal::QueryContext<'_>, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub mod lattice_api::pgwire
 pub enum lattice_api::pgwire::Backend
 pub lattice_api::pgwire::Backend::AuthenticationCleartextPassword
@@ -515,6 +525,11 @@ pub fn lattice_api::session::QueryHandler::describe(&mut self, &lattice_api::pri
 pub fn lattice_api::session::QueryHandler::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
 pub fn lattice_api::session::QueryHandler::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub fn lattice_api::session::QueryHandler::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+impl<I: lattice_seams::Io, C: lattice_seams::Clock + core::clone::Clone, R: lattice_seams::Rng> lattice_api::session::QueryHandler for lattice_api::exec_handler::ExecHandler<I, C, R>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe(&mut self, &lattice_api::principal::QueryContext<'_>, &str) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::describe_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &lattice_api::cancel::CancellationToken) -> core::result::Result<alloc::vec::Vec<lattice_api::pgwire::Column>, lattice_api::session::QueryError>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::execute(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>]) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
+pub fn lattice_api::exec_handler::ExecHandler<I, C, R>::execute_cancellable(&mut self, &lattice_api::principal::QueryContext<'_>, &str, &[core::option::Option<alloc::vec::Vec<u8>>], &lattice_api::cancel::CancellationToken) -> core::result::Result<lattice_api::session::QueryOutput, lattice_api::session::QueryError>
 pub type lattice_api::session::Row = alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>
 pub mod lattice_api::subscribe
 pub enum lattice_api::subscribe::CloseReason

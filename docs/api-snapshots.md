@@ -1,7 +1,7 @@
 # Public API snapshots
 
 The public API of each library crate is committed as a text snapshot in `api-snapshots/<crate>.txt`
-(`lattice-abi`, `lattice-seams`, `lattice-lsl`, `lattice-sim`, `lattice-core`, `lattice-engines`,
+(`lattice-abi`, `lattice-seams`, `lattice-lsl`, `lattice-sim`, `lattice-core`, `lattice-engines`, `lattice-exec`,
 `lattice-api`, `lattice-sql`, `lattice-sdk`, `lattice-evalkit`). The `public-api` job in
 `.github/workflows/pr.yml` regenerates them and fails when they differ, so a breaking or
 accidental API change is an explicit diff in review.
