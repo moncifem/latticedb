@@ -58,6 +58,11 @@ exclude_re = [
     # Index lookup: the filter in the `RowIndexPrefixLookup` branch only runs with that planted bug on;
     # its planted-bug test checks that the bug is detected, not the bug's own comparison.
     "index\\.rs:314:\\d+: replace (==|&&) with (!=|\\|\\|) in Indexes::lookup",
+    # Cancel registry: slots are scanned for a key whose pid is unique for the registry's lifetime, so
+    # at most one slot ever matches; with one match, `|` and `^` select the same index.
+    "cancel\\.rs:\\d+:\\d+: replace \\| with \\^ in CancelRegistry::find_slot",
+    # A mutant inside a test helper (a constant random source) changes the test, not the product.
+    "cancel\\.rs:\\d+:\\d+: replace tests::<impl lattice_seams::Rng for Constant>::next_u64",
 ]
 
 # The benchmark bodies choose iteration counts and time loops; their output is a timing, which varies
