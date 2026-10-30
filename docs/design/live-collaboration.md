@@ -13,8 +13,9 @@ goes offline it resumes from its cursor without a gap or a duplicate.
 This is the first use case of the product: agents share one history of work and see each other's changes
 as they happen, instead of polling files or each other's chat. Everything below uses parts that are
 already on `main`, connects them, and names what is still missing. Latency target for the demo: p99 from
-commit to frame written under 100 ms on loopback with up to 10 agents. This is a target, not a measurement;
-work package [#534](https://github.com/moncifem/latticedb/issues/534) records the real number.
+commit to frame written under 100 ms on loopback with 2 agents; 20 agents are measured too, with no target
+claimed. These are targets, not measurements; work package [#534](https://github.com/moncifem/latticedb/issues/534)
+records the real numbers.
 
 ## Flow
 
@@ -82,7 +83,7 @@ ordering, deduplication by key, cursors and permissions need no second mechanism
 | Presence | none | Ephemeral scope ([#533](https://github.com/moncifem/latticedb/issues/533)) |
 | Backpressure and limits | `lattice-api/src/backpressure.rs` (pure queues, u64 cursors, not wired); per-connection caps in `HostConfig` | Per-principal connection and output budgets, slow-reader disconnect with resume cursor ([#529](https://github.com/moncifem/latticedb/issues/529)) |
 | Observability | startup line and rate-limited accept errors only (threat model G-05) | Security event log, counters, commit-to-delivery histogram ([#530](https://github.com/moncifem/latticedb/issues/530)) |
-| End-to-end proof | per-piece unit and property tests; `lattice-testkit` convergence and fencing sweeps (in-memory) | Harness over real sockets with two principals ([#534](https://github.com/moncifem/latticedb/issues/534)); `layers.toml` lets neither `lattice-testkit` nor `latticed` depend on `lattice-sdk` |
+| End-to-end proof | per-piece unit and property tests; `lattice-testkit` convergence and fencing sweeps (in-memory) | Harness crate over real sockets with accounts, test clients and kill schedules ([#540](https://github.com/moncifem/latticedb/issues/540)), then the demo and latency record ([#534](https://github.com/moncifem/latticedb/issues/534)); `layers.toml` lets neither `lattice-testkit` nor `latticed` depend on `lattice-sdk`, so the harness is a new layer-9 crate |
 
 ## Decisions the design makes (each still needs its review)
 
@@ -118,14 +119,14 @@ effort is collecting the exact formats, and this design does not guess them.
 
 | Kind | Name | Behaviour |
 |---|---|---|
-| Tool | `lattice_read` | A row or a page of rows from a table in a scope the caller may read; returns the cursor it read at (exists as a schema in `mcp.rs`) |
+| Tool | `lattice_read` | A row or a page of rows from a table in a scope the caller may read; the schema exists in `mcp.rs`; returning the cursor it read at is intended behaviour, not on `main` |
 | Tool | `lattice_write` | One row with `expected_version` (exists as a schema; backend in [#526](https://github.com/moncifem/latticedb/issues/526)) |
 | Tool | `lattice_subscribe` | Events after a cursor, with a bounded `wait_ms` long poll; always returns `next_cursor`. This is the lowest common denominator: any client that can call a tool can be live |
 | Tool | `lattice_doc_edit`, `lattice_doc_read` | Text document operations ([#532](https://github.com/moncifem/latticedb/issues/532)) |
 | Tool | `lattice_transition` | Workflow transition with conflict result ([#531](https://github.com/moncifem/latticedb/issues/531)) |
 | Tool | `lattice_presence` | Who is here and a bounded status string ([#533](https://github.com/moncifem/latticedb/issues/533)) |
 | Resource | `lattice://table/<name>`, `lattice://presence/<workspace>` | Read returns the page after a cursor; subscribable where the client supports resource subscriptions |
-| Notification | resource updated, list changed | Carry a scope and a cursor hint only, never row data; data always comes through an authorized read |
+| Notification | resource updated, list changed (legacy-era mechanism; the stateless 2026-07-28 revision that `mcp.rs` targets delivers subscriptions through `subscriptions/listen`, which is not implemented, see `docs/mcp-v0.md`; [#535](https://github.com/moncifem/latticedb/issues/535) chooses) | Carry a scope and a cursor hint only, never row data; data always comes through an authorized read |
 
 Notification semantics (what each mode guarantees, and that all modes yield the same events in the same
 order) are package [#535](https://github.com/moncifem/latticedb/issues/535). The MCP codec on `main` supports
@@ -139,21 +140,31 @@ tools only (`docs/mcp-v0.md`: resources, prompts and subscription streams are no
    can run a tool call in the background. Counts against per-agent limits.
 3. **Resource subscriptions and notifications.** Clients that surface server notifications to the model get
    pushed hints, then read with the cursor. Which clients do is to be researched.
-4. **Native WebSocket** for SDK and service clients (the sync protocol), the only mode with sub-100 ms
-   delivery by design.
+4. **Native WebSocket** for SDK and service clients (the sync protocol), the mode with the lowest
+   latency target (100 ms p99 at 2 agents, to be measured).
 
 ### Transport options
 
 | Option | For | Notes |
 |---|---|---|
 | stdio proxy (`lattice mcp`) | Clients that start local MCP servers by command | A small local process holds the token, speaks stdio to the client and HTTP or WebSocket to the gateway; works offline-first for the cursor file. The default for local agents |
-| Streamable HTTP (and SSE where a client needs it) on the gateway port | Remote, containerized and hosted clients | [#527](https://github.com/moncifem/latticedb/issues/527); needs TLS off loopback |
+| Streamable HTTP (and SSE where a client needs it) on the gateway port | Remote, containerized and hosted clients | [#527](https://github.com/moncifem/latticedb/issues/527); needs TLS off loopback. Browser access is a threat: see below |
 | Native WebSocket | SDK agents | [#524](https://github.com/moncifem/latticedb/issues/524) |
+
+Browser and DNS-rebinding defence for the HTTP endpoint (a web page must not be able to call a tool as the
+development principal): bind loopback by default; validate `Host` and `Origin` against an allow-list on every
+request; require `Content-Type: application/json` on `POST`; send no CORS headers; refuse the
+`LocalDevelopment` principal over HTTP unless a valid token is present. A test that posts from a second
+loopback origin must fail. These are acceptance criteria of [#527](https://github.com/moncifem/latticedb/issues/527).
 
 ### Authentication
 
-- **Local token (first slice):** per-account bearer token, stored by the installer with owner-only
-  permissions, sent by the proxy or the HTTP client ([#521](https://github.com/moncifem/latticedb/issues/521)).
+- **Local token (first slice):** per-account bearer token sent by the proxy or the HTTP client
+  ([#521](https://github.com/moncifem/latticedb/issues/521)). Tokens are generated by the server with at least
+  256 bits of entropy; a token chosen by a person is refused. Revocation and rotation are defined: the credential
+  file is reloaded, a revoked token closes the account's live connections within a bounded time, and rotation
+  allows a bounded overlap of two tokens. The file is owner-only on Unix and restricted by an ACL to the current
+  user on Windows, checked at start and at install, with a refusal when broader.
 - **OAuth (later):** remote and hosted use needs a standard authorization flow that MCP clients can run
   themselves. It depends on Phase 4 identity (`lattice-identity`) and is not designed here; the token design
   must not make it harder (the principal is still created by the server from verified credentials only).
@@ -201,33 +212,36 @@ are estimates, not commitments.
 
 | Order | Issue | Package | Needs | Days |
 |---|---|---|---|---|
-| 1 | [#356](https://github.com/moncifem/latticedb/issues/356) | Shared wire types and client WebSocket codec (existing) | none | 3 |
+| 1 | [#356](https://github.com/moncifem/latticedb/issues/356) | Shared wire/protocol crate (existing issue) | none | 3 |
 | 2 | [#519](https://github.com/moncifem/latticedb/issues/519) | Kernel-backed `EventSource` | none | 3 |
-| 3 | [#520](https://github.com/moncifem/latticedb/issues/520) | Author and turn on row commits | none | 2 |
-| 4 | [#521](https://github.com/moncifem/latticedb/issues/521) | Bearer-token authentication, ADR | none | 3 |
-| 5 | [#522](https://github.com/moncifem/latticedb/issues/522) | Interim per-table grants | none | 3 |
-| 6 | [#523](https://github.com/moncifem/latticedb/issues/523) | Commit notifier | #519 | 1 |
-| 7 | [#524](https://github.com/moncifem/latticedb/issues/524) | WebSocket gateway endpoint | #519, #521, #356 | 5 |
-| 8 | [#525](https://github.com/moncifem/latticedb/issues/525) | Snapshot-then-tail bootstrap | #519 | 3 |
-| 9 | [#526](https://github.com/moncifem/latticedb/issues/526) | MCP backend over the executor | #519, #520, #522 | 4 |
-| 10 | [#527](https://github.com/moncifem/latticedb/issues/527) | MCP over HTTP and the layering change | #526, #521, #524 | 4 |
-| 11 | [#528](https://github.com/moncifem/latticedb/issues/528) | Rust client driver | #356, #524 | 4 |
-| 12 | [#529](https://github.com/moncifem/latticedb/issues/529) | Per-agent limits, slow-reader disconnect | #524 | 3 |
-| 13 | [#530](https://github.com/moncifem/latticedb/issues/530) | Observability | #524 | 2 |
-| 14 | [#344](https://github.com/moncifem/latticedb/issues/344) then [#531](https://github.com/moncifem/latticedb/issues/531) | Arbiter wired, workflow transitions seen by subscribers | #526 | 5 + 3 |
-| 15 | [#532](https://github.com/moncifem/latticedb/issues/532) | Collaborative text documents | #524, #526, #520, #525 | 8 |
-| 16 | [#533](https://github.com/moncifem/latticedb/issues/533) | Presence | #524 | 3 |
-| 17 | [#534](https://github.com/moncifem/latticedb/issues/534) | Demo, e2e harness, latency record | #524, #525, #526, #528, #529 | 3 |
-| 18 | [#535](https://github.com/moncifem/latticedb/issues/535) | MCP live-notification semantics | #526, #527 | 3 |
-| 19 | [#536](https://github.com/moncifem/latticedb/issues/536) | One-command installer | #527, #535 | 4 |
-| 20 | [#537](https://github.com/moncifem/latticedb/issues/537) | Per-client harness packs | #535, #536 and the client research | 4 |
+| 3 | [#520](https://github.com/moncifem/latticedb/issues/520) | Injective author id, author and turn on row commits | none | 3 |
+| 4 | [#521](https://github.com/moncifem/latticedb/issues/521) | Bearer-token authentication, revocation, ADR | none | 4 |
+| 5 | [#522](https://github.com/moncifem/latticedb/issues/522) | Interim per-table and presence grants | none | 4 |
+| 6 | [#523](https://github.com/moncifem/latticedb/issues/523) | Commit notifier | [#519](https://github.com/moncifem/latticedb/issues/519) | 1 |
+| 7 | [#524](https://github.com/moncifem/latticedb/issues/524) | WebSocket gateway endpoint | [#519](https://github.com/moncifem/latticedb/issues/519), [#521](https://github.com/moncifem/latticedb/issues/521), [#356](https://github.com/moncifem/latticedb/issues/356) | 5 |
+| 8 | [#540](https://github.com/moncifem/latticedb/issues/540) | End-to-end harness crate (layer 9) | [#524](https://github.com/moncifem/latticedb/issues/524), [#356](https://github.com/moncifem/latticedb/issues/356) | 3 |
+| 9 | [#525](https://github.com/moncifem/latticedb/issues/525) | Snapshot-then-tail bootstrap | [#519](https://github.com/moncifem/latticedb/issues/519) | 3 |
+| 10 | [#526](https://github.com/moncifem/latticedb/issues/526) | MCP backend over the executor, and the `latticed -> lattice-sdk` layers edge | [#519](https://github.com/moncifem/latticedb/issues/519), [#520](https://github.com/moncifem/latticedb/issues/520), [#522](https://github.com/moncifem/latticedb/issues/522) | 5 |
+| 11 | [#528](https://github.com/moncifem/latticedb/issues/528) | Rust client driver | [#356](https://github.com/moncifem/latticedb/issues/356), [#524](https://github.com/moncifem/latticedb/issues/524), [#540](https://github.com/moncifem/latticedb/issues/540) | 4 |
+| 12 | [#529](https://github.com/moncifem/latticedb/issues/529) | Per-agent limits, executor budget, long-poll cap | [#524](https://github.com/moncifem/latticedb/issues/524) | 4 |
+| 13 | [#530](https://github.com/moncifem/latticedb/issues/530) | Observability | [#524](https://github.com/moncifem/latticedb/issues/524) | 2 |
+| 14 | [#527](https://github.com/moncifem/latticedb/issues/527) | MCP over HTTP with browser and rebinding defence | [#526](https://github.com/moncifem/latticedb/issues/526), [#521](https://github.com/moncifem/latticedb/issues/521), [#524](https://github.com/moncifem/latticedb/issues/524), [#529](https://github.com/moncifem/latticedb/issues/529) | 5 |
+| 15 | [#344](https://github.com/moncifem/latticedb/issues/344) then [#531](https://github.com/moncifem/latticedb/issues/531) | Arbiter wired, workflow transitions seen by subscribers | [#526](https://github.com/moncifem/latticedb/issues/526), [#540](https://github.com/moncifem/latticedb/issues/540) | 8 |
+| 16 | [#532](https://github.com/moncifem/latticedb/issues/532) | Collaborative text documents | [#524](https://github.com/moncifem/latticedb/issues/524), [#526](https://github.com/moncifem/latticedb/issues/526), [#520](https://github.com/moncifem/latticedb/issues/520), [#525](https://github.com/moncifem/latticedb/issues/525), [#540](https://github.com/moncifem/latticedb/issues/540) | 8 |
+| 17 | [#533](https://github.com/moncifem/latticedb/issues/533) | Presence | [#524](https://github.com/moncifem/latticedb/issues/524), [#522](https://github.com/moncifem/latticedb/issues/522) | 3 |
+| 18 | [#534](https://github.com/moncifem/latticedb/issues/534) | Demo and latency record | [#540](https://github.com/moncifem/latticedb/issues/540), [#524](https://github.com/moncifem/latticedb/issues/524), [#525](https://github.com/moncifem/latticedb/issues/525), [#526](https://github.com/moncifem/latticedb/issues/526), [#528](https://github.com/moncifem/latticedb/issues/528), [#529](https://github.com/moncifem/latticedb/issues/529), [#530](https://github.com/moncifem/latticedb/issues/530) | 3 |
+| 19 | [#535](https://github.com/moncifem/latticedb/issues/535) | MCP live-notification semantics | [#526](https://github.com/moncifem/latticedb/issues/526), [#527](https://github.com/moncifem/latticedb/issues/527) | 3 |
+| 20 | [#536](https://github.com/moncifem/latticedb/issues/536) | One-command installer | [#527](https://github.com/moncifem/latticedb/issues/527), [#535](https://github.com/moncifem/latticedb/issues/535) | 4 |
+| 21 | [#537](https://github.com/moncifem/latticedb/issues/537) | Per-client harness packs | #535, #536 and the client research | 4 |
 | gate | [#487](https://github.com/moncifem/latticedb/issues/487) | Resync API and sender-charged replay budget; needed before any tree sync | none | 5 |
 
-Waves that can run in parallel on disjoint files: (1) packages 1 to 5; (2) 6 to 9; (3) 10 to 13;
-(4) 14 to 16; then 17; the client packages 18 to 20 follow the server slice. About 71 engineer-days in total without #487, about a quarter of it in the text
-document package and the arbiter. The first usable cut (rows only, one writer and one reader through the
-gateway and MCP) is packages 1 to 9 and 17 without the document script, about 30 days, and already
-demonstrates the slice for work items.
+Waves that can run in parallel on disjoint files: (1) packages 1 to 5; (2) 6 to 9; (3) 10 to 13; (4) 14 to 17;
+then 18; the client packages 19 to 21 follow the server slice. The total is the sum of the Days column, 82
+engineer-days without #487; given the spread of estimates a range of 60 to 125 is the honest statement.
+About a fifth of it is the text document package and the arbiter. The first usable cut (rows only, a writer and a
+reader through the gateway and MCP, without documents, arbiter and presence) is packages 1 to 14 and 18, 52
+engineer-days by the same sum (range 40 to 80), and already demonstrates the slice for work items. It is longer
+than the pieces suggest because the demo depends on the client driver, limits and observability.
 
 Design calls that stay with the owner and are not made here: acceptance of RFC 0009 and RFC 0010 (the
 feed and sync encodings are unaccepted, experimental), the interim grants versus the Phase 4 policy language
@@ -240,7 +254,7 @@ feed and sync encodings are unaccepted, experimental), the interim grants versus
    row left a reader's scope (G-07, #363). The plugin-contract session id is client chosen, so a second principal
    can join a session or squat a record id (G-03, P3-F). Hostile CRDT peers are bounded at the library edge
    but the compaction frontier is trusted and the tree replay cap is a stopgap (G-08, #487). A gateway also adds
-   an unauthenticated surface before a token is checked (G-06, G-05). Mitigations in the packages: the principal
+   an unauthenticated surface before a token is checked (G-06, G-05). An HTTP MCP endpoint on loopback is reachable from any web page unless Host, Origin and content type are checked and the development principal is refused over HTTP (DNS rebinding, [#527](https://github.com/moncifem/latticedb/issues/527)). Mitigations in the packages: the principal
    comes only from the verified token, a denied scope looks like an unknown one, every write is admitted
    with a `PeerContext` bound to that principal, tree sync is excluded, and per-principal budgets exist before
    the demo. The demo must say plainly that per-agent permissions are table-level and that feed gaps leak counts.
@@ -264,25 +278,29 @@ a legitimate large paste, and the error must be visible instead of a silent stop
 
 ## Demo script
 
-Setup: one `latticed` with `--data-dir`, TLS off on loopback, two accounts with tokens: `planner` (read and write
-`work_items` and `docs`) and `reviewer` (read `work_items`, no access to `docs`). Two terminals running two
-different agents; a third pane shows the gateway statistics.
+Setup: one `latticed` with `--data-dir`, TLS off on loopback, three accounts with tokens: `planner` and `coder`
+(each reads and writes `work_items` and `docs`, and has the presence grant) and `reviewer` (reads `work_items` and
+has the presence grant; no access to `docs`, no write grant). Three terminals running three agents; a fourth pane
+shows the gateway statistics. The first two agents are the pair of the slice; `reviewer` exists to show
+permissions.
 
-1. Both agents connect and list members; each sees the other under `presence/team` (join events).
-2. `reviewer` subscribes to `table/work_items`. `planner` creates `WI-1 "write the retry test"`. `reviewer`'s
-   terminal prints the row within a few tens of milliseconds, with `author: planner`; the statistics pane shows
-   the commit-to-delivery time of that event.
-3. `reviewer` tries `table/docs`. It gets the same refusal as for a table that does not exist.
-4. Both agents edit the same document paragraph at the same moment. Both clients end with the same text
-   (document package; this step is the convergence proof with the real transport).
-5. Both agents try to move `WI-1` from `todo` to `doing`. One is accepted; the other receives a conflict
-   entity, and both see it on the feed (arbiter package).
-6. Kill `reviewer`'s connection (pull the network). `planner` writes five more items. Reconnect: `reviewer`
-   prints exactly the five, in order, and the log line shows the resume cursor it used.
-7. Run vacuum and reconnect an old `reviewer` cursor: the client receives `invalid_cursor`, re-reads the
-   table with its snapshot token and continues live.
-8. Show the refusal paths a developer would try: a wrong token, a forged author in the request, a flood of
-   document operations. Each ends in a named error and a line in the event log, and `planner` is unaffected.
+1. All three connect; each sees the others under `presence/team` (join events).
+2. `coder` and `reviewer` subscribe to `table/work_items`. `planner` creates `WI-1 "write the retry test"`. Both
+   terminals print the row within a few tens of milliseconds, with `author: planner`; the statistics pane shows
+   the commit-to-delivery time of that event and the demo prints the measured value, not a promised one.
+3. `reviewer` tries `table/docs`: the same refusal as for a table that does not exist. It tries to write
+   `work_items`: refused by its grants.
+4. `planner` and `coder` edit the same document paragraph at the same moment. Both end with the same text
+   (document package; this step is the convergence proof with the real transport). `reviewer` sees nothing of it.
+5. `planner` and `coder` both try to move `WI-1` from `todo` to `doing`. One is accepted; the other receives a
+   conflict entity, and `planner`, `coder` and `reviewer` see it on the `work_items` feed (arbiter package).
+6. Kill `coder`'s connection (pull the network). `planner` writes five more items. Reconnect: `coder` prints
+   exactly the five, in order, and the log line shows the resume cursor it used.
+7. Run vacuum and reconnect an old `coder` cursor: the client receives `invalid_cursor`, re-reads the table with
+   its snapshot token and continues live.
+8. Show the refusal paths a developer would try: a wrong token, a forged author in the request, a web page
+   posting to the HTTP endpoint, a flood of document operations. Each ends in a named error and a line in the
+   event log, and `planner` is unaffected.
 
 What would convince a developer: steps 2 and 6 (live, then gapless catch-up) and step 8 (the system holds when
 an agent misbehaves), with the measured latency printed instead of claimed.
