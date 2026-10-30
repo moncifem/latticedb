@@ -1,4 +1,4 @@
-Authenticated principal (#357, ADR 0025, proposed): a connection now has a `Principal`, set once when
+Authenticated principal (#357, ADR 0026, proposed): a connection now has a `Principal`, set once when
 authentication completes and never changed. SCRAM names it from the credential store's own account key
 (not the client's `user` string); loopback trust mode uses the fixed, labeled `local-development`
 principal (`Session::local_trust`, which replaces `Session::new`). `Accounts::exchange` returns

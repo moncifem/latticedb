@@ -1,4 +1,4 @@
-# ADR 0025: Carry the authenticated principal from the credential store to the query handler
+# ADR 0026: Carry the authenticated principal from the credential store to the query handler
 
 Status: proposed
 

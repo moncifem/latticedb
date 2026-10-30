@@ -3,7 +3,7 @@
 //! A [`Principal`] is created only by this crate: from an account found in the credential store
 //! ([`crate::auth::Accounts`]) after a verified SCRAM proof, or as the fixed development principal of
 //! loopback trust mode. The client-supplied startup `user` string is never the identity; it is only
-//! compared against the account the exchange was selected for. See ADR 0025.
+//! compared against the account the exchange was selected for. See ADR 0026.
 use std::fmt;
 
 /// How a principal was established.

@@ -175,7 +175,7 @@ defect. Evaluator identity remains bound, but interior-mutable authorization sta
 the trusted host and is not snapshotted. This is not authenticated PostgreSQL session isolation,
 SQL grants, executor deadline/memory enforcement or completion of P2-17/P2-18.
 
-Principal propagation (#357, [ADR 0025](../adr/0025-principal-propagation.md), proposed): the
+Principal propagation (#357, [ADR 0026](../adr/0026-principal-propagation.md), proposed): the
 authenticated SCRAM account, or the fixed `local-development` principal in loopback trust mode, now
 reaches every `QueryHandler` call in a `QueryContext`. Integration tests through the TCP, TLS and SCRAM
 listener show the handler sees the account that proved itself and nothing before the proof. The row
