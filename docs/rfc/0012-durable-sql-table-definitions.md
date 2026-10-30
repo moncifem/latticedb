@@ -51,8 +51,8 @@ Constraints that bound the design:
   already commits through `RowStore::commit_with_catalog`, which writes an LCIX v1 change set with
   `MANAGED_COMPOUND` (bit 0). A directory created by the executor therefore already refuses readers that
   predate LCIX.
-- `KNOWN_CAPABILITIES` is `MANAGED_COMPOUND` only. Bit 1 (value 2) is unknown and reserved by an accepted
-  negative fixture. The unaccepted typed-catalog proposal (RFC 0001, PR 291) proposes bit 2 (value 4),
+- `KNOWN_CAPABILITIES` is `MANAGED_COMPOUND` only. Bit 1 (value 2) is unknown: a unit test
+  (`admission_tests.rs`, an append requiring mask 2) pins its refusal; it is not a corpus golden. The unaccepted typed-catalog proposal (RFC 0001, PR 291) proposes bit 2 (value 4),
   LCAT version 2 and LCIX version 2.
 - Executor rows are typed-row-codec bytes with no writer-schema version in the value. Table ids are never
   reused; the executor allocates `max + 1` and retries on `IdUsed`.
@@ -143,6 +143,11 @@ capability-rollback checks are used unchanged. A directory with a segment that h
 any callback or repair, in every reader that does not list bit 3 as supported. That includes every
 binary built from current main.
 
+This relies on the RFC 0008 empty-tail promotion as amended for issue 307 (a staged `.guard` file so a
+crash cannot lose already durable bits). That amendment is still awaiting owner acceptance; this
+proposal's guard installation depends on it, so its acceptance should precede or accompany the format
+decision here.
+
 Support is declared only by an engine that really validates:
 
 | Consumer | Advertises bit 3 | Behaviour |
@@ -166,7 +171,10 @@ definition operations        u32 count (1..=1024) + operations                  
 row mutations                u32 length + canonical LROW v1 bytes (0 = none)         as v1
 ```
 
-Version 3 is canonical only when the definition count is at least one. A change without definitions is
+Definition operations are in ascending table id with no duplicate id. Version 3 is canonical only when the
+definition count is at least one. The version 1 rule "at least one table or index operation" becomes
+"at least one table, index or definition operation" for the shared encoder; a version 3 payload may
+carry definitions for existing tables with no table operation (adoption). A change without definitions is
 encoded as version 1, byte for byte as today, so a directory that never defines a SQL table never needs
 the new capability and every accepted fixture is unchanged. Version 3 requires capabilities 1 and 8
 together (mask 9) in its actual containing segment; a version 3 payload in a segment without both bits
@@ -189,15 +197,15 @@ definition version u8 = 1
 layout rule u8 = 1           typed-row codec v1 with the type mapping below, columns in this order
 column count u16             1..=1024
 per column:
-  name                       u32 length (1..=255) + UTF-8, lower case
+  name                       u32 length (1..=255) + UTF-8, no byte in 0x41..=0x5a
   type tag u8                see below
-  varchar limit u32          0 = none; nonzero only for tag 8
+  varchar limit u32          0 = none; nonzero only for tag 8; counted in characters (Unicode scalar values)
   flags u8                   bit 0 NOT NULL, bit 1 has default, bits 2..7 must be zero
   default                    only when bit 1: value tag u8 + payload, checked against the type tag
 primary key                  u16 count (0..=column count) + that many u16 column positions, no repeats
-primary key name             only when count > 0: u32 length + UTF-8
+primary key name             only when count > 0: u32 length (1..=255) + UTF-8
 unique count u8              0..=15
-per unique constraint k:     u16 count (1..=column count) + u16 positions, no repeats; u32 length + UTF-8 name
+per unique constraint k:     u16 count (1..=column count) + u16 positions, no repeats; u32 length (1..=255) + UTF-8 name
 ```
 
 Type tags: 1 boolean, 2 smallint, 3 integer, 4 bigint, 5 double precision, 6 numeric (no modifiers),
@@ -206,17 +214,22 @@ that needs a modifier (`numeric(p, s)`) or a new type gets a new definition vers
 for these tags.
 
 Default tags and payloads: 1 boolean (u8 0 or 1); 2 integer (i64, within the column's range); 3 double
-(u64 bit pattern, NaN canonicalised to `0x7ff8000000000000`); 4 numeric (canonical decimal text, u32
-length); 5 text or varchar (UTF-8, u32 length, within the limit); 6 bytea (u32 length); 7 uuid (16
+(u64 bit pattern, NaN canonicalised to `0x7ff8000000000000`); 4 numeric (u32 length + canonical decimal
+text: optional `-`, digits with no leading zero except a single `0`, optionally `.` and digits with no
+trailing zero, and no `-0`; any other spelling refuses, so the encoding is canonical); 5 text or varchar
+(UTF-8, u32 length in bytes; the character count must be within the varchar limit); 6 bytea (u32 length); 7 uuid (16
 bytes, big endian); 8 date (i32 days since 1970-01-01); 9 timestamptz (i64 microseconds since
-1970-01-01 00:00:00 UTC); 10 jsonb (UTF-8 text as written). These are the units of the executor's
+1970-01-01 00:00:00 UTC); 10 jsonb (UTF-8 text as written, which is not canonical: the executor compares jsonb textually, and so does
+the identity test in Migration, so two spellings of the same JSON are two definitions). These are the units of the executor's
 `Datum`. Defaults are constants; `now()` and expressions are not representable and need a new
 definition version.
 
 Structural rules that the engine validates, before append and again on replay, without SQL knowledge (the
 engine does not depend on `lattice-sql` or `lattice-exec`):
 
-- names nonempty, lower case, distinct among columns; positions in range; no repeated position in one
+- column names nonempty and distinct; "lower case" means ASCII only: no byte `A`-`Z`, and no Unicode
+  folding is performed or implied (other UTF-8 is kept as written). Constraint names are nonempty,
+  at most 255 bytes, and distinct, including the primary key name; positions in range; no repeated position in one
   key; every primary key column has `NOT NULL`; constraint names distinct;
 - key columns are not numeric (6) or jsonb (13), matching the executor's `key_type_ok`;
 - default tag matches the type tag and is in range; reserved flag bits are zero; the `varchar` limit rule;
@@ -247,7 +260,11 @@ all-or-nothing behaviour as indexes (nothing is published unless every step of t
    vacuum floor, as `vacuum_index_versions` already does for index versions; the id stays used.
 4. `Rename` leaves the definition untouched.
 5. A row write to a table that has a definition is checked against the catalog at commit: the table must
-   be live in the post-change catalog of the same change set. This is a new engine check (`RowStore::commit`
+   be live in the post-change catalog of the same change set. Marker tables are included: a write to a
+   physical id with bit 31 set is mapped back to its owner (`(id & 0x7fff_ffff) >> 4`) and its
+   constraint index `k` (`id & 0xf`). If the owner has a definition, the owner must be live and `k` must
+   be below its unique count; a marker write with `k` out of range, or to a dropped owner, is refused.
+   A marker id whose owner has no definition stays a raw write. This is a new engine check (`RowStore::commit`
    does not consult the catalog today). It is the primitive the executor needs so a transaction that
    bound a table cannot commit rows into a table dropped in the meantime (retryable, SQLSTATE `40001`).
    Undefined and raw tables keep the existing byte API.
@@ -256,7 +273,10 @@ Because a definition is immutable per id, no per-version dispatch is needed to r
 a table were written under its one definition. Any later schema change is a new physical table or
 generation, which is what RFC 0004 already proposes (a hidden target generation with new ids). If a
 future design wants in-place layout versions it adds a definition version and a row envelope with its own
-review. The catalog holds one shared copy of the canonical bytes per id, so no earlier definition is
+review. Consequence: with immutable definitions, a future `ADD COLUMN` is a rewrite into a new
+generation with a new table id, and its unique-constraint marker ids change with the id (they derive from
+it); `ALTER TABLE` is not available in the first slice and this is the price of the rule. The catalog
+holds one shared copy of the canonical bytes per id, so no earlier definition is
 copied per change (the tables history is cloned per change today, issue 234).
 
 ### Commit and recovery
@@ -272,6 +292,11 @@ catalog by borrow, and applied only when the whole record succeeds. A CRC-valid 
 version 3 and fails parsing or validation refuses open; it is not skipped as unknown data. Version 3
 outside a segment with mask 9 refuses. Unacknowledged but complete durable change sets may be adopted,
 exactly as for LCIX v1. Retried recovery reproduces the same catalog.
+
+Recovery cannot tell a SQL table that lost its definition from a table deliberately created raw; both are
+simply undefined. Only a scrubber check against the host's expectation (for example the executor
+listing tables it believes it created) can notice, and the format carries no "SQL table" flag in version 1.
+A flag on `Create` would close this at the price of another catalog change; it is left out and noted.
 
 Tables with no definition (raw tables created through the library API, and tables created by a build
 before this change) are listed as undefined. The SQL layer reports them as not addressable, as it does
@@ -291,7 +316,7 @@ today. It never guesses a definition.
 Three levels, each refusing rather than guessing:
 
 1. Capability bit 3 in the segment header. A reader without it refuses before any callback or repair
-   (RFC 0008). A frozen-reader proof is part of the acceptance evidence.
+   (RFC 0008). A frozen-reader proof, against a reader that has the guard, is part of the acceptance evidence.
 2. The envelope version byte (3), the definition version byte (1) and the layout rule byte (1). A reader
    that knows bit 3 but not a later definition version refuses, because the decoder is strict.
 3. A later incompatible definition version should sit behind its own capability bit (for example bit 4)
@@ -321,19 +346,31 @@ is expected to be disposable. A migration is still specified so the question is 
 1. Legacy tables stay undefined and not addressable, as today. Nothing is guessed.
 2. An explicit `Database::adopt_table` (replacing `attach_table`) takes a candidate definition and:
    a. refuses unless the id and name are live in the catalog and the table has no durable definition;
-   b. runs a streaming verification over every retained version of every row of the table and of its
-      marker tables: each value decodes under the candidate layout, each primary key equals the key
-      derived from the row, each marker entry equals the entry derived from the row and the constraint
-      position, and `NOT NULL` and `varchar` limits hold. Memory is bounded by one row; the pass is
-      cancellable and reports the first violation;
-   c. only then commits `DefineTable` for the existing id in one change set, under the upgrade policy
+   b. fixes the catalog LSN `P` and holds the single writer (`&mut Database`; the directory lock excludes
+      other processes) from the start of the verification until the commit, so no change set can land in
+      between. The commit also takes `P` as a precondition and the engine refuses `DefineTable` for an
+      existing table if the applied LSN moved or the table or any of its marker tables changed since
+      `P`. A host that cannot pause writers for the pass runs it before serving clients;
+   c. runs the verification over every retained version of the table and of its marker tables, in both
+      directions and per version at the same LSN: each row version decodes under the candidate layout;
+      its primary key equals the key derived from the row; `NOT NULL` and `varchar` limits hold; for
+      every unique constraint `k` whose columns are all non-null in that version, the marker table has an
+      entry at that LSN equal to the derived entry (a missing entry would silently permit duplicates), and
+      a tombstone at the same LSN where the row was deleted or the key changed; conversely, every marker
+      entry version has a row version at that LSN that derives it, so no marker entry is orphaned and
+      none exists for a null-containing key. A marker table with an index outside `0..unique count` that
+      holds any entry fails the check. The pass is cancellable and reports the first violation;
+   d. only then commits `DefineTable` for the existing id in one change set, under the upgrade policy
       and the DDL grant.
+   Memory: the algorithm needs one row and one entry at a time plus point lookups, but the scan API today
+   (`scan_at`) materialises borrowed row references for the whole table, so peak memory grows with the
+   table until a streaming scan exists. The work package must measure it; no bound is claimed.
 3. Verification cannot prove intent. A different but compatible definition (for example a weaker
    constraint over rows that happen to satisfy it) is accepted once and is then immutable. This is stated
    rather than hidden. Adoption is retroactive for reads at earlier snapshots of the same table, which is
-   sound only because step b covers every retained version.
+   sound only because step c covers every retained version.
 4. Once a definition exists, `adopt_table` with a different one is refused with `42P17`; with an
-   identical canonical encoding it is a no-op.
+   identical decoded definition (numeric defaults by value, jsonb by text, as above) it is a no-op.
 
 If the owner declares existing directories disposable, step 2 can be left out of the first slice; the
 rest of the design does not depend on it.
@@ -382,6 +419,34 @@ fencing a writing transaction when the catalog changed; an independent golden ge
 frozen-reader hosted job (`tools/typed-admission`). It does not reuse LCAT v2, LCIX v2, bit 2, `LTYP`,
 or LSL as the definition language.
 
+## Security and resource limits
+
+**Who may read definitions.** A definition holds table and column names, types, constraint names and
+constant defaults. The SQL layer already answers names to any actor that may connect (`describe` binds
+against the catalog; the executor README states this and defers hiding to Phase 4). This RFC keeps that
+rule: definitions are metadata readable through the host-only `Catalog` API and through SQL binding, with
+no new per-actor read check. `CatalogStore` and the raw scrub and read tools have no policy hook at all,
+as for names today, so anyone who can run them or read the directory sees every definition. The
+`authorize_ddl` hook, extended with the definitions, governs writes only. A catalog-read authorization
+rule is a Phase 4 policy decision, not made here.
+
+**Cleartext.** Definitions, including constant defaults, are stored unencrypted in the WAL, in every
+segment copy and in backups, like row values. A default must not carry a secret. The documentation and the
+executor's error messages must say so; the executor never echoes a default value in an error.
+
+**Catalog-wide caps.** The per-definition bounds (1,024 columns, 65,536 bytes, 1,024 definition operations
+per payload) do not bound the catalog. Proposed, for the owner to confirm: at most 16,384 live defined
+tables and 64 MiB of retained definition bytes in total. Dropped definitions count until the vacuum floor
+passes their drop LSN, since they are needed for `AS OF` reads. A commit that would exceed either cap is
+refused with a resource error before append. Replay does not refuse a history a writer accepted, so a
+later lower cap affects new commits only; memory stays bounded by the caps in force when the history was
+written.
+
+**What the fuzz targets bound.** Decoding allocates at most the input length (no `with_capacity` from an
+unvalidated count; a count larger than the remaining bytes divided by the smallest possible element is
+refused first), never panics, and re-encodes a successful decode to the input. The replay target also
+asserts that the catalog's retained definition bytes never exceed the sum of accepted payload sizes.
+
 ## Verification plan
 
 ### Fixtures
@@ -418,6 +483,8 @@ One per new invariant, so the simulator and the tests can fail:
 | `Create` and `DefineTable` committed as two change sets | atomic create | power-cut sweep: table without definition after a cut |
 | drop leaves the definition live, or an id is reused after a drop | ids never reused; `AS OF` decoding | model map comparison and scrubber |
 | row write to a dropped defined table accepted | commit-time liveness | targeted test and simulator workload step |
+| marker write with `k` out of range or to a dropped owner accepted | commit-time liveness for marker ids | targeted tests in WP4 and WP6 |
+| adoption skips the reverse (orphan) marker check or the LSN precondition | adoption soundness | adoption tests with a missing and an orphaned marker entry and a concurrent commit |
 | mismatched definition adopted | no weaker re-definition (the issue 379 hazard) | adoption test with a deliberately weaker candidate |
 | columns sorted at decode | layout rule 1 | row round trip against the independent fixture |
 
@@ -431,8 +498,9 @@ Each outcome records whether the guard and the definition survived, that no ackn
 definition, that no definition survives in an unguarded segment, and a second recovery. Controls prove
 each fault site is reached.
 
-A hosted job pinned to an immutable pre-change revision (the pattern of `typed-admission.yml`) builds
-that real reader with its original lockfile, runs it on every exported directory and checks it refuses
+A hosted job pinned to an immutable revision that contains the RFC 0008 guard but not bit 3 (the pattern of
+`typed-admission.yml`; not `743b0fb`, the pre-guard reader, which refuses a guarded header by `BadMagic`
+and would not test capability refusal) builds that real reader with its original lockfile, runs it on every exported directory and checks it refuses
 guarded directories with unchanged before/after byte manifests. Evidence goes to `docs/evidence/` with the
 run id; a workflow file is not evidence until a run succeeds.
 
@@ -457,11 +525,11 @@ dependency order:
    document.
 3. LCIX v3 encode and decode, `CompoundChange` definitions, `Catalog` definition history and rules,
    `CatalogStore` projection, planted bugs.
-4. `RowStore` commit and replay with mask 9, commit-time liveness check, upgrade-policy setting,
-   `DdlRef` extension.
+4. `RowStore` commit and replay with mask 9, commit-time liveness check including marker tables,
+   catalog caps, upgrade-policy setting, `DdlRef` extension.
 5. Fault sweep and frozen-reader hosted compatibility job with evidence.
-6. `lattice-exec`: open loads definitions, atomic create, `adopt_table` with the verification pass,
-   remove `fingerprints`, simplify the catalog version.
+6. `lattice-exec` (6a): open loads definitions, atomic create, remove `fingerprints`, simplify the
+   catalog version. (6b): `adopt_table` with the bidirectional verification pass and LSN precondition.
 7. `latticed`: data directory startup, the restart test changes from "names only" to full recovery,
    undefined-table reporting, upgrade setting.
 8. Simulator workload step, definitions scrubber check, model oracle.
@@ -501,6 +569,10 @@ struct layout the disk format.
 5. Whether pre-alpha name-only directories are disposable (leave adoption out of the first slice) or
    must be migrated by verified adoption.
 6. Whether the checkpoint requirements above can be added to RFC 0002's discussion now.
+7. The catalog caps (16,384 live defined tables, 64 MiB retained definition bytes) and the read rule:
+   definitions are readable metadata like names today, with no per-actor check before Phase 4.
+8. Whether Option B stays the stated fallback if Option A is rejected.
+9. Acceptance of the RFC 0008 `.guard` amendment (issue 307), which this proposal depends on.
 
 An independent review of the final diff is required before merge and is the tech lead's call for the
 `reviewed` label. It does not replace the owner's format decision.

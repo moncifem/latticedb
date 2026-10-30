@@ -43,6 +43,12 @@ The decisions listed at the end of the RFC are the owner's.
 
 ## Consequences
 
+Definitions are immutable per table id, so a future `ADD COLUMN` is a rewrite into a new generation
+with a new id, and its unique-constraint marker ids change. Definitions are cleartext metadata in the
+WAL and backups, readable like table names today, and the catalog gets caps on live and retained
+definitions. The design depends on the RFC 0008 `.guard` amendment (issue 307), still awaiting
+the owner. Recovery cannot tell a SQL table that lost its definition from a raw table.
+
 SQL schemas survive a restart, the weaker-definition hazard disappears because the durable definition is
 the comparison key, and the in-process fingerprint and the host's `attach_table` call leave normal
 startup. The record is the atomic unit that transactional DDL (issue 382) needs and does not implement
