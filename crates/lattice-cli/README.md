@@ -32,14 +32,20 @@ exactly one cursor is refused and left as it is. Two watches on one cursor file 
 holds `FILE.lock` for its whole run, and a second one exits at once. Without the flag the watch starts
 from `--from` or `--from-start` and keeps no cursor on disk.
 
-A dropped connection is retried from the last saved cursor. The wait before a retry starts at one
-second and doubles with each failure, up to eight seconds. A connection that delivers no event counts
-as a failure, and three failures in a row stop the watch with status 1; a connection that delivers an
-event starts the count again. A refused token (HTTP 401 or 403) and a close with code 1008 (policy)
-stop the watch at once, because a new connection would be refused the same way. The retry wait is
-local: the SDK's jittered backoff (#778) is not in the tree yet. SIGTERM and SIGINT stop the watch after
-the event in hand is saved, with status 0. Not done: TLS on the client, and an end-to-end test against
-a live gateway (the e2e harness cannot run this binary, see #583).
+A dropped connection is retried from the last saved cursor. The retry policy is the SDK's reconnect
+supervisor (`lattice_sdk::reconnect`), with full jitter: the wait before each retry is random, between
+one second and a ceiling that starts at one second, doubles with each failure and stops at eight seconds.
+A connection that delivers no event counts as a failure, and three failures in a row stop the watch with
+status 1. An event counts as delivered once it is printed, acknowledged and saved; that resets the count
+and the ceiling, so the next wait starts again at one second. A refused token (HTTP 401 or 403), a close
+with code 1008 (policy), and a server refusal that a new connection would repeat (for example an invalid
+scope or cursor, or a version the client does not speak) stop the watch at once. A protocol violation or
+an internal server error is retried like a dropped connection. A line that cannot be printed, a cursor
+that cannot be saved and an event that does not match its cursor stop the watch at once, without a retry.
+SIGTERM and SIGINT stop the watch after the event in hand is saved, with status 0. The retry pause is a
+plain sleep of at most eight seconds that a stop signal does not interrupt, so a stop during a pause takes
+effect when the pause ends. Not done: TLS on the
+client, and an end-to-end test against a live gateway (the e2e harness cannot run this binary, see #583).
 `lattice watch --help` lists the flags.
 
 `lattice mcp --url http://127.0.0.1:PORT/mcp --token-file FILE` is a stdio proxy to the gateway's

@@ -8,7 +8,8 @@
 //!
 //! The driver is generic over [`Dialer`], [`Connection`], [`Output`] and [`CursorStore`], so the
 //! order rule and the resume rule are tested with scripted doubles. The socket transport at the end
-//! of this file is the only part that touches the network.
+//! of this file is the only part that touches the network. The retry policy is the SDK's supervisor
+//! (`lattice_sdk::reconnect`): this file reports each outcome to it and waits as it decides.
 
 mod cursor_file;
 
@@ -16,9 +17,11 @@ use cursor_file::{CursorFileError, FileCursorStore};
 use lattice_api::sync;
 use lattice_api::websocket::{self, Opcode};
 use lattice_core::feed::{ChangeEvent, ChangeOp, Cursor};
-use lattice_sdk::client::{Action, ClientConfig, CloseReason, Frame, SyncClient};
+use lattice_sdk::backoff::Backoff;
+use lattice_sdk::client::{Action, ClientConfig, ClientError, CloseReason, Frame, SyncClient};
 use lattice_sdk::cursor_store::{CursorStore, MemoryCursorStore};
 use lattice_sdk::mcp::FeedCursor;
+use lattice_sdk::reconnect::{Decision, Input, StopReason, Supervisor};
 use lattice_seams::{OsRng, Rng};
 use std::fmt;
 use std::io::{Read, Write};
@@ -38,10 +41,12 @@ const SCOPE_PREFIX: &str = "table/";
 const SYNC_PATH: &str = "/sync";
 /// Consecutive failed connections after which the watch gives up.
 const MAX_FAILED_CONNECTIONS: u32 = 3;
-/// The first wait between two connection attempts. Each further failure doubles it.
-const RETRY_PAUSE: Duration = Duration::from_secs(1);
-/// The longest wait between two connection attempts.
-const RETRY_CAP: Duration = Duration::from_secs(8);
+/// The first retry window of the supervisor's backoff, in milliseconds. Each further failure doubles it.
+const RETRY_BASE_MS: u64 = 1_000;
+/// The largest retry window, in milliseconds.
+const RETRY_CAP_MS: u64 = 8_000;
+/// The shortest wait before a reconnect. The jitter may draw less; the watch never waits less.
+const RETRY_FLOOR: Duration = Duration::from_millis(RETRY_BASE_MS);
 /// The WebSocket close code for a policy violation: the gateway refused the connection itself.
 const POLICY_CLOSE: u16 = 1008;
 /// How long a connect or the upgrade may take.
@@ -67,8 +72,9 @@ usage: lattice watch table/NAME --url ws://HOST:PORT --token-file FILE (--from C
 
 Each event prints one line: CURSOR AUTHOR TABLE KEY OPERATION
 The token is never accepted on the command line. A dropped connection is retried from the last
-saved cursor, with a wait that doubles from one second. Three connections in a row that deliver
-nothing stop the watch, and a refused token or a policy close stops it at once.
+saved cursor, after a random wait of one to eight seconds whose upper bound doubles with each
+failure. Three connections in a row that deliver nothing stop the watch, and a refused token or a
+policy close stops it at once.
 ";
 
 /// Where the bearer token comes from.
@@ -124,8 +130,8 @@ trait Connection {
     fn recv(&mut self) -> Result<Received, String>;
 }
 
-/// Opens a connection to the gateway. Each call is one attempt; a refusal that a new attempt cannot
-/// change comes back as [`Stop::Fatal`].
+/// Opens a connection to the gateway. Each call is one attempt; a failed attempt comes back as a
+/// [`Stop::Ended`] carrying the input the supervisor should see.
 trait Dialer {
     type Conn: Connection;
     fn dial(&mut self) -> Result<Self::Conn, Stop>;
@@ -138,19 +144,29 @@ trait Output {
     fn note(&mut self, text: &str);
 }
 
-/// Why a connection or the whole watch ended.
+/// How one connection attempt ended.
 #[derive(Debug, PartialEq, Eq)]
 enum Stop {
     /// The operator asked the watch to stop. Not an error.
     Interrupted,
-    /// The connection failed or ended. A new connection may succeed.
-    Dropped(String),
-    /// Nothing a new connection would change: a refusal, a protocol error or a local failure.
-    Fatal(String),
+    /// The connection ended or was refused. The `Input` is what the supervisor is told; the text is
+    /// for the operator.
+    Ended(Input, String),
+    /// A local failure that a new connection would not change: a line that cannot be printed, a
+    /// cursor that cannot be saved, an event that does not match its cursor. The supervisor is not
+    /// consulted for these.
+    Local(String),
 }
 
-fn fatal<E: fmt::Display>(error: E) -> Stop {
-    Stop::Fatal(error.to_string())
+/// A transport failure with no protocol reason: the supervisor's `TransportClosed`.
+fn transport(text: String) -> Stop {
+    Stop::Ended(Input::TransportClosed, text)
+}
+
+/// A call the client refused, such as an ack beyond what was delivered: the supervisor's `Failed`.
+fn call_refused(error: ClientError) -> Stop {
+    let text = error.to_string();
+    Stop::Ended(Input::Failed(error), text)
 }
 
 fn set_once<T>(slot: &mut Option<T>, flag: &str, new: T) -> Result<(), String> {
@@ -437,8 +453,9 @@ struct Pump<'a, C, O, S> {
     conn: &'a mut C,
     out: &'a mut O,
     store: &'a mut S,
-    /// Set once an event of this connection has been printed, acknowledged and saved.
-    delivered: bool,
+    /// The supervisor that decides what follows this connection. Healthy steps reach it as they
+    /// happen, so a delivered event resets it before the connection can drop.
+    sup: &'a mut Supervisor,
 }
 
 impl<C: Connection, O: Output, S: CursorStore> Pump<'_, C, O, S>
@@ -448,45 +465,49 @@ where
     fn perform(&mut self, actions: Vec<Action>) -> Result<(), Stop> {
         for action in actions {
             match action {
-                Action::Send(frame) => self.conn.send(&frame).map_err(Stop::Dropped)?,
+                Action::Send(frame) => self.conn.send(&frame).map_err(transport)?,
                 Action::Ready { .. } => {
                     let scope = format!("{SCOPE_PREFIX}{}", self.table);
                     let (_, subscribe) = self
                         .client
                         .subscribe(&scope, self.resume.as_slice())
-                        .map_err(fatal)?;
+                        .map_err(call_refused)?;
                     self.perform(subscribe)?;
                 }
                 Action::Deliver { sub, cursor, data } => {
-                    let event = decode_delivery(&cursor, &data).map_err(Stop::Fatal)?;
+                    let event = decode_delivery(&cursor, &data).map_err(Stop::Local)?;
                     self.out
                         .line(&format_event(self.table, &event))
-                        .map_err(Stop::Fatal)?;
-                    let acks = self.client.ack(sub, &cursor).map_err(fatal)?;
+                        .map_err(Stop::Local)?;
+                    let acks = self.client.ack(sub, &cursor).map_err(call_refused)?;
                     self.perform(acks)?;
                     self.save(&cursor)?;
-                    self.delivered = true;
+                    // Only now is the event delivered: printed, acknowledged and saved.
+                    self.report(Input::EventDelivered);
                 }
                 Action::SubscriptionFailed { code, message, .. } => {
-                    return Err(Stop::Fatal(format!(
-                        "the server refused the subscription ({code:?}): {message:?}"
-                    )));
+                    // A server refusal with a code: the supervisor stops on the codes a new
+                    // connection would repeat, such as an invalid scope or cursor.
+                    let text =
+                        format!("the server refused the subscription ({code:?}): {message:?}");
+                    return Err(Stop::Ended(
+                        Input::Closed(CloseReason::ServerError { code, message }),
+                        text,
+                    ));
                 }
                 Action::Close(reason) => {
-                    let timed_out = matches!(
-                        reason,
-                        CloseReason::PingTimeout | CloseReason::HandshakeTimeout
-                    );
                     let text = format!("the connection closed: {reason:?}");
-                    return Err(if timed_out {
-                        Stop::Dropped(text)
-                    } else {
-                        Stop::Fatal(text)
-                    });
+                    return Err(Stop::Ended(Input::Closed(reason), text));
                 }
             }
         }
         Ok(())
+    }
+
+    /// Reports a healthy step to the supervisor. A healthy input never schedules a retry or stops,
+    /// so no jitter is drawn for it.
+    fn report(&mut self, input: Input) {
+        let _ = self.sup.on_input(input, 0);
     }
 
     /// Saves the cursor of an acknowledged event. A failed save stops the watch: continuing would
@@ -494,23 +515,24 @@ where
     fn save(&mut self, cursor: &[u8]) -> Result<(), Stop> {
         let saved: FeedCursor = cursor
             .try_into()
-            .map_err(|_| Stop::Fatal("an event cursor is not 12 bytes".into()))?;
+            .map_err(|_| Stop::Local("an event cursor is not 12 bytes".into()))?;
         self.store
             .save(&saved)
-            .map_err(|e| Stop::Fatal(format!("cannot save the cursor: {e}")))?;
+            .map_err(|e| Stop::Local(format!("cannot save the cursor: {e}")))?;
         *self.resume = cursor.to_vec();
         Ok(())
     }
 
-    /// Runs the connection until it stops. `interrupted` is asked before each read.
+    /// Runs the connection until it ends. `interrupted` is asked before each read.
     fn run(&mut self, interrupted: &mut dyn FnMut() -> bool) -> Stop {
         let hello = match self.client.connect(0) {
             Ok(actions) => actions,
-            Err(e) => return fatal(e),
+            Err(e) => return call_refused(e),
         };
         if let Err(stop) = self.perform(hello) {
             return stop;
         }
+        self.report(Input::Connected);
         let mut now: u64 = 0;
         loop {
             if interrupted() {
@@ -518,22 +540,29 @@ where
             }
             let received = match self.conn.recv() {
                 Ok(received) => received,
-                Err(e) => return Stop::Dropped(e),
+                Err(e) => return transport(e),
             };
             now = now.saturating_add(1);
             let actions = match received {
                 Received::Frame(frame) => match self.client.handle(frame, now) {
-                    Ok(actions) => actions,
-                    Err(e) => return fatal(e),
+                    Ok(actions) => {
+                        self.report(Input::FrameReceived);
+                        actions
+                    }
+                    Err(e) => return call_refused(e),
                 },
                 Received::Idle => self.client.tick(now),
+                // 1008 is the gateway refusing the credential or the connection itself. It closes with
+                // 1008 when the token no longer verifies, and a new connection with the same token is
+                // refused the same way: the supervisor's transport refusal.
                 Received::Closed(Some(POLICY_CLOSE)) => {
-                    return Stop::Fatal(
+                    return Stop::Ended(
+                        Input::Unauthorized,
                         "the gateway closed the connection with code 1008 (policy); a new connection would be refused the same way".into(),
                     );
                 }
                 Received::Closed(_) => {
-                    return Stop::Dropped("the server closed the connection".into());
+                    return transport("the server closed the connection".into());
                 }
             };
             if let Err(stop) = self.perform(actions) {
@@ -543,26 +572,25 @@ where
     }
 }
 
-/// The wait before the next connection after `failed` failures in a row: the first wait is
-/// `RETRY_PAUSE`, each further failure doubles it, and the wait never exceeds `RETRY_CAP`.
-fn retry_delay(failed: u32) -> Duration {
-    let doublings = failed.saturating_sub(1);
-    let factor = 1u32.checked_shl(doublings).unwrap_or(u32::MAX);
-    RETRY_PAUSE.saturating_mul(factor).min(RETRY_CAP)
+/// What the watch takes from its surroundings: the stop request, the jitter for its retry waits and
+/// the wait itself. Production reads the stop signals, the OS and the thread; tests script all three.
+struct Env<'a> {
+    interrupted: &'a mut dyn FnMut() -> bool,
+    jitter: &'a mut dyn FnMut() -> u64,
+    pause: &'a mut dyn FnMut(Duration),
 }
 
-/// Runs the watch until it is interrupted or gives up. A dropped connection is retried from the last
-/// saved cursor, after a wait that doubles with each failure. A connection that delivers no event
-/// counts as a failure; one that delivers an event starts the count again. Fatal refusals stop the
-/// watch at once.
+/// Runs the watch until it is interrupted or gives up. Each connection attempt ends one way, and each
+/// way is reported to the supervisor, which decides whether to retry and how long to wait. Healthy
+/// steps are reported as they happen, so an event that was printed, acknowledged and saved resets the
+/// supervisor before its connection drops.
 fn watch<D, O, S>(
     table: &str,
     start: Vec<u8>,
     dialer: &mut D,
     out: &mut O,
     store: &mut S,
-    interrupted: &mut dyn FnMut() -> bool,
-    pause: &mut dyn FnMut(Duration),
+    env: &mut Env<'_>,
 ) -> Result<(), String>
 where
     D: Dialer,
@@ -570,13 +598,14 @@ where
     S: CursorStore,
     S::Error: fmt::Display,
 {
+    let backoff = Backoff::new(RETRY_BASE_MS, RETRY_CAP_MS).map_err(|e| e.to_string())?;
+    let mut sup = Supervisor::new(backoff, Some(MAX_FAILED_CONNECTIONS));
     let mut resume = start;
-    let mut failed: u32 = 0;
     loop {
-        if interrupted() {
+        if (env.interrupted)() {
             return Ok(());
         }
-        let (stop, delivered) = match dialer.dial() {
+        let stop = match dialer.dial() {
             Ok(mut conn) => {
                 let mut pump = Pump {
                     client: SyncClient::new(ClientConfig::new(AGENT)).map_err(|e| e.to_string())?,
@@ -585,30 +614,32 @@ where
                     conn: &mut conn,
                     out: &mut *out,
                     store: &mut *store,
-                    delivered: false,
+                    sup: &mut sup,
                 };
-                let stop = pump.run(interrupted);
-                (stop, pump.delivered)
+                pump.run(&mut *env.interrupted)
             }
-            Err(stop) => (stop, false),
+            Err(stop) => stop,
         };
         match stop {
             Stop::Interrupted => return Ok(()),
-            Stop::Fatal(e) => return Err(e),
-            Stop::Dropped(e) => {
-                if delivered {
-                    failed = 0;
+            Stop::Local(e) => return Err(e),
+            Stop::Ended(input, message) => match sup.on_input(input, (env.jitter)()) {
+                Decision::RetryAfter(ms) => {
+                    let delay = Duration::from_millis(ms).max(RETRY_FLOOR);
+                    out.note(&format!(
+                        "connection lost ({message}); retrying in {delay:?}"
+                    ));
+                    (env.pause)(delay);
                 }
-                failed = failed.saturating_add(1);
-                if failed >= MAX_FAILED_CONNECTIONS {
+                Decision::Stop(StopReason::GaveUp) => {
                     return Err(format!(
-                        "giving up after {failed} failed connections in a row: {e}"
+                        "giving up after {MAX_FAILED_CONNECTIONS} failed connections in a row: {message}"
                     ));
                 }
-                let delay = retry_delay(failed);
-                out.note(&format!("connection lost ({e}); retrying in {delay:?}"));
-                pause(delay);
-            }
+                // A refusal the supervisor stops on. `Continue` cannot follow a connection that ended,
+                // and if it did the watch would still stop rather than retry blindly.
+                Decision::Stop(_) | Decision::Continue => return Err(message),
+            },
         }
     }
 }
@@ -633,10 +664,13 @@ impl Output for Printer {
 /// gateway's own text, so it is shown quoted, with control characters escaped.
 fn refused_upgrade(status: &str) -> Stop {
     match status {
-        "401" | "403" => Stop::Fatal(format!(
-            "the gateway refused the token (status {status:?}); fix the token file and start again"
-        )),
-        other => Stop::Dropped(format!(
+        "401" | "403" => Stop::Ended(
+            Input::Unauthorized,
+            format!(
+                "the gateway refused the token (status {status:?}); fix the token file and start again"
+            ),
+        ),
+        other => transport(format!(
             "the gateway refused the upgrade with status {other:?}"
         )),
     }
@@ -653,10 +687,10 @@ impl Dialer for TcpDialer {
 
     fn dial(&mut self) -> Result<Socket, Stop> {
         let mut stream = TcpStream::connect_timeout(&self.address, CONNECT_TIMEOUT)
-            .map_err(|e| Stop::Dropped(format!("cannot connect to {}: {e}", self.address)))?;
+            .map_err(|e| transport(format!("cannot connect to {}: {e}", self.address)))?;
         stream
             .set_read_timeout(Some(CONNECT_TIMEOUT))
-            .map_err(|e| Stop::Dropped(format!("cannot set the handshake timeout: {e}")))?;
+            .map_err(|e| transport(format!("cannot set the handshake timeout: {e}")))?;
         let mut rng = OsRng;
         let mut nonce = Vec::with_capacity(16);
         nonce.extend_from_slice(&rng.next_u64().to_be_bytes());
@@ -671,21 +705,21 @@ impl Dialer for TcpDialer {
         );
         stream
             .write_all(request.as_bytes())
-            .map_err(|e| Stop::Dropped(format!("cannot send the upgrade request: {e}")))?;
-        let head = read_head(&mut stream).map_err(Stop::Dropped)?;
+            .map_err(|e| transport(format!("cannot send the upgrade request: {e}")))?;
+        let head = read_head(&mut stream).map_err(transport)?;
         let status = head.split_whitespace().nth(1).unwrap_or("none");
         if status != "101" {
             return Err(refused_upgrade(status));
         }
         let expected = websocket::accept_key(&key);
         if header_value(&head, "sec-websocket-accept") != Some(expected.as_str()) {
-            return Err(Stop::Dropped(
+            return Err(transport(
                 "the gateway's Sec-WebSocket-Accept does not match the request".into(),
             ));
         }
         stream
             .set_read_timeout(Some(TICK))
-            .map_err(|e| Stop::Dropped(format!("cannot set the read timeout: {e}")))?;
+            .map_err(|e| transport(format!("cannot set the read timeout: {e}")))?;
         Ok(Socket {
             stream,
             buf: Vec::new(),
@@ -831,7 +865,13 @@ fn start(opts: Options) -> Result<(), String> {
     let mut dialer = TcpDialer { address, token };
     let mut out = Printer;
     let mut interrupted = || latticed::stop::stop_signals_received() > 0;
+    let mut jitter = || OsRng.next_u64();
     let mut pause = |delay: Duration| std::thread::sleep(delay);
+    let mut env = Env {
+        interrupted: &mut interrupted,
+        jitter: &mut jitter,
+        pause: &mut pause,
+    };
     let table = opts.table.as_str();
     match opts.start {
         Start::Origin => watch(
@@ -840,8 +880,7 @@ fn start(opts: Options) -> Result<(), String> {
             &mut dialer,
             &mut out,
             &mut MemoryCursorStore::new(),
-            &mut interrupted,
-            &mut pause,
+            &mut env,
         ),
         Start::Cursor(from) => watch(
             table,
@@ -849,8 +888,7 @@ fn start(opts: Options) -> Result<(), String> {
             &mut dialer,
             &mut out,
             &mut MemoryCursorStore::new(),
-            &mut interrupted,
-            &mut pause,
+            &mut env,
         ),
         Start::File(path) => {
             let mut store = FileCursorStore::open(Path::new(&path)).map_err(|e| e.to_string())?;
@@ -866,15 +904,7 @@ fn start(opts: Options) -> Result<(), String> {
                 }
                 Err(e) => return Err(e.to_string()),
             };
-            watch(
-                table,
-                from,
-                &mut dialer,
-                &mut out,
-                &mut store,
-                &mut interrupted,
-                &mut pause,
-            )
+            watch(table, from, &mut dialer, &mut out, &mut store, &mut env)
         }
     }
 }
@@ -911,7 +941,7 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
 )]
 mod tests {
     use super::*;
-    use lattice_sdk::client::{Event, SUPPORTED_MAX_VERSION, SUPPORTED_MIN_VERSION};
+    use lattice_sdk::client::{Event, SUPPORTED_MAX_VERSION, SUPPORTED_MIN_VERSION, WireError};
     use lattice_sdk::cursor_store::MalformedCursor;
     use std::cell::RefCell;
     use std::collections::VecDeque;
@@ -1045,7 +1075,7 @@ mod tests {
 
         fn dial(&mut self) -> Result<Script, Stop> {
             let Some(incoming) = self.connections.pop_front() else {
-                return Err(Stop::Dropped("no more scripted connections".into()));
+                return Err(transport("no more scripted connections".into()));
             };
             Ok(Script {
                 incoming: incoming.into(),
@@ -1104,12 +1134,25 @@ mod tests {
         }
     }
 
-    /// Runs one watch over scripted connections and returns every step in order with the result.
+    /// Runs one watch over scripted connections with the largest jitter: every wait is the top of its
+    /// window. Returns every step in order with the result.
     fn watch_over(
         connections: Vec<Vec<Received>>,
         start: &[u8],
         refuse_saves: bool,
     ) -> (Vec<Step>, Result<(), String>) {
+        let (steps, result, _) = run_scripted(connections, start, refuse_saves, &mut || u64::MAX);
+        (steps, result)
+    }
+
+    /// Runs one watch over scripted connections with the given jitter. Returns every step in order,
+    /// the result and each wait the watch took before a retry.
+    fn run_scripted(
+        connections: Vec<Vec<Received>>,
+        start: &[u8],
+        refuse_saves: bool,
+        jitter: &mut dyn FnMut() -> u64,
+    ) -> (Vec<Step>, Result<(), String>, Vec<Duration>) {
         let log: Log = Rc::new(RefCell::new(Vec::new()));
         let mut dialer = Dialing {
             connections: connections.into(),
@@ -1122,17 +1165,37 @@ mod tests {
             log: Rc::clone(&log),
             refuse: refuse_saves,
         };
-        let result = watch(
-            "notes",
-            start.to_vec(),
-            &mut dialer,
-            &mut out,
-            &mut store,
-            &mut || false,
-            &mut |_: Duration| {},
-        );
+        let mut waits: Vec<Duration> = Vec::new();
+        let result = {
+            let mut pause = |delay: Duration| waits.push(delay);
+            let mut env = Env {
+                interrupted: &mut || false,
+                jitter,
+                pause: &mut pause,
+            };
+            watch(
+                "notes",
+                start.to_vec(),
+                &mut dialer,
+                &mut out,
+                &mut store,
+                &mut env,
+            )
+        };
         let steps = std::mem::take(&mut *log.borrow_mut());
-        (steps, result)
+        (steps, result, waits)
+    }
+
+    /// A seeded jitter source (splitmix64): the same seed gives the same waits on every run.
+    fn seeded(seed: u64) -> impl FnMut() -> u64 {
+        let mut state = seed;
+        move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
     }
 
     #[test]
@@ -1255,14 +1318,18 @@ mod tests {
             log: Rc::clone(&log),
             refuse: false,
         };
+        let mut env = Env {
+            interrupted: &mut || true,
+            jitter: &mut || u64::MAX,
+            pause: &mut |_: Duration| {},
+        };
         let result = watch(
             "notes",
             Vec::new(),
             &mut dialer,
             &mut out,
             &mut store,
-            &mut || true,
-            &mut |_: Duration| {},
+            &mut env,
         );
         assert_eq!(result, Ok(()));
         assert!(log.borrow().is_empty());
@@ -1324,41 +1391,23 @@ mod tests {
     }
 
     #[test]
-    fn a_connect_then_drop_without_an_event_is_bounded_and_waits_longer_each_time() {
+    fn a_welcome_then_drop_without_an_event_is_bounded_and_the_wait_grows_each_time() {
         let cycle = || vec![welcome(), Received::Closed(None)];
-        let log: Log = Rc::new(RefCell::new(Vec::new()));
-        let mut dialer = Dialing {
-            connections: vec![cycle(), cycle(), cycle(), cycle()].into(),
-            log: Rc::clone(&log),
-        };
-        let mut out = Recorder {
-            log: Rc::clone(&log),
-        };
-        let mut store = Saves {
-            log: Rc::clone(&log),
-            refuse: false,
-        };
-        let mut pauses: Vec<Duration> = Vec::new();
-        let result = {
-            let mut pause = |delay: Duration| pauses.push(delay);
-            watch(
-                "notes",
-                Vec::new(),
-                &mut dialer,
-                &mut out,
-                &mut store,
-                &mut || false,
-                &mut pause,
-            )
-        };
+        let (steps, result, waits) = run_scripted(
+            vec![cycle(), cycle(), cycle(), cycle()],
+            &[],
+            false,
+            &mut || u64::MAX,
+        );
         let err = result.unwrap_err();
         assert!(
             err.contains("giving up after 3 failed connections"),
             "{err}"
         );
-        // Three connections were made, each handshaken and subscribed, and none delivered.
-        assert_eq!(pauses, vec![RETRY_PAUSE, RETRY_PAUSE * 2]);
-        let steps = std::mem::take(&mut *log.borrow_mut());
+        // The windows are 1 s then 2 s. The third failure gives up, so no third wait is taken.
+        assert_eq!(waits, vec![Duration::from_secs(1), Duration::from_secs(2)]);
+        // Three connections were made, each handshaken and subscribed, and none delivered. The
+        // fourth scripted connection is never dialed.
         let handshake = || vec![Step::Sent(hello()), Step::Sent(subscribe(""))];
         let mut expected = handshake();
         expected.extend(handshake());
@@ -1367,36 +1416,183 @@ mod tests {
     }
 
     #[test]
+    fn an_event_then_drop_resets_the_wait_to_its_first_window() {
+        // Connection 1 drops with no event: window 1 s. Connection 2 delivers event 1 and then drops:
+        // the delivery resets the supervisor, so its wait is 1 s again, not 2 s. Connection 3 drops
+        // with no event: window 2 s. Connection 4 is the third failure in a row, so the watch gives up.
+        let silent = || vec![welcome(), Received::Closed(None)];
+        let (steps, result, waits) = run_scripted(
+            vec![
+                silent(),
+                vec![
+                    welcome(),
+                    event_frame(1, vec![(CURSOR_1, "00000001")]),
+                    Received::Closed(None),
+                ],
+                silent(),
+                silent(),
+            ],
+            &[],
+            false,
+            &mut || u64::MAX,
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("giving up after 3 failed connections"),
+            "{err}"
+        );
+        assert_eq!(
+            waits,
+            vec![
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+            ]
+        );
+        // The retries after the delivery resume after event 1, which was saved before the drop.
+        let handshake = |cursor: &str| vec![Step::Sent(hello()), Step::Sent(subscribe(cursor))];
+        let mut expected = handshake("");
+        expected.extend(handshake(""));
+        expected.extend([
+            Step::Printed(LINE_1.into()),
+            Step::Sent(ack(CURSOR_1)),
+            Step::Saved(cursor_of(CURSOR_1)),
+        ]);
+        expected.extend(handshake(CURSOR_1));
+        expected.extend(handshake(CURSOR_1));
+        assert_eq!(steps, expected);
+    }
+
+    #[test]
+    fn a_seeded_jitter_keeps_each_wait_inside_its_window_and_never_below_one_second() {
+        let cycle = || vec![welcome(), Received::Closed(None)];
+        let mut jitter = seeded(7);
+        let (_, result, waits) =
+            run_scripted(vec![cycle(), cycle(), cycle()], &[], false, &mut jitter);
+        assert!(result.unwrap_err().contains("giving up"));
+        assert_eq!(waits.len(), 2, "{waits:?}");
+        // The first window is 0 to 1 s, so the floor of one second applies. The second is 0 to 2 s.
+        assert_eq!(waits[0], Duration::from_secs(1));
+        assert!(
+            waits[1] >= Duration::from_secs(1) && waits[1] <= Duration::from_secs(2),
+            "{waits:?}"
+        );
+    }
+
+    #[test]
+    fn the_supervisor_windows_are_one_second_doubling_to_eight() {
+        let mut backoff = Backoff::new(RETRY_BASE_MS, RETRY_CAP_MS).unwrap();
+        let windows: Vec<u64> = (0..5).map(|_| backoff.next_delay(u64::MAX)).collect();
+        assert_eq!(windows, vec![1_000, 2_000, 4_000, 8_000, 8_000]);
+    }
+
+    #[test]
     fn a_policy_close_is_fatal_and_no_further_connection_is_made() {
         let refused = vec![welcome(), Received::Closed(Some(POLICY_CLOSE))];
-        let (steps, result) = watch_over(vec![refused, vec![welcome()]], &[], false);
+        let (steps, result, waits) =
+            run_scripted(vec![refused, vec![welcome()]], &[], false, &mut || u64::MAX);
         let err = result.unwrap_err();
         assert!(err.contains("1008"), "{err}");
         assert!(!err.contains("giving up"), "{err}");
+        assert!(waits.is_empty(), "{waits:?}");
         assert_eq!(steps, vec![Step::Sent(hello()), Step::Sent(subscribe(""))]);
+    }
+
+    /// A refusal of subscription 1 by the server, as the gateway sends it.
+    fn subscription_error(code: WireError) -> Received {
+        Received::Frame(Frame::Error {
+            code,
+            sub: 1,
+            message: "refused".into(),
+        })
+    }
+
+    #[test]
+    fn a_subscription_refused_with_a_permanent_code_stops_at_once() {
+        // The codes a new connection would repeat, and the version refusal: no retry, no second
+        // connection, and no wait.
+        for code in [
+            WireError::Malformed,
+            WireError::UnknownSubscription,
+            WireError::InvalidScope,
+            WireError::InvalidCursor,
+            WireError::TooManySubscriptions,
+            WireError::UnsupportedVersion,
+        ] {
+            let refused = vec![welcome(), subscription_error(code)];
+            let (steps, result, waits) =
+                run_scripted(vec![refused, vec![welcome()]], &[], false, &mut || u64::MAX);
+            let err = result.unwrap_err();
+            assert!(!err.contains("giving up"), "{code:?}: {err}");
+            assert!(waits.is_empty(), "{code:?}: {waits:?}");
+            assert_eq!(
+                steps,
+                vec![Step::Sent(hello()), Step::Sent(subscribe(""))],
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subscription_refused_with_an_internal_code_is_retried_within_the_bound() {
+        let refused = || vec![welcome(), subscription_error(WireError::Internal)];
+        let (_, result, waits) = run_scripted(
+            vec![refused(), refused(), refused()],
+            &[],
+            false,
+            &mut || u64::MAX,
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .contains("giving up after 3 failed connections"),
+        );
+        assert_eq!(waits, vec![Duration::from_secs(1), Duration::from_secs(2)]);
+    }
+
+    #[test]
+    fn a_protocol_violation_is_retried_within_the_bound() {
+        // Events before the welcome break the protocol: the client closes with ProtocolViolation.
+        let early = || vec![event_frame(1, vec![(CURSOR_1, "00000001")])];
+        let (steps, result, waits) =
+            run_scripted(vec![early(), early(), early()], &[], false, &mut || {
+                u64::MAX
+            });
+        assert!(
+            result
+                .unwrap_err()
+                .contains("giving up after 3 failed connections"),
+        );
+        assert_eq!(waits, vec![Duration::from_secs(1), Duration::from_secs(2)]);
+        assert!(
+            steps
+                .iter()
+                .all(|s| !matches!(s, Step::Printed(_) | Step::Sent(Frame::Subscribe { .. }))),
+            "{steps:?}"
+        );
     }
 
     #[test]
     fn a_refused_token_is_fatal_and_other_statuses_are_retried_with_the_status_escaped() {
-        assert!(matches!(refused_upgrade("401"), Stop::Fatal(_)));
-        assert!(matches!(refused_upgrade("403"), Stop::Fatal(_)));
-        assert!(matches!(refused_upgrade("503"), Stop::Dropped(_)));
+        assert!(matches!(
+            refused_upgrade("401"),
+            Stop::Ended(Input::Unauthorized, _)
+        ));
+        assert!(matches!(
+            refused_upgrade("403"),
+            Stop::Ended(Input::Unauthorized, _)
+        ));
+        assert!(matches!(
+            refused_upgrade("503"),
+            Stop::Ended(Input::TransportClosed, _)
+        ));
         match refused_upgrade("50\x1b\n") {
-            Stop::Dropped(text) => {
+            Stop::Ended(Input::TransportClosed, text) => {
                 assert!(!text.contains('\x1b'), "{text:?}");
                 assert!(text.contains("\\n"), "{text:?}");
             }
             other => panic!("{other:?}"),
         }
-    }
-
-    #[test]
-    fn the_retry_wait_doubles_from_one_second_and_stops_at_the_cap() {
-        assert_eq!(retry_delay(1), Duration::from_secs(1));
-        assert_eq!(retry_delay(2), Duration::from_secs(2));
-        assert_eq!(retry_delay(3), Duration::from_secs(4));
-        assert_eq!(retry_delay(9), RETRY_CAP);
-        assert_eq!(retry_delay(u32::MAX), RETRY_CAP);
     }
 
     /// A real file store that fails after `allowed` saves. To the watch this is a crash between an
@@ -1449,14 +1645,18 @@ mod tests {
             inner: FileCursorStore::open(&path).unwrap(),
             allowed: 1,
         };
+        let mut env = Env {
+            interrupted: &mut || false,
+            jitter: &mut || u64::MAX,
+            pause: &mut |_: Duration| {},
+        };
         let first = watch(
             "notes",
             Vec::new(),
             &mut dialer,
             &mut out,
             &mut store,
-            &mut || false,
-            &mut |_: Duration| {},
+            &mut env,
         );
         assert!(first.unwrap_err().contains("simulated crash"));
 
@@ -1480,15 +1680,12 @@ mod tests {
             allowed: u32::MAX,
         };
         let resume = saved.map(|c| c.to_vec()).unwrap_or_default();
-        let second = watch(
-            "notes",
-            resume,
-            &mut dialer,
-            &mut out,
-            &mut store,
-            &mut || false,
-            &mut |_: Duration| {},
-        );
+        let mut env = Env {
+            interrupted: &mut || false,
+            jitter: &mut || u64::MAX,
+            pause: &mut |_: Duration| {},
+        };
+        let second = watch("notes", resume, &mut dialer, &mut out, &mut store, &mut env);
         let err = second.unwrap_err();
         assert!(err.contains("giving up"), "{err}");
 
