@@ -1,0 +1,1 @@
+Test: `lattice watch` is now run end to end against an in-process gateway (events printed and saved, a gateway restart, a process kill and resume from the cursor file, a revoked token, and the 1008 timeout close that is retried against the credential close that is not). Unix only; TLS and signals are not covered.

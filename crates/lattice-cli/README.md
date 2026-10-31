@@ -47,7 +47,10 @@ that cannot be saved and an event that does not match its cursor stop the watch 
 SIGTERM and SIGINT stop the watch after the event in hand is saved, with status 0. The retry pause is a
 plain sleep of at most eight seconds that a stop signal does not interrupt, so a stop during a pause takes
 effect when the pause ends. Not done: TLS on the
-client, and an end-to-end test against a live gateway (the e2e harness cannot run this binary, see #583).
+client. `crates/lattice-cli/tests/watch_gateway.rs` runs the binary against an in-process gateway (Unix only):
+printed events, the saved cursor, a gateway stopped and started again on the same address, a process kill
+and resume from the cursor file, a revoked token (status 1, no retry), and the two 1008 closes (a timeout
+is retried, an invalid credential is not). It does not cover TLS, a gateway on another host, or signals.
 `lattice watch --help` lists the flags.
 
 `lattice mcp --url http://127.0.0.1:PORT/mcp --token-file FILE` is a stdio proxy to the gateway's
