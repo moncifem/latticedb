@@ -296,10 +296,15 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         keys: Vec<SortKey>,
     },
-    /// Exactly one row of aggregates over every row of `input`, even when `input` is empty. Column
-    /// `i` of the row is `calls[i]`; a [`LogicalPlan::Project`] above it names and orders them.
+    /// Aggregates over the rows of `input`. Without `group_by` it yields exactly one row, even when
+    /// `input` is empty. With it, one row per distinct value of the `group_by` expressions (`NULL`s
+    /// group together) and none when `input` is empty, in the order of the keys. Each row holds the
+    /// key values and then the results of `calls`: columns `0..group_by.len()` are the keys and
+    /// column `group_by.len() + i` is `calls[i]`. A [`LogicalPlan::Project`] above names and orders
+    /// them.
     Aggregate {
         input: Box<LogicalPlan>,
+        group_by: Vec<TypedExpr>,
         calls: Vec<AggCall>,
     },
     Limit {
@@ -400,7 +405,12 @@ impl LogicalPlan {
                 writeln!(out, "{pad}Sort [{}]", keys.join(", "))?;
                 input.write_tree(out, depth + 1)?;
             }
-            LogicalPlan::Aggregate { input, calls } => {
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                calls,
+            } => {
+                let keys: Vec<String> = group_by.iter().map(ToString::to_string).collect();
                 let c: Vec<String> = calls
                     .iter()
                     .map(|c| match &c.arg {
@@ -408,7 +418,16 @@ impl LogicalPlan {
                         None => format!("{}(*)", c.func.name()),
                     })
                     .collect();
-                writeln!(out, "{pad}Aggregate [{}]", c.join(", "))?;
+                if keys.is_empty() {
+                    writeln!(out, "{pad}Aggregate [{}]", c.join(", "))?;
+                } else {
+                    writeln!(
+                        out,
+                        "{pad}Aggregate by [{}] [{}]",
+                        keys.join(", "),
+                        c.join(", ")
+                    )?;
+                }
                 input.write_tree(out, depth + 1)?;
             }
             LogicalPlan::Limit {

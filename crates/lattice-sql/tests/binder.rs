@@ -474,10 +474,23 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
         // aggregate argument types
         ("SELECT sum(title) FROM notes", "42883", None),
         ("SELECT avg(title) FROM notes", "42883", None),
+        // grouping errors (PostgreSQL: 42803)
+        ("SELECT rep FROM sales GROUP BY region", "42803", None),
         (
-            "SELECT region FROM sales GROUP BY region",
+            "SELECT region, count(*) FROM sales GROUP BY region HAVING rep = 'x'",
+            "42803",
+            None,
+        ),
+        (
+            "SELECT count(*) FROM sales GROUP BY count(*)",
             "0A000",
             Some("LSQL-0002"),
+        ),
+        ("SELECT region FROM sales GROUP BY 7", "42P10", None),
+        (
+            "SELECT region FROM sales GROUP BY nope",
+            "42703",
+            Some("LSQL-0003"),
         ),
         ("SELECT DISTINCT rep FROM sales", "0A000", Some("LSQL-0002")),
         (
@@ -771,7 +784,7 @@ fn expected_bind(sql: &str, script_expects: &str) -> &'static str {
     ) {
         return "0A000";
     }
-    let unsupported = ["GROUP BY", "DISTINCT", " JOIN ", "CROSS JOIN", "OVER ("];
+    let unsupported = ["DISTINCT", " JOIN ", "CROSS JOIN", "OVER ("];
     if unsupported.iter().any(|u| upper.contains(u)) {
         return "0A000";
     }
@@ -814,7 +827,7 @@ fn script_records_bind_as_the_subset_says() {
                 refused += 1;
             }
             // An aggregate the subset runs, inside a form it does not (an expression around it,
-            // `DISTINCT`, `HAVING`): refused with 0A000 where the script expects PostgreSQL's answer.
+            // `DISTINCT`, an aggregate in `WHERE`): refused with 0A000 where the script expects PostgreSQL's answer.
             (Err(e), "ok") if e.sqlstate() == "0A000" && has_aggregate(&r.sql) => refused += 1,
             (got, state) => panic!("{}: `{}` expected {state}, got {got:?}", r.file, r.sql),
         }
@@ -871,7 +884,12 @@ fn plan_exprs(p: &LogicalPlan, f: &mut impl FnMut(&TypedExpr)) {
             keys.iter().for_each(|k| walk(&k.expr, f));
             plan_exprs(input, f);
         }
-        LogicalPlan::Aggregate { input, calls } => {
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            calls,
+        } => {
+            group_by.iter().for_each(|x| walk(x, f));
             calls
                 .iter()
                 .filter_map(|c| c.arg.as_ref())

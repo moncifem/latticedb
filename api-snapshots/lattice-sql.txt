@@ -739,6 +739,7 @@ impl core::marker::StructuralPartialEq for lattice_sql::plan::InsertSource
 pub enum lattice_sql::plan::LogicalPlan
 pub lattice_sql::plan::LogicalPlan::Aggregate
 pub lattice_sql::plan::LogicalPlan::Aggregate::calls: alloc::vec::Vec<lattice_sql::plan::AggCall>
+pub lattice_sql::plan::LogicalPlan::Aggregate::group_by: alloc::vec::Vec<lattice_sql::plan::TypedExpr>
 pub lattice_sql::plan::LogicalPlan::Aggregate::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Delete
 pub lattice_sql::plan::LogicalPlan::Delete::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>

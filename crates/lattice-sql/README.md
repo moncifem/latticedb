@@ -26,7 +26,7 @@ Allowed workspace dependencies: none.
   of the `$n` placeholders. Names resolve to column positions, expressions are typed, integer
   constants fold (`2147483647 + 1` is `22003`, `1 / 0` is `22012`).
 - Bind errors map to `42P01`, `42703`, `42804`, `22003`, `23502` and others, plus `LSQL-0003` and
-  `LSQL-0004` where the subset document defines them. Joins, `GROUP BY`, `DISTINCT`,
+  `LSQL-0004` where the subset document defines them. Joins, `DISTINCT`,
   subqueries, DDL and session statements are refused with `0A000` until the IR has operators for them.
   Operand type mismatches report `42804` where PostgreSQL reports `42883` for operators.
 - `LogicalPlan` prints as an indented tree for review. The text is not a stable interface.

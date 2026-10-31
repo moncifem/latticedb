@@ -519,10 +519,18 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 let rows = self.rel(input)?;
                 self.sort(rows, keys)
             }
-            LogicalPlan::Aggregate { input, calls } => {
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                calls,
+            } => {
                 let rows = self.rel(input)?;
-                let vals = self.aggregate(&rows, calls)?;
-                Ok(vec![Tuple { key: None, vals }])
+                if group_by.is_empty() {
+                    let all: Vec<&Tuple> = rows.iter().collect();
+                    let vals = self.aggregate(&all, calls)?;
+                    return Ok(vec![Tuple { key: None, vals }]);
+                }
+                self.grouped(&rows, group_by, calls)
             }
             LogicalPlan::Limit {
                 input,
@@ -553,7 +561,7 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
 
     /// The aggregates of `calls` over `rows`: one value each. `NULL` arguments are skipped, an empty
     /// input gives `0` for `count` and `NULL` for the rest, and a result outside its type is `22003`.
-    fn aggregate(&mut self, rows: &[Tuple], calls: &[AggCall]) -> Result<Vec<Datum>, ExecError> {
+    fn aggregate(&mut self, rows: &[&Tuple], calls: &[AggCall]) -> Result<Vec<Datum>, ExecError> {
         let mut out = Vec::with_capacity(calls.len());
         for call in calls {
             let mut args: Vec<Datum> = Vec::with_capacity(rows.len());
@@ -567,6 +575,38 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 }
             }
             out.push(fold_aggregate(call, rows.len(), &args)?);
+        }
+        Ok(out)
+    }
+
+    /// One row per distinct value of the `group_by` expressions, in key order (`NULL`s sort first and
+    /// group together): the key values, then the aggregates of the rows that share them. The memory
+    /// charged is the group index (a position per input row) and the output rows.
+    fn grouped(
+        &mut self,
+        rows: &[Tuple],
+        group_by: &[TypedExpr],
+        calls: &[AggCall],
+    ) -> Result<Vec<Tuple>, ExecError> {
+        self.gov
+            .charge((rows.len() as u64).saturating_mul(std::mem::size_of::<usize>() as u64))?;
+        let mut groups: BTreeMap<GroupKey, Vec<usize>> = BTreeMap::new();
+        for (i, t) in rows.iter().enumerate() {
+            self.gov.check()?;
+            let mut key = Vec::with_capacity(group_by.len());
+            for g in group_by {
+                key.push(eval(g, &t.vals, &self.ctx())?);
+            }
+            groups.entry(GroupKey(key)).or_default().push(i);
+        }
+        let mut out = Vec::with_capacity(groups.len());
+        for (key, members) in groups {
+            self.gov.check()?;
+            let group_rows: Vec<&Tuple> = members.iter().filter_map(|i| rows.get(*i)).collect();
+            let mut vals = key.0;
+            vals.extend(self.aggregate(&group_rows, calls)?);
+            self.gov.charge(row_cost(&vals))?;
+            out.push(Tuple { key: None, vals });
         }
         Ok(out)
     }
@@ -1117,6 +1157,47 @@ fn duplicate(constraint: &str) -> ExecError {
         "23505",
         format!("duplicate key value violates unique constraint \"{constraint}\""),
     )
+}
+
+/// A `GROUP BY` key: equal when every value is equal, `NULL` equal to `NULL`, ordered with `NULL` first
+/// and the values by [`total_order`].
+struct GroupKey(Vec<Datum>);
+
+impl GroupKey {
+    fn compare(&self, other: &Self) -> Ordering {
+        for (a, b) in self.0.iter().zip(&other.0) {
+            let o = match (a.is_null(), b.is_null()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                (false, false) => total_order(a, b),
+            };
+            if o != Ordering::Equal {
+                return o;
+            }
+        }
+        Ordering::Equal
+    }
+}
+
+impl PartialEq for GroupKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.compare(other) == Ordering::Equal
+    }
+}
+
+impl Eq for GroupKey {}
+
+impl PartialOrd for GroupKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for GroupKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.compare(other)
+    }
 }
 
 /// One aggregate over its non-`NULL` arguments (`rows` is the input row count, for `count(*)`).
