@@ -851,6 +851,21 @@ impl Binder<'_> {
                 }
             }
             Concat => {
+                // `text || anything` and `anything || text` convert the other side to text, as
+                // PostgreSQL's `anynonarray || text` operators do. Bytea and unknown stay as they are.
+                let known =
+                    |t: SqlType| !matches!(t, SqlType::Text | SqlType::Bytea | SqlType::Unknown);
+                let (l, r) = if l.ty == SqlType::Text && known(r.ty) {
+                    (l, self.cast(r, SqlType::Text, span)?)
+                } else if r.ty == SqlType::Text && known(l.ty) {
+                    (self.cast(l, SqlType::Text, span)?, r)
+                } else if l.ty == SqlType::Unknown && known(r.ty) {
+                    (l, self.cast(r, SqlType::Text, span)?)
+                } else if r.ty == SqlType::Unknown && known(l.ty) {
+                    (self.cast(l, SqlType::Text, span)?, r)
+                } else {
+                    (l, r)
+                };
                 let (mut v, c) = self.unify(vec![l, r], span)?;
                 if !matches!(c, SqlType::Text | SqlType::Bytea) {
                     return mismatch(format!("operator || is not defined for {c}"), span);
