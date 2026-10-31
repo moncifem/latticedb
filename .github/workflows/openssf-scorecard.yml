@@ -49,3 +49,18 @@ jobs:
         with:
           sarif_file: results.sarif
           category: openssf-scorecard
+  notify:
+    # A failed scheduled run opens or comments on one issue for this workflow (scheduled-failure.yml).
+    # Schedule runs only; a job cancelled by a lost runner counts, as it does in nightly's report.
+    if: always() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    needs: [analysis]
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    uses: ./.github/workflows/scheduled-failure.yml
+    with:
+      workflow: ${{ github.workflow }}
+      run_id: ${{ github.run_id }}
+      run_attempt: ${{ github.run_attempt }}
+      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

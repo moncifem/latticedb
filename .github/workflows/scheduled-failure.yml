@@ -1,0 +1,70 @@
+name: scheduled-failure
+# Called by the scheduled workflows, from a job that runs only on `schedule` and after every job of the caller.
+# It opens one issue per workflow, labelled scheduled-failure, or comments on the one still open for it,
+# with the run URL and the failed jobs. The logs are the record: a failed job is a finding to read, and a
+# weekly mutation run that fails means survivors exist, not a broken workflow.
+# It checks out nothing and runs no code from the repository. The caller passes every value as an input,
+# and the step reads them from env, never from the script text. The caller's job grants the permissions.
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: The name of the calling workflow, used in the issue title.
+        required: true
+        type: string
+      run_id:
+        description: The id of the calling run.
+        required: true
+        type: string
+      run_attempt:
+        description: The attempt number of the calling run.
+        required: true
+        type: string
+      run_url:
+        description: The URL of the calling run, written into the issue.
+        required: true
+        type: string
+permissions: {}
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ inputs.workflow }}
+          RUN_ID: ${{ inputs.run_id }}
+          RUN_ATTEMPT: ${{ inputs.run_attempt }}
+          RUN_URL: ${{ inputs.run_url }}
+        run: |
+          set -euo pipefail
+          failed=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") | .name')
+          body="$RUNNER_TEMP/scheduled-failure.md"
+          {
+            echo "The scheduled run of \`$WORKFLOW\` failed: $RUN_URL"
+            echo
+            echo "Failed jobs:"
+            if [ -n "$failed" ]; then
+              while IFS= read -r job; do printf -- '- %s\n' "$job"; done <<< "$failed"
+            else
+              echo "- none listed by the jobs API; read the run"
+            fi
+            echo
+            echo "Read the failed job logs before acting on this. A job listed as cancelled may have been stopped by"
+            echo "a newer run or by a lost runner rather than by a failing check."
+          } > "$body"
+          open=$(gh issue list --repo "$REPO" --label scheduled-failure --state open --limit 200 --json number,title \
+            | jq -r --arg prefix "$WORKFLOW failed on " 'first(.[] | select(.title | startswith($prefix)) | .number) // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$REPO" --body-file "$body"
+          else
+            gh issue create --repo "$REPO" --title "$WORKFLOW failed on $(date -u +%F)" \
+              --label scheduled-failure --body-file "$body"
+          fi

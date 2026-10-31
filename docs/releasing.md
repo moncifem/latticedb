@@ -14,6 +14,13 @@ format changes in its notes.
 Scheduled verification is separate from packaging: the `nightly` and `weekly` workflows run the
 simulator, fuzzing, model checking and heavier suites and report failures; they publish nothing.
 
+A failed scheduled run of `nightly-build`, `kani`, `io-probe`, `image-smoke`, `driver-smoke`, `driver-psql`,
+`quickstart-smoke`, `zizmor` or `openssf-scorecard` opens an issue labelled `scheduled-failure` titled with the
+workflow name and the date, or comments on the open issue for that workflow, with the run URL and the failed
+jobs (`scheduled-failure.yml`). Only scheduled runs report; manual runs and pull requests open nothing. A job
+reported as cancelled counts, because a lost runner reports that way, and such a job may also have been stopped
+by a newer run. Read the logs before acting. `nightly` keeps its own `nightly-failure` issue.
+
 ### Fuzz, mutation and property coverage of the scheduled workflows
 
 - Every `[[bin]]` in `fuzz/Cargo.toml` except `trivial` is in the nightly (ten minutes), weekly (five
