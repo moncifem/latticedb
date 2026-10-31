@@ -42,7 +42,7 @@ released, so the next start recovers the log without any repair. A second signal
 running, or the stop timeout, abandons it. The log is crash-safe, so abandoning a stop loses no
 acknowledged commit; it is what a SIGKILL would have done, and the next start recovers as after a
 crash. Exit status: `0` clean stop, `1` startup or configuration error or a failed stop, `2` forced
-stop.
+stop or a stop signal during startup.
 
 **Which mode.** Default `on` keeps the interactive and script uses working (`echo shutdown |
 latticed ...`, a FIFO held open, the README quickstart). Anything that runs the server detached must
@@ -51,11 +51,20 @@ pipe, which `on` reads as end-of-file and stops at once (the server prints a hin
 happens). `off` is deliberately not the default, so a forgotten flag fails loudly instead of leaving
 a server that cannot be stopped from a terminal pipe.
 
-Signal handlers are installed after startup finishes and before the `latticed listening on` line is
-printed. A signal during recovery keeps its default action and kills the process (recovery is
-crash-safe). Wait for the listening line before signalling for a clean stop. The handler only
+Signal handlers are installed before the data directory is opened, so a stop signal during startup
+or recovery is never ignored. Recovery cannot be cancelled, so a watcher thread ends the process at
+once with status `2` (the stop was abandoned, as for a forced stop) and prints `latticed: stop signal
+received during startup, exiting`, before the listening line is printed; the data-directory lock is
+released by the operating system. The log is crash-safe, so this is what a SIGKILL would have done and
+the next start recovers again. If startup is still running after 3 seconds the process prints
+`latticed: still starting (recovering the data directory); a stop signal ends it`. The handler only
 increments an atomic counter; it lives in `lattice-sys`, the one crate that may contain `unsafe`,
 declares `signal(2)` itself and adds no dependency.
+
+Because that stop exits with `2`, a supervisor sees a failure: systemd marks the unit failed unless the
+unit sets `SuccessExitStatus=2`, and the launchd plist below (`KeepAlive` with `SuccessfulExit` false) would
+start it again. `SuccessExitStatus=2` would also hide a forced stop, which exits `2` as well. This is
+accepted for the alpha; a stop after the listening line is printed still exits `0`.
 
 The unit and plist below were written from the systemd and launchd documentation and have not been
 run under those supervisors; the real-binary tests cover the signal and stdin behaviour they rely on.
@@ -113,8 +122,8 @@ no arguments it prints the flags it needs and exits 2; the commands are in
 container needs `--stdin-control off` passed yourself. Give `docker stop` more time than
 `--stop-timeout-ms` (`docker stop -t 40`, or lower the flag below Docker's default of 10 seconds).
 A process running as PID 1 only receives signals it has a handler for. `latticed` installs its SIGTERM
-and SIGINT handlers after startup, so a stop sent during recovery is ignored and `docker stop` falls
-back to SIGKILL. Trust mode refuses a non-loopback bind, so a container that publishes the port needs
+and SIGINT handlers before recovery, so `docker stop` during recovery ends the process at once with
+status 2 instead of waiting for SIGKILL. Trust mode refuses a non-loopback bind, so a container that publishes the port needs
 `--auth scram-tls`.
 
 ## Cooperative cancellation

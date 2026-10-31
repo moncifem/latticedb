@@ -353,3 +353,112 @@ fn the_service_options_are_validated() {
         "latticed: missing value for --stdin-control\n"
     );
 }
+
+/// Kills the child when dropped, so a failed assertion leaves no process behind.
+struct KillOnDrop(Child);
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The first directory below `dir` (itself included) that holds a log segment: the layout is not
+/// fixed by the test, so it follows wherever the first start put its segment.
+fn segment_directory(dir: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            if let Some(found) = segment_directory(&path) {
+                return Some(found);
+            }
+        } else if path.extension().is_some_and(|e| e == "seg") {
+            return path.parent().map(Path::to_path_buf);
+        }
+    }
+    None
+}
+
+#[test]
+fn a_stop_signal_during_recovery_ends_the_process_with_status_2_and_the_directory_reopens() {
+    // Covers an early abandon (recovery blocked reading, nothing written): the directory is startable
+    // afterwards. It does not exercise abandoning a recovery that is in the middle of a write.
+    let scratch = Scratch::new("recovery-stop");
+    let data = scratch.arg("data");
+    let args = ["--data-dir", &data, "--development-policy", "allow-all"];
+
+    // Lay the directory out with a normal start and stop.
+    start(Stdin::Pipe, &args).terminate_cleanly("TERM");
+
+    // A named pipe where a later log segment belongs: recovery opens it to read the header and
+    // blocks until a writer appears, which none does. That stalls recovery with no timing guess.
+    let segments = segment_directory(&scratch.path("data")).expect("a log segment exists");
+    let stall = segments.join("00000000000000000002.seg");
+    let made = Command::new("mkfifo").arg(&stall).status().unwrap();
+    assert!(made.success());
+
+    let mut child = KillOnDrop(
+        Command::new(env!("CARGO_BIN_EXE_latticed"))
+            .args(["--listen", "127.0.0.1:0", "--stdin-control", "off"])
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = child.0.stderr.take().unwrap();
+    let (lines, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = lines.send(line);
+        }
+    });
+    // The slow-start notice is printed by the watcher after the handlers are installed, so once it
+    // arrives a signal can no longer hit the default action.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut seen = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(left) {
+            Ok(line) if line.contains("still starting") => break,
+            Ok(line) => seen.push(line),
+            Err(_) => {
+                panic!("no 'still starting' line within 30 s (recovery did not stall?): {seen:?}")
+            }
+        }
+    }
+
+    let status = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.0.id().to_string())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let until = Instant::now() + Duration::from_secs(10);
+    let exit = loop {
+        if let Some(exit) = child.0.try_wait().unwrap() {
+            break exit;
+        }
+        if Instant::now() >= until {
+            panic!("a SIGTERM during recovery did not end the process within 10 s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(exit.code(), Some(2), "{exit:?}");
+    // The reader thread ends when the pipe closes, which drops the sender and ends this loop.
+    let mut rest = Vec::new();
+    while let Ok(line) = receiver.recv_timeout(Duration::from_secs(10)) {
+        rest.push(line);
+    }
+    assert!(
+        rest.iter()
+            .any(|l| l.contains("stop signal received during startup")),
+        "{rest:?}"
+    );
+
+    // The abandoned recovery left nothing behind: without the pipe the directory starts and stops.
+    std::fs::remove_file(&stall).unwrap();
+    let report = start(Stdin::Pipe, &args).terminate_cleanly("TERM");
+    assert_eq!(report, "latticed: stop signal received, shutting down\n");
+}

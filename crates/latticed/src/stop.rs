@@ -12,6 +12,8 @@
 //! without sending real signals; the real wiring is covered by the binary tests.
 
 use std::io::{self, BufRead};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -155,6 +157,119 @@ pub fn stop_within(
                 return StopOutcome::Failed("shutdown thread ended without a result".into());
             }
         }
+    }
+}
+
+/// How long startup (recovery included) may run before the process says that a stop signal ends it.
+pub const SLOW_STARTUP_NOTICE: Duration = Duration::from_secs(3);
+
+const WATCH_RUNNING: u8 = 0;
+const WATCH_FINISHED: u8 = 1;
+const WATCH_FIRED: u8 = 2;
+
+/// Ends the watcher started by [`watch_startup`]. Dropping it has the same effect (see the `Drop` note).
+pub struct StartupWatch {
+    state: Arc<AtomicU8>,
+    settled: bool,
+}
+
+impl StartupWatch {
+    /// Startup is over: the watcher stops looking at the signal counter. Returns `false` when the
+    /// watcher had already decided to end the process; the caller must then not carry on.
+    #[must_use]
+    pub fn try_finish(mut self) -> bool {
+        self.settled = true;
+        self.state
+            .compare_exchange(
+                WATCH_RUNNING,
+                WATCH_FINISHED,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    /// As [`StartupWatch::try_finish`], and when the watcher won the race (a stop signal arrived
+    /// first and its action is ending the process) parks this thread until the process is gone, so
+    /// the server is never reported as listening after the stop was decided.
+    pub fn finish(self) {
+        if !self.try_finish() {
+            loop {
+                thread::park();
+            }
+        }
+    }
+}
+
+/// Dropping an unsettled watch (an early error return from startup) is a finish: if the watcher
+/// had already decided to end the process, this parks too, so the exit status is the watcher's and
+/// not whatever the error path would have returned.
+impl Drop for StartupWatch {
+    fn drop(&mut self) {
+        if !self.settled
+            && self
+                .state
+                .compare_exchange(
+                    WATCH_RUNNING,
+                    WATCH_FINISHED,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_err()
+            && self.state.load(Ordering::SeqCst) == WATCH_FIRED
+        {
+            loop {
+                thread::park();
+            }
+        }
+    }
+}
+
+/// Watches for a stop signal while startup runs on the calling thread.
+///
+/// Recovery cannot be cancelled and the signal handler only counts, so a stop signal that arrives
+/// before [`StartupWatch::finish`] is acted on here: `on_signal` runs at most once, on the watcher
+/// thread, and only if the watcher won the single running-to-fired transition against `finish`;
+/// it is expected to end the process. If startup is still running after `slow_after`, `on_slow`
+/// runs once so the operator knows a stop signal is honoured. The thread ends on its own when the
+/// watch is finished or dropped.
+pub fn watch_startup(
+    signals: impl Fn() -> u32 + Send + 'static,
+    slow_after: Duration,
+    on_slow: impl FnOnce() + Send + 'static,
+    on_signal: impl FnOnce() + Send + 'static,
+) -> StartupWatch {
+    let state = Arc::new(AtomicU8::new(WATCH_RUNNING));
+    let seen = Arc::clone(&state);
+    thread::spawn(move || {
+        let slow_at = Instant::now() + slow_after;
+        let mut on_slow = Some(on_slow);
+        while seen.load(Ordering::SeqCst) == WATCH_RUNNING {
+            if signals() > 0 {
+                if seen
+                    .compare_exchange(
+                        WATCH_RUNNING,
+                        WATCH_FIRED,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
+                {
+                    on_signal();
+                }
+                return;
+            }
+            if Instant::now() >= slow_at
+                && let Some(notice) = on_slow.take()
+            {
+                notice();
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    StartupWatch {
+        state,
+        settled: false,
     }
 }
 
@@ -361,5 +476,102 @@ mod tests {
             Duration::from_secs(5),
         );
         assert_eq!(out, StopOutcome::Clean);
+    }
+
+    #[test]
+    fn a_signal_during_startup_runs_the_stop_action_once() {
+        let count = Arc::new(AtomicU32::new(0));
+        let (done, fired) = mpsc::channel();
+        let seen = Arc::clone(&count);
+        let watch = watch_startup(
+            move || seen.load(Ordering::SeqCst),
+            Duration::from_secs(60),
+            || {},
+            move || {
+                let _ = done.send(());
+            },
+        );
+        count.fetch_add(1, Ordering::SeqCst);
+        assert!(fired.recv_timeout(Duration::from_secs(10)).is_ok());
+        assert!(fired.recv_timeout(Duration::from_millis(200)).is_err());
+        // The watcher won, so finishing must report that it lost and on_signal ran exactly once.
+        assert!(!watch.try_finish());
+    }
+
+    #[test]
+    fn a_signal_after_startup_finished_is_left_to_the_normal_stop() {
+        let count = Arc::new(AtomicU32::new(0));
+        let (done, fired) = mpsc::channel();
+        let seen = Arc::clone(&count);
+        let watch = watch_startup(
+            move || seen.load(Ordering::SeqCst),
+            Duration::from_secs(60),
+            || {},
+            move || {
+                let _ = done.send(());
+            },
+        );
+        assert!(watch.try_finish());
+        // The watcher polls every 20 ms; give it time to notice it was finished.
+        thread::sleep(Duration::from_millis(300));
+        count.fetch_add(1, Ordering::SeqCst);
+        assert!(fired.recv_timeout(Duration::from_millis(500)).is_err());
+    }
+
+    #[test]
+    fn a_slow_startup_is_announced_once() {
+        let (slow, told) = mpsc::channel();
+        let watch = watch_startup(
+            || 0,
+            Duration::from_millis(50),
+            move || {
+                let _ = slow.send(());
+            },
+            || {},
+        );
+        assert!(told.recv_timeout(Duration::from_secs(10)).is_ok());
+        assert!(told.recv_timeout(Duration::from_millis(200)).is_err());
+        drop(watch);
+    }
+
+    #[test]
+    fn finishing_and_signalling_together_gives_exactly_one_winner() {
+        for round in 0..80u32 {
+            // The signal is already counted, so the watcher fires on its first iteration; the delay
+            // before finishing sweeps from "finish first" to "watcher first".
+            let (done, fired) = mpsc::channel();
+            let watch = watch_startup(
+                || 1,
+                Duration::from_secs(60),
+                || {},
+                move || {
+                    let _ = done.send(());
+                },
+            );
+            let delay_us = match round {
+                r if r.is_multiple_of(4) => 0,
+                r if r.is_multiple_of(5) => 3000,
+                r => u64::from(r % 20) * 10,
+            };
+            thread::sleep(Duration::from_micros(delay_us));
+            if watch.try_finish() {
+                // Finish won: the watcher sees the finished state and never runs its action.
+                thread::sleep(Duration::from_millis(50));
+                assert!(
+                    fired.try_recv().is_err(),
+                    "round {round}: on_signal ran after finish won"
+                );
+            } else {
+                // The watcher won, so its action must run exactly once, however late it is scheduled.
+                assert!(
+                    fired.recv_timeout(Duration::from_secs(10)).is_ok(),
+                    "round {round}: watcher won but on_signal did not run"
+                );
+                assert!(
+                    fired.recv_timeout(Duration::from_millis(5)).is_err(),
+                    "round {round}: on_signal ran twice"
+                );
+            }
+        }
     }
 }

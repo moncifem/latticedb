@@ -17,12 +17,17 @@ use latticed::{
     Authentication, ServerConfig, ServerHandle, SqlConfig, SqlServer, TlsConfig, files,
 };
 use std::io::Read;
+use std::io::Write;
 use std::io::{self};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 use zeroize::Zeroizing;
+
+/// Exit status when a stop signal ended startup before the server was serving: the recovery was
+/// abandoned, the same status as a stop that was abandoned.
+const STARTUP_ABANDONED_STATUS: i32 = 2;
 
 /// Exit status of a run that did not fail: the stop either finished or had to be abandoned.
 enum Exit {
@@ -56,7 +61,7 @@ fn run() -> Result<Exit, String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows, tables and their column definitions survive a restart. A data directory written before table definitions existed refuses its first CREATE TABLE until --allow-format-upgrade on (older builds cannot open the directory afterwards and there is no downgrade: take a verified backup first); a new directory needs nothing. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Sync gateway (WebSocket, protocol lattice.sync.v1, path /sync, and POST /mcp on the same port; requires --data-dir): --gateway-listen IP:PORT enables it; --gateway-tokens FILE makes it require 'Authorization: Bearer' tokens from a credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (a file that does not load keeps the tokens in use; after 10 minutes of failed loads no token works; SCRAM verifiers and policies are read at start only), otherwise it serves the loopback development principal and only with development-trust; --tls-cert FILE and --tls-key FILE (the same files and key rules as scram-tls) serve the gateway over TLS. A non-loopback --gateway-listen needs both TLS files and --gateway-tokens, or it refuses to start; plaintext is for loopback development only (only 127.0.0.0/8 and ::1 are loopback; an IPv4-mapped address such as [::ffff:127.0.0.1] needs TLS and tokens). The gateway and the PostgreSQL listener share one certificate, so clients must trust a certificate whose name is valid for both ports. With development-trust the TLS files are accepted only with --gateway-listen, and then apply to the gateway alone (the PostgreSQL listener stays loopback trust in plaintext). POST /mcp answers to the bound address and to localhost on the bound port, and to each --gateway-allowed-host NAME[:PORT] given (repeatable, at most 16, needs --gateway-listen; the name is an ASCII DNS name or an IP literal, IPv6 in brackets, matched exactly and case-insensitively with no wildcards; an omitted port is the bound port; a malformed value stops the start); any other Host gets 403. /sync checks only that Host is present and well formed, and refuses any browser Origin. --gateway-max-connections N (default 32) and --gateway-handshake-timeout-ms N (default 5000) bound it, and the handshake timeout covers the TLS handshake. Optional --startup-timeout-ms N bounds startup/TLS/authentication. SIGTERM and SIGINT stop it cleanly; a second signal, or --stop-timeout-ms N (default 30000) elapsing, abandons a stop that does not finish. Stdin control is --stdin-control on|off (default on): with on, the line 'shutdown' on stdin stops the server and so does end-of-file, so run it with stdin held open; under a supervisor or container pass --stdin-control off, which never reads stdin. Exit status: 0 clean stop, 1 failure, 2 forced stop. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key, SCRAM verifier, decoy secret and account policy files must not be accessible to group or others (mode 0600), and their directory must not be writable by group or others (mode 0700 or 0755); a symlink or a FIFO in their place is refused."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows, tables and their column definitions survive a restart. A data directory written before table definitions existed refuses its first CREATE TABLE until --allow-format-upgrade on (older builds cannot open the directory afterwards and there is no downgrade: take a verified backup first); a new directory needs nothing. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Sync gateway (WebSocket, protocol lattice.sync.v1, path /sync, and POST /mcp on the same port; requires --data-dir): --gateway-listen IP:PORT enables it; --gateway-tokens FILE makes it require 'Authorization: Bearer' tokens from a credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (a file that does not load keeps the tokens in use; after 10 minutes of failed loads no token works; SCRAM verifiers and policies are read at start only), otherwise it serves the loopback development principal and only with development-trust; --tls-cert FILE and --tls-key FILE (the same files and key rules as scram-tls) serve the gateway over TLS. A non-loopback --gateway-listen needs both TLS files and --gateway-tokens, or it refuses to start; plaintext is for loopback development only (only 127.0.0.0/8 and ::1 are loopback; an IPv4-mapped address such as [::ffff:127.0.0.1] needs TLS and tokens). The gateway and the PostgreSQL listener share one certificate, so clients must trust a certificate whose name is valid for both ports. With development-trust the TLS files are accepted only with --gateway-listen, and then apply to the gateway alone (the PostgreSQL listener stays loopback trust in plaintext). POST /mcp answers to the bound address and to localhost on the bound port, and to each --gateway-allowed-host NAME[:PORT] given (repeatable, at most 16, needs --gateway-listen; the name is an ASCII DNS name or an IP literal, IPv6 in brackets, matched exactly and case-insensitively with no wildcards; an omitted port is the bound port; a malformed value stops the start); any other Host gets 403. /sync checks only that Host is present and well formed, and refuses any browser Origin. --gateway-max-connections N (default 32) and --gateway-handshake-timeout-ms N (default 5000) bound it, and the handshake timeout covers the TLS handshake. Optional --startup-timeout-ms N bounds startup/TLS/authentication. SIGTERM and SIGINT stop it cleanly (also while it is still starting or recovering: that ends the process at once with status 2, before the listening line is printed); a second signal, or --stop-timeout-ms N (default 30000) elapsing, abandons a stop that does not finish. Stdin control is --stdin-control on|off (default on): with on, the line 'shutdown' on stdin stops the server and so does end-of-file, so run it with stdin held open; under a supervisor or container pass --stdin-control off, which never reads stdin. Exit status: 0 clean stop, 1 failure, 2 forced stop or a stop signal during startup. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key, SCRAM verifier, decoy secret and account policy files must not be accessible to group or others (mode 0600), and their directory must not be writable by group or others (mode 0700 or 0755); a symlink or a FIFO in their place is refused."
             );
             return Ok(Exit::Clean);
         }
@@ -283,6 +288,30 @@ fn run() -> Result<Exit, String> {
         gateway.tls = gateway_tls;
     }
     let mode = auth_mode;
+    // The stop handlers go in before recovery: as PID 1 a signal without a handler is ignored, and
+    // recovery cannot be cancelled, so a watcher thread ends the process if a stop signal arrives
+    // before startup finishes.
+    stop::install_stop_signal_handlers()
+        .map_err(|e| format!("cannot install signal handlers: {e}"))?;
+    let startup_watch = stop::watch_startup(
+        stop::stop_signals_received,
+        stop::SLOW_STARTUP_NOTICE,
+        // These run on the watcher thread and must not panic: eprintln! panics on a write error such
+        // as EPIPE, and a panic after the watcher won would leave the main thread parked forever.
+        || {
+            let _ = writeln!(
+                io::stderr(),
+                "latticed: still starting (recovering the data directory); a stop signal ends it"
+            );
+        },
+        || {
+            let _ = writeln!(
+                io::stderr(),
+                "latticed: stop signal received during startup, exiting"
+            );
+            std::process::exit(STARTUP_ABANDONED_STATUS);
+        },
+    );
     let server = match data_dir {
         None => Running::Placeholder(ServerHandle::start(config).map_err(|e| e.to_string())?),
         Some(dir) => {
@@ -330,10 +359,9 @@ fn run() -> Result<Exit, String> {
     } else {
         "SELECT 1 only"
     };
-    // Handlers go in after startup, so recovery stays killable by the default signal action, and
-    // before the line below, which is what a supervisor or test waits for before signalling us.
-    stop::install_stop_signal_handlers()
-        .map_err(|e| format!("cannot install signal handlers: {e}"))?;
+    // Startup is over: from here the normal stop path handles signals. This is before the line
+    // below, which is what a supervisor or test waits for before signalling us.
+    startup_watch.finish();
     if gateway_tokens.is_some() {
         // SIGHUP asks the token file to be read again. Without a token file SIGHUP keeps its default.
         stop::install_reload_signal_handler()

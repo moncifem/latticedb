@@ -123,8 +123,9 @@ docker run -d --name lattice -p 127.0.0.1:5432:5432 \
 PGPASSWORD="$PASSWORD" psql "host=localhost port=5432 user=alice dbname=lattice sslmode=verify-full sslrootcert=ca.pem"
 ```
 
-`docker stop` gives a clean stop when `latticed` has printed its listening line (wait for it first; a
-process that is still recovering ignores SIGTERM as PID 1 and is killed after the stop timeout). Docker
+`docker stop` gives a clean stop once `latticed` has printed its listening line. A stop sent while it is
+still recovering ends the process at once with exit code 2 (the recovery is abandoned; the next start recovers
+again). Docker
 waits 10 seconds by default; use `docker stop -t 40` when connections may take longer to drain. A
 `docker start lattice` keeps the same volumes and rows. `docker inspect -f '{{.State.ExitCode}}' lattice`
 prints `0` after a clean stop.
@@ -137,7 +138,7 @@ What is checked and what is not. `tests/image/smoke.sh` runs the steps above in 
 the amd64 image: the usage error, the user and volume ownership, the account tool inside the image, SCRAM
 over TLS with `sslmode=verify-full`, a wrong password, inserts, a clean `docker stop`, and rows read back
 after a restart on the same volumes. It does not run the arm64 image, the published image or a supervisor,
-and it does not test a stop during recovery. The image adds no shell or package manager, but the
+and it does not test a stop during recovery (`crates/latticed/tests/service.rs` does, against the binary on the host). The image adds no shell or package manager, but the
 `ubuntu:24.04` base still ships `/bin/sh` and `apt`; removing them is a separate decision.
 
 ## Dev stack

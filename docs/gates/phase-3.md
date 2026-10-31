@@ -81,8 +81,11 @@ end-of-file (the default stays `on`), and `--stop-timeout-ms` or a second signal
 SIGTERM and SIGINT with a client still connected, a restart of the same data directory, end-of-file with control on and
 off, and option validation (run locally: `cargo test -p latticed`). The forced-stop paths are tested only with an
 injected stuck shutdown (`latticed::stop`), because the real server has no worker that fails to return. Not verified:
-the systemd and launchd snippets in the crate README under those supervisors, Windows (no signal handling there), and a
-SIGTERM during recovery (it keeps the default action). The handler is one `signal(2)` declaration and call in
+the systemd and launchd snippets in the crate README under those supervisors and Windows (no signal handling there).
+A SIGTERM during recovery (issue #714) now ends the process at once with status 2: the handlers are installed before the
+data directory is opened and a watcher thread exits the process, because recovery cannot be cancelled. The test
+`a_stop_signal_during_recovery_ends_the_process_with_status_2_and_the_directory_reopens` stalls recovery with a named pipe
+in the log directory; it runs in CI, not locally, and the container case (PID 1 under `docker stop`) is not tested. The handler is one `signal(2)` declaration and call in
 `lattice-sys`; no dependency was added.
 
 Linux archive glibc baseline (issue #588, part of the Alpha 0.1 definition #567, no exit criterion): `package.yml`
@@ -114,8 +117,8 @@ passed (usage error, version passthrough, uid, fresh volume owner and mode, `lat
 TLS key installed for uid 10001, SCRAM over TLS listening on 0.0.0.0:5432, wrong password refused, `psql sslmode=verify-full`
 insert and select, clean `docker stop` with exit 0, restart on the same volumes with the rows read back and a duplicate key
 still refused, a second clean stop). Not verified here: the amd64 release-profile image (the `image-smoke` job is its first
-run), arm64 in CI, the published or nightly image, the systemd and launchd snippets, a stop during recovery (as PID 1 the
-process ignores SIGTERM until its handler is installed; not tested), and `docker stop` while a client is connected. The
+run), arm64 in CI, the published or nightly image, the systemd and launchd snippets, a stop during recovery as PID 1 under Docker (the
+host test in `crates/latticed/tests/service.rs` covers the binary, not the image), and `docker stop` while a client is connected. The
 `ubuntu:24.04` base still contains `/bin/sh` and `apt`; they were not removed.
 
 Alpha documentation (issues #589 and #590, part of the Alpha 0.1 definition #567, no exit criterion): `docs/alpha.md`
