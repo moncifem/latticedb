@@ -557,6 +557,7 @@ pub lattice_sql::binder::BindErrorKind::CannotCoerce
 pub lattice_sql::binder::BindErrorKind::DatatypeMismatch
 pub lattice_sql::binder::BindErrorKind::DivisionByZero
 pub lattice_sql::binder::BindErrorKind::DuplicateColumn
+pub lattice_sql::binder::BindErrorKind::Grouping
 pub lattice_sql::binder::BindErrorKind::InconsistentParamTypes
 pub lattice_sql::binder::BindErrorKind::IndeterminateParam
 pub lattice_sql::binder::BindErrorKind::InvalidColumnReference
@@ -654,6 +655,24 @@ impl core::fmt::Debug for lattice_sql::error::Span
 pub fn lattice_sql::error::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for lattice_sql::error::Span
 pub mod lattice_sql::plan
+pub enum lattice_sql::plan::AggFunc
+pub lattice_sql::plan::AggFunc::Avg
+pub lattice_sql::plan::AggFunc::Count
+pub lattice_sql::plan::AggFunc::CountStar
+pub lattice_sql::plan::AggFunc::Max
+pub lattice_sql::plan::AggFunc::Min
+pub lattice_sql::plan::AggFunc::Sum
+impl lattice_sql::plan::AggFunc
+pub fn lattice_sql::plan::AggFunc::name(self) -> &'static str
+impl core::clone::Clone for lattice_sql::plan::AggFunc
+pub fn lattice_sql::plan::AggFunc::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::plan::AggFunc
+impl core::cmp::PartialEq for lattice_sql::plan::AggFunc
+pub fn lattice_sql::plan::AggFunc::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::AggFunc
+pub fn lattice_sql::plan::AggFunc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::plan::AggFunc
+impl core::marker::StructuralPartialEq for lattice_sql::plan::AggFunc
 pub enum lattice_sql::plan::AsOfPlan
 pub lattice_sql::plan::AsOfPlan::Changeset(lattice_sql::plan::TypedExpr)
 pub lattice_sql::plan::AsOfPlan::Timestamp(lattice_sql::plan::TypedExpr)
@@ -718,11 +737,17 @@ impl core::fmt::Debug for lattice_sql::plan::InsertSource
 pub fn lattice_sql::plan::InsertSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_sql::plan::InsertSource
 pub enum lattice_sql::plan::LogicalPlan
+pub lattice_sql::plan::LogicalPlan::Aggregate
+pub lattice_sql::plan::LogicalPlan::Aggregate::calls: alloc::vec::Vec<lattice_sql::plan::AggCall>
+pub lattice_sql::plan::LogicalPlan::Aggregate::group_by: alloc::vec::Vec<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::LogicalPlan::Aggregate::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Delete
 pub lattice_sql::plan::LogicalPlan::Delete::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Delete::returning: alloc::vec::Vec<lattice_sql::plan::OutputColumn>
 pub lattice_sql::plan::LogicalPlan::Delete::table: alloc::string::String
 pub lattice_sql::plan::LogicalPlan::Delete::table_id: u64
+pub lattice_sql::plan::LogicalPlan::Distinct
+pub lattice_sql::plan::LogicalPlan::Distinct::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Filter
 pub lattice_sql::plan::LogicalPlan::Filter::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Filter::predicate: lattice_sql::plan::TypedExpr
@@ -807,6 +832,18 @@ pub fn lattice_sql::plan::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> co
 impl core::fmt::Display for lattice_sql::plan::Value
 pub fn lattice_sql::plan::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for lattice_sql::plan::Value
+pub struct lattice_sql::plan::AggCall
+pub lattice_sql::plan::AggCall::arg: core::option::Option<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::AggCall::distinct: bool
+pub lattice_sql::plan::AggCall::func: lattice_sql::plan::AggFunc
+pub lattice_sql::plan::AggCall::ty: lattice_sql::plan::SqlType
+impl core::clone::Clone for lattice_sql::plan::AggCall
+pub fn lattice_sql::plan::AggCall::clone(&self) -> Self
+impl core::cmp::PartialEq for lattice_sql::plan::AggCall
+pub fn lattice_sql::plan::AggCall::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::plan::AggCall
+pub fn lattice_sql::plan::AggCall::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for lattice_sql::plan::AggCall
 pub struct lattice_sql::plan::BoundStatement
 pub lattice_sql::plan::BoundStatement::catalog_version: u64
 pub lattice_sql::plan::BoundStatement::param_types: alloc::vec::Vec<lattice_sql::plan::SqlType>

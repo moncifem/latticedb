@@ -21,8 +21,8 @@ use crate::ast::{
 };
 use crate::error::Span;
 use crate::plan::{
-    AsOfPlan, BoundStatement, CatalogView, ColumnInfo, ExprNode, InsertSource, LogicalPlan,
-    OutputColumn, SortKey, SqlType, TableInfo, TypedExpr, Value,
+    AggCall, AggFunc, AsOfPlan, BoundStatement, CatalogView, ColumnInfo, ExprNode, InsertSource,
+    LogicalPlan, OutputColumn, SortKey, SqlType, TableInfo, TypedExpr, Value,
 };
 
 /// The class of a binding failure.
@@ -58,6 +58,8 @@ pub enum BindErrorKind {
     NegativeLimit,
     /// `OFFSET` below zero (`2201X`).
     NegativeOffset,
+    /// A column outside an aggregate in a query that aggregates (`42803`).
+    Grouping,
     /// A cast between types with no conversion (`42846`).
     CannotCoerce,
     /// A function called with arguments it does not take (`42883`).
@@ -124,6 +126,7 @@ impl BindError {
             BindErrorKind::UndefinedParameter => "42P02",
             BindErrorKind::NegativeLimit => "2201W",
             BindErrorKind::NegativeOffset => "2201X",
+            BindErrorKind::Grouping => "42803",
             BindErrorKind::CannotCoerce => "42846",
             BindErrorKind::UndefinedFunction => "42883",
             BindErrorKind::InvalidParameterValue => "22023",
@@ -173,6 +176,9 @@ pub fn bind_statement(
         catalog,
         params: Vec::new(),
         depth: 0,
+        aggregates: None,
+        in_aggregate_arg: false,
+        group_keys: Vec::new(),
     };
     let plan = b.statement(stmt)?;
     let mut param_types = Vec::with_capacity(b.params.len());
@@ -228,6 +234,15 @@ struct Binder<'a> {
     catalog: &'a dyn CatalogView,
     params: Vec<Option<SqlType>>,
     depth: usize,
+    /// While the items of a query that aggregates are bound: the aggregate calls met so far. A call
+    /// becomes column `i` of the single row the `Aggregate` operator yields, so an expression can mix
+    /// calls and constants. `None` outside such a query, where an aggregate call is refused.
+    aggregates: Option<Vec<AggCall>>,
+    /// Inside the argument of an aggregate call, where columns are allowed.
+    in_aggregate_arg: bool,
+    /// While a query with `GROUP BY` is bound: the printed form of each key expression, in key order.
+    /// An expression that prints the same is that key (column `i` of the aggregate row).
+    group_keys: Vec<(String, SqlType)>,
 }
 
 fn err<T>(kind: BindErrorKind, message: impl Into<String>, span: Span) -> R<T> {
@@ -252,6 +267,50 @@ fn int_range(ty: SqlType) -> Option<(i128, i128)> {
         SqlType::Integer => Some((i128::from(i32::MIN), i128::from(i32::MAX))),
         SqlType::BigInt => Some((i128::from(i64::MIN), i128::from(i64::MAX))),
         _ => None,
+    }
+}
+
+/// Whether `e` is a call of `count`, `sum`, `min`, `max` or `avg`.
+fn is_aggregate_call(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Function(f) if matches!(f.name.as_str(), "count" | "sum" | "min" | "max" | "avg"))
+}
+
+/// Whether an aggregate call appears anywhere in `e` (outside a subquery, which is refused anyway).
+/// The match has no wildcard arm, so a new expression form has to say where its operands are.
+fn contains_aggregate(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column(_) => false,
+        ExprKind::Subquery(_) => false,
+        ExprKind::Unary { expr, .. }
+        | ExprKind::IsNull { expr, .. }
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::Extract { expr, .. }
+        | ExprKind::InSubquery { expr, .. } => contains_aggregate(expr),
+        ExprKind::Binary { left, right, .. } => {
+            contains_aggregate(left) || contains_aggregate(right)
+        }
+        ExprKind::InList { expr, list, .. } => {
+            contains_aggregate(expr) || list.iter().any(contains_aggregate)
+        }
+        ExprKind::Between {
+            expr, low, high, ..
+        } => contains_aggregate(expr) || contains_aggregate(low) || contains_aggregate(high),
+        ExprKind::Like { expr, pattern, .. } => {
+            contains_aggregate(expr) || contains_aggregate(pattern)
+        }
+        ExprKind::Position { needle, haystack } => {
+            contains_aggregate(needle) || contains_aggregate(haystack)
+        }
+        ExprKind::Trim { chars, expr, .. } => {
+            contains_aggregate(expr) || chars.as_deref().is_some_and(contains_aggregate)
+        }
+        ExprKind::Function(f) => {
+            is_aggregate_call(e)
+                || match &f.args {
+                    FunctionArgs::Star => false,
+                    FunctionArgs::List(args) => args.iter().any(contains_aggregate),
+                }
+        }
     }
 }
 
@@ -571,6 +630,21 @@ impl Binder<'_> {
     // ----- expressions -----
 
     fn expr(&mut self, e: &Expr, scope: &Scope) -> R<TypedExpr> {
+        // In a grouped query, an expression that is a `GROUP BY` key reads the key's column of the
+        // aggregate row (outside an aggregate's own argument).
+        if !self.group_keys.is_empty() && self.aggregates.is_some() && !self.in_aggregate_arg {
+            let printed = e.to_string();
+            if let Some(at) = self.group_keys.iter().position(|(k, _)| *k == printed) {
+                let ty = self.group_keys.get(at).map_or(SqlType::Unknown, |k| k.1);
+                return Ok(typed(
+                    ExprNode::Column {
+                        index: at,
+                        name: output_name(e),
+                    },
+                    ty,
+                ));
+            }
+        }
         self.depth += 1;
         let out = if self.depth > MAX_DEPTH + 8 {
             err(
@@ -601,7 +675,17 @@ impl Binder<'_> {
                 // as inconsistent parameter types (42P08).
                 Ok(typed(ExprNode::Param(*n), SqlType::Unknown))
             }
-            ExprKind::Column(parts) => column(parts, scope, span),
+            ExprKind::Column(parts) => {
+                let bound = column(parts, scope, span)?;
+                if self.aggregates.is_some() && !self.in_aggregate_arg {
+                    return err(
+                        BindErrorKind::Grouping,
+                        "a column must be used in an aggregate function when the query aggregates",
+                        span,
+                    );
+                }
+                Ok(bound)
+            }
             ExprKind::Unary { op, expr } => {
                 let inner = self.expr(expr, scope)?;
                 match op {
@@ -921,7 +1005,32 @@ impl Binder<'_> {
     fn function(&mut self, f: &ast::Function, scope: &Scope, span: Span) -> R<TypedExpr> {
         let name = f.name.as_str();
         if matches!(name, "count" | "sum" | "min" | "max" | "avg") {
-            return unsupported("aggregate functions", span);
+            if self.aggregates.is_none() {
+                return unsupported("aggregate functions", span);
+            }
+            if self.in_aggregate_arg {
+                return err(
+                    BindErrorKind::Grouping,
+                    "aggregate function calls cannot be nested",
+                    span,
+                );
+            }
+            self.in_aggregate_arg = true;
+            let call = self.aggregate_call(f, scope, span);
+            self.in_aggregate_arg = false;
+            let call = call?;
+            let ty = call.ty;
+            let width = self.group_keys.len();
+            let calls = self.aggregates.get_or_insert_with(Vec::new);
+            let index = width + calls.len();
+            calls.push(call);
+            return Ok(typed(
+                ExprNode::Column {
+                    index,
+                    name: f.name.clone(),
+                },
+                ty,
+            ));
         }
         let list = match &f.args {
             FunctionArgs::Star => return unsupported("aggregate functions", span),
@@ -1071,12 +1180,6 @@ impl Binder<'_> {
 
     /// Binds a `SELECT`. `targets` are the column types an `INSERT ... SELECT` stores into.
     fn query(&mut self, q: &Query, targets: Option<&[ColumnInfo]>) -> R<LogicalPlan> {
-        if q.distinct {
-            return unsupported("DISTINCT", Span::default());
-        }
-        if !q.group_by.is_empty() || q.having.is_some() {
-            return unsupported("GROUP BY and HAVING", Span::default());
-        }
         let (scope, mut plan) = match q.from.as_slice() {
             // No FROM clause: one row with no columns, so only constants and functions bind.
             [] => (Scope::empty(), LogicalPlan::OneRow),
@@ -1104,6 +1207,16 @@ impl Binder<'_> {
             };
         }
 
+        if !q.group_by.is_empty()
+            || q.having.is_some()
+            || q.projection.iter().any(|item| match item {
+                SelectItem::Expr { expr, .. } => contains_aggregate(expr),
+                _ => false,
+            })
+        {
+            return self.aggregate_query(q, plan, &scope, targets);
+        }
+
         let mut columns = self.select_list(&q.projection, &scope)?;
         if let Some(targets) = targets {
             for (c, t) in columns.iter_mut().zip(targets) {
@@ -1116,26 +1229,30 @@ impl Binder<'_> {
             c.expr = self.finish(e, Span::default())?;
         }
 
-        if !q.order_by.is_empty() {
-            let mut keys = Vec::with_capacity(q.order_by.len());
-            for item in &q.order_by {
-                let expr = self.order_key(&item.expr, &columns, &scope)?;
-                let expr = self.finish(expr, item.expr.span)?;
-                keys.push(SortKey {
-                    expr,
-                    desc: item.desc,
-                    nulls_first: item.nulls_first.unwrap_or(item.desc),
-                });
+        let mut keys = Vec::with_capacity(q.order_by.len());
+        for item in &q.order_by {
+            let expr = self.order_key(&item.expr, &columns, &scope)?;
+            let expr = self.finish(expr, item.expr.span)?;
+            keys.push(SortKey {
+                expr,
+                desc: item.desc,
+                nulls_first: item.nulls_first.unwrap_or(item.desc),
+            });
+        }
+        if q.distinct {
+            plan = Self::distinct_over(plan, columns, keys)?;
+        } else {
+            if !keys.is_empty() {
+                plan = LogicalPlan::Sort {
+                    input: Box::new(plan),
+                    keys,
+                };
             }
-            plan = LogicalPlan::Sort {
+            plan = LogicalPlan::Project {
                 input: Box::new(plan),
-                keys,
+                columns,
             };
         }
-        plan = LogicalPlan::Project {
-            input: Box::new(plan),
-            columns,
-        };
         if q.limit.is_some() || q.offset.is_some() {
             let limit = match &q.limit {
                 Some(e) => Some(self.row_count(e, BindErrorKind::NegativeLimit)?),
@@ -1152,6 +1269,305 @@ impl Binder<'_> {
             };
         }
         Ok(plan)
+    }
+
+    /// `SELECT DISTINCT`: project, drop repeated rows, then sort. The sort runs on the distinct output
+    /// rows, so each key has to be one of the output columns (PostgreSQL: `42P10`).
+    fn distinct_over(
+        input: LogicalPlan,
+        columns: Vec<OutputColumn>,
+        keys: Vec<SortKey>,
+    ) -> R<LogicalPlan> {
+        let mut mapped = Vec::with_capacity(keys.len());
+        for k in keys {
+            let printed = k.expr.to_string();
+            let Some((index, c)) = columns
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c.expr.to_string() == printed)
+            else {
+                return err(
+                    BindErrorKind::InvalidColumnReference,
+                    "for SELECT DISTINCT, ORDER BY expressions must appear in the select list",
+                    Span::default(),
+                );
+            };
+            mapped.push(SortKey {
+                expr: typed(
+                    ExprNode::Column {
+                        index,
+                        name: c.name.clone(),
+                    },
+                    c.expr.ty,
+                ),
+                desc: k.desc,
+                nulls_first: k.nulls_first,
+            });
+        }
+        let mut plan = LogicalPlan::Distinct {
+            input: Box::new(LogicalPlan::Project {
+                input: Box::new(input),
+                columns,
+            }),
+        };
+        if !mapped.is_empty() {
+            plan = LogicalPlan::Sort {
+                input: Box::new(plan),
+                keys: mapped,
+            };
+        }
+        Ok(plan)
+    }
+
+    /// A `SELECT` whose items are aggregate calls over the rows of `input`: one row out, so
+    /// `ORDER BY` has nothing to order (its keys are still checked) and `LIMIT`/`OFFSET` apply to it.
+    fn aggregate_query(
+        &mut self,
+        q: &Query,
+        input: LogicalPlan,
+        scope: &Scope,
+        targets: Option<&[ColumnInfo]>,
+    ) -> R<LogicalPlan> {
+        // The key expressions are bound as ordinary expressions over the table, so a column in them
+        // is fine and an aggregate in them is refused.
+        let mut keys = Vec::with_capacity(q.group_by.len());
+        let mut key_printed = Vec::with_capacity(q.group_by.len());
+        for g in &q.group_by {
+            let target = self.group_target(g, q, scope)?;
+            let bound = self.expr(target, scope)?;
+            let bound = self.finish(bound, target.span)?;
+            key_printed.push((target.to_string(), bound.ty));
+            keys.push(bound);
+        }
+        self.group_keys = key_printed;
+        self.aggregates = Some(Vec::new());
+        let bound = self.aggregate_items(q, scope);
+        let calls = self.aggregates.take().unwrap_or_default();
+        self.in_aggregate_arg = false;
+        self.group_keys = Vec::new();
+        let (mut columns, having, sort_keys) = bound?;
+        if let Some(targets) = targets {
+            for (c, t) in columns.iter_mut().zip(targets) {
+                let e = std::mem::replace(&mut c.expr, konst(Value::Null, SqlType::Unknown));
+                c.expr = self.assign(e, t, Span::default())?;
+            }
+        }
+        let mut plan = LogicalPlan::Aggregate {
+            input: Box::new(input),
+            group_by: keys,
+            calls,
+        };
+        if let Some(predicate) = having {
+            plan = LogicalPlan::Filter {
+                input: Box::new(plan),
+                predicate,
+            };
+        }
+        if q.distinct {
+            plan = Self::distinct_over(plan, columns, sort_keys)?;
+        } else {
+            if !sort_keys.is_empty() {
+                plan = LogicalPlan::Sort {
+                    input: Box::new(plan),
+                    keys: sort_keys,
+                };
+            }
+            plan = LogicalPlan::Project {
+                input: Box::new(plan),
+                columns,
+            };
+        }
+        if q.limit.is_some() || q.offset.is_some() {
+            let limit = match &q.limit {
+                Some(e) => Some(self.row_count(e, BindErrorKind::NegativeLimit)?),
+                None => None,
+            };
+            let offset = match &q.offset {
+                Some(e) => Some(self.row_count(e, BindErrorKind::NegativeOffset)?),
+                None => None,
+            };
+            plan = LogicalPlan::Limit {
+                input: Box::new(plan),
+                limit,
+                offset,
+            };
+        }
+        Ok(plan)
+    }
+
+    /// What a `GROUP BY` item groups by: a position names the select item, a bare name that is not a
+    /// table column but is an output name names that item, anything else is the expression itself.
+    fn group_target<'q>(&self, g: &'q Expr, q: &'q Query, scope: &Scope) -> R<&'q Expr> {
+        if let ExprKind::Literal(Literal::Number(n)) = &g.kind {
+            let item = n
+                .parse::<usize>()
+                .ok()
+                .and_then(|p| p.checked_sub(1))
+                .and_then(|i| q.projection.get(i));
+            return match item {
+                Some(SelectItem::Expr { expr, .. }) if !contains_aggregate(expr) => Ok(expr),
+                Some(SelectItem::Expr { .. }) => err(
+                    BindErrorKind::Grouping,
+                    "aggregate functions are not allowed in GROUP BY",
+                    g.span,
+                ),
+                _ => err(
+                    BindErrorKind::InvalidColumnReference,
+                    format!("GROUP BY position {n} is not in select list"),
+                    g.span,
+                ),
+            };
+        }
+        // A bare name that no table column carries but a select item does is that item.
+        if let ExprKind::Column(parts) = &g.kind
+            && let [name] = parts.as_slice()
+            && !scope.info.columns.iter().any(|c| c.name == name.value)
+        {
+            for item in &q.projection {
+                if let SelectItem::Expr {
+                    expr,
+                    alias: Some(alias),
+                } = item
+                    && alias.value == name.value
+                {
+                    return if contains_aggregate(expr) {
+                        err(
+                            BindErrorKind::Grouping,
+                            "aggregate functions are not allowed in GROUP BY",
+                            g.span,
+                        )
+                    } else {
+                        Ok(expr)
+                    };
+                }
+            }
+        }
+        Ok(g)
+    }
+
+    /// The output columns, the `HAVING` predicate and the `ORDER BY` keys of a query that
+    /// aggregates. All of them are expressions of group keys, aggregate calls and constants; a column
+    /// outside both is a grouping error.
+    #[allow(clippy::type_complexity)]
+    fn aggregate_items(
+        &mut self,
+        q: &Query,
+        scope: &Scope,
+    ) -> R<(Vec<OutputColumn>, Option<TypedExpr>, Vec<SortKey>)> {
+        let mut columns = Vec::with_capacity(q.projection.len());
+        for item in &q.projection {
+            let SelectItem::Expr { expr, alias } = item else {
+                return err(
+                    BindErrorKind::Grouping,
+                    "a query that aggregates cannot select every column",
+                    Span::default(),
+                );
+            };
+            let bound = self.expr(expr, scope)?;
+            let bound = self.finish(bound, expr.span)?;
+            let name = alias
+                .as_ref()
+                .map_or_else(|| output_name(expr), |a| a.value.clone());
+            columns.push(OutputColumn { expr: bound, name });
+        }
+        let having = match &q.having {
+            Some(h) => {
+                let p = self.expr(h, scope)?;
+                Some(self.require_bool(p, h.span)?)
+            }
+            None => None,
+        };
+        let mut sort_keys = Vec::with_capacity(q.order_by.len());
+        for item in &q.order_by {
+            let expr = self.order_key(&item.expr, &columns, scope)?;
+            let expr = self.finish(expr, item.expr.span)?;
+            sort_keys.push(SortKey {
+                expr,
+                desc: item.desc,
+                nulls_first: item.nulls_first.unwrap_or(item.desc),
+            });
+        }
+        Ok((columns, having, sort_keys))
+    }
+
+    /// Binds one aggregate call and types its result as PostgreSQL does: `count` is `bigint`; `sum`
+    /// of `smallint` or `integer` is `bigint`, of `bigint` or `numeric` is `numeric`, of `double
+    /// precision` is `double precision`; `avg` is `numeric` for integers and `numeric`, `double
+    /// precision` for floats; `min` and `max` keep the argument's type.
+    fn aggregate_call(&mut self, f: &ast::Function, scope: &Scope, span: Span) -> R<AggCall> {
+        let func = match (f.name.as_str(), &f.args) {
+            ("count", FunctionArgs::Star) => {
+                if f.distinct {
+                    return err(
+                        BindErrorKind::Syntax,
+                        "count(DISTINCT *) is not valid; name a column",
+                        span,
+                    );
+                }
+                return Ok(AggCall {
+                    func: AggFunc::CountStar,
+                    arg: None,
+                    ty: SqlType::BigInt,
+                    distinct: false,
+                });
+            }
+            (_, FunctionArgs::Star) => {
+                return err(
+                    BindErrorKind::UndefinedFunction,
+                    format!("{}(*) does not exist, only count(*) takes *", f.name),
+                    span,
+                );
+            }
+            ("count", _) => AggFunc::Count,
+            ("sum", _) => AggFunc::Sum,
+            ("avg", _) => AggFunc::Avg,
+            ("min", _) => AggFunc::Min,
+            _ => AggFunc::Max,
+        };
+        let FunctionArgs::List(list) = &f.args else {
+            return unsupported("aggregate arguments", span);
+        };
+        let [arg] = list.as_slice() else {
+            return err(
+                BindErrorKind::UndefinedFunction,
+                format!("function {} takes one argument, not {}", f.name, list.len()),
+                span,
+            );
+        };
+        let a = self.expr(arg, scope)?;
+        let a = self.finish(a, arg.span)?;
+        let ty = match (func, a.ty) {
+            (AggFunc::Count, _) => SqlType::BigInt,
+            (AggFunc::Sum, SqlType::SmallInt | SqlType::Integer) => SqlType::BigInt,
+            (AggFunc::Sum, SqlType::BigInt | SqlType::Numeric) => SqlType::Numeric,
+            (AggFunc::Sum, SqlType::DoublePrecision) => SqlType::DoublePrecision,
+            (AggFunc::Avg, SqlType::DoublePrecision) => SqlType::DoublePrecision,
+            (AggFunc::Avg, t) if t.is_numeric() => SqlType::Numeric,
+            (
+                AggFunc::Min | AggFunc::Max,
+                t @ (SqlType::SmallInt
+                | SqlType::Integer
+                | SqlType::BigInt
+                | SqlType::Numeric
+                | SqlType::DoublePrecision
+                | SqlType::Text
+                | SqlType::Date
+                | SqlType::Timestamptz),
+            ) => t,
+            (_, t) => {
+                return err(
+                    BindErrorKind::UndefinedFunction,
+                    format!("function {}({t}) does not exist", f.name),
+                    span,
+                );
+            }
+        };
+        Ok(AggCall {
+            func,
+            arg: Some(a),
+            ty,
+            distinct: f.distinct,
+        })
     }
 
     fn row_count(&mut self, e: &Expr, negative: BindErrorKind) -> R<TypedExpr> {

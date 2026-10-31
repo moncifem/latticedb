@@ -3,8 +3,8 @@
 Status: draft (Phase 2, requirement P2-09). This is the **target** SQL subset, declared before
 implementation. A bounded parser and AST, PostgreSQL wire session state machine and development
 listener exist; the listener serves the single-table subset from `lattice-exec` when started with
-`--data-dir` (and answers a `SELECT 1` placeholder otherwise); joins, aggregates, `DISTINCT`, subqueries,
-indexes and full Lattice conformance remain pending. The constructs below describe the intended
+`--data-dir` (and answers a `SELECT 1` placeholder otherwise); joins, subqueries,
+indexes and full Lattice conformance remain pending. Ungrouped aggregates run. The constructs below describe the intended
 contract, not commands available today.
 
 Once implemented, each accepted construct must be tested; everything outside the subset must fail
@@ -47,9 +47,9 @@ The intended front door is PostgreSQL wire v3 (P2-11). Transaction behaviour is 
 | `SELECT` list, `*`, aliases, expressions over supported types | Yes. Without `FROM` the source is one row with no columns (`SELECT 1 + 2`, `SELECT 1 WHERE false`, `LIMIT`/`OFFSET` apply); `*` there is `42601` as in PostgreSQL |
 | `FROM` with one or more tables, `JOIN` (`INNER`, `LEFT`, `CROSS`) with `ON` | Yes. `RIGHT`, `FULL`, `NATURAL`, `LATERAL` no |
 | `WHERE` | Comparison, `AND`/`OR`/`NOT`, `IN (list)`, `BETWEEN`, `LIKE`, `IS [NOT] NULL`. The executor reads only a key range or one entry when `AND` terms compare the primary key or a `UNIQUE` constraint with constants; results are the same as a full scan (see the `lattice-exec` README, Access paths) |
-| `GROUP BY`, `HAVING` | Yes, with `COUNT`, `SUM`, `MIN`, `MAX`, `AVG`; `COUNT(DISTINCT x)` |
+| `GROUP BY`, `HAVING` | Yes, with `COUNT`, `SUM`, `MIN`, `MAX`, `AVG` over one table: keys are columns, expressions, positions or output names; one row per group in key order (`NULL`s group together and sort first); `HAVING` and `ORDER BY` may use keys and aggregates; `DISTINCT` inside an aggregate (`COUNT(DISTINCT x)`) counts each non-`NULL` value once. The groups are held in memory under the statement budget. Without `ORDER BY` the order of groups is by key, which PostgreSQL does not promise |
 | `ORDER BY`, `LIMIT`, `OFFSET` | Yes, with `NULLS FIRST/LAST` |
-| `DISTINCT` | Yes |
+| `SELECT DISTINCT` | Yes: rows equal in every output column (`NULL` equal to `NULL`) are kept once, the first in scan order; an `ORDER BY` expression must be an output column (`42P10` otherwise). `DISTINCT ON` is `0A000` |
 | Subqueries | Scalar and `IN` subqueries, uncorrelated. Correlated, `EXISTS`, `ANY/ALL` not yet |
 | `WITH` (CTE), window functions, `UNION`/`INTERSECT`/`EXCEPT`, `RECURSIVE` | Not in Phase 2 |
 | `AS OF CHANGESET <id>` / `AS OF TIMESTAMP '<ts>'` after a table reference | Yes (P2-14). Read-only snapshot |
@@ -121,7 +121,7 @@ those inside `options`, are ignored.
 
 ## Functions and operators
 
-Arithmetic and comparison operators, `||` for text, `coalesce`, `nullif`, `lower`, `upper`, `length`,
+Arithmetic and comparison operators, `||` for text, `count`, `sum`, `avg`, `min`, `max` as ungrouped aggregates (`count(*)`, or one expression argument; `NULL`s skipped; an empty input gives `0` for `count` and `NULL` otherwise; `sum` of `smallint` or `integer` is `bigint`, of `bigint` or `numeric` is `numeric`; `avg` of integers is `numeric`; no `DISTINCT`; a select item may combine aggregate calls, constants and scalar functions (`sum(i) + 1`, `coalesce(max(t), 'none')`), but a column outside an aggregate is `42803`; `min` and `max` take numbers, text, `date` and `timestamptz`), `coalesce`, `nullif`, `lower`, `upper`, `length`,
 `substring`, `position`, `trim`, `abs`, `round`, `now()`, `date_trunc` (`second` to `year`),
 `extract`, `cast` / `::`. Anything else is `0A000`.
 
@@ -214,7 +214,7 @@ with its reason.
 | A column default that does not fit its column (`a INT DEFAULT 2147483648`) | the table is created and the first insert that uses the default fails (`22003`) | `CREATE TABLE` fails with `22003` | the default is checked when the table is defined |
 | A numeric constant of more than 38 digits, and a float literal in exponent form that large (`1e308` into a `double precision` column) | exact `numeric` of any size; the literal then casts to double | `22003` | the decimal type holds 38 digits ([#691](https://github.com/moncifem/latticedb/issues/691)); `'1e308'::float8` works |
 | `double precision % integer` | `42883` (no such operator) | computed | the operator is accepted for any two numbers |
-| Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
+| Joins, `DISTINCT ON`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
 
 ### Contract with the host catalog
 
