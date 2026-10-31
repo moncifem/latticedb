@@ -163,3 +163,19 @@ jobs:
           path: target/mutation-campaign/
           if-no-files-found: error
           retention-days: 90
+  notify:
+    # A failed scheduled run opens or comments on one issue for this workflow (scheduled-failure.yml).
+    # Schedule runs only. A failed mutation job often means survivors exist, or that a shard could not run;
+    # read its shard log before acting.
+    if: always() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    needs: [long-fuzz, mutation-plan, mutation, mutation-summary]
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    uses: ./.github/workflows/scheduled-failure.yml
+    with:
+      workflow: ${{ github.workflow }}
+      run_id: ${{ github.run_id }}
+      run_attempt: ${{ github.run_attempt }}
+      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

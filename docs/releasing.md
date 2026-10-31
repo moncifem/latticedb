@@ -15,11 +15,13 @@ Scheduled verification is separate from packaging: the `nightly` and `weekly` wo
 simulator, fuzzing, model checking and heavier suites and report failures; they publish nothing.
 
 A failed scheduled run of `nightly-build`, `kani`, `io-probe`, `image-smoke`, `driver-smoke`, `driver-psql`,
-`quickstart-smoke`, `zizmor` or `openssf-scorecard` opens an issue labelled `scheduled-failure` titled with the
-workflow name and the date, or comments on the open issue for that workflow, with the run URL and the failed
-jobs (`scheduled-failure.yml`). Only scheduled runs report; manual runs and pull requests open nothing. A job
-reported as cancelled counts, because a lost runner reports that way, and such a job may also have been stopped
-by a newer run. Read the logs before acting. `nightly` keeps its own `nightly-failure` issue.
+`quickstart-smoke`, `zizmor`, `openssf-scorecard` or `weekly` opens an issue labelled `scheduled-failure`
+titled with the workflow name and the date, or comments on the open issue for that workflow, with the run URL
+and the failed jobs (`scheduled-failure.yml`). Only scheduled runs report; manual runs and pull requests open
+nothing. A job reported as cancelled counts, because a lost runner reports that way, and such a job may also
+have been stopped by a newer run. Read the logs before acting. A failed `weekly` mutation job often means
+survivors exist, or that a shard could not run, so read its shard log rather than treating the workflow as
+broken. `nightly` keeps its own `nightly-failure` issue.
 
 ### Fuzz, mutation and property coverage of the scheduled workflows
 
