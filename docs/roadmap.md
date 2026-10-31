@@ -42,7 +42,7 @@ agent task board run over `psql` in [integrations/board](../integrations/board/C
 1. Alpha 0.1 (milestone): `v0.1.0-alpha.1` is tagged. The milestone still holds the install script for the
    release archives (#585), the quickstart from the built archive (#586), the release checklist and rehearsal
    (#591, #568), `lattice watch` TLS client and live-gateway test (#583; the loopback network loop is on `main`, `6cb2bce6`), the gateway idle deadline (#578; TLS on the gateway landed in `4b297405`), the browser and DNS-rebinding defences
-   for MCP over HTTP (#580, part 2 of #527; its Host, Origin and token checks and `--gateway-allowed-host` (#774) are on main, the rest of its acceptance list is open), the per-principal long-poll cap (#529), the two-agent demo (#534; the harness (#540, on main as `8a7bde20`) and its two-principal MCP test (`475b3a01`) are on main), the
+   for MCP over HTTP (#580, part 2 of #527; its Host, Origin and token checks and `--gateway-allowed-host` (#774) are on main, the rest of its acceptance list is open), the per-principal output and executor budgets (#529 part 2; the connection and long-poll caps of part 1 are on main, PR 861), the two-agent demo (#534; the harness (#540, on main as `8a7bde20`) and its two-principal MCP test (`475b3a01`) are on main), the
    security disclosure refresh (#590) and the alpha documentation (#589). Tags after `v0.1.0-alpha.1` are the
    owner's decision (#568).
 2. SQL: the `kill -9` restart proof with the real binary (#574), the driver matrix and binary formats

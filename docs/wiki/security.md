@@ -36,7 +36,7 @@ supported.
 
 **Gateway**
 
-- The WebSocket gateway is loopback only and plaintext. Its token goes only in the `Authorization` header, and an
+- The WebSocket gateway is plaintext on loopback only. Off loopback it needs TLS and tokens, and `latticed` refuses to start without them. Its token goes only in the `Authorization` header, and an
   address that fails 10 times in a minute gets `429`.
 
 ## What it does not protect

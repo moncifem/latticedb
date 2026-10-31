@@ -4,7 +4,7 @@ First slice of the Model Context Protocol server (WP52, issue #254, requirement 
 message codec, three scoped tools and a grant layer, in `crates/lattice-sdk/src/mcp.rs`, and a tool
 backend over the SQL executor in `crates/latticed/src/mcp_backend.rs` (issue #526, part 1, see
 "Backend over the executor"). The one transport is HTTP: `POST /mcp` on the sync gateway port (issue
-#527, part 1, see "HTTP transport"). There is no stdio transport and no streaming transport, and no phase
+#527, part 1, see "HTTP transport"). Stdio is only the `lattice mcp` proxy, which has no TLS client and reaches only a loopback plaintext gateway; there is no streaming transport, and no phase
 exit criterion is claimed.
 
 ## Protocol revision
@@ -219,10 +219,12 @@ principal, so it sees exactly the events a PostgreSQL reader of the same account
   - A corrupt event: if a feed event's bytes do not decode, the whole call fails with `50001` and every
     later call from the same cursor fails the same way. Only corrupted feed bytes can cause this; it needs
     the store repaired or reopened.
-  - Long-poll budget: there is no per-principal cap on waiting or feed work (issues #529 and #543). A
+  - Long-poll budget: waiting calls are capped per principal (4 by default, `--gateway-max-long-polls-per-principal`)
+    and on the whole gateway (16 by default, `--gateway-max-long-polls`); a call over a cap is answered `503` at once
+    (#529 part 1). There is no per-principal cap on feed work yet (issues #529 part 2 and #543). A
     waiting call holds its worker for up to 30 seconds. When the notifier has no room for another sleeper
-    (the host's commit-waiter limit), the call polls the feed about 50 times a second until the cap of
-    #529 bounds the waiters.
+    (the host's commit-waiter limit, 1,024 by default), the call polls the feed about 50 times a second. At the
+    default caps that limit is not reached.
 
 ## HTTP transport
 
@@ -325,9 +327,10 @@ non-200 status becomes a JSON-RPC error. The proxy connects only to a loopback a
 it has no TLS yet; the token comes from an owner-only file or from the first line of standard input, never
 from the command line.
 
-Not here: Streamable HTTP streams (SSE, GET, sessions and resumption), and the per-principal limit
-on long polls (issue #529). A `lattice_subscribe` call with `wait_ms` holds its connection thread for up to
-30 seconds; the connection counts against the gateway's connection limit, not a per-principal budget.
+Not here: Streamable HTTP streams (SSE, GET, sessions and resumption), and the per-principal output and executor
+budgets (issue #529 part 2). A `lattice_subscribe` call with `wait_ms` holds its connection thread for up to
+30 seconds; the connection counts against the principal's connection cap (8 by default, shared with WebSocket) and
+the gateway's connection limit, and the waiting call against the long-poll caps (#529 part 1).
 
 ## Not implemented
 
@@ -344,8 +347,8 @@ on long polls (issue #529). A `lattice_subscribe` call with `wait_ms` holds its 
   but no read or write result carries one yet.
 - A count of unseen changes. It is not built, and would reveal hidden commits to a restricted reader
   (issue #363), so it is not planned for a restricted caller.
-- The per-principal limit on long polls (issue #529): a `wait_ms` call holds a connection's worker for up
-  to 30 seconds, and only the host's commit-waiter limit bounds how many sleep at once.
+- The per-principal output and executor budgets (issue #529 part 2): a `wait_ms` call holds a connection's worker
+  for up to 30 seconds. The long-poll caps (#529 part 1) and the host's commit-waiter limit bound how many wait at once.
 - Presence, search, document and workflow tools.
 
 ## Evidence
