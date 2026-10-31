@@ -164,6 +164,33 @@ class ClassifyRisk(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(g.classify_risk([path]), {area})
 
+    def test_gate_definition_and_hooks_are_toolchain_risk(self):
+        # Issue 439: the gate evidence bundle, the backlog and ADR/RFC checks, and the local hooks
+        # were classified "none", so a change could weaken the gate with no `reviewed` label.
+        expected = {
+            "xtask/src/gate.rs": "toolchain",
+            "xtask/src/backlog.rs": "toolchain",
+            ".githooks/pre-commit": "toolchain",
+            ".githooks/commit-msg": "toolchain",
+        }
+        for path, area in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {area})
+
+    def test_policy_pages_are_security_docs_risk(self):
+        for path in ["docs/policies/branch-protection.md", "docs/policies/workflow-security.md",
+                     "docs/policies/flaky-tests.md", "docs/policies/openssf-scorecard.md"]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), {"security-docs"})
+
+    def test_new_gate_paths_have_lookalike_neighbours_that_stay_unlisted(self):
+        for path in [
+            "xtask/src/gate_extras.rs", "xtask/src/backlog/mod.rs.bak", "githooks/pre-commit",
+            "docs/policies-notes.md", "docs/policy/x.md", ".githooks.bak/x",
+        ]:
+            with self.subTest(path=path):
+                self.assertEqual(g.classify_risk([path]), set())
+
     def test_proof_tools_are_verification_evidence(self):
         for path in [
             "tools/wal-admission/verify_old_reader.py",
@@ -178,7 +205,7 @@ class ClassifyRisk(unittest.TestCase):
 
     def test_neighbours_of_the_new_gate_paths_stay_unlisted(self):
         for path in [
-            "xtask/Cargo.toml", "xtask/src/backlog.rs", "xtask/src/gate.rs", "_typos.toml.bak",
+            "xtask/Cargo.toml", "_typos.toml.bak",
             "docs/Dockerfile", "Dockerfile.dev", "crates/lattice-sim-extras/src/x.rs",
             "crates/lattice-testkit2/src/x.rs", "tools/docs_wiki.py", "tools/test_docs_wiki.py",
             "tools/checks.py", "api-snapshots-notes.md", "docs/api-snapshots/x.txt",
@@ -453,6 +480,9 @@ class CodeownersMatchesClassifier(unittest.TestCase):
         "xtask/src/main.rs": "xtask/src/main.rs",
         "xtask/src/conventions.rs": "xtask/src/conventions.rs",
         "xtask/src/lex.rs": "xtask/src/lex.rs",
+        "xtask/src/gate.rs": "xtask/src/gate.rs",
+        "xtask/src/backlog.rs": "xtask/src/backlog.rs",
+        ".githooks/**": ".githooks/pre-commit",
         "_typos.toml": "_typos.toml",
         ".gitleaks.toml": ".gitleaks.toml",
         ".cargo/mutants.toml": ".cargo/mutants.toml",
@@ -476,6 +506,7 @@ class CodeownersMatchesClassifier(unittest.TestCase):
         "docs/security-test-plan.md": "docs/security-test-plan.md",
         "docs/review-policy.md": "docs/review-policy.md",
         "docs/merging.md": "docs/merging.md",
+        "docs/policies/**": "docs/policies/branch-protection.md",
         "docs/rfc/**": "docs/rfc/0001-x.md",
         "docs/adr/**": "docs/adr/0001-x.md",
         "Cargo.toml": "Cargo.toml",

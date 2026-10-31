@@ -29,6 +29,9 @@
 /xtask/src/main.rs @moncifem
 /xtask/src/conventions.rs @moncifem
 /xtask/src/lex.rs @moncifem
+/xtask/src/gate.rs @moncifem
+/xtask/src/backlog.rs @moncifem
+/.githooks/ @moncifem
 /_typos.toml @moncifem
 /.gitleaks.toml @moncifem
 /.cargo/mutants.toml @moncifem
@@ -76,6 +79,7 @@
 /docs/adr/ @moncifem
 /docs/threat-model.md @moncifem
 /docs/security-test-plan.md @moncifem
+/docs/policies/ @moncifem
 /docs/review-policy.md @moncifem
 /docs/merging.md @moncifem
 /Cargo.toml @moncifem

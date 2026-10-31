@@ -79,9 +79,14 @@ RISK_RULES = (
             # What defines or weakens the required gate: `xtask ci` and its convention checks, the
             # lexer behind the banned-construct checks, the typo and secret scanners' own config,
             # the mutation scope and the public API snapshots the API check compares against.
+            # The gate evidence bundle, the backlog and ADR/RFC checks, and the local hooks that run
+            # the cheap gate and the commit-message lint before a push.
             "xtask/src/main.rs",
             "xtask/src/conventions.rs",
             "xtask/src/lex.rs",
+            "xtask/src/gate.rs",
+            "xtask/src/backlog.rs",
+            ".githooks/**",
             "_typos.toml",
             ".gitleaks.toml",
             ".cargo/mutants.toml",
@@ -147,6 +152,10 @@ RISK_RULES = (
             "docs/security-test-plan.md",
             "docs/review-policy.md",
             "docs/merging.md",
+            # The policy pages the gate and the workflows are judged against: branch protection,
+            # workflow security, flaky tests and the scorecard. A weakened page changes what a
+            # green check promises.
+            "docs/policies/**",
         ),
     ),
     # Root manifest, lockfile and cargo-deny policy: where dependencies and their licences are
