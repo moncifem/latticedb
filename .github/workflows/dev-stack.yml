@@ -41,4 +41,8 @@ jobs:
           }
           psql --version
       - name: dev stack end to end
+        # The gateway steps (6d) run on the nightly image. That image is rebuilt daily from main; until a
+        # build includes the TLS gateway, the test prints a skip with its reason and the rest still runs.
+        env:
+          LATTICE_DEV_IMAGE: ghcr.io/moncifem/latticedb:nightly
         run: bash tests/dev/dev-stack.sh

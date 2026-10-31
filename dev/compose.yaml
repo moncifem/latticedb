@@ -6,8 +6,11 @@
 # certificate into the tls volume and creates the account files in the config volume, so the
 # containers read them as uid 10001 without a bind mount of the state dir.
 #
-# The sync gateway is not in this stack: the image refuses a non-loopback gateway address until TLS
-# exists on the gateway (issue #578), so it cannot be published from a container.
+# The sync gateway and POST /mcp are off by default. LATTICE_DEV_GATEWAY_PORT turns them on: then
+# dev/lattice-dev.sh writes an override file that replaces latticed's command and ports, adding the
+# gateway on 0.0.0.0:7070 inside the container (TLS with the same files, bearer tokens) and publishing
+# it on 127.0.0.1 only. That needs an image whose latticed serves the gateway over TLS; the pinned
+# image below predates it. The command list here is repeated in that override: keep the two in step.
 name: ${LATTICE_DEV_PROJECT:-lattice-dev}
 
 x-image: &image ${LATTICE_DEV_IMAGE:-ghcr.io/moncifem/latticedb:0.1.0-alpha.1@sha256:678aba924b803c5ed198e117e36a5fd0d5c9ec05f5d1bb80fb56a5d739d948fd}

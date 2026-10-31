@@ -181,9 +181,12 @@ dev/lattice-dev.sh reset       # asks first, then deletes the rows, the volumes 
 - `tests/dev/dev-stack.sh` runs the whole flow in its own project and state dir, then removes them. CI runs it
   in the `dev-stack` workflow (`.github/workflows/dev-stack.yml`) on changes under `dev/`, `tests/dev/` and `docker/`; it is not a required check yet.
 
-The sync gateway (`--gateway-listen`) is not in the stack. The image refuses a non-loopback gateway
-address until TLS exists on the gateway ([#578](https://github.com/moncifem/latticedb/issues/578)), so
-a container cannot publish it.
+The sync gateway and `POST /mcp` are off by default. `LATTICE_DEV_GATEWAY_PORT=PORT dev/lattice-dev.sh up`
+serves them at `https://127.0.0.1:PORT` over TLS with the dev CA, with the bearer tokens of `account token
+create`. The setting is remembered in the state dir, so later commands keep the gateway on and print a
+line saying so; `LATTICE_DEV_GATEWAY_PORT=0` turns it off. It needs an image built from main at or after
+`4b297405` (set `LATTICE_DEV_IMAGE`): the script checks the image's `latticed --help` before it restarts
+the server, and refuses an image without the TLS gateway.
 
 ## Connect with psql
 

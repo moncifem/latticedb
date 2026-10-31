@@ -19,6 +19,12 @@
 #   6b. add while the server runs: refused while alice's session is open (nothing changes); after the
 #       session writes a row and ends, the add restarts latticed, the row survives and carol logs in.
 #   6c. remove the last accounts; removing the last one stops latticed.
+#   6d. the gateway, opt-in: needs LATTICE_DEV_IMAGE, an image whose latticed serves the gateway over
+#       TLS. Without one, or with one that predates it, the step prints a skip and its reason. With one:
+#       three accounts; POST /mcp on 127.0.0.1 over TLS refuses no token and a wrong token and plain
+#       http; a writer and a reader share a key; a principal without grants is refused; the published
+#       port is 127.0.0.1 only; a removed account's token stops working; the setting is remembered
+#       across a command that does not name it, and LATTICE_DEV_GATEWAY_PORT=0 turns it off.
 #   7.  reset without a yes is refused.
 #   7b. a failed rename leaves no temp file holding a password.
 #   8.  reset, answered yes at the prompt, removes every container, volume and file the test made.
@@ -44,6 +50,11 @@ if [ -z "${LATTICE_DEV_TEST_PORT:-}" ]; then
   done
 fi
 export LATTICE_DEV_PORT=$port
+
+# Every step before 6d runs on the pinned default image, whatever the caller set. LATTICE_DEV_IMAGE
+# names the image for the gateway step only, and the gateway is off unless step 6d turns it on.
+gateway_image=${LATTICE_DEV_IMAGE:-}
+unset LATTICE_DEV_IMAGE LATTICE_DEV_GATEWAY_PORT
 
 case "$LATTICE_DEV_PROJECT" in
   lattice-dev-test-*) ;;
@@ -333,6 +344,194 @@ done
   || fail "latticed still runs with no account"
 ok "removing_the_last_account_stops_latticed"
 
+# --- 6d. the gateway, opt-in. It runs only on LATTICE_DEV_IMAGE, and only when that image's latticed
+# serves the gateway over TLS. The pinned default image predates it. The probe reads the image's
+# --help: a missing marker is a skip with its reason, never a pass. A usable image that fails is a
+# failure.
+gateway_ran=0
+gateway_reason=""
+gateway_probe() {
+  local image=$1 help marker
+  if ! help=$(docker run --rm "$image" --help 2>/dev/null); then
+    gateway_reason="$image could not be pulled or started"
+    return 1
+  fi
+  for marker in "serve the gateway over TLS" "--gateway-allowed-host"; do
+    if ! grep -qF -- "$marker" <<<"$help"; then
+      gateway_reason="$image does not list '$marker' in latticed --help, so it predates the TLS gateway"
+      return 1
+    fi
+  done
+}
+
+# POST /mcp over TLS, verified against the dev CA. NAME names the output: NAME.code holds the HTTP
+# status (000 when nothing answered) and NAME.body the reply. AUTH is a header file, or empty for no
+# Authorization header. The token stays in that file, never on a command line.
+gw_post() {
+  local name=$1 auth=$2 body=$3
+  local args=(-sS --max-time 10 --cacert "$LATTICE_DEV_HOME/ca.pem" -H "Content-Type: application/json"
+    --data "$body" -o "$work/$name.body" -w '%{http_code}')
+  if [ -n "$auth" ]; then args+=(-H "@$auth"); fi
+  curl "${args[@]}" "$gw_url" >"$work/$name.code" 2>"$work/$name.err" || true
+}
+
+gw_status() {
+  cat "$work/$1.code"
+}
+
+run_gateway_steps() {
+  local who tok i published gw_cid plain
+  local list_body='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+  local write_body='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lattice_write","arguments":{"scope":"default","table":"mcp_kv","key":"greeting","value":"hello from gate-a","expected_version":0}}}'
+  local read_body='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lattice_read","arguments":{"scope":"default","table":"mcp_kv","key":"greeting"}}}'
+  local denied_body='{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"lattice_write","arguments":{"scope":"default","table":"mcp_kv","key":"greeting","value":"written by gate-b","expected_version":1}}}'
+
+  # A free port, the first above the database port's. The gateway is published on it.
+  gport=$((port + 1))
+  while (exec 3<>"/dev/tcp/127.0.0.1/$gport") 2>/dev/null; do
+    gport=$((gport + 1))
+  done
+  gw_url=https://127.0.0.1:$gport/mcp
+  export LATTICE_DEV_IMAGE=$gateway_image
+
+  # gate-a writes and reads mcp_kv, gate-b only reads it, gate-c holds no grant at all.
+  expect_ok gw-add-a env LATTICE_DEV_GATEWAY_PORT="$gport" "$dev" account add gate-a --ddl mcp_kv --read mcp_kv --write mcp_kv
+  expect_ok gw-add-b env LATTICE_DEV_GATEWAY_PORT="$gport" "$dev" account add gate-b --read mcp_kv
+  expect_ok gw-add-c env LATTICE_DEV_GATEWAY_PORT="$gport" "$dev" account add gate-c
+  expect_ok gw-create "$dev" psql gate-a -X -q -v ON_ERROR_STOP=1 \
+    -c "CREATE TABLE mcp_kv (key text PRIMARY KEY, value text, version bigint NOT NULL)"
+  ok "gateway_accounts_added_and_the_table_created"
+
+  # The bearer token is printed once; it goes into an owner-only header file and is never echoed.
+  for who in gate-a gate-b gate-c; do
+    expect_ok "gw-token-$who" tool account token create /etc/lattice "$who"
+    tok=$(sed -n 's/^token (shown once, only a salted hash is stored): //p' "$work/gw-token-$who.out")
+    rm -f -- "$work/gw-token-$who.out"
+    [ -n "$tok" ] || fail "lattice account token create printed no token for $who"
+    (umask 077 && printf 'Authorization: Bearer %s\n' "$tok" > "$work/$who.auth")
+  done
+  tok=""
+  (umask 077 && printf 'Authorization: Bearer %s\n' "$(openssl rand -hex 32)" > "$work/wrong.auth")
+  ok "bearer_tokens_created_once_each"
+
+  # latticed starts the gateway after its SCRAM listener is healthy: poll, bounded, for an answer.
+  for i in $(seq 1 30); do
+    gw_post gw-probe "" "$list_body"
+    if [ "$(gw_status gw-probe)" = 401 ]; then break; fi
+    sleep 1
+  done
+  [ "$(gw_status gw-probe)" = 401 ] || fail "the gateway gave no 401 to a request with no token (status $(gw_status gw-probe))"
+  ok "gateway_answers_over_tls_and_refuses_a_request_with_no_token"
+
+  gw_post gw-wrong "$work/wrong.auth" "$list_body"
+  [ "$(gw_status gw-wrong)" = 401 ] || fail "a wrong token got status $(gw_status gw-wrong), wanted 401"
+  ok "gateway_refuses_a_wrong_token"
+
+  # The TLS port reads plain HTTP as a broken handshake and closes: curl reports no HTTP status at all.
+  plain=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$gport/mcp" 2>/dev/null || true)
+  [ "$plain" = 000 ] || fail "plain http to the gateway got status '$plain', wanted no answer (000)"
+  ok "plain_http_to_the_gateway_gets_no_answer"
+
+  gw_post gw-list-a "$work/gate-a.auth" "$list_body"
+  [ "$(gw_status gw-list-a)" = 200 ] || fail "tools/list with gate-a's token got status $(gw_status gw-list-a)"
+  # The shapes below are the ones docs/mcp-v0.md gives: tools/list names the tools in result.tools; a
+  # tool result is one text block holding a JSON envelope; a refused call is a JSON-RPC error whose
+  # code is 40301 (tool not granted). The text is parsed, not grepped, so escaping does not matter.
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+names = {t["name"] for t in d["result"]["tools"]}
+assert {"lattice_read", "lattice_write"} <= names, names
+' "$work/gw-list-a.body" || fail "tools/list does not name lattice_read and lattice_write"
+  ok "tools_list_with_a_valid_token_names_the_tools"
+
+  gw_post gw-write-a "$work/gate-a.auth" "$write_body"
+  [ "$(gw_status gw-write-a)" = 200 ] || fail "lattice_write by gate-a got status $(gw_status gw-write-a)"
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert "error" not in d, d
+t = json.loads(d["result"]["content"][0]["text"])
+assert t["tool"] == "lattice_write" and t["applied"] is True, t
+' "$work/gw-write-a.body" || fail "gate-a's lattice_write was not applied"
+  ok "writer_with_a_grant_writes_a_row_through_the_gateway"
+
+  gw_post gw-read-b "$work/gate-b.auth" "$read_body"
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+t = json.loads(d["result"]["content"][0]["text"])
+assert t["untrusted"]["rows"][0]["value"] == "hello from gate-a", t
+' "$work/gw-read-b.body" || fail "gate-b did not read the row gate-a wrote"
+  ok "reader_sees_the_row_another_principal_wrote"
+
+  gw_post gw-deny-b "$work/gate-b.auth" "$denied_body"
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["error"]["code"] == 40301, d
+' "$work/gw-deny-b.body" || fail "gate-b without a write grant was not refused with 40301"
+  ok "reader_without_a_write_grant_is_refused_the_tool"
+
+  gw_post gw-deny-c "$work/gate-c.auth" "$read_body"
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["error"]["code"] == 40301, d
+' "$work/gw-deny-c.body" || fail "gate-c without any grant was not refused with 40301"
+  ok "principal_without_grants_is_refused_the_tool"
+
+  gw_cid=$(docker ps -q --filter "label=com.docker.compose.project=$LATTICE_DEV_PROJECT" --filter label=com.docker.compose.service=latticed)
+  [ -n "$gw_cid" ] || fail "latticed is not running, so the gateway port cannot be checked"
+  published=$(docker port "$gw_cid" 7070) || fail "docker port could not list the gateway port"
+  [ "$published" = "127.0.0.1:$gport" ] || fail "the gateway is bound to '$published', wanted 127.0.0.1:$gport only"
+  ok "gateway_port_is_bound_to_loopback_only"
+
+  # Removing gate-a restarts latticed, which reloads the token file: gate-a's token must stop working,
+  # and gate-b must keep reading.
+  expect_ok gw-remove-a env LATTICE_DEV_GATEWAY_PORT="$gport" "$dev" account remove gate-a
+  for i in $(seq 1 30); do
+    gw_post gw-revoked "$work/gate-a.auth" "$list_body"
+    if [ "$(gw_status gw-revoked)" = 401 ]; then break; fi
+    sleep 1
+  done
+  [ "$(gw_status gw-revoked)" = 401 ] || fail "a removed account's token still gets past the gateway"
+  gw_post gw-read-b2 "$work/gate-b.auth" "$read_body"
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+t = json.loads(d["result"]["content"][0]["text"])
+assert t["untrusted"]["rows"][0]["value"] == "hello from gate-a", t
+' "$work/gw-read-b2.body" || fail "gate-b lost its read after gate-a was removed"
+  ok "removed_accounts_token_stops_working_and_others_still_read"
+
+  # These two removes pass no LATTICE_DEV_GATEWAY_PORT: the state dir remembers the gateway, so the
+  # restarts keep it on, and the script says so.
+  expect_ok gw-remove-b "$dev" account remove gate-b
+  grep -q 'the gateway stays on' "$work/gw-remove-b.err" || fail "a remembered gateway was not reported"
+  expect_ok gw-remove-c "$dev" account remove gate-c
+  [ -z "$(docker ps -q --filter "label=com.docker.compose.project=$LATTICE_DEV_PROJECT" --filter label=com.docker.compose.service=latticed)" ] \
+    || fail "latticed still runs with no account"
+  rm -f -- "$work"/*.auth
+  ok "gateway_setting_is_remembered_and_latticed_stopped_with_the_last_account"
+
+  # LATTICE_DEV_GATEWAY_PORT=0 turns the gateway off and forgets the port.
+  expect_ok gw-off env LATTICE_DEV_GATEWAY_PORT=0 "$dev" up
+  [ ! -e "$LATTICE_DEV_HOME/gateway.port" ] || fail "gateway.port remains after LATTICE_DEV_GATEWAY_PORT=0"
+  ok "gateway_turned_off_and_forgotten"
+
+  unset LATTICE_DEV_IMAGE
+  gateway_ran=1
+}
+
+if [ -z "$gateway_image" ]; then
+  echo "skip    gateway: LATTICE_DEV_IMAGE is not set, and the default image predates the TLS gateway"
+elif ! gateway_probe "$gateway_image"; then
+  echo "skip    gateway: $gateway_reason; step 6d did not run"
+else
+  run_gateway_steps
+fi
+
 # --- 7. reset asks first; a no leaves everything in place
 printf 'no\n' >"$work/answer-no"
 expect_refused reset-declined "$dev" reset <"$work/answer-no"
@@ -359,4 +558,7 @@ expect_ok reset "$dev" reset <"$work/answer-yes"
 [ ! -e "$LATTICE_DEV_HOME" ] || [ -z "$(ls -A "$LATTICE_DEV_HOME")" ] || fail "state dir still holds files"
 ok "reset_removes_containers_volumes_and_state"
 
+if [ "$gateway_ran" != 1 ]; then
+  echo "SKIPPED gateway steps: see the skip line above"
+fi
 echo "dev stack test passed"
