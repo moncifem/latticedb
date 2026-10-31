@@ -22,7 +22,10 @@
 //!
 //! Limits, by design: results are text only (a binary format code is refused with `0A000`), a `Q`
 //! message is passed to the handler as one statement, `Flush` has nothing to do because every reply
-//! is returned at once, and `Cancel` and `client_encoding` negotiation are left to the caller.
+//! is returned at once, and `Cancel` and `client_encoding` negotiation are left to the caller. A row
+//! or row description that would not fit one protocol message (1 MiB) fails its statement with
+//! `54000` before any of it is sent, and the connection stays usable. Caveat: a write made outside
+//! a transaction block that returns such a row has already committed when the `54000` is sent.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -30,8 +33,8 @@ use crate::cancel::CancellationToken;
 use crate::principal::{Principal, QueryContext};
 
 use crate::pgwire::{
-    Backend, Column, ENCRYPTION_DECLINED, Frontend, ProtoError, SaslPhase, Startup, Target,
-    TxStatus,
+    Backend, Column, ENCRYPTION_DECLINED, Frontend, MAX_MESSAGE_LEN, ProtoError, SaslPhase,
+    Startup, Target, TxStatus,
 };
 
 /// The `server_version` reported to clients. Drivers parse it to pick features.
@@ -651,6 +654,13 @@ impl<H: QueryHandler> Session<H> {
         match self.run(sql, &[], cancellation) {
             Ok(result) => {
                 if !result.columns.is_empty() {
+                    // Checked before the first byte is queued: a message the encoder refuses would
+                    // end the connection in the middle of the reply, with no error for the client.
+                    if let Err(e) = check_result(&result.columns, &result.rows) {
+                        self.fail_block();
+                        out.push(error_message(&e));
+                        return;
+                    }
                     out.push(Backend::RowDescription(result.columns));
                     out.extend(result.rows.into_iter().map(Backend::DataRow));
                 }
@@ -830,14 +840,17 @@ impl<H: QueryHandler> Session<H> {
                         format!("prepared statement \"{name}\" does not exist"),
                     )
                 })?;
+                // Built before anything is queued: a refused Describe must not leave its
+                // ParameterDescription behind the error.
+                let columns = shape(&stmt.columns)?;
                 out.push(Backend::ParameterDescription(stmt.param_types.clone()));
-                out.push(shape(&stmt.columns));
+                out.push(columns);
             }
             Frontend::Describe(Target::Portal(name)) => {
                 let portal = self.portals.get(&name).ok_or_else(|| {
                     QueryError::new("34000", format!("portal \"{name}\" does not exist"))
                 })?;
-                out.push(shape(&portal.columns));
+                out.push(shape(&portal.columns)?);
             }
             Frontend::Close(Target::Statement(name)) => {
                 self.remove_statement(&name);
@@ -893,7 +906,9 @@ impl<H: QueryHandler> Session<H> {
                 // would be committed while the client sees an error. So refuse before it starts when
                 // the session already holds more than its budget. Once it ran, its result is always
                 // kept (it is bounded by the statement memory budget), which makes the budget soft:
-                // retained bytes stay under the budget plus one result.
+                // retained bytes stay under the budget plus one result. The one failure after a run
+                // is a row too large for one protocol message: it cannot be sent at all, so the
+                // statement fails with 54000 (a write it made in auto-commit mode stays committed).
                 if self.held_bytes() > self.byte_budget {
                     return Err(over_byte_budget());
                 }
@@ -931,6 +946,13 @@ impl<H: QueryHandler> Session<H> {
             let Some(row) = rows.pop_front() else { break };
             sent_bytes = sent_bytes.saturating_add(row_bytes(&row));
             batch.push(row);
+        }
+        // Refused before any row of the batch is queued. The portal goes too, so a client that
+        // retries after the error cannot make the statement run a second time. The rows are dropped
+        // without being cloned or encoded.
+        if !batch.iter().all(data_row_fits) {
+            self.remove_portal(name);
+            return Err(too_large_for_one_message("a result row"));
         }
         let Some(portal) = self.portals.get_mut(name) else {
             // The statement ended the transaction and took the portal with it.
@@ -999,11 +1021,73 @@ fn error_message(e: &QueryError) -> Backend {
     }
 }
 
-fn shape(columns: &[Column]) -> Backend {
+/// A result the protocol cannot carry in one message. Raised before anything of the result is queued.
+fn too_large_for_one_message(what: &str) -> QueryError {
+    QueryError::new(
+        "54000",
+        format!("{what} is larger than one protocol message (1 MiB) can carry"),
+    )
+}
+
+/// Length field (4) and column count (2): the start of a DataRow and of a RowDescription.
+const LENGTH_AND_COUNT_BYTES: usize = 4 + 2;
+/// Length word of one DataRow value; NULL has no bytes after it.
+const DATA_VALUE_HEADER_BYTES: usize = 4;
+/// Fixed fields after a column name in a RowDescription: table oid, attribute, type oid, type size,
+/// type modifier and format, 4 + 2 + 4 + 2 + 4 + 2 bytes, plus the terminator of the name.
+const COLUMN_FIXED_BYTES: usize = 4 + 2 + 4 + 2 + 4 + 2 + 1;
+
+/// Whether a DataRow of these values encodes within [`MAX_MESSAGE_LEN`]. The sum follows the layout
+/// in `Backend::encode`, where the length field counts itself, so it is compared with the whole
+/// limit. A row with more than `i16::MAX` values cannot be encoded either.
+fn data_row_fits(row: &Row) -> bool {
+    if i16::try_from(row.len()).is_err() {
+        return false;
+    }
+    let total = row.iter().try_fold(LENGTH_AND_COUNT_BYTES, |n, cell| {
+        n.checked_add(DATA_VALUE_HEADER_BYTES)?
+            .checked_add(cell.as_ref().map_or(0, Vec::len))
+    });
+    total.is_some_and(|n| n <= MAX_MESSAGE_LEN)
+}
+
+/// Whether a RowDescription of these columns encodes within [`MAX_MESSAGE_LEN`]. A name with a NUL
+/// byte cannot be encoded at all.
+fn row_description_fits(columns: &[Column]) -> bool {
+    if i16::try_from(columns.len()).is_err() {
+        return false;
+    }
+    let total = columns
+        .iter()
+        .try_fold(LENGTH_AND_COUNT_BYTES, |n, column| {
+            if column.name.contains('\0') {
+                return None;
+            }
+            n.checked_add(column.name.len())?
+                .checked_add(COLUMN_FIXED_BYTES)
+        });
+    total.is_some_and(|n| n <= MAX_MESSAGE_LEN)
+}
+
+/// What a simple query may send: its row description and its rows, all or nothing.
+fn check_result(columns: &[Column], rows: &[Row]) -> Result<(), QueryError> {
+    if !row_description_fits(columns) {
+        return Err(too_large_for_one_message("the row description"));
+    }
+    if !rows.iter().all(data_row_fits) {
+        return Err(too_large_for_one_message("a result row"));
+    }
+    Ok(())
+}
+
+/// The RowDescription (or NoData) that answers a Describe, refused when it would not fit.
+fn shape(columns: &[Column]) -> Result<Backend, QueryError> {
     if columns.is_empty() {
-        Backend::NoData
+        Ok(Backend::NoData)
+    } else if row_description_fits(columns) {
+        Ok(Backend::RowDescription(columns.to_vec()))
     } else {
-        Backend::RowDescription(columns.to_vec())
+        Err(too_large_for_one_message("the row description"))
     }
 }
 
