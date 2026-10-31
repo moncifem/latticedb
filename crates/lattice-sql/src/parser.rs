@@ -115,9 +115,12 @@ const UNSUPPORTED_STATEMENTS: &[&str] = &[
 const FUNCTIONS: &[&str] = &[
     "abs",
     "avg",
+    "ceil",
+    "ceiling",
     "coalesce",
     "count",
     "date_trunc",
+    "floor",
     "length",
     "lower",
     "max",
@@ -125,8 +128,10 @@ const FUNCTIONS: &[&str] = &[
     "now",
     "nullif",
     "round",
+    "sign",
     "substring",
     "sum",
+    "trunc",
     "upper",
 ];
 
