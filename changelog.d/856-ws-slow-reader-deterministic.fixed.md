@@ -1,0 +1,1 @@
+The WebSocket gateway test that checks a revoked slow reader is cut between frames no longer depends on wall-clock time or on the size of the socket buffers. It counts delivered events against a bound derived from its constants, and it now runs in the default test set instead of being ignored. Gateway behaviour is unchanged.

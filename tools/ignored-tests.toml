@@ -30,8 +30,3 @@ reason = "states the behaviour proposed in the RFC 0012 amendment (issue 642); t
 path = "crates/lattice-engines/tests/sqldef_golden.rs"
 name = "reject_duplicate_unique_sets"
 reason = "states the behaviour proposed in the RFC 0012 amendment (issue 642); the codec follows the amendment once it lands, then the ignore is removed and the test runs in the normal gate"
-
-[[allow]]
-path = "crates/latticed/tests/ws_sync.rs"
-name = "a_revoked_slow_reader_is_cut_between_frames_not_at_the_end_of_the_step"
-reason = "timing-dependent: it failed on both hosted gate runners of the commit that merged the gateway (the stream outlived the revocation by 12.5 s, limit 8 s) and once locally under load; it stays for a manual run until the real cause is found"

@@ -732,90 +732,80 @@ fn shutdown_closes_live_connections_with_going_away() {
 }
 
 #[test]
-#[ignore = "timing-dependent: failed on both hosted gate runners of 2ae6da13 (stream outlived the revocation by 12.5 s); run with --ignored until the cut-between-frames timing is understood"]
 fn a_revoked_slow_reader_is_cut_between_frames_not_at_the_end_of_the_step() {
-    // One step is 128 frames of about 30 KB, far more than the socket buffers hold, and the reader
-    // takes 10 KB every 100 ms, so every write succeeds (slowly) and the step would take over 20 s.
-    // The write budgets are long enough that only the check between frames can end it early.
-    let f = start("trickle", |c| {
+    // The step is the whole table: one pump of ROWS frames, one event each, of about ROW_BYTES. The
+    // reader takes frames as they come until it has counted REVOKE_AFTER events, then the credential
+    // is replaced. The writer checks the credential before every frame, so after the revocation it
+    // sends nothing beyond the frames already written. Nothing here waits on the clock: each wait is
+    // bounded per message, and the assertion is a count.
+    //
+    // The count is derived from constants. Every frame is at least ROW_BYTES, so the frames that can
+    // sit unread in the socket buffers of both ends are at most SOCKET_BUFFERS / ROW_BYTES. SOCKET_BUFFERS
+    // is an assumption about the OS (not measured on the CI hosts here): 16 MiB is above the default
+    // maxima of the common kernels. A step that is not cut delivers all ROWS events, and ROWS is larger
+    // than CUT_BOUND, so that case fails.
+    const ROWS: usize = 1_000;
+    const ROW_BYTES: usize = 30_000;
+    const REVOKE_AFTER: usize = 40;
+    const SOCKET_BUFFERS: usize = 16 << 20;
+    // Frames received when the revocation is seen, plus the frames in the buffers, plus one frame
+    // written when the revocation happened and one frame partly read by the reader.
+    const CUT_BOUND: usize = REVOKE_AFTER + SOCKET_BUFFERS / ROW_BYTES + 2;
+    const _: () = assert!(CUT_BOUND < ROWS);
+    let f = start("revoked-slow-reader", |c| {
         c.write_timeout = Duration::from_secs(10);
         c.response_timeout = Duration::from_secs(120);
         c.revalidate_every = Duration::from_millis(100);
         c.batch_events = 1;
-        c.max_frames_per_pump = 128;
+        c.max_frames_per_pump = ROWS;
         c.max_subscriptions = 1;
     });
     {
         let mut pg = Pg::connect(f.sql);
         pg.run("CREATE TABLE notes (id INT PRIMARY KEY, body TEXT)");
-        let big = "x".repeat(30_000);
-        for n in 1..=200u32 {
+        let big = "x".repeat(ROW_BYTES);
+        for n in 1..=ROWS {
             pg.run(&format!("INSERT INTO notes VALUES ({n}, '{big}')"));
         }
     }
     let mut ws = Ws::open(f.ws, &f.tokens.alice);
     ws.hello("slow");
     ws.subscribe(1, "table/notes", b"");
-    let mut revoked: Option<(Instant, usize)> = None;
     let started = Instant::now();
-    let mut received = 0usize;
-    let mut buf = Vec::new();
-    let mut ended = None;
-    while ended.is_none() {
-        assert!(started.elapsed() < Duration::from_secs(40), "never ended");
-        std::thread::sleep(Duration::from_millis(100));
-        if revoked.is_none() && started.elapsed() > Duration::from_secs(1) {
-            // The step is in flight and the server is blocked writing to this reader.
-            let server = f.server.as_ref().unwrap();
-            assert!(
-                server
-                    .gateway()
-                    .unwrap()
-                    .replace_credentials(CredentialStore::empty())
-            );
-            revoked = Some((Instant::now(), received));
-        }
-        ws.socket
-            .set_read_timeout(Some(Duration::from_millis(10)))
-            .unwrap();
-        let mut chunk = [0u8; 20_000];
-        match ws.socket.read(&mut chunk) {
-            Ok(0) => ended = Some("eof"),
-            Ok(n) => {
-                received += n;
-                buf.extend_from_slice(&chunk[..n]);
-                while let Some((frame, used)) =
-                    websocket::decode_server_frame(&buf, 1 << 22).unwrap()
-                {
-                    buf.drain(..used);
-                    if frame.opcode == Opcode::Close {
-                        ended = Some("close");
-                    }
+    let mut events = 0usize;
+    let mut revoked = false;
+    let code = loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(40),
+            "the stream never ended after {events} events"
+        );
+        // The server builds the whole pump (1,000 frames) before it sends the first one, so the
+        // first wait covers that work; the 40 s check above is the only overall bound.
+        match ws.next_opt(Duration::from_secs(30)) {
+            Some(Got::Sync(Message::Events { events: batch, .. })) => {
+                events += batch.len();
+                if !revoked && events >= REVOKE_AFTER {
+                    // The step is in flight: the writer is at most SOCKET_BUFFERS ahead of this reader.
+                    let server = f.server.as_ref().unwrap();
+                    assert!(
+                        server
+                            .gateway()
+                            .unwrap()
+                            .replace_credentials(CredentialStore::empty())
+                    );
+                    revoked = true;
                 }
             }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(_) => ended = Some("reset"),
+            Some(Got::Close(code)) => break code,
+            other => panic!("expected events or a close after {events} events, got {other:?}"),
         }
-    }
-    let (at, before) = revoked.expect("the stream ended before the revocation");
-    // One frame to finish, then the close; the reader is still trickling, so allow the close budget.
+    };
+    assert!(revoked, "the stream ended before the revocation");
+    assert_eq!(code, Some(close_code::POLICY));
     assert!(
-        at.elapsed() < Duration::from_secs(8),
-        "the stream outlived the revocation by {:?}",
-        at.elapsed()
+        events <= CUT_BOUND,
+        "{events} of {ROWS} events arrived; a connection cut between frames delivers at most {CUT_BOUND}"
     );
-    // At 100 KB/s the reader cannot take more than about 0.8 MB in that time.
-    assert!(
-        received - before < 1_000_000,
-        "{} bytes after the revocation",
-        received - before
-    );
-    // The step was nowhere near done: 128 frames of 30 KB, of which the reader took far fewer.
-    assert!(received < 3_000_000, "{received}");
 }
 
 // --- live credential changes (issue #577, ADR 0031) -------------------------------------------------
