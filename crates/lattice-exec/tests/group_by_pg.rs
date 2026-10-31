@@ -269,3 +269,99 @@ fn group_by_and_having_answer_as_postgresql_does() {
         assert_eq!(&got, want, "{sql}");
     }
 }
+
+/// Two keys give four groups; grouping by the first only would give two.
+fn two_keys_make_four_groups() -> Result<(), String> {
+    let mut f = fixture();
+    let mut s = common::admin();
+    common::ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE gk (id INT PRIMARY KEY, a INT, b INT)",
+    );
+    common::ok(
+        &mut f.db,
+        &mut s,
+        "INSERT INTO gk VALUES (1, 1, 1), (2, 1, 2), (3, 2, 1), (4, 2, 2), (5, 2, 2)",
+    );
+    let got = common::rows(
+        &mut f.db,
+        &mut s,
+        "SELECT a, b, count(*) FROM gk GROUP BY a, b ORDER BY a, b",
+    );
+    let want = [
+        ["1", "1", "1"],
+        ["1", "2", "1"],
+        ["2", "1", "1"],
+        ["2", "2", "2"],
+    ];
+    if got != want {
+        return Err(format!("{got:?}"));
+    }
+    Ok(())
+}
+
+#[test]
+fn a_group_by_that_uses_only_its_first_key_is_caught() {
+    assert_eq!(two_keys_make_four_groups(), Ok(()));
+    lattice_core::bugs::enable(lattice_core::bugs::Bug::GroupKeyTruncated);
+    let caught = two_keys_make_four_groups().is_err();
+    lattice_core::bugs::clear();
+    assert!(caught);
+}
+
+#[test]
+fn the_groups_are_charged_to_the_statement_memory_budget() {
+    use lattice_exec::ExecLimits;
+    let mut f = fixture();
+    let mut s = common::admin();
+    common::ok(
+        &mut f.db,
+        &mut s,
+        "CREATE TABLE t (id INT PRIMARY KEY, g INT)",
+    );
+    let values: Vec<String> = (0..200).map(|i| format!("({i}, {i})")).collect();
+    common::ok(
+        &mut f.db,
+        &mut s,
+        &format!("INSERT INTO t VALUES {}", values.join(", ")),
+    );
+    let limits = |memory_bytes| ExecLimits {
+        timeout_ms: None,
+        memory_bytes,
+        transaction_bytes: u64::MAX,
+        max_timeout_ms: None,
+    };
+    // 40 KiB holds the 200 scanned rows and one aggregate row, but not 200 groups on top of them.
+    s.set_limits(limits(40 * 1024));
+    assert_eq!(
+        s.execute(&mut f.db, "SELECT count(*) FROM t")
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+    let e = s
+        .execute(&mut f.db, "SELECT g, count(*) FROM t GROUP BY g")
+        .unwrap_err();
+    assert_eq!(
+        (e.sqlstate(), e.kind()),
+        ("53200", lattice_exec::ErrorKind::Limit)
+    );
+    // A few groups fit in the same budget, and the same query fits a larger one.
+    assert_eq!(
+        s.execute(&mut f.db, "SELECT g % 5, count(*) FROM t GROUP BY g % 5")
+            .unwrap()
+            .rows
+            .len(),
+        5
+    );
+    s.set_limits(limits(1024 * 1024));
+    assert_eq!(
+        s.execute(&mut f.db, "SELECT g, count(*) FROM t GROUP BY g")
+            .unwrap()
+            .rows
+            .len(),
+        200
+    );
+}

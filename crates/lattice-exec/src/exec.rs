@@ -597,6 +597,9 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             for g in group_by {
                 key.push(eval(g, &t.vals, &self.ctx())?);
             }
+            if bugs::active(Bug::GroupKeyTruncated) {
+                key.truncate(1);
+            }
             groups.entry(GroupKey(key)).or_default().push(i);
         }
         let mut out = Vec::with_capacity(groups.len());
@@ -604,6 +607,10 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             self.gov.check()?;
             let group_rows: Vec<&Tuple> = members.iter().filter_map(|i| rows.get(*i)).collect();
             let mut vals = key.0;
+            // Keep the row the width the plan says even with the planted defect.
+            while vals.len() < group_by.len() {
+                vals.push(Datum::Null);
+            }
             vals.extend(self.aggregate(&group_rows, calls)?);
             self.gov.charge(row_cost(&vals))?;
             out.push(Tuple { key: None, vals });

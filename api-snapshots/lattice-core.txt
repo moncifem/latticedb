@@ -89,6 +89,7 @@ pub lattice_core::bugs::Bug::GatewayQueryStringAccepted
 pub lattice_core::bugs::Bug::GatewayRevalidationSkipped
 pub lattice_core::bugs::Bug::GrantReadOnlyTreatedAsWrite
 pub lattice_core::bugs::Bug::GrantTableMatchByPrefix
+pub lattice_core::bugs::Bug::GroupKeyTruncated
 pub lattice_core::bugs::Bug::GuardBitNotRequested
 pub lattice_core::bugs::Bug::GuardRewriteUnstaged
 pub lattice_core::bugs::Bug::HlcCounterStuck
@@ -148,7 +149,7 @@ pub const lattice_core::bugs::Bug::BEARER: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CATALOG_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::CRDT: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::CRDT_PEER: [lattice_core::bugs::Bug; 9]
-pub const lattice_core::bugs::Bug::EXEC_AGGREGATE: [lattice_core::bugs::Bug; 1]
+pub const lattice_core::bugs::Bug::EXEC_AGGREGATE: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::EXEC_DEFINITIONS: [lattice_core::bugs::Bug; 1]
 pub const lattice_core::bugs::Bug::EXEC_INDEX: [lattice_core::bugs::Bug; 2]
 pub const lattice_core::bugs::Bug::FEED_BOUND: [lattice_core::bugs::Bug; 3]
