@@ -985,6 +985,41 @@ impl Binder<'_> {
                 }
                 Ok(call(vec![a], SqlType::Integer))
             }
+            "initcap" => {
+                if n != 1 {
+                    return bad_arity("1");
+                }
+                let a = self.require_text(take(args), span)?;
+                Ok(call(vec![a], SqlType::Text))
+            }
+            "lpad" | "rpad" => {
+                if !(2..=3).contains(&n) {
+                    return bad_arity("2 or 3");
+                }
+                let mut out = Vec::with_capacity(n);
+                for (i, a) in args.into_iter().enumerate() {
+                    out.push(if i == 1 {
+                        self.require_integer(a, span)?
+                    } else {
+                        self.require_text(a, span)?
+                    });
+                }
+                Ok(call(out, SqlType::Text))
+            }
+            "split_part" => {
+                if n != 3 {
+                    return bad_arity("3");
+                }
+                let mut out = Vec::with_capacity(n);
+                for (i, a) in args.into_iter().enumerate() {
+                    out.push(if i == 2 {
+                        self.require_integer(a, span)?
+                    } else {
+                        self.require_text(a, span)?
+                    });
+                }
+                Ok(call(out, SqlType::Text))
+            }
             "substring" => {
                 if !(2..=3).contains(&n) {
                     return bad_arity("2 or 3");

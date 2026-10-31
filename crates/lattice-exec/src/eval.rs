@@ -640,6 +640,75 @@ fn function(name: &str, a: &[Datum], ty: SqlType, ctx: &EvalCtx<'_>) -> Result<D
             Datum::Bytes(b) => Ok(Datum::Int(i64::try_from(b.len()).unwrap_or(i64::MAX))),
             _ => Err(ExecError::bind_type("length needs text or bytea")),
         },
+        "initcap" => {
+            let s = text_arg(arg(0)?)?;
+            admit_value(ctx.bounds, (s.len() as u64).saturating_mul(3))?;
+            let mut out = String::with_capacity(s.len());
+            let mut in_word = false;
+            for c in s.chars() {
+                if !c.is_alphanumeric() {
+                    in_word = false;
+                    out.push(c);
+                    continue;
+                }
+                if in_word {
+                    out.extend(c.to_lowercase());
+                } else {
+                    out.extend(c.to_uppercase());
+                }
+                in_word = true;
+            }
+            Ok(Datum::Text(out))
+        }
+        "lpad" | "rpad" => {
+            let s = text_arg(arg(0)?)?;
+            let want = int_arg(arg(1)?)?;
+            let fill = a.get(2).map(text_arg).transpose()?.unwrap_or(" ");
+            let want = usize::try_from(want.max(0)).unwrap_or(usize::MAX);
+            // Characters take up to four bytes; refuse before building a huge string.
+            admit_value(ctx.bounds, (want as u64).saturating_mul(4))?;
+            let have = s.chars().count();
+            if want <= have {
+                return Ok(Datum::Text(s.chars().take(want).collect()));
+            }
+            if fill.is_empty() {
+                return Ok(Datum::Text(s.to_string()));
+            }
+            let pad: String = fill.chars().cycle().take(want - have).collect();
+            Ok(Datum::Text(if name == "lpad" {
+                format!("{pad}{s}")
+            } else {
+                format!("{s}{pad}")
+            }))
+        }
+        "split_part" => {
+            let s = text_arg(arg(0)?)?;
+            let delim = text_arg(arg(1)?)?;
+            let n = int_arg(arg(2)?)?;
+            if n == 0 {
+                return Err(ExecError::eval("22023", "field position must not be zero"));
+            }
+            if delim.is_empty() {
+                // No delimiter: the whole string is the only field, and field -1 counts from the end.
+                return Ok(Datum::Text(if n == 1 || n == -1 {
+                    s.to_string()
+                } else {
+                    String::new()
+                }));
+            }
+            let parts: Vec<&str> = s.split(delim).collect();
+            let at = if n > 0 {
+                usize::try_from(n - 1).ok()
+            } else {
+                parts
+                    .len()
+                    .checked_sub(usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX))
+            };
+            Ok(Datum::Text(
+                at.and_then(|i| parts.get(i))
+                    .map_or_else(String::new, |p| (*p).to_string()),
+            ))
+        }
         "substring" => {
             let s = text_arg(arg(0)?)?;
             let start = int_arg(arg(1)?)?;
@@ -1238,6 +1307,8 @@ mod tests {
                             "upper",
                             "length",
                             "substring",
+                            "lpad",
+                            "split_part",
                             "position",
                             "trim_both",
                             "trim_leading",
