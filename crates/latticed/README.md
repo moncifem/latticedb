@@ -4,7 +4,7 @@
 handler answers `SELECT 1` and other SQL returns `0A000`; with `--data-dir` it serves the
 single-table SQL executor over a durable log (see below). Simple and extended query framing are handled by the existing
 session. The default is explicit development trust on loopback. Configured SCRAM mode requires
-TLS and refuses plaintext startup or trust fallback. The five-driver matrix is not established (#413); one client, psql, is run against the real binary by `tests/drivers/psql` (see the Phase 2 gate page). CancelRequest routes a cooperative token and cannot preempt blocking I/O.
+TLS and refuses plaintext startup or trust fallback. The five-driver matrix is not established (#413). `tests/drivers/psql` runs psql against the real binary, and `tests/drivers/smoke.sh` runs node-postgres, pgx and pg8000 in text mode over loopback trust (the `driver-smoke` workflow; see the Phase 2 gate page). CancelRequest routes a cooperative token and cannot preempt blocking I/O.
 
 ```sh
 cargo run -p latticed -- --auth development-trust --listen 127.0.0.1:5432 --max-connections 32
@@ -474,5 +474,6 @@ gets. A table the principal may not see answers like a table that does not exist
 
 It is served over HTTP as `POST /mcp` on the sync gateway port (`--gateway-listen` with `--gateway-tokens`; issue
 #527, part 1, with the Host, Origin and content-type defences of issue #580). Each request is verified against the
-bearer token and served as that token's principal, from `ws/mcp_http.rs`. There is no stdio transport. See
-[docs/mcp-v0.md](../../docs/mcp-v0.md#http-transport).
+bearer token and served as that token's principal, from `ws/mcp_http.rs`. `latticed` has no stdio transport: the
+`lattice mcp` command in `lattice-cli` is a stdio proxy to this endpoint, for loopback `http://` URLs only (see
+[crates/lattice-cli/README.md](../lattice-cli/README.md)). See [docs/mcp-v0.md](../../docs/mcp-v0.md#http-transport).

@@ -17,6 +17,14 @@ Allowed workspace dependencies: lattice-abi, lattice-lsl, lattice-proto.
 - `cursor_store`: the `CursorStore` trait for a saved feed cursor, `encode_cursor` and `decode_cursor` (24 lowercase
   hex digits and one optional newline; anything else is refused) and an in-memory store. No file I/O here: the
   owner-only file store belongs to the CLI layer.
+- `backoff`: `Backoff`, a pure reconnect delay with a ceiling and full jitter. The caller owns the clock and
+  supplies the jitter sample; the ceiling never exceeds the cap, and a delay can be zero. It is a state machine
+  only. The module `reconnect` (below) is the decision layer that uses it.
+- `reconnect`: `Supervisor`, a pure decision function over `Backoff` (`src/reconnect.rs`, #620). The caller reports
+  each event as an `Input` and carries out the `Decision` (`RetryAfter(ms)` or `Stop`). It is not yet wired into the
+  `lattice watch` loop, which keeps its own local doubling wait.
+- `mcp`: the MCP server v0 message codec, tool registry and scoping layer (`docs/mcp-v0.md`). The `lattice_read`,
+  `lattice_write` and `lattice_subscribe` tool backend lives in `latticed`, not here.
 
 ## Conformance suite
 

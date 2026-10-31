@@ -18,7 +18,9 @@ That is all the quickstart claims, and it is exactly what the quickstart smoke t
 `latticed`, start it, run the README SQL through `psql`, stop it, start it again on the same data
 directory and check the documented restart behaviour below.
 
-Platforms: macOS arm64, Linux x86_64, Linux arm64. Not Windows. The Linux archives are built on Ubuntu
+Platforms: macOS arm64, Linux x86_64, Linux arm64. Not Windows. A non-blocking CI job (`windows-check.yml`,
+[#552](https://github.com/moncifem/latticedb/issues/552)) type-checks `lattice-cli` and `latticed` for Windows; it builds no
+binary and runs no test, so it is not platform support. The Linux archives are built on Ubuntu
 22.04 and smoke-tested on Debian 12 and Ubuntu 22.04; the measured minimum glibc is printed in the
 release notes ([#588](https://github.com/moncifem/latticedb/issues/588)).
 
@@ -196,10 +198,11 @@ psql -h 127.0.0.1 -p 5432 -U dev
 
 In SCRAM mode use `"host=... user=ACCOUNT sslmode=verify-full sslrootcert=ca.pem"` and enter the
 account's password. The smoke test and the socket tests use `psql` and a plain client that frames
-messages itself. node-postgres and pgx are run in text mode by `tests/drivers/smoke.sh` in CI
-([#576](https://github.com/moncifem/latticedb/issues/576)); each needs the setting in the known issues
-table below. No Python driver is run yet: psycopg 3 is LGPL-3.0, outside the licence policy, and its
-permissively licensed replacement is tracked in [#710](https://github.com/moncifem/latticedb/issues/710).
+messages itself. node-postgres, pgx and pg8000 are run in text mode by `tests/drivers/smoke.sh` in CI
+(`driver-smoke`, [#576](https://github.com/moncifem/latticedb/issues/576),
+[#710](https://github.com/moncifem/latticedb/issues/710)) against a release build over loopback trust; each
+needs the setting in the known issues table below. psycopg 3 is not used: it is LGPL-3.0, outside the
+licence policy, so pg8000 is the Python driver that runs.
 JDBC has not been run ([#413](https://github.com/moncifem/latticedb/issues/413)). Results are text format
 only.
 
@@ -217,33 +220,52 @@ names only, refuses its first `CREATE TABLE` (SQLSTATE `55000`) until `latticed`
 backup first. A new directory needs nothing. Tables that earlier builds created keep their names but cannot be
 queried. A quoted column name with a capital letter is refused (`0A000`). The smoke test asserts the restart.
 
+### Repairing a torn log tail
+
+`lattice log repair` (`lattice-cli`, [#475](https://github.com/moncifem/latticedb/issues/475), commit `e700711e`)
+reports damage in a write-ahead log. A dry run is the default and changes no byte. With `--apply` it removes only a
+torn tail, the bytes recovery itself would discard, after copying the newest segment to `<segment>.repair-backup`
+and verifying the copy. Interior damage, a checksum-valid frame with the wrong LSN
+([#441](https://github.com/moncifem/latticedb/issues/441); `formats/wal-v1.md`), a missing segment and an unreadable
+header are refused and left untouched; `formats/wal-v1.md` describes the manual procedure for them. The command
+refuses while the log's lock is held, so stop the server that owns the log first.
+
 ## Connect an agent client
 
 What an agent client can do today: connect as any PostgreSQL client and run the SQL above, as an
-account with table-level read, write and ddl grants (SCRAM mode) or allow-all (loopback trust). That
-is the whole agent surface on `main`.
+account with table-level read, write and ddl grants (SCRAM mode) or allow-all (loopback trust). Over HTTP,
+the experimental gateway serves three MCP tools, `lattice_read`, `lattice_write` and `lattice_subscribe`, with a
+bearer token (below). Those are the agent surfaces on `main`.
 
-What is not shipped, so no agent client can use it yet:
+What is only partly shipped, so no agent client can rely on it yet:
 
 - A usable sync gateway. A WebSocket gateway (issue [#524](https://github.com/moncifem/latticedb/issues/524), commit `e03b319a`) is on
   `main` behind `--gateway-listen`, with bearer-token authentication
-  ([ADR 0031](adr/0031-bearer-token-authentication.md)). It is experimental: loopback only, plaintext (there
-  is no TLS on the gateway port, so a non-loopback address is refused), rows only and read only, with no
-  idle deadline and no per-principal byte budget. Bearer-token files are reloaded when they change and revoked
-  connections are closed ([#577](https://github.com/moncifem/latticedb/issues/577)). It is not covered by the quickstart
-  smoke test.
-- MCP over stdio. `lattice-sdk` contains the MCP message codec, tool schemas and a grant layer
+  ([ADR 0031](adr/0031-bearer-token-authentication.md)). It is experimental: plaintext only on loopback. A
+  non-loopback address is refused unless `--tls-cert`, `--tls-key` and `--gateway-tokens` are all set (TLS landed
+  in commit `4b297405`, [#578](https://github.com/moncifem/latticedb/issues/578)). It serves rows only and reads
+  only for the sync protocol, with no idle deadline and no per-principal byte budget. Bearer-token files are
+  reloaded when they change and revoked connections are closed
+  ([#577](https://github.com/moncifem/latticedb/issues/577)). It is not covered by the quickstart smoke test.
+- MCP over HTTP and stdio. `lattice-sdk` contains the MCP message codec, tool schemas and a grant layer
   ([mcp-v0.md](mcp-v0.md)). The tool backend in `latticed` serves `lattice_read`, `lattice_write` and
   `lattice_subscribe` (issues [#526](https://github.com/moncifem/latticedb/issues/526) and [#579](https://github.com/moncifem/latticedb/issues/579)); `lattice_subscribe` is a long poll that waits at most 30 seconds.
   Over HTTP the tools are served as `POST /mcp` on the experimental gateway (issue
-  [#527](https://github.com/moncifem/latticedb/issues/527), part 1), with a bearer token, on loopback and without
-  TLS. No stdio transport exists. The Claude Code CLI (2.1.314) was run once against this endpoint by hand, with
-  an HTTP MCP entry and a bearer header (`lattice_write` then `lattice_read`); no other client has been run, and the
-  tests send raw requests.
-- `lattice watch`.
+  [#527](https://github.com/moncifem/latticedb/issues/527), part 1), with a bearer token. Off loopback it needs TLS
+  and tokens, as above. `--gateway-allowed-host` adds `Host` names that `POST /mcp` accepts
+  ([#774](https://github.com/moncifem/latticedb/issues/774)). The stdio transport is `lattice mcp` in `lattice-cli`
+  ([#775](https://github.com/moncifem/latticedb/issues/775)): it reads one JSON-RPC message per line and sends it
+  to `POST /mcp` on a loopback `http://` URL, with the token from an owner-only file. It refuses `https://` and
+  non-loopback addresses, because the CLI has no TLS client. The Claude Code CLI (2.1.314) was run once against
+  this endpoint by hand, with an HTTP MCP entry and a bearer header (`lattice_write` then `lattice_read`); no
+  other client has been run, and the tests send raw requests.
+- `lattice watch table/NAME` connects to the gateway on a loopback `ws://` address with a bearer token, prints each
+  change and acknowledges it. `--cursor-file` keeps the cursor in an owner-only file. It has no TLS client, it retries
+  with its own doubling wait rather than the SDK reconnect supervisor (not wired in yet), and no test runs it against a live gateway ([#583](https://github.com/moncifem/latticedb/issues/583);
+  the network loop is [PR #787](https://github.com/moncifem/latticedb/pull/787), merged as `6cb2bce6`).
 
 Apart from that one manual Claude Code run, no MCP client has been run against `latticed`, so this page gives no
-client configuration and lists every other client as untested. When a transport lands, each client entry will be added only after someone ran
+client configuration and lists every other client as untested. Each client entry will be added only after someone ran
 it, with the date and client version. The design of the live-collaboration slice that these pieces are
 building toward is [live-collaboration.md](design/live-collaboration.md); it is a proposal, not shipped
 behaviour.
@@ -264,6 +286,10 @@ through `psql`. There is no push: agents poll.
 for each of five tasks, checks a hostile title, restarts the server on the same data directory and
 removes what it made. The conventions file lists the subset limits the board works around. The board has no CI
 job yet; run the script by hand with `LATTICE_BIN_DIR` set to the binaries under test.
+
+The Claude Code session hooks in `integrations/claude-code/hooks` print a bounded digest of the open tasks at
+session start, and the board events after a saved cursor on each prompt. `tools/test_agent_hooks.py` runs in the
+`tools-tests` workflow. No interactive client session with these hooks is recorded here.
 
 ## Experimental and unstable
 
@@ -302,8 +328,8 @@ optional models plugin; Windows.
 | [#675](https://github.com/moncifem/latticedb/issues/675) | An unknown type name answers `0A000` instead of `42704`. |
 | [#360](https://github.com/moncifem/latticedb/issues/360) | No SCRAM channel binding; a client that skips certificate verification can be relayed. |
 | [#361](https://github.com/moncifem/latticedb/issues/361) | No security event log and no failed-authentication backoff for pgwire. |
-| No TLS on the gateway | The gateway listens on loopback only and has no TLS ([#578](https://github.com/moncifem/latticedb/issues/578)); do not expose it. The pgwire listener can use TLS (SCRAM mode). |
-| MCP transport | HTTP `POST /mcp` on the experimental loopback gateway only, with a bearer token and no TLS; no stdio transport (above). |
+| Gateway idle deadline and TLS | The gateway port can use TLS (`--tls-cert`, `--tls-key`), and a non-loopback bind needs TLS and `--gateway-tokens`. The idle deadline is not built ([#578](https://github.com/moncifem/latticedb/issues/578)). Do not expose a plaintext gateway. The pgwire listener can use TLS (SCRAM mode). |
+| MCP transport | HTTP `POST /mcp` on the experimental gateway, with a bearer token; TLS and tokens are required off loopback. The stdio proxy `lattice mcp` reaches only a loopback, plaintext gateway. |
 | Containers | The image's entrypoint passes `--stdin-control off` and prints usage with no arguments. A published port needs SCRAM over TLS. `tests/image/smoke.sh` (CI job `image-smoke`) tests the amd64 image only; the `nightly` image predates this entrypoint until the next nightly build. See [Run in a container](#run-in-a-container). |
 | Platforms | No Windows (no signal handling or installer). Linux needs glibc as stated in the release notes. |
 

@@ -37,7 +37,9 @@ generated file is stale, and when the text holds an email address, an absolute u
    Claude Code asks you to approve a project-scoped server the first time it sees `.mcp.json`.
 
 The server side is `latticed --gateway-listen 127.0.0.1:PORT --gateway-tokens FILE`. The endpoint is
-`POST /mcp`, loopback only, with no TLS yet, and it is experimental (see `docs/mcp-v0.md`).
+`POST /mcp`. Plaintext is accepted only on a loopback address; a non-loopback `--gateway-listen` needs
+`--tls-cert`, `--tls-key` and `--gateway-tokens` as well (TLS landed in `4b297405`). The endpoint is experimental
+(see `docs/mcp-v0.md`).
 
 ## Stdio variant
 
