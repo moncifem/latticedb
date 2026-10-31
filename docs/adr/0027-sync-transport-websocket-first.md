@@ -69,3 +69,9 @@ non-loopback `--gateway-listen` needs TLS and `--gateway-tokens`; otherwise latt
 is for loopback development only. Loopback is `127.0.0.0/8` and `::1` (as in the PostgreSQL listener); an IPv4-mapped address such as `[::ffff:127.0.0.1]` needs TLS and tokens. `POST /mcp` answers
 only to its bound address, to localhost on the bound port, and to the names given with `--gateway-allowed-host` (#774, exact match, at most 16), so any other `Host` gets `403`. `/sync` checks that `Host` is present and well formed, and
 refuses any browser `Origin`. Idle deadlines and the rest of #578 are still open.
+
+Per-principal connection and long-poll limits (issue #529, part 1) are implemented in `latticed::ws`:
+`--gateway-max-connections-per-principal`, `--gateway-reserved-connections`,
+`--gateway-max-long-polls-per-principal` and `--gateway-max-long-polls` (defaults 8, 4, 4 and 16). They change no
+frame and no byte of the wire format, and add no write channel. The output byte budget for a slow reader (#529 part 2)
+and a per-principal executor budget are not implemented.

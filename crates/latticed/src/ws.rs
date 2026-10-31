@@ -7,6 +7,10 @@
 //!    most [`GatewayConfig::max_handshakes`] that have not finished the upgrade; the next one gets
 //!    `503` and is closed. These counters belong to the gateway. They are not the PostgreSQL
 //!    listener's worker count, cancel registry or TLS start limiter, which this module never touches.
+//!    The principal is only known once the token verified, so the per-principal limits (issue #529)
+//!    are applied then, still before the `101`: see [`GatewayConfig::max_connections_per_principal`]
+//!    and [`GatewayConfig::reserved_connections`]. A refusal there is a `503` and is counted
+//!    ([`GatewayHandle::limit_refusals`]).
 //! 2. **Upgrade.** The request head is read under one absolute deadline
 //!    ([`GatewayConfig::handshake_timeout`]) and at most [`GatewayConfig::max_head`] bytes, then
 //!    judged by `websocket::parse_upgrade_with` (method, version, subprotocol `lattice.sync.v1`,
@@ -84,6 +88,7 @@ use lattice_api::websocket::{
     UpgradeConfig, close_code,
 };
 use lattice_core::bugs::{self, Bug};
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -188,6 +193,21 @@ pub struct GatewayConfig {
     pub max_connections: usize,
     /// Connections that have not finished the upgrade, `1..=max_connections`.
     pub max_handshakes: usize,
+    /// Connections (WebSocket and `POST /mcp` alike) one principal may hold at once, `1..=1024`. The
+    /// next one is refused with `503` before the upgrade. A value above `max_connections` has no
+    /// effect beyond the global cap. The development principal is one principal.
+    pub max_connections_per_principal: usize,
+    /// Places of `max_connections` kept for principals that hold no connection yet, `0..=1024`. A
+    /// principal that already holds a connection is refused (`503`) while more than
+    /// `max_connections - reserved_connections` connections are open, so a few busy principals cannot
+    /// take every place from a principal that is new. A value of `max_connections` or more means
+    /// every principal gets one connection and no principal gets a second.
+    pub reserved_connections: usize,
+    /// `lattice_subscribe` long polls (a `wait_ms` above zero) one principal may have waiting, `1..=1024`.
+    /// The next one is answered `503` and does not wait.
+    pub max_long_polls_per_principal: usize,
+    /// Long polls waiting at once on the whole gateway, `1..=1024`.
+    pub max_long_polls: usize,
     /// One absolute budget from accept to the `101` response.
     pub handshake_timeout: Duration,
     /// Largest request head in bytes, `512..=65536`.
@@ -232,6 +252,11 @@ pub struct GatewayConfig {
     /// Extra `Host` names `POST /mcp` answers to, beyond the bound address and `localhost` on the bound
     /// port (`--gateway-allowed-host`). At most [`MAX_ALLOWED_HOSTS`]; none by default.
     pub allowed_hosts: Vec<AllowedHost>,
+    /// How long a `POST /mcp` connection keeps reading after its response, so the answer is not
+    /// destroyed by a reset, `1 ms..=60 s`. Only tests change it (to hold a lingering connection
+    /// without relying on a short window).
+    #[doc(hidden)]
+    pub mcp_linger: Duration,
 }
 
 impl Default for GatewayConfig {
@@ -241,6 +266,10 @@ impl Default for GatewayConfig {
             tls: None,
             max_connections: 32,
             max_handshakes: 8,
+            max_connections_per_principal: 8,
+            reserved_connections: 4,
+            max_long_polls_per_principal: 4,
+            max_long_polls: 16,
             handshake_timeout: Duration::from_secs(5),
             max_head: websocket::DEFAULT_MAX_HEAD,
             origins: OriginPolicy::NoBrowsers,
@@ -259,6 +288,7 @@ impl Default for GatewayConfig {
             ws_ping_interval: Duration::from_secs(30),
             mcp_workspace: "default".to_owned(),
             allowed_hosts: Vec::new(),
+            mcp_linger: CLOSE_GRACE,
         }
     }
 }
@@ -280,6 +310,17 @@ impl GatewayConfig {
         if self.max_handshakes == 0 || self.max_handshakes > self.max_connections {
             return bad("gateway handshakes must be 1..=max connections");
         }
+        if !(1..=1024).contains(&self.max_connections_per_principal) {
+            return bad("gateway connections per principal must be 1..=1024");
+        }
+        if self.reserved_connections > 1024 {
+            return bad("gateway reserved connections must be 0..=1024");
+        }
+        if !(1..=1024).contains(&self.max_long_polls_per_principal)
+            || !(1..=1024).contains(&self.max_long_polls)
+        {
+            return bad("gateway long polls must be 1..=1024");
+        }
         if !(MIN_HEAD..=65_536).contains(&self.max_head) {
             return bad("gateway request head limit must be 512..=65536 bytes");
         }
@@ -299,6 +340,9 @@ impl GatewayConfig {
             || self.credential_poll > Duration::from_secs(5)
         {
             return bad("gateway credential poll must be 1 ms to 5 s");
+        }
+        if self.mcp_linger.is_zero() || self.mcp_linger > Duration::from_secs(60) {
+            return bad("gateway MCP linger must be 1 ms to 60 s");
         }
         if self.failure_limit == 0 {
             return bad("gateway failure limit must be positive");
@@ -557,6 +601,198 @@ impl Drop for Slot {
     }
 }
 
+/// Why a connection or a long poll was refused after the principal was known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LimitRefusal {
+    /// The principal holds its share of connections already.
+    PerPrincipal,
+    /// The open connections reached the part kept for principals that hold none.
+    Reserved,
+    /// The principal has its share of long polls waiting.
+    PollsPerPrincipal,
+    /// The gateway has its share of long polls waiting.
+    PollsGlobal,
+}
+
+/// How many requests the gateway refused because of its limits, since it started. Each was answered
+/// `503`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LimitRefusals {
+    /// Refused at accept, before any token was read: `max_connections` or `max_handshakes` was used up.
+    pub global: u64,
+    /// Refused because the principal held `max_connections_per_principal` already.
+    pub per_principal: u64,
+    /// Refused because only the reserved places were left.
+    pub reserved_share: u64,
+    /// Long polls refused (the per-principal or the global cap).
+    pub long_polls: u64,
+}
+
+/// What one principal holds.
+#[derive(Default)]
+struct Held {
+    connections: usize,
+    polls: usize,
+}
+
+#[derive(Default)]
+struct QuotaState {
+    /// Only principals that hold something: an entry is removed when its last holding is released, so
+    /// the map is never larger than the number of open connections.
+    held: BTreeMap<String, Held>,
+    polls: usize,
+}
+
+/// Per-principal connection and long-poll limits (issue #529, part 1). They are counted apart from
+/// [`Counters`], which sees no principal, and apart from the PostgreSQL listener's registry.
+struct Quotas {
+    per_principal: usize,
+    reserved: usize,
+    max_live: usize,
+    polls_per_principal: usize,
+    max_polls: usize,
+    state: Mutex<QuotaState>,
+    refused_per_principal: AtomicU64,
+    refused_reserved: AtomicU64,
+    refused_polls: AtomicU64,
+    refused_global: AtomicU64,
+}
+
+impl Quotas {
+    fn new(cfg: &GatewayConfig) -> Arc<Self> {
+        Arc::new(Self {
+            per_principal: cfg.max_connections_per_principal,
+            reserved: cfg.reserved_connections,
+            max_live: cfg.max_connections,
+            polls_per_principal: cfg.max_long_polls_per_principal,
+            max_polls: cfg.max_long_polls,
+            state: Mutex::new(QuotaState::default()),
+            refused_per_principal: AtomicU64::new(0),
+            refused_reserved: AtomicU64::new(0),
+            refused_polls: AtomicU64::new(0),
+            refused_global: AtomicU64::new(0),
+        })
+    }
+
+    /// Takes one connection for `who`. `live` is the number of connections open now, this one
+    /// included. It is read outside the lock, so concurrent upgrades may overshoot the reserved
+    /// boundary by the number of upgrades in flight, never the global cap.
+    fn enter(self: &Arc<Self>, who: &str, live: usize) -> Result<Share, LimitRefusal> {
+        let mut state = locked(&self.state);
+        let held = state.held.get(who).map_or(0, |h| h.connections);
+        if !bugs::active(Bug::GatewayConnectionCapIgnored) {
+            if held >= self.per_principal {
+                self.refused_per_principal.fetch_add(1, Ordering::Relaxed);
+                return Err(LimitRefusal::PerPrincipal);
+            }
+            if held > 0 && live > self.max_live.saturating_sub(self.reserved) {
+                self.refused_reserved.fetch_add(1, Ordering::Relaxed);
+                return Err(LimitRefusal::Reserved);
+            }
+        }
+        state.held.entry(who.to_owned()).or_default().connections += 1;
+        Ok(Share {
+            quotas: Arc::clone(self),
+            who: who.to_owned(),
+        })
+    }
+
+    /// Takes one long-poll place for `who`.
+    fn poll(self: &Arc<Self>, who: &str) -> Result<PollPlace, LimitRefusal> {
+        let mut state = locked(&self.state);
+        let mine = state.held.get(who).map_or(0, |h| h.polls);
+        let refusal = if mine >= self.polls_per_principal {
+            Some(LimitRefusal::PollsPerPrincipal)
+        } else if state.polls >= self.max_polls {
+            Some(LimitRefusal::PollsGlobal)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal
+            && !bugs::active(Bug::GatewayConnectionCapIgnored)
+        {
+            self.refused_polls.fetch_add(1, Ordering::Relaxed);
+            return Err(refusal);
+        }
+        state.polls += 1;
+        state.held.entry(who.to_owned()).or_default().polls += 1;
+        Ok(PollPlace {
+            quotas: Arc::clone(self),
+            who: who.to_owned(),
+        })
+    }
+
+    fn release(&self, who: &str, connection: bool) {
+        let mut state = locked(&self.state);
+        if !connection {
+            state.polls = state.polls.saturating_sub(1);
+        }
+        let empty = state.held.get_mut(who).is_some_and(|h| {
+            if connection {
+                h.connections = h.connections.saturating_sub(1);
+            } else {
+                h.polls = h.polls.saturating_sub(1);
+            }
+            h.connections == 0 && h.polls == 0
+        });
+        if empty {
+            state.held.remove(who);
+        }
+    }
+
+    fn refusals(&self) -> LimitRefusals {
+        LimitRefusals {
+            global: self.refused_global.load(Ordering::Relaxed),
+            per_principal: self.refused_per_principal.load(Ordering::Relaxed),
+            reserved_share: self.refused_reserved.load(Ordering::Relaxed),
+            long_polls: self.refused_polls.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// One connection of one principal; dropping it (on any exit, a panic included) gives it back.
+struct Share {
+    quotas: Arc<Quotas>,
+    who: String,
+}
+
+impl Drop for Share {
+    fn drop(&mut self) {
+        self.quotas.release(&self.who, true);
+    }
+}
+
+/// One waiting long poll; dropping it gives the place back.
+struct PollPlace {
+    quotas: Arc<Quotas>,
+    who: String,
+}
+
+impl Drop for PollPlace {
+    fn drop(&mut self) {
+        self.quotas.release(&self.who, false);
+    }
+}
+
+/// The key a principal is limited under. The development principal and an account cannot collide:
+/// an account prints as `account:NAME`.
+fn principal_key(principal: &Principal) -> String {
+    principal.to_string()
+}
+
+/// The key of the fixed development principal.
+const DEVELOPMENT_KEY: &str = "local-development";
+
+/// What a limit's `503` says. It names the limit, which is the caller's own, and nothing else.
+fn limit_message(refusal: LimitRefusal) -> &'static str {
+    match refusal {
+        LimitRefusal::PerPrincipal => "this account has too many connections",
+        LimitRefusal::Reserved => "the gateway is full",
+        LimitRefusal::PollsPerPrincipal => "this account has too many long polls waiting",
+        LimitRefusal::PollsGlobal => "the gateway has too many long polls waiting",
+    }
+}
+
 fn http_response(status: u16, phrase: &str, extra: &str, body: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 {status} {phrase}\r\n{extra}Connection: close\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
@@ -587,6 +823,7 @@ struct Shared {
     watch: Option<Mutex<CredentialWatch>>,
     bearer: bool,
     counters: Arc<Counters>,
+    quotas: Arc<Quotas>,
     gate: AuthGate,
     epoch: Instant,
     stopping: AtomicBool,
@@ -707,6 +944,7 @@ impl GatewayHandle {
             .map_err(|why| io::Error::new(io::ErrorKind::InvalidInput, why))?;
         let shared = Arc::new(Shared {
             counters: Counters::new(config.max_connections, config.max_handshakes),
+            quotas: Quotas::new(&config),
             gate: AuthGate::new(config.failure_limit, config.failure_window),
             credentials: Mutex::new(Arc::new(store)),
             generation: AtomicU64::new(0),
@@ -738,6 +976,16 @@ impl GatewayHandle {
     /// Connections admitted now, including those still upgrading.
     pub fn open_connections(&self) -> usize {
         self.shared.counters.live.load(Ordering::Acquire)
+    }
+
+    /// `lattice_subscribe` long polls waiting now.
+    pub fn long_polls_waiting(&self) -> usize {
+        locked(&self.shared.quotas.state).polls
+    }
+
+    /// Requests refused by the connection and long-poll limits since the gateway started.
+    pub fn limit_refusals(&self) -> LimitRefusals {
+        self.shared.quotas.refusals()
     }
 
     /// True once the accept thread ended, which only follows a shutdown or a fatal listener error.
@@ -808,6 +1056,7 @@ where
                 let slot = match shared.counters.enter() {
                     Ok(slot) => slot,
                     Err(_) => {
+                        shared.quotas.refused_global.fetch_add(1, Ordering::Relaxed);
                         refuse(&socket, 503, "Service Unavailable", "the gateway is full");
                         continue;
                     }
@@ -909,7 +1158,8 @@ fn serve<S: EventSource>(
         return;
     };
     let mut socket = Transport::new(socket, deadline, shared.cfg.write_timeout);
-    let Some((identity, leftover)) = upgrade(&mut socket, deadline, address, shared, &mut slot)
+    let Some((identity, leftover, _share)) =
+        upgrade(&mut socket, deadline, address, shared, &mut slot)
     else {
         let _ = socket.shutdown();
         return;
@@ -970,7 +1220,7 @@ fn upgrade(
     address: IpAddr,
     shared: &Shared,
     slot: &mut Slot,
-) -> Option<(Identity, Vec<u8>)> {
+) -> Option<(Identity, Vec<u8>, Share)> {
     let cfg = &shared.cfg;
     if let Some(tls) = &cfg.tls {
         socket.upgrade_in_place(tls).ok()?;
@@ -1089,12 +1339,36 @@ fn upgrade(
     } else {
         Identity::Development
     };
+    // The principal is known now. A refusal here is still before the `101`. The share is dropped on
+    // every path out of this function that does not return it.
+    let who = match &identity {
+        Identity::Development => DEVELOPMENT_KEY.to_owned(),
+        Identity::Account(principal, _) => principal_key(principal),
+    };
+    let share = match shared
+        .quotas
+        .enter(&who, shared.counters.live.load(Ordering::Acquire))
+    {
+        Ok(share) => share,
+        Err(refusal) => {
+            reply(
+                socket,
+                &http_response(
+                    503,
+                    "Service Unavailable",
+                    "Retry-After: 1\r\n",
+                    limit_message(refusal),
+                ),
+            );
+            return None;
+        }
+    };
     let response = found.response();
     if write_all_by(socket, &response, deadline).is_err() {
         return None;
     }
     let leftover = buf.get(used..).unwrap_or_default().to_vec();
-    Some((identity, leftover))
+    Some((identity, leftover, share))
 }
 
 enum Flow {
@@ -1748,5 +2022,159 @@ mod tests {
             ..GatewayConfig::default()
         };
         assert!(remote.validate().unwrap_err().to_string().contains("TLS"));
+    }
+
+    fn quotas(per_principal: usize, reserved: usize, max_live: usize) -> Arc<Quotas> {
+        Quotas::new(&GatewayConfig {
+            max_connections: max_live,
+            max_connections_per_principal: per_principal,
+            reserved_connections: reserved,
+            max_long_polls_per_principal: 1,
+            max_long_polls: 2,
+            ..GatewayConfig::default()
+        })
+    }
+
+    #[test]
+    fn one_principal_stops_at_its_cap_and_others_are_not_affected() {
+        let quotas = quotas(2, 0, 32);
+        let a1 = quotas.enter("account:a", 1).unwrap();
+        let _a2 = quotas.enter("account:a", 2).unwrap();
+        assert_eq!(
+            quotas.enter("account:a", 3).err(),
+            Some(LimitRefusal::PerPrincipal)
+        );
+        // Another principal has its own two places.
+        let _b1 = quotas.enter("account:b", 3).unwrap();
+        let _b2 = quotas.enter("account:b", 4).unwrap();
+        drop(a1);
+        let _a3 = quotas.enter("account:a", 4).unwrap();
+        assert_eq!(quotas.refusals().per_principal, 1);
+    }
+
+    #[test]
+    fn the_reserved_places_are_only_for_principals_that_hold_none() {
+        // 4 places, 2 reserved: a principal that holds one may take places while at most 2 are open.
+        let quotas = quotas(8, 2, 4);
+        let _a1 = quotas.enter("account:a", 1).unwrap();
+        let _a2 = quotas.enter("account:a", 2).unwrap();
+        assert_eq!(
+            quotas.enter("account:a", 3).err(),
+            Some(LimitRefusal::Reserved)
+        );
+        // A principal with nothing may use them.
+        let _b = quotas.enter("account:b", 3).unwrap();
+        let _c = quotas.enter("account:c", 4).unwrap();
+        assert_eq!(quotas.refusals().reserved_share, 1);
+    }
+
+    #[test]
+    fn long_poll_places_are_capped_per_principal_and_globally_and_come_back() {
+        let quotas = quotas(8, 0, 32);
+        let a = quotas.poll("account:a").unwrap();
+        assert_eq!(
+            quotas.poll("account:a").err(),
+            Some(LimitRefusal::PollsPerPrincipal)
+        );
+        let _b = quotas.poll("account:b").unwrap();
+        assert_eq!(
+            quotas.poll("account:c").err(),
+            Some(LimitRefusal::PollsGlobal)
+        );
+        drop(a);
+        let _c = quotas.poll("account:c").unwrap();
+        assert_eq!(quotas.refusals().long_polls, 2);
+    }
+
+    #[test]
+    fn nothing_is_kept_for_a_principal_that_holds_nothing() {
+        let quotas = quotas(2, 0, 32);
+        let share = quotas.enter("account:a", 1).unwrap();
+        let place = quotas.poll("account:a").unwrap();
+        drop(share);
+        // The poll still counts for the principal, so its entry stays until the poll is back.
+        assert_eq!(locked(&quotas.state).held.len(), 1);
+        drop(place);
+        let state = locked(&quotas.state);
+        assert!(state.held.is_empty());
+        assert_eq!(state.polls, 0);
+    }
+
+    #[test]
+    fn a_connection_that_panics_gives_its_place_back() {
+        let quotas = quotas(1, 0, 32);
+        let held = Arc::clone(&quotas);
+        let worker = std::thread::spawn(move || {
+            let _share = held.enter("account:a", 1).unwrap();
+            let _place = held.poll("account:a").unwrap();
+            panic!("a connection thread that panics");
+        });
+        assert!(worker.join().is_err());
+        // Both places are free again: one of each is admitted, and the count is that one, not two.
+        let _share = quotas.enter("account:a", 1).unwrap();
+        let _place = quotas.poll("account:a").unwrap();
+        assert_eq!(locked(&quotas.state).polls, 1);
+    }
+
+    #[test]
+    fn a_planted_ignored_principal_cap_is_caught_by_the_witness() {
+        bugs::clear();
+        bugs::enable(Bug::GatewayConnectionCapIgnored);
+        let quotas = quotas(1, 0, 32);
+        let _first = quotas.enter("account:a", 1).unwrap();
+        let second = quotas.enter("account:a", 2);
+        let poll_first = quotas.poll("account:a").unwrap();
+        let poll_second = quotas.poll("account:a");
+        bugs::clear();
+        drop(poll_first);
+        assert!(second.is_ok(), "the planted bug must admit past the cap");
+        assert!(
+            poll_second.is_ok(),
+            "the planted bug must admit past the poll cap"
+        );
+    }
+
+    #[test]
+    fn the_limits_are_validated_before_binding() {
+        let ok = GatewayConfig {
+            address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            ..GatewayConfig::default()
+        };
+        let cases = [
+            GatewayConfig {
+                max_connections_per_principal: 0,
+                ..ok.clone()
+            },
+            GatewayConfig {
+                max_connections_per_principal: 1025,
+                ..ok.clone()
+            },
+            GatewayConfig {
+                reserved_connections: 1025,
+                ..ok.clone()
+            },
+            GatewayConfig {
+                max_long_polls_per_principal: 0,
+                ..ok.clone()
+            },
+            GatewayConfig {
+                max_long_polls: 0,
+                ..ok.clone()
+            },
+            GatewayConfig {
+                max_long_polls: 1025,
+                ..ok.clone()
+            },
+        ];
+        for case in cases {
+            assert!(case.validate().is_err());
+        }
+        // The defaults are accepted with a single-connection gateway, as the existing tests use.
+        let tiny = GatewayConfig {
+            max_connections: 1,
+            max_handshakes: 1,
+            ..ok
+        };
+        assert!(tiny.validate().is_ok());
     }
 }
