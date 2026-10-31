@@ -36,11 +36,17 @@ fn refused(args: &[&str], message: &str) {
     assert_eq!(stderr(&o), format!("latticed: {message}\n"), "{args:?}");
 }
 
-/// Writes a file with the given unix mode. Key and decoy files must be private (0600).
+/// Writes a file with the given unix mode. Key and decoy files must be private (0600). The file
+/// lives in a per-process directory with mode 0700: a directory that others can write to is refused
+/// as a secret location, and the system temp directory (`/tmp` on Linux) is one.
 fn file_with_mode(name: &str, bytes: &[u8], mode: u32) -> String {
     use std::os::unix::fs::PermissionsExt;
-    let path: PathBuf =
-        std::env::temp_dir().join(format!("latticed-bin-{name}-{}", std::process::id()));
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("latticed-bin-secrets-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = dir.join(name);
+    let _ = std::fs::remove_file(&path);
     std::fs::write(&path, bytes).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
     path.to_string_lossy().into_owned()

@@ -14,11 +14,11 @@ use latticed::ws::{
     AllowedHost, GatewayAuth, GatewayConfig, check_allowed_hosts, check_gateway_exposure,
 };
 use latticed::{
-    Authentication, ServerConfig, ServerHandle, SqlConfig, SqlServer, TlsConfig,
-    require_private_file,
+    Authentication, ServerConfig, ServerHandle, SqlConfig, SqlServer, TlsConfig, files,
 };
 use std::io::Read;
 use std::io::{self};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -56,7 +56,7 @@ fn run() -> Result<Exit, String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows, tables and their column definitions survive a restart. A data directory written before table definitions existed refuses its first CREATE TABLE until --allow-format-upgrade on (older builds cannot open the directory afterwards and there is no downgrade: take a verified backup first); a new directory needs nothing. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Sync gateway (WebSocket, protocol lattice.sync.v1, path /sync, and POST /mcp on the same port; requires --data-dir): --gateway-listen IP:PORT enables it; --gateway-tokens FILE makes it require 'Authorization: Bearer' tokens from a credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (a file that does not load keeps the tokens in use; after 10 minutes of failed loads no token works; SCRAM verifiers and policies are read at start only), otherwise it serves the loopback development principal and only with development-trust; --tls-cert FILE and --tls-key FILE (the same files and key rules as scram-tls) serve the gateway over TLS. A non-loopback --gateway-listen needs both TLS files and --gateway-tokens, or it refuses to start; plaintext is for loopback development only (only 127.0.0.0/8 and ::1 are loopback; an IPv4-mapped address such as [::ffff:127.0.0.1] needs TLS and tokens). The gateway and the PostgreSQL listener share one certificate, so clients must trust a certificate whose name is valid for both ports. With development-trust the TLS files are accepted only with --gateway-listen, and then apply to the gateway alone (the PostgreSQL listener stays loopback trust in plaintext). POST /mcp answers to the bound address and to localhost on the bound port, and to each --gateway-allowed-host NAME[:PORT] given (repeatable, at most 16, needs --gateway-listen; the name is an ASCII DNS name or an IP literal, IPv6 in brackets, matched exactly and case-insensitively with no wildcards; an omitted port is the bound port; a malformed value stops the start); any other Host gets 403. /sync checks only that Host is present and well formed, and refuses any browser Origin. --gateway-max-connections N (default 32) and --gateway-handshake-timeout-ms N (default 5000) bound it, and the handshake timeout covers the TLS handshake. Optional --startup-timeout-ms N bounds startup/TLS/authentication. SIGTERM and SIGINT stop it cleanly; a second signal, or --stop-timeout-ms N (default 30000) elapsing, abandons a stop that does not finish. Stdin control is --stdin-control on|off (default on): with on, the line 'shutdown' on stdin stops the server and so does end-of-file, so run it with stdin held open; under a supervisor or container pass --stdin-control off, which never reads stdin. Exit status: 0 clean stop, 1 failure, 2 forced stop. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key and decoy secret files must not be accessible to group or others (mode 0600)."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows, tables and their column definitions survive a restart. A data directory written before table definitions existed refuses its first CREATE TABLE until --allow-format-upgrade on (older builds cannot open the directory afterwards and there is no downgrade: take a verified backup first); a new directory needs nothing. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Sync gateway (WebSocket, protocol lattice.sync.v1, path /sync, and POST /mcp on the same port; requires --data-dir): --gateway-listen IP:PORT enables it; --gateway-tokens FILE makes it require 'Authorization: Bearer' tokens from a credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (a file that does not load keeps the tokens in use; after 10 minutes of failed loads no token works; SCRAM verifiers and policies are read at start only), otherwise it serves the loopback development principal and only with development-trust; --tls-cert FILE and --tls-key FILE (the same files and key rules as scram-tls) serve the gateway over TLS. A non-loopback --gateway-listen needs both TLS files and --gateway-tokens, or it refuses to start; plaintext is for loopback development only (only 127.0.0.0/8 and ::1 are loopback; an IPv4-mapped address such as [::ffff:127.0.0.1] needs TLS and tokens). The gateway and the PostgreSQL listener share one certificate, so clients must trust a certificate whose name is valid for both ports. With development-trust the TLS files are accepted only with --gateway-listen, and then apply to the gateway alone (the PostgreSQL listener stays loopback trust in plaintext). POST /mcp answers to the bound address and to localhost on the bound port, and to each --gateway-allowed-host NAME[:PORT] given (repeatable, at most 16, needs --gateway-listen; the name is an ASCII DNS name or an IP literal, IPv6 in brackets, matched exactly and case-insensitively with no wildcards; an omitted port is the bound port; a malformed value stops the start); any other Host gets 403. /sync checks only that Host is present and well formed, and refuses any browser Origin. --gateway-max-connections N (default 32) and --gateway-handshake-timeout-ms N (default 5000) bound it, and the handshake timeout covers the TLS handshake. Optional --startup-timeout-ms N bounds startup/TLS/authentication. SIGTERM and SIGINT stop it cleanly; a second signal, or --stop-timeout-ms N (default 30000) elapsing, abandons a stop that does not finish. Stdin control is --stdin-control on|off (default on): with on, the line 'shutdown' on stdin stops the server and so does end-of-file, so run it with stdin held open; under a supervisor or container pass --stdin-control off, which never reads stdin. Exit status: 0 clean stop, 1 failure, 2 forced stop. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key, SCRAM verifier, decoy secret and account policy files must not be accessible to group or others (mode 0600), and their directory must not be writable by group or others (mode 0700 or 0755); a symlink or a FIFO in their place is refused."
             );
             return Ok(Exit::Clean);
         }
@@ -263,7 +263,8 @@ fn run() -> Result<Exit, String> {
             let tls = load_tls(certificates.as_deref(), private_key.as_deref())?
                 .ok_or("--tls-cert required")?;
             gateway_tls = Some(tls.clone());
-            let verifiers = bounded_file(
+            // Verifiers let an attacker guess passwords offline, so they get the key-file rule too.
+            let verifiers = bounded_secret_file(
                 credentials.as_deref().ok_or("--scram-verifiers required")?,
                 MAX_CREDENTIAL_BYTES,
             )?;
@@ -459,13 +460,18 @@ fn bounded_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> 
     read_bounded(file, limit)
 }
 
-/// Like `bounded_file` for key material: the open handle is checked, so the mode that was verified
-/// is the mode of the bytes that are read.
+/// Startup secrets (TLS key, SCRAM verifiers, decoy secret, account policy) use the one private-file
+/// rule of `files::read_private`: an owner-only regular file, in a directory that group and others
+/// cannot write to, opened without following a symlink. The check runs on the open handle, so the
+/// mode that was verified is the mode of the bytes read. Errors name the path, never the contents.
 fn bounded_secret_file(path: &str, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {
-    require_regular(path)?;
-    let file = std::fs::File::open(path).map_err(|_| "cannot open configured security file")?;
-    require_private_file(&file).map_err(|e| format!("{path}: {e}"))?;
-    read_bounded(file, limit)
+    files::read_private(Path::new(path), limit).map_err(|error| match error.kind() {
+        io::ErrorKind::InvalidData => "configured security file exceeds bounds".to_string(),
+        io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied => {
+            "cannot open configured security file".to_string()
+        }
+        _ => format!("{path}: {error}"),
+    })
 }
 
 fn read_bounded(file: std::fs::File, limit: usize) -> Result<Zeroizing<Vec<u8>>, String> {

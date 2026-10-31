@@ -38,6 +38,8 @@ command -v openssl >/dev/null || { echo "openssl not found" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
 rm -rf "$dir"
 mkdir -p "$dir"
+# latticed refuses a secret directory that group or others can write, whatever the umask is.
+chmod 700 "$dir"
 cd "$dir"
 
 # --- certificates: CA and a server certificate with SAN localhost and 127.0.0.1

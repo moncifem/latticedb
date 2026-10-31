@@ -240,15 +240,16 @@ fix rereview are complete; the owner accepted the integration and waived its com
   the peer is gone or does not accept the bytes within the cap, and a plaintext connection has
   nothing to send.
 - Each socket write is capped at 16 KiB so the response deadline is rechecked while a peer drains.
-- `--tls-key` and `--scram-decoy-secret` files must be regular files with no group or other
-  permission bits (mode 0600 or 0400, unix only). All configured security files (including the certificate chain and
-  verifiers) are stat-checked to be regular files before opening, and the key and decoy handles are
-  checked again before reading. The stat and the open are two steps: a local attacker who can replace
-  the path in between can still block startup with a FIFO, and symlinks are followed. A dependency-free
-  atomic open is not available in std.
-  Limits: only the mode bits are checked, not the owner; the verifiers file is not checked; and
-  secret mounts at 0440 or 0444 (common for orchestrator-mounted secrets) are refused until
-  their mode is tightened.
+- Startup secrets are read through one private-file rule: `--tls-key`, `--scram-verifiers`,
+  `--scram-decoy-secret` and `--account-policies`. Each must be a regular file with no group or other
+  permission bits (mode 0600 or 0400; 0440 and 0444 are refused), in a directory that group and others
+  cannot write to. The path is opened without following a symlink, so a symlink is refused (this includes
+  a Kubernetes `..data` secret mount), and a FIFO is refused without blocking startup. The mode is checked
+  on the open file, so the bytes read are the bytes checked. The certificate chain is public: it is only
+  checked to be a regular file, and symlinks are followed for it.
+  Limits: the owner is not checked. Secret mounts at 0440 or 0444 (common for orchestrator-mounted secrets)
+  must be tightened first. On Windows these files are refused entirely, so `scram-tls` and TLS startup do
+  not run there.
 - CancelRequests are limited to 16 per second per client address (IPv6 /64) and 256 per second
   globally; an excess request is dropped without a reply, like an unknown key. This is a resource
   bound, not a DoS guarantee. The budget is charged before the key is looked up, so wrong keys
@@ -427,7 +428,7 @@ server names the gateway address.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--gateway-listen IP:PORT` | off | Enables the gateway. Needs `--data-dir`. Plaintext only on a loopback address. A non-loopback address needs `--tls-cert`, `--tls-key` and `--gateway-tokens`, or latticed refuses to start (#578). |
-| `--tls-cert FILE`, `--tls-key FILE` | none | With `--gateway-listen`, serve the gateway port over TLS. These are the same files and key rules (mode 0600, bounded reads) as the PostgreSQL listener in `scram-tls`, and one certificate serves both. With `--auth development-trust` they are accepted only together with `--gateway-listen` and apply to the gateway alone; the PostgreSQL listener stays loopback trust in plaintext. In `scram-tls` the gateway always uses them. The handshake runs under `--gateway-handshake-timeout-ms` and holds a handshake place, so a stalled handshake is cut and frees its place. Plaintext clients get no HTTP reply on that port. |
+| `--tls-cert FILE`, `--tls-key FILE` | none | With `--gateway-listen`, serve the gateway port over TLS. These are the same files and key rules (owner-only mode 0600 or 0400, a directory that group and others cannot write to, no symlink, bounded reads; see [Timeouts, close and cancel limits](#timeouts-close-and-cancel-limits)) as the PostgreSQL listener in `scram-tls`, and one certificate serves both. With `--auth development-trust` they are accepted only together with `--gateway-listen` and apply to the gateway alone; the PostgreSQL listener stays loopback trust in plaintext. In `scram-tls` the gateway always uses them. The handshake runs under `--gateway-handshake-timeout-ms` and holds a handshake place, so a stalled handshake is cut and frees its place. Plaintext clients get no HTTP reply on that port. |
 | `--gateway-tokens FILE` | none | Require `Authorization: Bearer lat_...` from this credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (SIGHUP is caught only when this flag is set). A file that does not load keeps the tokens in use. SCRAM verifiers and policies are not re-read. The connection is the token's account and its table grants (`--account-policies`, which this flag also allows with `--auth development-trust`). Without it the gateway serves the loopback development principal and only with `--auth development-trust`. |
 | `--gateway-allowed-host NAME[:PORT]` | none | Adds a `Host` that `POST /mcp` answers to, besides this address and `localhost` on the bound port (which stay allowed). Repeatable, at most 16, needs `--gateway-listen`. Exact and case-insensitive: an ASCII DNS name or an IP literal (IPv6 in brackets), no wildcards, no IP ranges, no userinfo or path. Without a port it means the bound port. List only names you control that resolve to this gateway; with a name beyond `localhost`, use TLS and tokens, since a plaintext loopback bind is protected only by the `Origin` refusal against DNS rebinding. A malformed, repeated or default-equal value stops the start (#774). |
 | `--gateway-max-connections N` | 32 | Connections at once, including upgrades in progress (at most 8 of those). The next one gets `503`. |

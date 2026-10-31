@@ -59,8 +59,9 @@ latticed --auth scram-tls --data-dir ./data --account-policies policies.txt \
 
 Plaintext never carries a password, and the server refuses to start in this mode without TLS. Clients
 must verify the certificate (libpq `sslmode=verify-full`); channel binding is not implemented
-([#360](https://github.com/moncifem/latticedb/issues/360)). The key and decoy-secret files must be mode
-0600. `policies.txt` has one `account<TAB>policy` line per account (`allow-all`, `deny-all` or a
+([#360](https://github.com/moncifem/latticedb/issues/360)). The TLS key, verifier, decoy-secret and policy
+files must each be owner-only (mode 0600 or 0400), in a directory that group and others cannot write to; a
+symlink is refused. Windows refuses these files, so `scram-tls` does not start there. `policies.txt` has one `account<TAB>policy` line per account (`allow-all`, `deny-all` or a
 per-table list of read, write and ddl bits); an unlisted account is denied. File formats and the limits
 are in the [listener guide](../crates/latticed/README.md#configured-scram-over-tls).
 

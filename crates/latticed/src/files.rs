@@ -49,7 +49,9 @@ pub(crate) fn require_private_directory(path: &Path) -> io::Result<()> {
 /// Reads at most `limit` bytes of the file at `path`.
 ///
 /// The file must be a regular file with no group or other access, in a directory that group and
-/// others cannot write to. A FIFO or symlink at the path is refused without blocking.
+/// others cannot write to. A FIFO or symlink at the path is refused without blocking. A file over
+/// `limit` bytes fails with `InvalidData`; the other refusals are `Other` (or the open error).
+/// Off Unix every call refuses with `Unsupported`.
 pub fn read_private(path: &Path, limit: usize) -> io::Result<Zeroizing<Vec<u8>>> {
     #[cfg(not(unix))]
     {
@@ -71,7 +73,10 @@ pub fn read_private(path: &Path, limit: usize) -> io::Result<Zeroizing<Vec<u8>>>
         let mut bytes = Zeroizing::new(Vec::new());
         file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > limit {
-            return Err(io::Error::other("credential file is too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "credential file is too large",
+            ));
         }
         Ok(bytes)
     }

@@ -111,9 +111,19 @@ impl Default for ServerConfig {
     }
 }
 
-/// Refuses a secret file (TLS private key, decoy secret) that group or others can access, because a
-/// readable key is a leaked key. Unix only; other platforms rely on the operator's ACLs.
+/// Refuses a secret file (TLS private key, SCRAM verifiers, decoy secret, account policy) that group
+/// or others can access, because a readable key is a leaked key. Every startup secret goes through
+/// this check on the open handle (see `files::read_private`). Other platforms have no owner-only
+/// check here yet, so they refuse with `Unsupported` rather than read the file unchecked.
 pub fn require_private_file(file: &std::fs::File) -> io::Result<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "secret files need an owner-only ACL check that this platform does not have yet",
+        ))
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -126,10 +136,8 @@ pub fn require_private_file(file: &std::fs::File) -> io::Result<()> {
                 "secret file is accessible to group or others (use mode 0600)",
             ));
         }
+        Ok(())
     }
-    #[cfg(not(unix))]
-    let _ = file;
-    Ok(())
 }
 
 /// Largest accepted pre-authentication startup packet (PostgreSQL's own limit is 10000 bytes).

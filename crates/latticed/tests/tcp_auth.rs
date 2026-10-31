@@ -604,6 +604,8 @@ fn cli_refuses_group_or_world_accessible_key_and_decoy_files() {
     use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("latticed-cli-perm-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    // The secrets' directory must not be writable by group or others, whatever the umask was.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let write = |name: &str, bytes: &[u8], mode: u32| {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
@@ -611,7 +613,8 @@ fn cli_refuses_group_or_world_accessible_key_and_decoy_files() {
         path.to_str().unwrap().to_owned()
     };
     let cert = write("cert.pem", b"unused", 0o644);
-    let verifiers = write("accounts", b"unused", 0o644);
+    // The verifier file is a secret too: owner-only, so the check reaches the key and decoy files.
+    let verifiers = write("accounts", b"unused", 0o600);
     let run = |decoy: &str, key: &str| {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_latticed"))
             .args([

@@ -28,9 +28,12 @@ use std::time::{Duration, Instant};
 struct Scratch(PathBuf);
 impl Scratch {
     fn new(name: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
         let path = std::env::temp_dir().join(format!("latticed-sql-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
+        // Secret files live here, so the directory is owner-only whatever the umask was.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Scratch(path)
     }
     fn path(&self, name: &str) -> PathBuf {

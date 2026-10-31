@@ -67,8 +67,7 @@ of the changed models is recorded here. Not run on CI yet; simulation, row integ
 measurement of WP43 are still open.
 
 Network hardening of the `latticed` listener (issue #347, no exit criterion): separate idle timeout, absolute
-per-response write deadline, best-effort TLS `close_notify` on every connection exit, a mode check on the key
-and decoy-secret files (mode bits only; 0440 and 0444 mounts are refused) and a CancelRequest rate limit
+per-response write deadline, best-effort TLS `close_notify` on every connection exit, a private-file check on the TLS key, SCRAM verifier, decoy-secret and account-policy files (owner-only mode 0600 or 0400, with 0440 and 0444 refused; a directory that group or others cannot write to; symlinks and FIFOs refused; not on Windows, which refuses these files) and a CancelRequest rate limit
 (a resource bound: wrong keys consume the budget, so a few dozen addresses can starve real cancels, and
 clients behind one NAT share 16 per second), each with a test in `crates/latticed` (run locally: `cargo test -p latticed`).
 Open from that issue: SCRAM channel binding (`SCRAM-SHA-256-PLUS`), the decoy-secret length-only check

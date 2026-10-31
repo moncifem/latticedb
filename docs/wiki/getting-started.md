@@ -80,8 +80,9 @@ Clients must verify the certificate. Use libpq `sslmode=verify-full` with your C
 PGPASSWORD="$PASSWORD" psql "host=localhost port=5432 user=alice dbname=lattice sslmode=verify-full sslrootcert=ca.pem"
 ```
 
-Channel binding is not implemented ([#360](https://github.com/moncifem/latticedb/issues/360)). The key and
-decoy-secret files must be mode 0600. The [listener guide](../../crates/latticed/README.md#provisioning-with-lattice-account)
+Channel binding is not implemented ([#360](https://github.com/moncifem/latticedb/issues/360)). The TLS key,
+verifier, decoy-secret and policy files must each be owner-only (mode 0600 or 0400), in a directory that
+group and others cannot write to; a symlink is refused, and Windows refuses these files. The [listener guide](../../crates/latticed/README.md#provisioning-with-lattice-account)
 covers token files, rotation and the other flags.
 
 ## 5. Container image

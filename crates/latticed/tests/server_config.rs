@@ -163,3 +163,127 @@ fn a_stopped_listener_no_longer_accepts_connections() {
     handle.shutdown().unwrap();
     assert!(std::net::TcpStream::connect(address).is_err());
 }
+
+/// Every startup secret of the binary goes through the one private-file rule, so a SCRAM verifier
+/// file that others can read, or a secret in a directory others can write, stops startup before a
+/// listener is bound. The expected messages are written out here, not taken from the reader.
+#[cfg(unix)]
+mod startup_secret_files {
+    use rcgen::generate_simple_self_signed;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+
+    fn scratch(name: &str, mode: u32) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("latticed-startup-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        dir
+    }
+
+    fn write(path: &Path, bytes: &[u8], mode: u32) -> String {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// The server certificate is public, so only its key file is written owner-only.
+    fn tls_files(dir: &Path) -> (String, String) {
+        let generated = generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert = write(
+            &dir.join("cert.pem"),
+            generated.cert.pem().as_bytes(),
+            0o644,
+        );
+        let key = write(
+            &dir.join("key.pem"),
+            generated.signing_key.serialize_pem().as_bytes(),
+            0o600,
+        );
+        (cert, key)
+    }
+
+    fn scram_args<'a>(
+        cert: &'a str,
+        key: &'a str,
+        verifiers: &'a str,
+        decoy: &'a str,
+    ) -> Vec<&'a str> {
+        vec![
+            "--auth",
+            "scram-tls",
+            "--tls-cert",
+            cert,
+            "--tls-key",
+            key,
+            "--scram-verifiers",
+            verifiers,
+            "--scram-decoy-secret",
+            decoy,
+        ]
+    }
+
+    /// Runs the binary with `args`, which must be refused at startup; returns its stderr.
+    fn refused(args: &[&str]) -> String {
+        let output = Command::new(env!("CARGO_BIN_EXE_latticed"))
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{args:?} started");
+        String::from_utf8(output.stderr).unwrap()
+    }
+
+    #[test]
+    fn a_verifier_file_that_others_can_read_stops_startup() {
+        let dir = scratch("verifiers", 0o700);
+        let (cert, key) = tls_files(&dir);
+        let decoy = write(&dir.join("decoy"), &[7u8; 32], 0o600);
+        let verifiers = write(&dir.join("accounts"), b"unused", 0o644);
+        let refused_with = |verifiers: &str| refused(&scram_args(&cert, &key, verifiers, &decoy));
+        assert_eq!(
+            refused_with(verifiers.as_str()),
+            format!(
+                "latticed: {verifiers}: secret file is accessible to group or others (use mode 0600)\n"
+            )
+        );
+        // The same file, owner-only, passes the check; the reader then rejects its (unused) text.
+        let verifiers = write(&dir.join("accounts"), b"unused", 0o600);
+        assert_eq!(
+            refused_with(verifiers.as_str()),
+            "latticed: invalid credential configuration\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_secret_in_a_directory_that_others_can_write_stops_startup() {
+        let dir = scratch("writable-dir", 0o777);
+        let decoy = write(&dir.join("decoy"), &[7u8; 32], 0o600);
+        assert_eq!(
+            refused(&["--auth", "scram-tls", "--scram-decoy-secret", &decoy]),
+            format!(
+                "latticed: {decoy}: credential directory is writable by group or others (use mode 0700)\n"
+            )
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_symlinked_secret_is_refused_before_its_target_is_read() {
+        let dir = scratch("symlink", 0o700);
+        let target = write(&dir.join("decoy"), &[7u8; 32], 0o600);
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let link = link.to_string_lossy().into_owned();
+        let stderr = refused(&["--auth", "scram-tls", "--scram-decoy-secret", &link]);
+        assert!(
+            stderr.starts_with(&format!("latticed: {link}: ")),
+            "{stderr}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
