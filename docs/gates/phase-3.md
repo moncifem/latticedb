@@ -32,8 +32,8 @@ what was not run):
 - CRDT peer limits and the tree CRDT with moves (`lattice-core`), with the `tla/TreeMove.tla` model.
 - Agent plugin contract with a conformance suite, and the MCP server and SDK outbox in `lattice-sdk`.
 - Reconnect backoff with caller-supplied jitter (`lattice-sdk::backoff`, `0d7572bf`) and the saved-cursor codec and
-  in-memory store (`lattice-sdk::cursor_store`, `befd1196`). `lattice watch` does not use this backoff: it keeps its own local retry loop (`crates/lattice-cli/src/watch.rs`, `MAX_FAILED_CONNECTIONS` 3, `RETRY_PAUSE` 1 s doubling to `RETRY_CAP` 8 s).
-- SDK reconnect supervisor, a pure decision state machine over `Backoff` (`lattice-sdk::reconnect`, `f32c3ae2`, #620). It is not yet wired into the `lattice watch` loop.
+  in-memory store (`lattice-sdk::cursor_store`, `befd1196`). `lattice watch` retries through that backoff and the supervisor below (`crates/lattice-cli/src/watch.rs`, `MAX_FAILED_CONNECTIONS` 3, `RETRY_BASE_MS` 1 s doubling to `RETRY_CAP_MS` 8 s, and never less than 1 s between attempts).
+- SDK reconnect supervisor, a pure decision state machine over `Backoff` (`lattice-sdk::reconnect`, `f32c3ae2`, #620). `lattice watch` reports each connection outcome to it (`8192053`).
 - End-to-end harness `crates/lattice-e2e` (`8a7bde20`, #540): `Fixture` runs the sync gateway and the SQL listener of
   `latticed` in process on loopback sockets, with `Pg` and `Ws` clients, and `Mcp` (`crates/lattice-e2e/src/mcp.rs`, `Fixture::mcp`) posts to `POST /mcp`. `tests/mcp.rs` (`475b3a01`, #534) runs two principals through the gateway (write, read, grants, conflict, scope, 401) and a `lattice_subscribe` cursor chain over a seeded history with no gap and no repeat. No `lattice watch` run against a real gateway is in the harness yet, and it injects no kills.
 - A client state machine that resumes without gaps, and experimental TypeScript and Python codec
@@ -120,9 +120,9 @@ process ignores SIGTERM until its handler is installed; not tested), and `docker
 
 Alpha documentation (issues #589 and #590, part of the Alpha 0.1 definition #567, no exit criterion): `docs/alpha.md`
 (what works, how to run `latticed` in trust and SCRAM modes, psql, the agent-client status, experimental parts and a
-hand-edited known-issues table), a README install section marked "once the alpha tag exists", a rewritten `SECURITY.md`
+hand-edited known-issues table), a README install section marked "once the alpha tag exists" (at the time; since removed), a rewritten `SECURITY.md`
 with supported versions and the disclosed gaps, and an alpha disposition for every threat-model gap row. Facts checked
-when this was written: the gateway (PR #680), the MCP tool backend (PR #687) and the `lattice account` tool (PR #683) were closed unmerged, and their commits (e03b319a, 8932717f, a3ca61f1) landed on `main` directly. Update 2026-10-30: `docs/alpha.md` still says no agent client can connect except as a PostgreSQL client, which holds because no MCP transport exists yet.
+when this was written: the gateway (PR #680), the MCP tool backend (PR #687) and the `lattice account` tool (PR #683) were closed unmerged, and their commits (e03b319a, 8932717f, a3ca61f1) landed on `main` directly. Update 2026-10-30: `docs/alpha.md` still says no agent client can connect except as a PostgreSQL client, which held then because no MCP transport existed yet. Superseded 2026-10-31: `POST /mcp` on the experimental gateway and the `lattice mcp` stdio proxy exist on `main`, and the gateway binds each connection to its verified bearer-token principal.
 The quickstart smoke test covers only the loopback build, psql and restart steps. Not done: a named MCP client run on a
 clean machine (none is recorded; the stdio proxy `lattice mcp` from `f14aa0f4` now exists for a client to use), the independent security review of the gateway diff, a link check run on a hosted
 runner, and verification of the install one-liner against a published tag.
@@ -164,8 +164,8 @@ issue #359, sync part only). `SubscriptionHost::new` now takes the authenticated
 28 tests, passing locally) cover the principal seen by the source, a `Hello` that names another account, a denied scope
 answered like an unserved one (the host maps only `SourceError::UnknownScope` to `invalid_scope`, so a source must return `UnknownScope` for a denied scope; `TooOld`, `BadCursor` or `Unavailable` would leak existence, and that is a contract on the source until a kernel-backed one exists), live polls, and the planted bug `SubscribePrincipalDropped`. This is an API change
 (`SubscriptionHost::new` gained a parameter, `SubscriptionHost::local_development` is the loopback stand-in,
-`EventSource::read_after` gained one). No transport supplies a principal yet, the plugin sessions and the MCP caller
-are not bound, so no end-to-end authorization claim is made. The kernel-backed source is the next paragraph.
+`EventSource::read_after` gained one). The gateway binds each connection to its verified bearer-token principal, and `POST /mcp`
+serves the MCP caller that way. The plugin sessions are not bound, so no end-to-end authorization claim is made for them. The kernel-backed source is the next paragraph.
 Verification evidence, not an exit criterion: kernel-backed `EventSource` (issue #519, part of #518, sync part of
 threat model G-03). `lattice-api::feed_source::FeedSource` (made by `ExecHost::feed_source`) serves `table/<name>` from
 `RowStore::read_feed_as` through the SQL executor's actor thread, as the principal's policy: the same
@@ -200,7 +200,7 @@ feed. The precondition still binds the Phase 4 policy language and any row-level
 `BadCursor` check against the newest applied LSN lets a principal who can read one table binary-search the global commit
 position, and gaps between cursor LSNs show activity on tables it cannot read (same class as issue #363, unchanged); a
 denied request still occupies an actor queue slot. The filtered-feed gap question (issue #363) is unchanged; column definitions are recovered across a restart since
-issue 573; no transport supplies the principal, so nothing here is live end to end.
+issue 573; the gateway binds the principal from its verified bearer token, and nothing here is claimed live end to end.
 Verification evidence, not an exit criterion: interim per-table grants (issue #522, part of #567, threat-model G-01).
 An account in the policy file can be `allow-all`, `deny-all` or `tables: name=bits, ...` with bits `r`, `w`, `d` per
 table and `*` for the rest; the most specific entry wins, nothing is merged, names match exactly, an unlisted account

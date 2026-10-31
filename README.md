@@ -17,7 +17,7 @@ have formal models. Features come after the evidence that the layer below them h
 **[Architecture](docs/ARCHITECTURE.md) · [Roadmap board](https://github.com/users/moncifem/projects/1) · [Contribute](CONTRIBUTING.md)**
 
 > **Pre-alpha. Use test data only.** No phase gate is signed and nothing here is production ready.
-> An alpha pre-release (`v0.1.0-alpha.1`), once it is tagged, is for trying the server and giving
+> An alpha pre-release (`v0.1.0-alpha.1`) is for trying the server and giving
 > feedback: its data directories and the change-feed and sync encodings are not stable, and it
 > makes no gate claim. Start with the [alpha guide](docs/alpha.md). The numbers below come from the
 > repository and CI; the [gate pages](docs/gates) are the source of truth.
@@ -119,10 +119,10 @@ answers `SELECT 1`. For configured SCRAM over TLS, timeouts and the other flags,
 [listener guide](crates/latticed/README.md). Known issues and the agent-client status are in the
 [alpha guide](docs/alpha.md).
 
-### Install an archive instead (once the alpha tag exists)
+### Install an archive
 
-This works only after the pre-release `v0.1.0-alpha.1` is published; until then build from source as
-above. It is a pre-release for test data, with no phase gate claimed. For macOS arm64, Linux x86_64 and
+The pre-release `v0.1.0-alpha.1` is published on GitHub. It is a pre-release for test data, with no phase
+gate claimed. For macOS arm64, Linux x86_64 and
 Linux arm64 (no Windows), fetch the script from the same tag, read it, then run it:
 
 ```bash
@@ -144,7 +144,7 @@ Other commands:
 ```bash
 cargo run -p lattice-cli -- doctor --dir path/to/data   # check a data directory
 cargo run -p lattice-cli -- lsl compat old.lsl new.lsl  # schema compatibility check
-cargo xtask sim --seeds 1000                            # replay crashes across five fault profiles
+cargo xtask sim --seeds 1000                            # replay crashes across the five standard fault profiles (nightly also runs non-prefix)
 cargo xtask ci                                          # the full pull request gate
 ```
 
@@ -181,10 +181,10 @@ Byte formats live in [`formats/`](formats) with golden files.
 
 | Evidence | Where it stands |
 |---|---|
-| Simulator | Seeded crashes, torn writes, disk errors and bit rot across 5 fault profiles. Nightly runs 1,000,000 seeds per profile. 10,000 seeds reproduce identical traces |
+| Simulator | Seeded crashes, torn writes, disk errors and bit rot across 6 fault profiles (five standard, plus `non-prefix`). Nightly runs 1,000,000 seeds per profile; `non-prefix` has no recorded night yet. 10,000 seeds reproduce identical traces |
 | Planted bugs | 53 switchable defects across the kernel, row engine, CRDTs, policy and executor. The simulator catches the 21 kernel ones; the others have focused witnesses |
 | Crash recovery | Power cut at every storage operation of 100 workloads: 4,729 cut points, every acknowledged change recovered |
-| Fuzzing | 19 targets (WAL records, pgwire, SQL, LSL, sync and WebSocket frames, CRDTs, MCP and more). Six core targets ran 28 h 20 min each with no crash |
+| Fuzzing | 25 targets (WAL records, pgwire, SQL, LSL, sync and WebSocket frames, CRDTs, MCP and more). Six core targets ran 28 h 20 min each with no crash |
 | Formal models | TLA+ for commit, fencing, clocks, set convergence and tree moves. The tree model has variants with a protection removed that must fail |
 | Bounded proofs | Kani harnesses exist for the change-feed cursor and event decoders, the sync frame decoder, the SDK framer and the tree cycle rule. 4 of 10 are proven on a verified CI job: the change-feed cursor and event decoder harnesses. The other 6 (tree cycle, sync frame, framer) time out or are killed on the runner and are not claimed ([#424](https://github.com/moncifem/latticedb/issues/424), [#425](https://github.com/moncifem/latticedb/issues/425)) |
 | Memory and UB | Miri, AddressSanitizer and Loom jobs |

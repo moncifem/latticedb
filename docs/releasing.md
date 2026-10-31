@@ -123,8 +123,8 @@ corrupted download but not a tampered release. Only the attestation ties the arc
 workflow. Downloads are limited to https. It uses no sudo, edits no shell
 profile, supports no Windows and does not update itself. Fetch the script from the same tagged release, not
 from `main`; publishing it as a release asset is not wired yet. The README shows a fetch-then-run form
-for `v0.1.0-alpha.1` under "once the alpha tag exists"; it is correct only after that tag is published, and
-the script has not been run against a real published release yet.
+for `v0.1.0-alpha.1` under "Install an archive"; the tag is published, and the install script has not been
+run against a real published release yet.
 
 The `install-script` workflow runs shellcheck, actionlint and `scripts/test_install.sh` (offline, against a
 fake release directory) on every change to `scripts/`. To prove the script against real archives, rehearse

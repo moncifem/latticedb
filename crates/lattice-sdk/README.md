@@ -21,8 +21,8 @@ Allowed workspace dependencies: lattice-abi, lattice-lsl, lattice-proto.
   supplies the jitter sample; the ceiling never exceeds the cap, and a delay can be zero. It is a state machine
   only. The module `reconnect` (below) is the decision layer that uses it.
 - `reconnect`: `Supervisor`, a pure decision function over `Backoff` (`src/reconnect.rs`, #620). The caller reports
-  each event as an `Input` and carries out the `Decision` (`RetryAfter(ms)` or `Stop`). It is not yet wired into the
-  `lattice watch` loop, which keeps its own local doubling wait.
+  each event as an `Input` and carries out the `Decision` (`RetryAfter(ms)` or `Stop`). `lattice watch` is its
+  caller: it reports each connection outcome and waits as the decision says.
 - `mcp`: the MCP server v0 message codec, tool registry and scoping layer (`docs/mcp-v0.md`). The `lattice_read`,
   `lattice_write` and `lattice_subscribe` tool backend lives in `latticed`, not here.
 

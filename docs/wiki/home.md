@@ -6,7 +6,7 @@ same permissions, and every change stays on the record. The core makes no model 
 
 **Status: pre-alpha. Use test data only.** No phase gate is signed, and nothing here is production ready.
 
-- The alpha pre-release `v0.1.0-alpha.1` is not published yet. When it is, it is a pre-release for test
+- The alpha pre-release `v0.1.0-alpha.1` is published. It is a pre-release for test
   data only, with no phase-gate claim. Its data directories and the change-feed and sync encodings are not
   stable. See the [alpha guide](../alpha.md).
 - Phase 0 is done. Phase 1 is built and its gate is open. Phase 2 work proceeds under a documented waiver
@@ -23,8 +23,8 @@ same permissions, and every change stays on the record. The core makes no model 
   control. Joins, aggregates, `GROUP BY`, `DISTINCT` and subqueries are refused with SQLSTATE `0A000`.
 - Tables and their column definitions are recovered after a restart.
 - Library pieces that are not yet a product feature: the schema language (LSL) tools, CRDT modules and sync
-  codecs. The experimental WebSocket gateway and the MCP tool backend exist, but no MCP transport serves the
-  tools. See [Agents and live collaboration](agents.md).
+  codecs. The experimental WebSocket gateway serves the MCP tools over `POST /mcp` on the same port, and the
+  `lattice mcp` stdio proxy reaches that endpoint on loopback. See [Agents and live collaboration](agents.md).
 
 ## Read next
 

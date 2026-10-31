@@ -62,7 +62,7 @@ unmeasured); a caught-up reader examines nothing; a commit queued during a read 
 is kept in memory for the row table only and is rebuilt by replay when the store opens, an O(history) step. Known issue,
 accepted for the alpha: a subscriber of a quiet table with more than about 4.2 million other-table or hidden versions
 after its last event gets `Unavailable` on every poll and does not recover by polling (table-scoped index: issue #661).
-Not done: a per-principal cap on feed work and a wall-clock bound (issue #543). No transport exists yet.
+Not done: a per-principal cap on feed work and a wall-clock bound (issue #543). The experimental WebSocket gateway in `latticed` is the transport that drives this host.
 
 `notify::CommitNotifier` (`ExecHost::commit_notifier`) tells waiters "something committed up to LSN `x`" so a
 subscriber polls the feed source when woken instead of on a timer. The actor publishes the newest applied LSN (row or

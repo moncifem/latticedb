@@ -18,7 +18,7 @@ review of the final diff is recorded in the pull request.
 SCRAM-SHA-256 is a PostgreSQL wire exchange. A WebSocket upgrade and an MCP or HTTP call are single HTTP
 requests, and the clients that make them (agents, SDKs, a local stdio proxy) can carry one header value
 but cannot run a multi-message challenge. The gateway still has to answer one question before it builds a
-`Principal` (ADR 0026): which account is this connection? Today no transport answers it; the loopback
+`Principal` (ADR 0026): which account is this connection? When this was written, no transport answered it; the loopback
 development principal is the only identity an HTTP request could get, which is why the design requires it
 to be refused over HTTP unless a token is present.
 

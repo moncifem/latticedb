@@ -37,10 +37,9 @@ are recovered. A data directory written by a build that stored only table names 
 afterwards, so take a backup first. A new directory needs nothing. The SQL that is accepted is described on
 the [SQL subset](sql.md) page.
 
-## 3. Install an archive (after the alpha tag exists)
+## 3. Install an archive
 
-The tag `v0.1.0-alpha.1` is not published yet, so this step does not work today. Once it is, fetch the
-install script from the tag, read it, then run it:
+The pre-release `v0.1.0-alpha.1` is published. Fetch the install script from the tag, read it, then run it:
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/moncifem/latticedb/v0.1.0-alpha.1/scripts/install.sh

@@ -1,8 +1,9 @@
 # Agents and live collaboration
 
 The aim is that agents share one history of work and see each other's changes as they happen, under their own
-permissions. That is not shipped yet. This page separates what runs today from what is library code with no
-transport, and from what is planned. No agent client has been run against `latticed` and documented as working.
+permissions. That is not shipped yet. This page separates what runs today from what is shipped only as library
+code, and from what is planned. No agent client is documented as working; one manual Claude Code run is recorded
+in [the alpha guide](../alpha.md).
 
 ## What an agent can use today
 
@@ -19,28 +20,32 @@ transport, and from what is planned. No agent client has been run against `latti
    ```
 
    It serves the sync protocol at `ws://127.0.0.1:5433/sync` with the subprotocol `lattice.sync.v1`. The
-   payload is rows only and read only. For authentication, pass `--gateway-tokens FILE`. The bearer tokens
+   sync protocol payload is rows only and read only. For authentication, pass `--gateway-tokens FILE`. The bearer tokens
    come from `lattice account token create`, and the client sends `Authorization: Bearer lat_...`. The file is
-   re-read within 5 seconds of a change, so a revoked token's connection is closed. The gateway is loopback
-   only and has no TLS, no idle deadline and no per-principal byte budget. The
+   re-read within 5 seconds of a change, so a revoked token's connection is closed. A loopback gateway runs
+   without TLS. A non-loopback gateway needs `--tls-cert`, `--tls-key` and `--gateway-tokens`, or `latticed` refuses to
+   start it. The CLI has no TLS client. The gateway has no idle deadline and no per-principal byte budget. The
    [listener guide](../../crates/latticed/README.md#sync-gateway-websocket) has the flags and limits.
+   `lattice watch table/NAME` is the command-line live view of one table over this gateway. It connects only to a
+   loopback `ws://` address, has no TLS client, and retries through the SDK reconnect supervisor.
 
 3. **Client libraries.** `lattice-sdk` contains the Rust sync client state machine and an outbox. The
    TypeScript and Python clients in `clients/` are experimental codec clients checked against test vectors.
    They do not talk to a server.
 
-4. **MCP pieces, not a server.** `lattice-sdk` has the MCP message codec, tool schemas and a grant layer
-   ([MCP server v0](../mcp-v0.md)). `latticed` has a transport-independent backend for `lattice_read`,
-   `lattice_write` and `lattice_subscribe`. `lattice_subscribe` is a long poll that waits at most 30 seconds
-   for a new event after a cursor. No MCP transport serves these tools yet. Nothing opens a listener, reads a
-   token header or runs a process that exposes them to a client.
+4. **MCP over HTTP and stdio.** `lattice-sdk` has the MCP message codec, tool schemas and a grant layer
+   ([MCP server v0](../mcp-v0.md)). `latticed` serves `lattice_read`, `lattice_write` and `lattice_subscribe` as
+   `POST /mcp` on the experimental gateway, with a bearer token; TLS and tokens are required off loopback.
+   `lattice mcp` is a stdio proxy to that endpoint, for a loopback plaintext gateway only. `lattice_subscribe` is a
+   long poll that waits at most 30 seconds for a new event after a cursor. One manual Claude Code run used the HTTP
+   endpoint, as recorded in [the alpha guide](../alpha.md).
 
 ## What is not shipped
 
-- An MCP transport over HTTP or stdio, and the harness that would connect an agent client to it.
+- MCP over TLS, and a remote MCP endpoint. `lattice mcp` has no TLS client and accepts only a loopback plaintext URL.
 - Streaming notifications. `lattice_subscribe` answers each call, it does not push.
-- `lattice watch`, the command-line live view.
-- A sync server on the PostgreSQL port. The gateway is a separate, experimental, read-only listener.
+- A sync server on the PostgreSQL port. The gateway is a separate, experimental listener. Its WebSocket sync protocol
+  is read only and rows only; `POST /mcp` on the same port can write under the caller's grants.
 - Live collaborative text documents, presence and the workflow arbiter.
 - Resource subscriptions.
 

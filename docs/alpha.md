@@ -29,8 +29,8 @@ release notes ([#588](https://github.com/moncifem/latticedb/issues/588)).
 From source (what the smoke test runs): install Rust with `rustup`, which picks the toolchain pinned in
 `rust-toolchain.toml`, then follow [Try it in the README](../README.md#try-it).
 
-From an archive, once the alpha tag exists (not yet verified against a real published release): see
-[Install an archive](../README.md#install-an-archive-instead-once-the-alpha-tag-exists) and
+From an archive (not yet verified against a real published release): see
+[Install an archive](../README.md#install-an-archive) and
 [releasing](releasing.md#installing-a-release). The script verifies checksums and, with `gh`, the build
 attestation. It is not a release asset yet, so fetch it from the tag as shown there.
 
@@ -261,8 +261,8 @@ What is only partly shipped, so no agent client can rely on it yet:
   this endpoint by hand, with an HTTP MCP entry and a bearer header (`lattice_write` then `lattice_read`); no
   other client has been run, and the tests send raw requests.
 - `lattice watch table/NAME` connects to the gateway on a loopback `ws://` address with a bearer token, prints each
-  change and acknowledges it. `--cursor-file` keeps the cursor in an owner-only file. It has no TLS client, it retries
-  with its own doubling wait rather than the SDK reconnect supervisor (not wired in yet), and no test runs it against a live gateway ([#583](https://github.com/moncifem/latticedb/issues/583);
+  change and acknowledges it. `--cursor-file` keeps the cursor in an owner-only file. It has no TLS client. It retries
+  through the SDK reconnect supervisor (`lattice-sdk::reconnect`) with jittered backoff, and no test runs it against a live gateway ([#583](https://github.com/moncifem/latticedb/issues/583);
   the network loop is [PR #787](https://github.com/moncifem/latticedb/pull/787), merged as `6cb2bce6`).
 
 Apart from that one manual Claude Code run, no MCP client has been run against `latticed`, so this page gives no
