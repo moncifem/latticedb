@@ -71,3 +71,19 @@ fn cancel_errors_print_what_went_wrong() {
         assert_eq!(error.to_string(), text);
     }
 }
+
+#[test]
+fn registrations_drawing_the_same_rng_output_get_distinct_pids() {
+    // A broken seam that returns one value for every draw: the PIDs must still differ, so a
+    // cancel for one connection never reaches the other.
+    let mut registry = CancelRegistry::new(2).unwrap();
+    let first = registry.register(&mut Fixed(7), 0, 100).unwrap();
+    let second = registry.register(&mut Fixed(7), 0, 100).unwrap();
+    assert_ne!(first.pid, second.pid);
+    assert_eq!(first.secret, second.secret);
+    let one = registry.begin_query(first, 0).unwrap();
+    let two = registry.begin_query(second, 0).unwrap();
+    assert!(registry.cancel(first, 1));
+    assert!(one.is_cancelled());
+    assert!(!two.is_cancelled());
+}

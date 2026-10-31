@@ -12,9 +12,14 @@
 //! success branch is unavoidable when signaling a matching token. This is fixed-work source code,
 //! not a formal guarantee of identical timings on every compiler and processor. Production callers
 //! must supply a cryptographically secure [`Rng`]; deterministic tests can supply a seeded seam.
-//! PIDs come from a wrapping counter over `1..=i32::MAX` that skips PIDs held by active
-//! registrations, so allocation never exhausts however many connections open and close. A PID is
-//! reused only after about 2^31 further allocations, and never while its previous holder is active.
+//! PIDs are drawn from the same [`Rng`] over `1..=i32::MAX`. A draw that matches a PID still held
+//! by any slot, live or expired but not yet reused, is retried a bounded number of times, then the
+//! next free PID is taken deterministically. Allocation therefore never exhausts however many
+//! connections open and close. A PID never repeats while its slot holds it, and it may recur once
+//! that slot is reused, as PostgreSQL process ids do. The connection secret is 32 bits, the full
+//! width of the protocol field. A PID is not a secret, since the protocol sends it only to the
+//! connection's own client. A blind guess must therefore match both fields, and the PID must be
+//! unpredictable.
 //! Create one registry for the server lifetime, not per query. Hosts should register only after the
 //! client has authenticated, so unauthenticated connections cannot consume slots.
 
@@ -32,12 +37,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Hard allocation ceiling, independent of caller configuration.
 pub const MAX_ENTRIES: usize = 4096;
 
+/// RNG draws for a PID before the deterministic probe takes over. A collision is rare (at most
+/// `MAX_ENTRIES` of about 2^31 values), so this only bounds the work a stuck RNG can force.
+const PID_DRAW_ATTEMPTS: usize = 8;
+
 /// The signed 32-bit fields used by PostgreSQL's BackendKeyData and CancelRequest messages.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CancelKey {
-    /// Registry-assigned connection id, positive and unique during this registry's lifetime.
+    /// Registry-assigned connection id, positive. Unique among the slots of one registry: it is not
+    /// reissued while its slot holds it, and it may recur after that slot is reused.
     pub pid: i32,
-    /// Connection secret; must not be logged.
+    /// Connection secret, the low 32 bits of one RNG output; must not be logged.
     pub secret: i32,
 }
 impl fmt::Debug for CancelKey {
@@ -81,7 +91,8 @@ pub enum CancelError {
     ExpiryOverflow,
     /// All configured slots are occupied by live connections.
     Full,
-    /// Retained for compatibility. PIDs wrap and skip active ones, so this is never returned.
+    /// Retained for compatibility. PIDs are drawn at random and probed upward past held ones, so a
+    /// free PID is found whenever a slot is free and this is never returned.
     PidExhausted,
     /// The credential is unknown, expired or has been unregistered.
     UnknownKey,
@@ -130,7 +141,6 @@ impl Entry {
 /// multiple threads must serialize registry access; tokens themselves can cross thread boundaries.
 pub struct CancelRegistry {
     entries: Vec<Entry>,
-    next_pid: u32,
 }
 impl CancelRegistry {
     /// Allocates all slots up front, rejecting an unbounded caller-selected capacity.
@@ -140,7 +150,6 @@ impl CancelRegistry {
         }
         Ok(Self {
             entries: (0..capacity).map(|_| Entry::empty()).collect(),
-            next_pid: 1,
         })
     }
 
@@ -201,16 +210,15 @@ impl CancelRegistry {
         if !self.entries.iter().any(|entry| !entry.active) {
             return Err(CancelError::Full);
         }
-        let pid = self.allocate_pid();
+        // The PID draw comes first, then the secret; a seeded test RNG depends on this order.
+        let pid = self.allocate_pid(&mut *rng).ok_or(CancelError::Full)?;
+        let secret = rng.next_u64() as i32;
         let entry = self
             .entries
             .iter_mut()
             .find(|entry| !entry.active)
             .ok_or(CancelError::Full)?;
-        let key = CancelKey {
-            pid,
-            secret: rng.next_u64() as i32,
-        };
+        let key = CancelKey { pid, secret };
         *entry = Entry {
             active: true,
             key,
@@ -254,7 +262,7 @@ impl CancelRegistry {
     }
 
     /// Removes a live connection and cancels its current query. Expired credentials cannot remove
-    /// another connection, and a reused storage slot never reuses its PID.
+    /// another connection, and the same slot never reuses its PID on its next registration.
     pub fn unregister(&mut self, key: CancelKey, now: u64) -> bool {
         self.expire(now);
         if let Some(index) = self.find_slot(key)
@@ -266,35 +274,34 @@ impl CancelRegistry {
         false
     }
 
-    /// Next PID from the wrapping counter, skipping PIDs of active registrations. At most
-    /// `capacity` PIDs are active and a free slot exists, so a free PID is found within
-    /// `capacity` steps.
-    fn allocate_pid(&mut self) -> i32 {
-        let mut active: Vec<i32> = self
-            .entries
-            .iter()
-            .filter(|entry| entry.active)
-            .map(|entry| entry.key.pid)
-            .collect();
-        active.sort_unstable();
-        let mut candidate = if (1..=i32::MAX as u32).contains(&self.next_pid) {
-            self.next_pid as i32
-        } else {
-            1
-        };
-        while active.binary_search(&candidate).is_ok() {
+    /// Draws a PID that no slot holds. A draw that collides is retried a bounded number of times,
+    /// then the probe moves upward from the last draw. Every slot's stored PID counts as held, so
+    /// an expired slot keeps its PID until it is reused. At most `capacity` PIDs are held, so while
+    /// a slot is free the probe finds a PID within `capacity + 1` candidates. `None` means no slot
+    /// is free, which the caller checks first, so it is not expected to occur.
+    fn allocate_pid(&self, rng: &mut (impl Rng + ?Sized)) -> Option<i32> {
+        let mut candidate = 1;
+        for _ in 0..PID_DRAW_ATTEMPTS {
+            candidate = pid_from_draw(rng.next_u64());
+            if !self.pid_held(candidate) {
+                return Some(candidate);
+            }
+        }
+        for _ in 0..=self.entries.len() {
+            if !self.pid_held(candidate) {
+                return Some(candidate);
+            }
             candidate = if candidate == i32::MAX {
                 1
             } else {
                 candidate + 1
             };
         }
-        self.next_pid = if candidate == i32::MAX {
-            1
-        } else {
-            candidate as u32 + 1
-        };
-        candidate
+        None
+    }
+
+    fn pid_held(&self, pid: i32) -> bool {
+        self.entries.iter().any(|entry| entry.key.pid == pid)
     }
 
     fn find_slot(&self, key: CancelKey) -> Option<usize> {
@@ -312,6 +319,11 @@ impl CancelRegistry {
     }
 }
 
+/// Maps one RNG output onto `1..=i32::MAX`. The modulo bias is about 2^-33 relative per value.
+fn pid_from_draw(value: u64) -> i32 {
+    (value % (i32::MAX as u64)) as i32 + 1
+}
+
 // Arithmetic comparison of complete words; no per-byte loop or early mismatch branch.
 fn equal_mask(a: u32, b: u32) -> u32 {
     let difference = std::hint::black_box(a ^ b);
@@ -323,6 +335,7 @@ fn equal_mask(a: u32, b: u32) -> u32 {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::VecDeque;
 
     struct Counter(u64);
     impl lattice_seams::Rng for Counter {
@@ -346,8 +359,10 @@ mod tests {
         let second = registry.register(&mut rng, 10, 20).unwrap();
         let one = registry.begin_query(first, 10).unwrap();
         let two = registry.begin_query(second, 10).unwrap();
-        assert_eq!(first, CancelKey { pid: 1, secret: 1 });
-        assert_eq!(second, CancelKey { pid: 2, secret: 2 });
+        // Each registration takes a PID draw, then a secret draw: draws 1 and 2, then 3 and 4. A
+        // draw of 1 maps to PID 2, and a draw of 3 maps to PID 4.
+        assert_eq!(first, CancelKey { pid: 2, secret: 2 });
+        assert_eq!(second, CancelKey { pid: 4, secret: 4 });
         assert!(!registry.cancel(
             CancelKey {
                 pid: first.pid,
@@ -422,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_capacity_overflow_full_and_pid_exhaustion_are_bounded() {
+    fn invalid_capacity_overflow_and_full_are_bounded() {
         assert!(matches!(
             CancelRegistry::new(0),
             Err(CancelError::InvalidCapacity)
@@ -442,39 +457,113 @@ mod tests {
             Err(CancelError::ExpiryOverflow)
         );
         let key = registry.register(&mut rng, 0, 5).unwrap();
+        // One PID draw and one secret draw for the successful registration.
+        assert_eq!(rng.0, 2);
         assert_eq!(registry.register(&mut rng, 0, 5), Err(CancelError::Full));
-        assert_eq!(rng.0, 1);
-        registry.unregister(key, 0);
-        registry.next_pid = i32::MAX as u32;
-        let last = registry.register(&mut rng, 0, 5).unwrap();
-        assert_eq!(last.pid, i32::MAX);
-        registry.unregister(last, 0);
-        let wrapped = registry.register(&mut rng, 0, 5).unwrap();
-        assert_eq!(wrapped.pid, 1);
-        assert_eq!(rng.0, 3);
+        // A refusal consumes no RNG output.
+        assert_eq!(rng.0, 2);
+        assert!(registry.unregister(key, 0));
     }
 
     #[test]
-    fn open_and_close_flood_never_exhausts_and_wrap_skips_active_pids() {
+    fn open_and_close_flood_never_exhausts_and_never_reissues_a_held_pid() {
         let mut registry = CancelRegistry::new(3).unwrap();
         let mut rng = Counter(0);
-        // Start-and-close across the wrap point with one long-lived connection holding PID 1.
+        // One long-lived connection; its first draw (1) maps to PID 2.
         let held = registry.register(&mut rng, 0, 100).unwrap();
-        assert_eq!(held.pid, 1);
-        registry.next_pid = i32::MAX as u32 - 2;
+        assert_eq!(held.pid, 2);
         for _ in 0..10 {
             let key = registry.register(&mut rng, 0, 100).unwrap();
             assert_ne!(key.pid, held.pid);
             assert!((1..=i32::MAX).contains(&key.pid));
             assert!(registry.unregister(key, 0));
         }
-        // Two actives next to the counter are both skipped.
-        registry.next_pid = i32::MAX as u32;
         let a = registry.register(&mut rng, 0, 100).unwrap();
         let b = registry.register(&mut rng, 0, 100).unwrap();
-        assert_eq!((a.pid, b.pid), (i32::MAX, 2));
+        assert_ne!(a.pid, b.pid);
         assert_eq!(registry.register(&mut rng, 0, 100), Err(CancelError::Full));
         assert!(registry.cancel(held, 0));
+    }
+
+    /// Returns its values in order, so a test chooses each PID draw and secret.
+    struct Script(VecDeque<u64>);
+    impl lattice_seams::Rng for Script {
+        // Not a #[test] fn, so the test-only exemption for expect does not reach it.
+        #[allow(clippy::expect_used)]
+        fn next_u64(&mut self) -> u64 {
+            self.0.pop_front().expect("script has enough draws")
+        }
+    }
+
+    /// SplitMix64: a fixed, seeded sequence that stands in for a secure RNG in tests.
+    struct SplitMix(u64);
+    impl lattice_seams::Rng for SplitMix {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+    }
+
+    #[test]
+    fn pid_draws_map_onto_the_positive_range_and_wrap_at_its_end() {
+        // A draw d gives PID (d mod (2^31 - 1)) + 1, so the range is 1..=i32::MAX.
+        for (draw, pid) in [
+            (0, 1),
+            (u64::from(i32::MAX as u32) - 1, i32::MAX),
+            (u64::from(i32::MAX as u32), 1),
+            // 2^64 - 1 is 3 modulo 2^31 - 1, since 2^31 is 1 modulo it.
+            (u64::MAX, 4),
+        ] {
+            let mut registry = CancelRegistry::new(1).unwrap();
+            let mut rng = Script(VecDeque::from(vec![draw, 9]));
+            let key = registry.register(&mut rng, 0, 5).unwrap();
+            assert_eq!(key, CancelKey { pid, secret: 9 }, "draw {draw}");
+        }
+    }
+
+    #[test]
+    fn colliding_draws_probe_to_the_next_free_pid() {
+        let mut registry = CancelRegistry::new(2).unwrap();
+        let held = registry.register(&mut Constant, 0, 100).unwrap();
+        assert_eq!(held, CancelKey { pid: 1, secret: 0 });
+        // Every PID draw maps to PID 1, which the held slot keeps. The bounded retries all fail and
+        // the probe moves up from there to PID 2. The last draw is the secret.
+        let mut draws = vec![0; PID_DRAW_ATTEMPTS];
+        draws.push(7);
+        let mut rng = Script(VecDeque::from(draws));
+        let key = registry.register(&mut rng, 0, 100).unwrap();
+        assert_eq!(key, CancelKey { pid: 2, secret: 7 });
+    }
+
+    #[test]
+    fn a_released_pid_is_held_by_its_slot_until_that_slot_is_reused() {
+        let mut registry = CancelRegistry::new(2).unwrap();
+        let first = registry.register(&mut Constant, 0, 100).unwrap();
+        assert_eq!(first.pid, 1);
+        assert!(registry.unregister(first, 0));
+        // Slot 0 still holds PID 1, so the draw collides and the probe gives slot 0 PID 2.
+        let second = registry.register(&mut Constant, 0, 100).unwrap();
+        assert_eq!(second.pid, 2);
+        // Slot 0 now holds PID 2 and slot 1 is empty, so PID 1 is free again and may recur.
+        let third = registry.register(&mut Constant, 0, 100).unwrap();
+        assert_eq!(third.pid, 1);
+    }
+
+    #[test]
+    fn seeded_pids_are_distinct_and_do_not_count_up_from_one() {
+        let mut registry = CancelRegistry::new(64).unwrap();
+        let mut rng = SplitMix(42);
+        let mut pids: Vec<i32> = (0..64)
+            .map(|_| registry.register(&mut rng, 0, 100).unwrap().pid)
+            .collect();
+        assert!(pids.iter().all(|pid| (1..=i32::MAX).contains(pid)));
+        assert!(pids.iter().any(|pid| *pid > 64));
+        pids.sort_unstable();
+        pids.dedup();
+        assert_eq!(pids.len(), 64);
     }
 
     #[test]
@@ -503,13 +592,13 @@ mod tests {
             let mut registry = CancelRegistry::new(capacity).unwrap();
             let mut rng = Counter(100);
             let mut model: Vec<(CancelKey, CancellationToken, bool)> = Vec::new();
-            let mut next_pid = 1;
             for (action, choice) in steps {
                 match action {
                     0 => match registry.register(&mut rng, 0, 100) {
                         Ok(key) => {
                             prop_assert!(model.len() < capacity);
-                            prop_assert_eq!(key.pid, next_pid); next_pid += 1;
+                            prop_assert!((1..=i32::MAX).contains(&key.pid));
+                            prop_assert!(model.iter().all(|(live, _, _)| live.pid != key.pid));
                             let token = registry.begin_query(key, 0).unwrap();
                             model.push((key, token, false));
                         }
@@ -557,7 +646,9 @@ mod tests {
         assert!(registry.is_empty());
         assert!(one.is_cancelled() && two.is_cancelled());
         let next = registry.register(&mut rng, 0, 100).unwrap();
-        assert_eq!(next.pid, 3);
+        // The cleared slots still hold their PIDs, so the new key takes a different one.
+        assert_ne!(next.pid, first.pid);
+        assert_ne!(next.pid, second.pid);
         assert!(!registry.cancel(first, 0));
         assert!(!registry.cancel(second, 0));
         assert!(!registry.begin_query(next, 0).unwrap().is_cancelled());

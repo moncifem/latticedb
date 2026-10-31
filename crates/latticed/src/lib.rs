@@ -142,10 +142,11 @@ pub const PRE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const GLOBAL_TLS_STARTS_PER_SECOND: usize = 64;
 const PER_IP_TLS_STARTS_PER_SECOND: usize = 16;
 const MAX_TRACKED_ADDRESSES: usize = 1024;
-/// CancelRequest budgets. A cancel needs a guessed 64-bit key, so these only bound guessing and
-/// registry lock traffic. They are a resource bound, not a DoS guarantee: wrong keys consume budget,
-/// so about 16 addresses (or a few IPv6 /64s) can use the whole global budget and starve real
-/// cancels, and every client behind one NAT shares the per-address budget.
+/// CancelRequest budgets. A cancel needs a guessed key of about 32 bits of secret plus a pid, so
+/// these only bound guessing and registry lock traffic. They are a resource bound, not a DoS
+/// guarantee: wrong keys consume budget, so about 16 addresses (or a few IPv6 /64s) can use the
+/// whole global budget and starve real cancels, and every client behind one NAT shares the
+/// per-address budget.
 const GLOBAL_CANCELS_PER_SECOND: usize = 256;
 const PER_IP_CANCELS_PER_SECOND: usize = 16;
 
@@ -1287,10 +1288,12 @@ mod tests {
             ..Outcome::default()
         };
         let done = bind_key(placeholder(), &registry, &mut registration);
-        assert_eq!(registration.as_ref().unwrap().key.pid, 1);
+        // The pid is random, so compare with the key that was stored, not a fixed value.
+        let stored = registration.as_ref().unwrap().key;
         assert!(matches!(
             done.messages.first(),
-            Some(Backend::BackendKeyData { pid: 1, .. })
+            Some(Backend::BackendKeyData { pid, secret })
+                if *pid == stored.pid && *secret == stored.secret
         ));
         // With the only slot held, a second completion is refused with 53300.
         let mut other = None;
