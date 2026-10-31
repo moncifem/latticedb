@@ -832,6 +832,7 @@ pub fn lattice_sql::plan::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> co
 impl core::marker::StructuralPartialEq for lattice_sql::plan::Value
 pub struct lattice_sql::plan::AggCall
 pub lattice_sql::plan::AggCall::arg: core::option::Option<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::AggCall::distinct: bool
 pub lattice_sql::plan::AggCall::func: lattice_sql::plan::AggFunc
 pub lattice_sql::plan::AggCall::ty: lattice_sql::plan::SqlType
 impl core::clone::Clone for lattice_sql::plan::AggCall

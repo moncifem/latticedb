@@ -289,6 +289,87 @@ fn expressions_over_aggregates_answer_as_postgresql_does() {
     }
 }
 
+/// `DISTINCT` inside an aggregate (`count`, `sum`, `avg`, `min`, `max`), alone and per group, with
+/// `NULL`s, expressions and empty inputs. Left out: `sum(DISTINCT numeric)` over values equal at
+/// different scales (which spelling survives is unspecified in PostgreSQL), `count(DISTINCT a, b)`
+/// (`42883` there, `42601` here) and `ALL` (not parsed).
+const DISTINCT_STEPS: &[(&str, &[&str])] = &[
+    (
+        "CREATE TABLE gr (id INT PRIMARY KEY, g INT, h TEXT, v INT, n NUMERIC, f DOUBLE PRECISION)",
+        &["CREATE TABLE"],
+    ),
+    (
+        "INSERT INTO gr VALUES (1, 1, 'a', 10, 1.5, 1.0), (2, 1, 'b', 20, 1.50, NULL), (3, 2, 'a', 10, NULL, 3.0), (4, 2, 'a', NULL, 4.0, 3.0), (5, NULL, 'b', 50, 5.0, 5.0), (6, NULL, 'b', 50, 5.00, NULL), (7, 3, NULL, 70, 7.5, 7.0), (8, 3, NULL, NULL, NULL, NULL)",
+        &["INSERT 0 8"],
+    ),
+    ("SELECT count(DISTINCT g) FROM gr", &["3"]),
+    ("SELECT count(DISTINCT h) FROM gr", &["2"]),
+    ("SELECT count(DISTINCT v) FROM gr", &["4"]),
+    ("SELECT count(DISTINCT n) FROM gr", &["4"]),
+    ("SELECT count(DISTINCT f) FROM gr", &["4"]),
+    (
+        "SELECT count(DISTINCT v), count(v), count(*) FROM gr",
+        &["4|6|8"],
+    ),
+    (
+        "SELECT sum(DISTINCT v), avg(DISTINCT v), min(DISTINCT v), max(DISTINCT v) FROM gr",
+        &["150|37.5000000000000000|10|70"],
+    ),
+    ("SELECT sum(DISTINCT f), avg(DISTINCT f) FROM gr", &["16|4"]),
+    ("SELECT sum(DISTINCT g) FROM gr", &["6"]),
+    ("SELECT count(DISTINCT g + 1) FROM gr", &["3"]),
+    ("SELECT count(DISTINCT lower(h)) FROM gr", &["2"]),
+    ("SELECT count(DISTINCT v) FROM gr WHERE id > 100", &["0"]),
+    ("SELECT sum(DISTINCT v) FROM gr WHERE id > 100", &[""]),
+    (
+        "SELECT h, count(DISTINCT g) FROM gr GROUP BY h ORDER BY h",
+        &["a|2", "b|1", "|1"],
+    ),
+    (
+        "SELECT g, count(DISTINCT h), sum(DISTINCT v) FROM gr GROUP BY g ORDER BY g",
+        &["1|2|30", "2|1|10", "3|0|70", "|1|50"],
+    ),
+    (
+        "SELECT g, count(DISTINCT v) FROM gr GROUP BY g HAVING count(DISTINCT v) > 1 ORDER BY g",
+        &["1|2"],
+    ),
+    ("SELECT count(DISTINCT v) + 1 FROM gr", &["5"]),
+    ("SELECT count(DISTINCT id) FROM gr", &["8"]),
+    ("SELECT count(DISTINCT *) FROM gr", &["ERR 42601"]),
+    ("SELECT count(DISTINCT) FROM gr", &["ERR 42601"]),
+    ("SELECT sum(DISTINCT h) FROM gr", &["ERR 42883"]),
+    ("SELECT count(DISTINCT 1) FROM gr", &["1"]),
+    ("SELECT count(DISTINCT NULL) FROM gr", &["0"]),
+    ("SELECT max(DISTINCT h) FROM gr", &["b"]),
+];
+
+#[test]
+fn distinct_inside_aggregates_answers_as_postgresql_does() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    for (sql, want) in DISTINCT_STEPS {
+        let got: Vec<String> = match s.execute(&mut f.db, sql) {
+            Ok(r) => {
+                let mut lines: Vec<String> = text(&r)
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|c| if c == "NULL" { "" } else { c.as_str() })
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    })
+                    .collect();
+                if r.columns.is_empty() {
+                    lines.push(r.tag);
+                }
+                lines
+            }
+            Err(e) => vec![format!("ERR {}", e.sqlstate())],
+        };
+        assert_eq!(&got, want, "{sql}");
+    }
+}
+
 /// Switches a defect off again however the test ends.
 struct Planted;
 

@@ -574,6 +574,11 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                     }
                 }
             }
+            if call.distinct {
+                // Each distinct value once, the first of equal values kept.
+                let mut seen = std::collections::BTreeSet::new();
+                args.retain(|v| seen.insert(GroupKey(vec![v.clone()])));
+            }
             out.push(fold_aggregate(call, rows.len(), &args)?);
         }
         Ok(out)

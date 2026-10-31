@@ -454,11 +454,6 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
         ),
         ("SELECT extract(century FROM ts) FROM events", "22023", None),
         // outside what the binder handles yet
-        (
-            "SELECT count(DISTINCT id) FROM notes",
-            "0A000",
-            Some("LSQL-0002"),
-        ),
         ("SELECT sum(count(*)) FROM notes", "42803", None),
         (
             "SELECT count(*) FROM notes WHERE count(*) > 1",
@@ -784,7 +779,7 @@ fn expected_bind(sql: &str, script_expects: &str) -> &'static str {
     ) {
         return "0A000";
     }
-    let unsupported = ["DISTINCT", " JOIN ", "CROSS JOIN", "OVER ("];
+    let unsupported = ["SELECT DISTINCT", " JOIN ", "CROSS JOIN", "OVER ("];
     if unsupported.iter().any(|u| upper.contains(u)) {
         return "0A000";
     }

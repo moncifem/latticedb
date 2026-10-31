@@ -1442,15 +1442,20 @@ impl Binder<'_> {
     /// precision` is `double precision`; `avg` is `numeric` for integers and `numeric`, `double
     /// precision` for floats; `min` and `max` keep the argument's type.
     fn aggregate_call(&mut self, f: &ast::Function, scope: &Scope, span: Span) -> R<AggCall> {
-        if f.distinct {
-            return unsupported("DISTINCT in an aggregate", span);
-        }
         let func = match (f.name.as_str(), &f.args) {
             ("count", FunctionArgs::Star) => {
+                if f.distinct {
+                    return err(
+                        BindErrorKind::Syntax,
+                        "count(DISTINCT *) is not valid; name a column",
+                        span,
+                    );
+                }
                 return Ok(AggCall {
                     func: AggFunc::CountStar,
                     arg: None,
                     ty: SqlType::BigInt,
+                    distinct: false,
                 });
             }
             (_, FunctionArgs::Star) => {
@@ -1508,6 +1513,7 @@ impl Binder<'_> {
             func,
             arg: Some(a),
             ty,
+            distinct: f.distinct,
         })
     }
 

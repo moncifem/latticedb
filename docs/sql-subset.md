@@ -47,7 +47,7 @@ The intended front door is PostgreSQL wire v3 (P2-11). Transaction behaviour is 
 | `SELECT` list, `*`, aliases, expressions over supported types | Yes. Without `FROM` the source is one row with no columns (`SELECT 1 + 2`, `SELECT 1 WHERE false`, `LIMIT`/`OFFSET` apply); `*` there is `42601` as in PostgreSQL |
 | `FROM` with one or more tables, `JOIN` (`INNER`, `LEFT`, `CROSS`) with `ON` | Yes. `RIGHT`, `FULL`, `NATURAL`, `LATERAL` no |
 | `WHERE` | Comparison, `AND`/`OR`/`NOT`, `IN (list)`, `BETWEEN`, `LIKE`, `IS [NOT] NULL`. The executor reads only a key range or one entry when `AND` terms compare the primary key or a `UNIQUE` constraint with constants; results are the same as a full scan (see the `lattice-exec` README, Access paths) |
-| `GROUP BY`, `HAVING` | Yes, with `COUNT`, `SUM`, `MIN`, `MAX`, `AVG` over one table: keys are columns, expressions, positions or output names; one row per group in key order (`NULL`s group together and sort first); `HAVING` and `ORDER BY` may use keys and aggregates; no `COUNT(DISTINCT x)`. The groups are held in memory under the statement budget. Without `ORDER BY` the order of groups is by key, which PostgreSQL does not promise |
+| `GROUP BY`, `HAVING` | Yes, with `COUNT`, `SUM`, `MIN`, `MAX`, `AVG` over one table: keys are columns, expressions, positions or output names; one row per group in key order (`NULL`s group together and sort first); `HAVING` and `ORDER BY` may use keys and aggregates; `DISTINCT` inside an aggregate (`COUNT(DISTINCT x)`) counts each non-`NULL` value once. The groups are held in memory under the statement budget. Without `ORDER BY` the order of groups is by key, which PostgreSQL does not promise |
 | `ORDER BY`, `LIMIT`, `OFFSET` | Yes, with `NULLS FIRST/LAST` |
 | `DISTINCT` | Yes |
 | Subqueries | Scalar and `IN` subqueries, uncorrelated. Correlated, `EXISTS`, `ANY/ALL` not yet |
@@ -214,7 +214,7 @@ with its reason.
 | A column default that does not fit its column (`a INT DEFAULT 2147483648`) | the table is created and the first insert that uses the default fails (`22003`) | `CREATE TABLE` fails with `22003` | the default is checked when the table is defined |
 | A numeric constant of more than 38 digits, and a float literal in exponent form that large (`1e308` into a `double precision` column) | exact `numeric` of any size; the literal then casts to double | `22003` | the decimal type holds 38 digits ([#691](https://github.com/moncifem/latticedb/issues/691)); `'1e308'::float8` works |
 | `double precision % integer` | `42883` (no such operator) | computed | the operator is accepted for any two numbers |
-| Joins, `DISTINCT`, `count(DISTINCT x)`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
+| Joins, `SELECT DISTINCT`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
 
 ### Contract with the host catalog
 

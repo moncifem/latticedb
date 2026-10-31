@@ -271,6 +271,8 @@ pub struct AggCall {
     pub arg: Option<TypedExpr>,
     /// The type of the result.
     pub ty: SqlType,
+    /// `count(DISTINCT x)`: each distinct non-`NULL` value of the argument counts once.
+    pub distinct: bool,
 }
 
 /// The relational and write operators of the single-table subset.
@@ -414,6 +416,7 @@ impl LogicalPlan {
                 let c: Vec<String> = calls
                     .iter()
                     .map(|c| match &c.arg {
+                        Some(a) if c.distinct => format!("{}(DISTINCT {a})", c.func.name()),
                         Some(a) => format!("{}({a})", c.func.name()),
                         None => format!("{}(*)", c.func.name()),
                     })
