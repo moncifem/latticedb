@@ -133,8 +133,9 @@ managers (Homebrew, Linux distributions) come after the first stable release.
 
 ## Phase 2 nightly verification
 
-The verification workflow configures Miri for the deterministic `lattice-engines` library tests as
-well as ABI/core libraries. AddressSanitizer includes engine and API library tests alongside the
+The verification workflow configures Miri for the ABI and core libraries, without the hostile-peer
+CRDT tests; `lattice-engines` is out of the Miri run until its time under the interpreter is measured
+(it exceeded the job limit). AddressSanitizer includes engine and API library tests alongside the
 existing unit and simulator suites. Real socket/process tests are not Miri targets. These workflow
 entries describe coverage to execute, not evidence that a nightly run or a phase gate has passed.
 
