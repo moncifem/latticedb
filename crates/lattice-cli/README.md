@@ -38,9 +38,11 @@ one second and a ceiling that starts at one second, doubles with each failure an
 A connection that delivers no event counts as a failure, and three failures in a row stop the watch with
 status 1. An event counts as delivered once it is printed, acknowledged and saved; that resets the count
 and the ceiling, so the next wait starts again at one second. A refused token (HTTP 401 or 403), a close
-with code 1008 (policy), and a server refusal that a new connection would repeat (for example an invalid
-scope or cursor, or a version the client does not speak) stop the watch at once. A protocol violation or
-an internal server error is retried like a dropped connection. A line that cannot be printed, a cursor
+with code 1008 whose reason says the token no longer verifies, and a server refusal that a new connection
+would repeat (for example an invalid scope or cursor, or a version the client does not speak) stop the
+watch at once. A close with code 1008 that says the connection timed out, or that gives no reason the
+watch knows, is retried like a dropped connection. A protocol violation or an internal server error is
+retried like a dropped connection. A line that cannot be printed, a cursor
 that cannot be saved and an event that does not match its cursor stop the watch at once, without a retry.
 SIGTERM and SIGINT stop the watch after the event in hand is saved, with status 0. The retry pause is a
 plain sleep of at most eight seconds that a stop signal does not interrupt, so a stop during a pause takes

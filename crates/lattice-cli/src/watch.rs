@@ -4,7 +4,8 @@
 //! is saved (with `--cursor-file`). A crash between two steps re-prints an event on the next start
 //! and never skips one. A dropped connection is retried from the last saved cursor. Connections that
 //! deliver nothing count as failures, and after a few failures in a row the watch stops with an error.
-//! A refusal that a new connection cannot fix (a bad token, a policy close) stops it at once.
+//! A refusal that a new connection cannot fix (a bad token, a protocol version the gateway does not
+//! speak) stops it at once. A policy close for a timeout is a dropped connection and is retried.
 //!
 //! The driver is generic over [`Dialer`], [`Connection`], [`Output`] and [`CursorStore`], so the
 //! order rule and the resume rule are tested with scripted doubles. The socket transport at the end
@@ -47,8 +48,21 @@ const RETRY_BASE_MS: u64 = 1_000;
 const RETRY_CAP_MS: u64 = 8_000;
 /// The shortest wait before a reconnect. The jitter may draw less; the watch never waits less.
 const RETRY_FLOOR: Duration = Duration::from_millis(RETRY_BASE_MS);
-/// The WebSocket close code for a policy violation: the gateway refused the connection itself.
+/// The WebSocket close code for a policy violation. The gateway uses it for three cases, told apart
+/// by the reason text below.
 const POLICY_CLOSE: u16 = 1008;
+/// The 1008 reason when the token no longer verifies for its account. A new connection with the same
+/// token is refused the same way. Text as the gateway sends it (`crates/latticed/src/ws.rs`); this
+/// crate does not depend on the gateway.
+const CREDENTIAL_CLOSE_REASON: &str = "credential no longer valid";
+/// The 1008 reason when the gateway speaks no protocol version the client offers in its `Hello`.
+/// Nothing in the connection is credential-related: a new connection repeats the refusal.
+const REFUSED_CLOSE_REASON: &str = "refused";
+/// The 1008 reason when no `Hello` or no `Pong` arrived in time. The connection was idle, not refused.
+const TIMEOUT_CLOSE_REASON: &str = "timeout";
+/// The longest close reason the watch reads. A control frame carries at most 125 payload bytes, and
+/// the first two are the close code. A longer reason is not one the watch knows.
+const MAX_CLOSE_REASON: usize = 123;
 /// How long a connect or the upgrade may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// One logical tick of the sync client. An idle socket wakes up this often, which drives the pings.
@@ -73,8 +87,8 @@ usage: lattice watch table/NAME --url ws://HOST:PORT --token-file FILE (--from C
 Each event prints one line: CURSOR AUTHOR TABLE KEY OPERATION
 The token is never accepted on the command line. A dropped connection is retried from the last
 saved cursor, after a random wait of one to eight seconds whose upper bound doubles with each
-failure. Three connections in a row that deliver nothing stop the watch, and a refused token or a
-policy close stops it at once.
+failure. Three connections in a row that deliver nothing stop the watch, and a refused token, or a
+server that speaks no protocol version this client speaks, stops it at once. A timeout close is retried.
 ";
 
 /// Where the bearer token comes from.
@@ -120,8 +134,9 @@ enum Received {
     Frame(Frame),
     /// Nothing arrived within one tick.
     Idle,
-    /// The peer closed the connection, with the close code when it sent one.
-    Closed(Option<u16>),
+    /// The peer closed the connection, with the close code when it sent one and the reason text
+    /// (empty when there was none, or when it was not UTF-8 or too long to be a known reason).
+    Closed(Option<u16>, String),
 }
 
 /// One connection: frames out and frames in.
@@ -552,16 +567,37 @@ where
                     Err(e) => return call_refused(e),
                 },
                 Received::Idle => self.client.tick(now),
-                // 1008 is the gateway refusing the credential or the connection itself. It closes with
-                // 1008 when the token no longer verifies, and a new connection with the same token is
-                // refused the same way: the supervisor's transport refusal.
-                Received::Closed(Some(POLICY_CLOSE)) => {
-                    return Stop::Ended(
-                        Input::Unauthorized,
-                        "the gateway closed the connection with code 1008 (policy); a new connection would be refused the same way".into(),
-                    );
-                }
-                Received::Closed(_) => {
+                // 1008 carries a reason that tells the cases apart. A token that no longer verifies is
+                // refused again by a new connection, so the watch stops. A protocol version the gateway
+                // does not speak is refused again too, so it stops as an incompatible server. A timeout
+                // closes an idle connection that a new one can resume from the saved cursor, and any other
+                // 1008 is retried like a dropped connection.
+                Received::Closed(Some(POLICY_CLOSE), reason) => match reason.as_str() {
+                    CREDENTIAL_CLOSE_REASON => {
+                        return Stop::Ended(
+                            Input::Unauthorized,
+                            "the token no longer verifies on the gateway (close code 1008); fix the token file and start again".into(),
+                        );
+                    }
+                    REFUSED_CLOSE_REASON => {
+                        return Stop::Ended(
+                            Input::Closed(CloseReason::Incompatible),
+                            "the gateway speaks no protocol version this client speaks (close code 1008)".into(),
+                        );
+                    }
+                    TIMEOUT_CLOSE_REASON => {
+                        return transport(
+                            "the gateway closed an idle connection on a timeout (close code 1008)"
+                                .into(),
+                        );
+                    }
+                    _ => {
+                        return transport(
+                            "the gateway closed the connection with code 1008 (policy)".into(),
+                        );
+                    }
+                },
+                Received::Closed(_, _) => {
                     return transport("the server closed the connection".into());
                 }
             };
@@ -793,6 +829,23 @@ impl Socket {
     }
 }
 
+/// The code and the reason text of a close frame's payload. A reason that is not UTF-8, or that is
+/// longer than [`MAX_CLOSE_REASON`], comes back empty: it cannot be one the watch knows.
+fn close_parts(payload: &[u8]) -> (Option<u16>, String) {
+    let code = payload
+        .get(..2)
+        .and_then(|c| <[u8; 2]>::try_from(c).ok())
+        .map(u16::from_be_bytes);
+    let reason = payload.get(2..).unwrap_or_default();
+    if reason.len() > MAX_CLOSE_REASON {
+        return (code, String::new());
+    }
+    let text = std::str::from_utf8(reason)
+        .map(str::to_owned)
+        .unwrap_or_default();
+    (code, text)
+}
+
 impl Connection for Socket {
     fn send(&mut self, frame: &Frame) -> Result<(), String> {
         let mut bytes = Vec::new();
@@ -820,12 +873,8 @@ impl Connection for Socket {
                     Opcode::Ping => self.write(Opcode::Pong, &frame.payload)?,
                     Opcode::Pong => {}
                     Opcode::Close => {
-                        let code = frame
-                            .payload
-                            .get(..2)
-                            .and_then(|c| <[u8; 2]>::try_from(c).ok())
-                            .map(u16::from_be_bytes);
-                        return Ok(Received::Closed(code));
+                        let (code, reason) = close_parts(&frame.payload);
+                        return Ok(Received::Closed(code, reason));
                     }
                     _ => return Err("the gateway sent a frame this client does not accept".into()),
                 }
@@ -833,7 +882,7 @@ impl Connection for Socket {
             }
             let mut chunk = [0u8; 4096];
             match self.stream.read(&mut chunk) {
-                Ok(0) => return Ok(Received::Closed(None)),
+                Ok(0) => return Ok(Received::Closed(None, String::new())),
                 Ok(n) => self
                     .buf
                     .extend_from_slice(chunk.get(..n).unwrap_or_default()),
@@ -1060,7 +1109,10 @@ mod tests {
         }
 
         fn recv(&mut self) -> Result<Received, String> {
-            Ok(self.incoming.pop_front().unwrap_or(Received::Closed(None)))
+            Ok(self
+                .incoming
+                .pop_front()
+                .unwrap_or(Received::Closed(None, String::new())))
         }
     }
 
@@ -1392,7 +1444,7 @@ mod tests {
 
     #[test]
     fn a_welcome_then_drop_without_an_event_is_bounded_and_the_wait_grows_each_time() {
-        let cycle = || vec![welcome(), Received::Closed(None)];
+        let cycle = || vec![welcome(), Received::Closed(None, String::new())];
         let (steps, result, waits) = run_scripted(
             vec![cycle(), cycle(), cycle(), cycle()],
             &[],
@@ -1420,14 +1472,14 @@ mod tests {
         // Connection 1 drops with no event: window 1 s. Connection 2 delivers event 1 and then drops:
         // the delivery resets the supervisor, so its wait is 1 s again, not 2 s. Connection 3 drops
         // with no event: window 2 s. Connection 4 is the third failure in a row, so the watch gives up.
-        let silent = || vec![welcome(), Received::Closed(None)];
+        let silent = || vec![welcome(), Received::Closed(None, String::new())];
         let (steps, result, waits) = run_scripted(
             vec![
                 silent(),
                 vec![
                     welcome(),
                     event_frame(1, vec![(CURSOR_1, "00000001")]),
-                    Received::Closed(None),
+                    Received::Closed(None, String::new()),
                 ],
                 silent(),
                 silent(),
@@ -1465,7 +1517,7 @@ mod tests {
 
     #[test]
     fn a_seeded_jitter_keeps_each_wait_inside_its_window_and_never_below_one_second() {
-        let cycle = || vec![welcome(), Received::Closed(None)];
+        let cycle = || vec![welcome(), Received::Closed(None, String::new())];
         let mut jitter = seeded(7);
         let (_, result, waits) =
             run_scripted(vec![cycle(), cycle(), cycle()], &[], false, &mut jitter);
@@ -1487,15 +1539,99 @@ mod tests {
     }
 
     #[test]
-    fn a_policy_close_is_fatal_and_no_further_connection_is_made() {
-        let refused = vec![welcome(), Received::Closed(Some(POLICY_CLOSE))];
+    fn a_credential_close_is_fatal_and_no_further_connection_is_made() {
+        // The gateway closes a live connection with 1008 when its token stops verifying.
+        let revoked = vec![
+            welcome(),
+            Received::Closed(Some(POLICY_CLOSE), "credential no longer valid".into()),
+        ];
+        let (steps, result, waits) =
+            run_scripted(vec![revoked, vec![welcome()]], &[], false, &mut || u64::MAX);
+        let err = result.unwrap_err();
+        assert!(err.contains("1008"), "{err}");
+        assert!(err.contains("token"), "{err}");
+        assert!(!err.contains("giving up"), "{err}");
+        assert!(waits.is_empty(), "{waits:?}");
+        assert_eq!(steps, vec![Step::Sent(hello()), Step::Sent(subscribe(""))]);
+    }
+
+    #[test]
+    fn a_version_refusal_close_is_fatal_and_does_not_blame_the_token() {
+        // The gateway refuses the Hello with 1008 and the reason "refused". No credential is involved,
+        // so the message says the protocol version is not spoken, and a new connection is not made.
+        let refused = vec![Received::Closed(Some(POLICY_CLOSE), "refused".into())];
         let (steps, result, waits) =
             run_scripted(vec![refused, vec![welcome()]], &[], false, &mut || u64::MAX);
         let err = result.unwrap_err();
         assert!(err.contains("1008"), "{err}");
+        assert!(err.contains("protocol version"), "{err}");
+        assert!(!err.contains("token"), "{err}");
         assert!(!err.contains("giving up"), "{err}");
         assert!(waits.is_empty(), "{waits:?}");
-        assert_eq!(steps, vec![Step::Sent(hello()), Step::Sent(subscribe(""))]);
+        assert_eq!(steps, vec![Step::Sent(hello())]);
+    }
+
+    #[test]
+    fn a_timeout_or_unknown_policy_close_is_retried_and_not_blamed_on_the_token() {
+        // The gateway closes an idle connection with 1008 and the reason "timeout", or with no reason
+        // the watch knows. A new connection from the saved cursor can succeed, so each close is a
+        // dropped connection: the supervisor waits and dials again, and gives up after three in a row.
+        for reason in ["timeout", ""] {
+            let idle = || {
+                vec![
+                    welcome(),
+                    Received::Closed(Some(POLICY_CLOSE), reason.into()),
+                ]
+            };
+            let (steps, result, waits) =
+                run_scripted(vec![idle(), idle(), idle()], &[], false, &mut || u64::MAX);
+            let err = result.unwrap_err();
+            assert!(
+                err.contains("giving up after 3 failed connections"),
+                "{reason:?}: {err}"
+            );
+            assert!(!err.contains("token"), "{reason:?}: {err}");
+            assert_eq!(
+                waits,
+                vec![Duration::from_secs(1), Duration::from_secs(2)],
+                "{reason:?}"
+            );
+            let handshake = || vec![Step::Sent(hello()), Step::Sent(subscribe(""))];
+            let mut expected = handshake();
+            expected.extend(handshake());
+            expected.extend(handshake());
+            assert_eq!(steps, expected, "{reason:?}");
+        }
+    }
+
+    #[test]
+    fn a_close_frame_carries_its_code_and_its_reason() {
+        // 1008 is 0x03 0xF0 in network byte order. The reason is the ASCII text the gateway sends.
+        let mut payload = vec![0x03, 0xF0];
+        payload.extend_from_slice(b"timeout");
+        assert_eq!(close_parts(&payload), (Some(1008), "timeout".to_owned()));
+    }
+
+    #[test]
+    fn a_close_frame_without_a_code_or_with_a_reason_the_watch_cannot_read_has_no_reason() {
+        assert_eq!(close_parts(&[]), (None, String::new()));
+        assert_eq!(close_parts(&[0x03]), (None, String::new()));
+        assert_eq!(close_parts(&[0x03, 0xF0]), (Some(1008), String::new()));
+        // 0xFF never occurs in UTF-8, so this reason is not text.
+        assert_eq!(
+            close_parts(&[0x03, 0xF0, b'a', 0xFF]),
+            (Some(1008), String::new())
+        );
+    }
+
+    #[test]
+    fn a_close_reason_of_123_bytes_is_kept_and_a_longer_one_is_dropped() {
+        let mut exact = vec![0x03, 0xF0];
+        exact.extend(std::iter::repeat_n(b'a', 123));
+        assert_eq!(close_parts(&exact), (Some(1008), "a".repeat(123)));
+        let mut long = vec![0x03, 0xF0];
+        long.extend(std::iter::repeat_n(b'a', 124));
+        assert_eq!(close_parts(&long), (Some(1008), String::new()));
     }
 
     /// A refusal of subscription 1 by the server, as the gateway sends it.
