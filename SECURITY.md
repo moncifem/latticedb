@@ -32,12 +32,15 @@ has reviewed. No external review, audit or penetration test has been done. In sh
   per-table read, write and ddl grants per account. There are no row predicates, roles or policy
   language yet.
 - Disclosed gaps: no SCRAM channel binding ([#360](https://github.com/moncifem/latticedb/issues/360));
-  no security event log or failed-login backoff ([#361](https://github.com/moncifem/latticedb/issues/361));
+  no security event log, and no failed-login backoff on the PostgreSQL listener (the gateway limits failed
+  bearer checks per address) ([#361](https://github.com/moncifem/latticedb/issues/361));
   a filtered change feed leaks the count of hidden writes ([#363](https://github.com/moncifem/latticedb/issues/363));
   feed reads are not fully bounded ([#543](https://github.com/moncifem/latticedb/issues/543)); text
   stored in the database can carry prompt injection to an agent that reads it.
-- The agent gateway is on `main` behind `--gateway-listen`; it listens on loopback only and has no TLS yet.
-  The MCP transport is not on `main` yet. When it ships it is planned to listen on loopback only, without TLS,
-  and the threat model lists the DNS-rebinding and browser rows that must hold first.
+- The agent gateway is on `main` behind `--gateway-listen`. Plaintext is for loopback only. Off loopback it
+  needs TLS (`--tls-cert`, `--tls-key`) and bearer tokens (`--gateway-tokens`), and the server refuses to start
+  without them. `POST /mcp` is served on the gateway port and needs a bearer token; `lattice mcp` is a stdio
+  proxy to it; it has no TLS client and reaches only a loopback plaintext gateway. The Host and Origin checks are on `main`; the rest of the browser and DNS-rebinding defences
+  (#580) are open, and the threat model lists them.
 
 See [docs/alpha.md](docs/alpha.md) for the known-issues list.
