@@ -148,7 +148,7 @@ jobs:
       - name: restore the corpus kept by earlier nights
         # Read-only here: only the save step below, on the default branch's scheduled run, writes a
         # cache entry, so a manual run from another branch can read the corpus but cannot replace it.
-        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-nightly-corpus-${{ matrix.target }}-${{ github.run_id }}
