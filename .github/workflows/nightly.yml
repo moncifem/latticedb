@@ -187,7 +187,7 @@ jobs:
         # Only the scheduled run on the default branch writes the shared corpus, and only a merged and
         # capped one: a failed merge step must not save the grown, unmerged directory.
         if: ${{ !cancelled() && steps.merge.outcome == 'success' && github.event_name == 'schedule' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-nightly-corpus-${{ matrix.target }}-${{ github.run_id }}
