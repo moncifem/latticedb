@@ -2235,14 +2235,8 @@ reader	allow-all
 
     #[test]
     fn a_timeout_queues_nothing_but_the_statement_itself() {
-        let (host, path) = limited_host(
-            "one-entry",
-            HostLimits {
-                max_timeout_ms: Some(150),
-                wait_slack_ms: 0,
-                ..HostLimits::default()
-            },
-        );
+        // The host keeps its default ceiling, so the CREATE TABLE is never cut short by a slow fsync.
+        let (host, path) = quick_host("one-entry");
         let principal = Principal::local_development();
         let ctx = QueryContext::new(&principal);
         let mut p = host.handler();
@@ -2251,10 +2245,19 @@ reader	allow-all
         let stall = host.stall_for_test();
         // The first statement times out in the queue and stays there. The retries do not add entries
         // (the earlier one has not left), and neither does the abort the timeout owes.
+        //
+        // The outcome does not depend on the clock. The stall keeps the actor from answering, so the
+        // first statement can only end in 57014 and each retry can only end in 53300 (its wait for
+        // the earlier entry expires). Each regression below fails on every run, whatever the timing:
+        // - a retry that queues its own SELECT instead of waiting for the earlier entry raises the
+        //   peak to 2 (the entry stays queued until `drop(stall)`) and answers 57014, not 53300;
+        // - a timeout that queues an abort entry raises the peak to 2 and fails the peak check.
+        arm(&mut p);
         assert_eq!(p.execute(&ctx, "SELECT 1", &[]).unwrap_err().code, "57014");
         for _ in 0..3 {
             assert_eq!(p.execute(&ctx, "SELECT 1", &[]).unwrap_err().code, "53300");
         }
+        disarm(&mut p);
         assert!(
             host.peak_queue_for_test() <= 1,
             "queue peaked at {}",
@@ -2397,11 +2400,12 @@ reader	allow-all
         // A queue of one: another connection's timed-out statement fills it while the thread is
         // stalled, so the block's next statement cannot get in and answers 53300. Nothing of it ever
         // reaches the thread, so only the failure mark can fail the executor's block.
+        // Only the two statements that are meant to time out run under a short wait (`arm`). The
+        // block's set-up, the COMMIT after the release and the final read use the default ceiling and
+        // wait, so a slow disk cannot fail them.
         let (host, path) = limited_host(
             "never-queued",
             HostLimits {
-                max_timeout_ms: Some(150),
-                wait_slack_ms: 0,
                 queue_depth: 1,
                 ..HostLimits::default()
             },
@@ -2411,16 +2415,19 @@ reader	allow-all
         let ctx = QueryContext::new(&principal);
         let stall = host.stall_for_test();
         let mut filler = host.handler();
+        arm(&mut filler);
         assert_eq!(
             filler.execute(&ctx, "SELECT 1", &[]).unwrap_err().code,
             "57014"
         );
+        arm(&mut p);
         assert_eq!(
             p.execute(&ctx, "INSERT INTO t VALUES (2)", &[])
                 .unwrap_err()
                 .code,
             "53300"
         );
+        disarm(&mut p);
         drop(stall);
         assert_eq!(p.execute(&ctx, "COMMIT", &[]).unwrap().tag, "ROLLBACK");
         assert_eq!(rows_of(&host, "SELECT id FROM t"), 0);

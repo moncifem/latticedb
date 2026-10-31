@@ -1,0 +1,1 @@
+The timeout tests in `exec_host` no longer fail on a loaded runner. Their set-up statements (CREATE TABLE, the COMMIT after a release, the final read) used the 150 ms test ceiling, so a slow fsync could time them out before the statement under test ran. Only the statements meant to time out now run under a short wait; the outcomes they check were already independent of the clock.
