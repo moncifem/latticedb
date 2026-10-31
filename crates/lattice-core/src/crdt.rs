@@ -262,10 +262,20 @@ impl Rga {
 }
 
 impl Crdt for Rga {
+    /// Union of the nodes, with the tombstone flag OR-ed. `insert` refuses a reused id, but a
+    /// merged state can carry one, so a node both sides hold keeps the smaller `(ch, after)` pair:
+    /// the result then does not depend on the merge order. A node whose `after` is missing from
+    /// the merged set is kept but never shown by [`Rga::chars`].
     fn merge(&mut self, other: &Self) {
         for (id, n) in &other.nodes {
             match self.nodes.get_mut(id) {
-                Some(mine) => mine.deleted |= n.deleted,
+                Some(mine) => {
+                    if (n.ch, n.after) < (mine.ch, mine.after) {
+                        mine.ch = n.ch;
+                        mine.after = n.after;
+                    }
+                    mine.deleted |= n.deleted;
+                }
                 None => {
                     self.nodes.insert(*id, n.clone());
                 }
@@ -722,5 +732,116 @@ mod tests {
                 prop_assert_eq!(b.tag_count(), recounted(&b));
             }
         }
+    }
+
+    // ---- conflicting character ids (issue 835) ---------------------------------------------------
+
+    /// An id from a tiny space, so two replicas often hold the same id with different content.
+    fn small_id() -> impl Strategy<Value = CharId> {
+        (0u64..3, 0u32..2).prop_map(|(wall_ms, node)| Hlc {
+            wall_ms,
+            counter: 0,
+            node,
+        })
+    }
+
+    /// A replica in which each id appears once, while two replicas may disagree about an id.
+    fn arb_conflicting_rga() -> impl Strategy<Value = Rga> {
+        proptest::collection::vec(
+            (
+                small_id(),
+                proptest::char::range('a', 'c'),
+                proptest::option::of(small_id()),
+                any::<bool>(),
+            ),
+            0..6,
+        )
+        .prop_map(|nodes| Rga {
+            nodes: nodes
+                .into_iter()
+                .map(|(id, ch, after, deleted)| (id, CharNode { ch, after, deleted }))
+                .collect(),
+        })
+    }
+
+    proptest! {
+        /// Replicas may hold one id with different content, so merge must reach the same state in
+        /// any order. The expected node is written from the rule itself: the smallest `(ch, after)`
+        /// among the copies, with the tombstone set if any copy has one.
+        #[test]
+        fn rga_merge_of_a_conflicting_id_is_order_independent(
+            a in arb_conflicting_rga(),
+            b in arb_conflicting_rga(),
+            c in arb_conflicting_rga(),
+        ) {
+            prop_assert_eq!(merged(&a, &b), merged(&b, &a));
+            prop_assert_eq!(merged(&merged(&a, &b), &c), merged(&a, &merged(&b, &c)));
+            prop_assert_eq!(merged(&a, &a), a.clone());
+
+            let mut copies: BTreeMap<CharId, Vec<&CharNode>> = BTreeMap::new();
+            for replica in [&a, &b, &c] {
+                for (id, n) in &replica.nodes {
+                    copies.entry(*id).or_default().push(n);
+                }
+            }
+            let expected: BTreeMap<CharId, (char, Option<CharId>, bool)> = copies
+                .into_iter()
+                .filter_map(|(id, ns)| {
+                    let (ch, after) = ns.iter().map(|n| (n.ch, n.after)).min()?;
+                    Some((id, (ch, after, ns.iter().any(|n| n.deleted))))
+                })
+                .collect();
+            for state in [merged(&merged(&a, &b), &c), merged(&merged(&c, &b), &a)] {
+                let actual: BTreeMap<CharId, (char, Option<CharId>, bool)> = state
+                    .nodes
+                    .iter()
+                    .map(|(id, n)| (*id, (n.ch, n.after, n.deleted)))
+                    .collect();
+                prop_assert_eq!(&actual, &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn a_conflicting_id_merges_to_the_same_node_whichever_side_is_merged_first() {
+        let p = Hlc {
+            wall_ms: 5,
+            counter: 0,
+            node: 1,
+        };
+        let x = Hlc {
+            wall_ms: 9,
+            counter: 0,
+            node: 1,
+        };
+        let mut base = Rga::default();
+        assert!(base.insert(None, 'p', p));
+        // Replica a types x at the start; replica b reuses x's id after p.
+        let mut a = base.clone();
+        assert!(a.insert(None, 'x', x));
+        let mut b = base.clone();
+        assert!(b.insert(Some(p), 'x', x));
+        assert_eq!(a.text(), "xp");
+        assert_eq!(b.text(), "px");
+        // None sorts before Some(p), so the kept node is the one at the start on both sides.
+        assert_eq!(merged(&a, &b).text(), "xp");
+        assert_eq!(merged(&b, &a).text(), "xp");
+        assert_eq!(merged(&a, &b), merged(&b, &a));
+    }
+
+    #[test]
+    fn a_conflicting_character_merges_to_the_smaller_one_on_both_sides() {
+        let id = Hlc {
+            wall_ms: 1,
+            counter: 0,
+            node: 1,
+        };
+        let mut a = Rga::default();
+        assert!(a.insert(None, 'b', id));
+        let mut b = Rga::default();
+        assert!(b.insert(None, 'a', id));
+        assert_eq!(merged(&a, &b).text(), "a");
+        assert_eq!(merged(&b, &a).text(), "a");
+        assert_eq!(merged(&a, &b).stored_chars(), 1);
     }
 }
