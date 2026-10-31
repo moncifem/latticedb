@@ -46,7 +46,7 @@ run over `psql` are in [integrations/board](integrations/board/CONVENTIONS.md).
 
 - `ALTER TABLE`, and column names with capital letters (a quoted identifier such as `"Id"` is refused,
   because the stored table definition keeps no ASCII capitals).
-- Joins, aggregates, `DISTINCT`, subqueries (they return `0A000`) and binary result formats.
+- `RIGHT`/`FULL JOIN` and subqueries (they return `0A000`) and binary result formats. `count`, `sum`, `avg`, `min`, `max`, `GROUP BY` and `HAVING` run, and `INNER`, `LEFT` and `CROSS` joins (nested loop) and comma `FROM` lists.
 - A PostgreSQL driver compatibility matrix ([#413](https://github.com/moncifem/latticedb/issues/413)).
 - Authenticated agent permissions: each account is allow-all, deny-all or a list of read, write and ddl bits per table, supplied by the host in a file. No row predicates, roles or policy language yet (Phase 4).
 - A production sync server. The WebSocket gateway (`latticed --gateway-listen`) is on `main` and experimental: plaintext only on loopback; a non-loopback bind needs `--tls-cert`, `--tls-key` and `--gateway-tokens`; read only, rows only.

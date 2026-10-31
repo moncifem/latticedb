@@ -189,7 +189,7 @@ fn refused_records_fail_with_the_declared_class() {
             _ => syntax += 1,
         }
     }
-    assert_eq!(unsupported, 125);
+    assert_eq!(unsupported, 123);
     assert_eq!(syntax, 18);
 }
 

@@ -154,6 +154,12 @@ planted_bugs! {
     /// The executor's unique-constraint lookup fetches the row without the actor's read policy
     /// (hidden rows revealed).
     ExecIndexPolicySkipped,
+    /// The executor's aggregates feed `NULL` arguments to the fold (`count(x)` counts them, `sum`,
+    /// `avg`, `min` and `max` see them), so results differ from PostgreSQL.
+    AggregateSkipsNull,
+    /// The executor's `GROUP BY` groups by the first key only, merging groups that differ in a later
+    /// key (wrong aggregates).
+    GroupKeyTruncated,
     /// A row commit accepts a key longer than the change feed can carry (feed availability).
     RowOversizeKeyAccepted,
     /// The tree CRDT replays any number of live ops for one peer operation (CPU exhaustion).
@@ -361,6 +367,10 @@ impl Bug {
     /// Index-scan defects in the SQL executor, detected by the differential index-scan witnesses.
     pub const EXEC_INDEX: [Bug; 2] = [Bug::ExecIndexUpperBoundOpen, Bug::ExecIndexPolicySkipped];
 
+    /// Aggregate defects in the SQL executor, detected by `count` over a column with `NULL`s and by
+    /// a `GROUP BY` over two keys.
+    pub const EXEC_AGGREGATE: [Bug; 2] = [Bug::AggregateSkipsNull, Bug::GroupKeyTruncated];
+
     /// Tree CRDT defects, detected by the convergence and acyclicity checks in `crdt_tree`.
     pub const CRDT: [Bug; 1] = [Bug::TreeCycleCheckSkipped];
 
@@ -490,6 +500,7 @@ impl Bug {
         &Bug::FEED_BOUND,
         &Bug::NOTIFY,
         &Bug::EXEC_INDEX,
+        &Bug::EXEC_AGGREGATE,
         &Bug::CRDT_PEER,
         &Bug::ADMISSION,
         &Bug::CATALOG_INDEX,

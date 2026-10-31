@@ -1,0 +1,1 @@
+`JOIN ... ON`, `INNER JOIN`, `LEFT JOIN`, `CROSS JOIN` and comma-separated `FROM` lists now run as a nested-loop join, checked against PostgreSQL 16. `RIGHT` and `FULL JOIN` are still refused with `0A000`.
