@@ -229,7 +229,7 @@ statement error 0A000
 SELECT w FROM cased ORDER BY w COLLATE "C"
 
 statement error 0A000
-SELECT concat(w, '!') FROM words
+SELECT md5(w) FROM words
 
 statement error 0A000
 SELECT replace(w, 'a', 'b') FROM words
