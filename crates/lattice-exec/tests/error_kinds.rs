@@ -70,6 +70,30 @@ fn statements_fail_with_the_documented_kind() {
 }
 
 #[test]
+fn a_refused_ddl_statement_carries_the_lattice_code() {
+    let mut f = fixture();
+    let mut s = common::admin();
+    common::ok(&mut f.db, &mut s, "CREATE TABLE k (id INT PRIMARY KEY)");
+    for sql in [
+        "ALTER TABLE k ADD COLUMN z text",
+        "CREATE INDEX k_id ON k (id)",
+        "DROP INDEX k_id",
+    ] {
+        let e = err(&mut f.db, &mut s, sql);
+        assert_eq!(
+            (e.sqlstate(), e.kind()),
+            ("0A000", ErrorKind::Unsupported),
+            "{sql}"
+        );
+        assert!(
+            e.message().starts_with("LSQL-0002 unsupported feature: "),
+            "{sql}: {}",
+            e.message()
+        );
+    }
+}
+
+#[test]
 fn a_constant_null_for_a_not_null_column_is_a_constraint_error() {
     let mut f = fixture();
     let mut s = common::admin();

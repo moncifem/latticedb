@@ -429,7 +429,7 @@ impl ExecSession {
             }
             Statement::AlterTable(_) | Statement::CreateIndex(_) | Statement::DropIndex { .. } => {
                 Err(ExecError::unsupported(
-                    "ALTER TABLE, CREATE INDEX and DROP INDEX are not executed yet",
+                    "LSQL-0002 unsupported feature: ALTER TABLE, CREATE INDEX and DROP INDEX are not executed yet",
                 ))
             }
             stmt @ (Statement::Query(_)
