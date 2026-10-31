@@ -1,0 +1,1 @@
+`ALTER TABLE`, `CREATE INDEX` and `DROP INDEX` refusals now carry the `LSQL-0002` code in their message, as `docs/sql-subset.md` says every refusal of valid PostgreSQL outside the subset does. The SQLSTATE `0A000` is unchanged.
