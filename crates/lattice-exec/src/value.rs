@@ -786,7 +786,10 @@ pub(crate) fn parse_text(s: &str, ty: SqlType) -> Result<Datum, ExecError> {
             let named = t
                 .bytes()
                 .any(|b| b.is_ascii_alphabetic() && !matches!(b, b'e' | b'E'));
-            if f.is_infinite() && !named {
+            // A nonzero mantissa that rounds to zero is an underflow, not a zero.
+            let mantissa = t.split(['e', 'E']).next().unwrap_or("");
+            let underflow = f == 0.0 && mantissa.bytes().any(|b| matches!(b, b'1'..=b'9'));
+            if (f.is_infinite() && !named) || underflow {
                 return Err(ExecError::eval(
                     "22003",
                     format!("\"{s}\" is out of range for type double precision"),
