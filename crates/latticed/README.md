@@ -441,6 +441,10 @@ server names the gateway address.
 | `--gateway-tokens FILE` | none | Require `Authorization: Bearer lat_...` from this credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (SIGHUP is caught only when this flag is set). A file that does not load keeps the tokens in use. SCRAM verifiers and policies are not re-read. The connection is the token's account and its table grants (`--account-policies`, which this flag also allows with `--auth development-trust`). Without it the gateway serves the loopback development principal and only with `--auth development-trust`. |
 | `--gateway-allowed-host NAME[:PORT]` | none | Adds a `Host` that `POST /mcp` answers to, besides this address and `localhost` on the bound port (which stay allowed). Repeatable, at most 16, needs `--gateway-listen`. Exact and case-insensitive: an ASCII DNS name or an IP literal (IPv6 in brackets), no wildcards, no IP ranges, no userinfo or path. Without a port it means the bound port. List only names you control that resolve to this gateway; with a name beyond `localhost`, use TLS and tokens, since a plaintext loopback bind is protected only by the `Origin` refusal against DNS rebinding. A malformed, repeated or default-equal value stops the start (#774). |
 | `--gateway-max-connections N` | 32 | Connections at once, including upgrades in progress (at most 8 of those). The next one gets `503`. |
+| `--gateway-max-connections-per-principal N` | 8 | Connections one principal holds at once, `1..=1024`, WebSocket and `POST /mcp` together. The principal is the account the token verified (the development gateway has one). The next one gets `503` with `Retry-After: 1` before the upgrade. |
+| `--gateway-reserved-connections N` | 4 | Places of `--gateway-max-connections` kept for principals that hold no connection: a principal that already holds one is refused (`503`) while more than `max-connections - N` are open. `0..=1024`. |
+| `--gateway-max-long-polls-per-principal N` | 4 | `lattice_subscribe` calls with a `wait_ms` above zero that one principal may have waiting, `1..=1024`. The next one is answered `503` at once and does not wait. |
+| `--gateway-max-long-polls N` | 16 | Long polls waiting at once on the whole gateway, `1..=1024`. |
 | `--gateway-handshake-timeout-ms N` | 5000 | One absolute budget from accept to the `101` response. |
 
 Host and Origin. `/sync` checks that `Host` is present and well formed, but not its value, and refuses any browser
@@ -456,7 +460,11 @@ the connection is. Reads wake on the executor's commit notifier and go through t
 the rest of the server; a fallback read every second means a lost wake costs latency only. The connection thread
 looks at the wake between socket reads of up to 20 ms, so a wake adds up to that. A client that stops reading is
 disconnected at the write budget; resume by subscribing again with the last acknowledged cursor. Not done here:
-an idle deadline (#578), byte budgets per principal (#529) and the security event log (#530). Token reload,
+an idle deadline (#578), the output byte budget (#529 part 2) and the security event log (#530). The connection and
+long-poll limits per principal are done (#529 part 1): they are applied after the token verified, still before the
+`101`, and a place is given back on every way a connection or poll ends, a panic included. Refusals are counted
+(`GatewayHandle::limit_refusals`); there is no executor budget per principal yet, so a principal that floods reads
+over its allowed connections is not slowed down by these limits. Token reload,
 revocation of live connections and expiry are done (#577): a revoked or expired token's connection is closed with
 1008 after the change is read, and a token that expires is closed at its expiry (within the 5 second revalidation).
 Rotation is the credential file's rule: two active tokens per account, the older ending at most seven days after the
