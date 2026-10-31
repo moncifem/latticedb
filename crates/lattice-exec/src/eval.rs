@@ -269,6 +269,20 @@ fn go(e: &TypedExpr, row: &[Datum], ctx: &EvalCtx<'_>, depth: usize) -> Result<D
                     }
                     Ok(Datum::Null)
                 }
+                // `case(cond1, result1, cond2, result2, .., else)`: only the chosen result is evaluated.
+                "case" => {
+                    let mut it = args.iter();
+                    while let Some(condition) = it.next() {
+                        let Some(result) = it.next() else {
+                            // The last argument is the ELSE result.
+                            return sub(condition);
+                        };
+                        if matches!(sub(condition)?, Datum::Bool(true)) {
+                            return sub(result);
+                        }
+                    }
+                    Ok(Datum::Null)
+                }
                 "nullif" => {
                     let (Some(a), Some(b)) = (args.first(), args.get(1)) else {
                         return Err(ExecError::internal("nullif takes two arguments"));

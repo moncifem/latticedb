@@ -46,9 +46,6 @@ TABLE ux
 
 # Expressions.
 statement error 0A000
-SELECT CASE WHEN a = 1 THEN 'one' ELSE 'other' END FROM ux
-
-statement error 0A000
 SELECT id FROM ux WHERE EXISTS (SELECT 1)
 
 statement error 0A000

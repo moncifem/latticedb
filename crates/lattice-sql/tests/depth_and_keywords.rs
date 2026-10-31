@@ -122,3 +122,28 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn case_expressions_round_trip_and_reject_malformed_forms() {
+    for sql in [
+        "SELECT CASE WHEN a THEN 1 END",
+        "SELECT CASE WHEN a THEN 1 ELSE 2 END",
+        "SELECT CASE a WHEN 1 THEN 'x' WHEN 2 THEN 'y' ELSE 'z' END",
+        "SELECT CASE WHEN a THEN CASE WHEN b THEN 1 END ELSE 2 END",
+        "SELECT 1 + CASE WHEN a THEN 1 END",
+        "SELECT a FROM t WHERE CASE WHEN a THEN b ELSE c END",
+    ] {
+        round_trips(sql);
+    }
+    for sql in [
+        "SELECT CASE",
+        "SELECT CASE END",
+        "SELECT CASE WHEN a THEN 1",
+        "SELECT CASE WHEN a 1 END",
+        "SELECT CASE WHEN a THEN END",
+        "SELECT CASE ELSE 1 END",
+        "SELECT CASE a END",
+    ] {
+        assert_eq!(err(sql).kind(), ErrorKind::Syntax, "{sql}");
+    }
+}
