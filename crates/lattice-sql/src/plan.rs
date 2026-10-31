@@ -298,6 +298,10 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         keys: Vec<SortKey>,
     },
+    /// The rows of `input` without repeats: two rows are the same when every column is equal, with
+    /// `NULL` equal to `NULL`. The first of equal rows is kept, in input order. `SELECT DISTINCT`
+    /// puts it directly above the `Project`.
+    Distinct { input: Box<LogicalPlan> },
     /// Aggregates over the rows of `input`. Without `group_by` it yields exactly one row, even when
     /// `input` is empty. With it, one row per distinct value of the `group_by` expressions (`NULL`s
     /// group together) and none when `input` is empty, in the order of the keys. Each row holds the
@@ -359,6 +363,7 @@ impl LogicalPlan {
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::Aggregate { input, .. }
+            | LogicalPlan::Distinct { input }
             | LogicalPlan::Limit { input, .. } => input.output(),
             LogicalPlan::Insert { returning, .. }
             | LogicalPlan::Update { returning, .. }
@@ -405,6 +410,10 @@ impl LogicalPlan {
                     })
                     .collect();
                 writeln!(out, "{pad}Sort [{}]", keys.join(", "))?;
+                input.write_tree(out, depth + 1)?;
+            }
+            LogicalPlan::Distinct { input } => {
+                writeln!(out, "{pad}Distinct")?;
                 input.write_tree(out, depth + 1)?;
             }
             LogicalPlan::Aggregate {

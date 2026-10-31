@@ -8,7 +8,6 @@
 # an earlier refused statement or whose result differs for a stated reason. The test asserts the
 # SQLSTATE in the parentheses (`none` for a statement that succeeded), so a cascade that turns into
 # a different error or a wrong result is caught.
-aggregates.test:41 DISTINCT: no distinct operator in the plan IR
 constraints.test:147 CREATE TABLE with numeric(p, s) is refused with 0A000 (the plan carries no type modifiers)
 constraints.test:150 not-0A000(42P01): depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
 constraints.test:153 not-0A000(42P01): depends on a CREATE TABLE with numeric(p, s), which is refused with 0A000 (the plan carries no type modifiers)
@@ -31,7 +30,6 @@ ddl_statements.test:91 refused with 0A000 before the expected error is reached: 
 ddl_statements.test:94 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
 ddl_statements.test:100 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
 ddl_statements.test:103 ALTER TABLE, CREATE INDEX and DROP INDEX are not executed
-empty_aggregates.test:41 DISTINCT: no distinct operator in the plan IR
 empty_aggregates.test:124 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
 joins.test:15 JOIN: no join operator in the plan IR
 joins.test:25 JOIN: no join operator in the plan IR
@@ -62,10 +60,6 @@ joins_small.test:187 JOIN: no join operator in the plan IR
 joins_small.test:193 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
 joins_small.test:199 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
 joins_small.test:202 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
-limit_offset.test:134 DISTINCT: no distinct operator in the plan IR
-nulls_functions.test:162 DISTINCT: no distinct operator in the plan IR
-order_nulls.test:149 DISTINCT: no distinct operator in the plan IR
-order_nulls.test:156 DISTINCT: no distinct operator in the plan IR
 returning.test:156 refused with 0A000 before the expected error is reached: a feature outside the plan IR (aggregates, joins, subqueries, ALTER TABLE or index DDL)
 subqueries.test:18 subquery: no subquery operator in the plan IR
 subqueries.test:23 subquery: no subquery operator in the plan IR

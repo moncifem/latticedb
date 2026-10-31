@@ -846,7 +846,7 @@ fn unsupported_statements_are_refused_with_0a000() {
     for sql in [
         "SELECT * FROM notes a JOIN notes b ON a.id = b.id",
         "SELECT count(*) FROM notes WHERE count(*) > 0",
-        "SELECT DISTINCT score FROM notes",
+        "SELECT DISTINCT ON (score) score FROM notes",
         "CREATE INDEX i ON notes (score)",
         "ALTER TABLE notes ADD COLUMN x INT",
         "SAVEPOINT a",

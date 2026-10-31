@@ -174,7 +174,7 @@ needs only the session itself; `WHERE`, `LIMIT` and `OFFSET` apply to that one r
 
 ## Not run
 
-Joins, `SELECT DISTINCT` and subqueries and an aggregate in `WHERE` (refused with `0A000`); `count`, `sum`, `avg`, `min`, `max`, `GROUP BY` and `HAVING` over one table run (one row per group, in key order; the groups are charged to the statement memory budget);
+Joins, `DISTINCT ON`, subqueries and an aggregate in `WHERE` (refused with `0A000`); `count`, `sum`, `avg`, `min`, `max`, `GROUP BY` and `HAVING` over one table run (one row per group, in key order; the groups are charged to the statement memory budget);
 `ALTER TABLE`, `CREATE INDEX`, `DROP INDEX` (`0A000`); the `jsonb` operators `->`, `->>`, `@>` (bound,
 `0A000` at run time); `numeric(p)` and `numeric(p, s)` columns (`0A000`: the plan carries no type
 modifiers, so the declaration could not be enforced); `round` with negative digits; `DDL` inside a transaction block (`25001`); keys on

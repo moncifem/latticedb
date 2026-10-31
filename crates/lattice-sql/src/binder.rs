@@ -1180,9 +1180,6 @@ impl Binder<'_> {
 
     /// Binds a `SELECT`. `targets` are the column types an `INSERT ... SELECT` stores into.
     fn query(&mut self, q: &Query, targets: Option<&[ColumnInfo]>) -> R<LogicalPlan> {
-        if q.distinct {
-            return unsupported("DISTINCT", Span::default());
-        }
         let (scope, mut plan) = match q.from.as_slice() {
             // No FROM clause: one row with no columns, so only constants and functions bind.
             [] => (Scope::empty(), LogicalPlan::OneRow),
@@ -1232,26 +1229,30 @@ impl Binder<'_> {
             c.expr = self.finish(e, Span::default())?;
         }
 
-        if !q.order_by.is_empty() {
-            let mut keys = Vec::with_capacity(q.order_by.len());
-            for item in &q.order_by {
-                let expr = self.order_key(&item.expr, &columns, &scope)?;
-                let expr = self.finish(expr, item.expr.span)?;
-                keys.push(SortKey {
-                    expr,
-                    desc: item.desc,
-                    nulls_first: item.nulls_first.unwrap_or(item.desc),
-                });
+        let mut keys = Vec::with_capacity(q.order_by.len());
+        for item in &q.order_by {
+            let expr = self.order_key(&item.expr, &columns, &scope)?;
+            let expr = self.finish(expr, item.expr.span)?;
+            keys.push(SortKey {
+                expr,
+                desc: item.desc,
+                nulls_first: item.nulls_first.unwrap_or(item.desc),
+            });
+        }
+        if q.distinct {
+            plan = Self::distinct_over(plan, columns, keys)?;
+        } else {
+            if !keys.is_empty() {
+                plan = LogicalPlan::Sort {
+                    input: Box::new(plan),
+                    keys,
+                };
             }
-            plan = LogicalPlan::Sort {
+            plan = LogicalPlan::Project {
                 input: Box::new(plan),
-                keys,
+                columns,
             };
         }
-        plan = LogicalPlan::Project {
-            input: Box::new(plan),
-            columns,
-        };
         if q.limit.is_some() || q.offset.is_some() {
             let limit = match &q.limit {
                 Some(e) => Some(self.row_count(e, BindErrorKind::NegativeLimit)?),
@@ -1265,6 +1266,54 @@ impl Binder<'_> {
                 input: Box::new(plan),
                 limit,
                 offset,
+            };
+        }
+        Ok(plan)
+    }
+
+    /// `SELECT DISTINCT`: project, drop repeated rows, then sort. The sort runs on the distinct output
+    /// rows, so each key has to be one of the output columns (PostgreSQL: `42P10`).
+    fn distinct_over(
+        input: LogicalPlan,
+        columns: Vec<OutputColumn>,
+        keys: Vec<SortKey>,
+    ) -> R<LogicalPlan> {
+        let mut mapped = Vec::with_capacity(keys.len());
+        for k in keys {
+            let printed = k.expr.to_string();
+            let Some((index, c)) = columns
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c.expr.to_string() == printed)
+            else {
+                return err(
+                    BindErrorKind::InvalidColumnReference,
+                    "for SELECT DISTINCT, ORDER BY expressions must appear in the select list",
+                    Span::default(),
+                );
+            };
+            mapped.push(SortKey {
+                expr: typed(
+                    ExprNode::Column {
+                        index,
+                        name: c.name.clone(),
+                    },
+                    c.expr.ty,
+                ),
+                desc: k.desc,
+                nulls_first: k.nulls_first,
+            });
+        }
+        let mut plan = LogicalPlan::Distinct {
+            input: Box::new(LogicalPlan::Project {
+                input: Box::new(input),
+                columns,
+            }),
+        };
+        if !mapped.is_empty() {
+            plan = LogicalPlan::Sort {
+                input: Box::new(plan),
+                keys: mapped,
             };
         }
         Ok(plan)
@@ -1314,16 +1363,20 @@ impl Binder<'_> {
                 predicate,
             };
         }
-        if !sort_keys.is_empty() {
-            plan = LogicalPlan::Sort {
+        if q.distinct {
+            plan = Self::distinct_over(plan, columns, sort_keys)?;
+        } else {
+            if !sort_keys.is_empty() {
+                plan = LogicalPlan::Sort {
+                    input: Box::new(plan),
+                    keys: sort_keys,
+                };
+            }
+            plan = LogicalPlan::Project {
                 input: Box::new(plan),
-                keys: sort_keys,
+                columns,
             };
         }
-        plan = LogicalPlan::Project {
-            input: Box::new(plan),
-            columns,
-        };
         if q.limit.is_some() || q.offset.is_some() {
             let limit = match &q.limit {
                 Some(e) => Some(self.row_count(e, BindErrorKind::NegativeLimit)?),

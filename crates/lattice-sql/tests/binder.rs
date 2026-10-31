@@ -487,7 +487,12 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
             "42703",
             Some("LSQL-0003"),
         ),
-        ("SELECT DISTINCT rep FROM sales", "0A000", Some("LSQL-0002")),
+        // DISTINCT sorts on the output rows, so an ORDER BY expression has to be an output column
+        (
+            "SELECT DISTINCT rep FROM sales ORDER BY amount",
+            "42P10",
+            None,
+        ),
         (
             "SELECT t.name FROM teams t INNER JOIN members m ON m.team_id = t.id",
             "0A000",
@@ -779,7 +784,7 @@ fn expected_bind(sql: &str, script_expects: &str) -> &'static str {
     ) {
         return "0A000";
     }
-    let unsupported = ["SELECT DISTINCT", " JOIN ", "CROSS JOIN", "OVER ("];
+    let unsupported = [" JOIN ", "CROSS JOIN", "OVER ("];
     if unsupported.iter().any(|u| upper.contains(u)) {
         return "0A000";
     }
@@ -879,6 +884,7 @@ fn plan_exprs(p: &LogicalPlan, f: &mut impl FnMut(&TypedExpr)) {
             keys.iter().for_each(|k| walk(&k.expr, f));
             plan_exprs(input, f);
         }
+        LogicalPlan::Distinct { input } => plan_exprs(input, f),
         LogicalPlan::Aggregate {
             input,
             group_by,

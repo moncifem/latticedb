@@ -150,6 +150,7 @@ impl ActorPolicy {
                 | LogicalPlan::Project { input, .. }
                 | LogicalPlan::Sort { input, .. }
                 | LogicalPlan::Aggregate { input, .. }
+                | LogicalPlan::Distinct { input }
                 | LogicalPlan::Limit { input, .. } => stack.push(input),
                 LogicalPlan::Insert {
                     table,
@@ -518,6 +519,21 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             LogicalPlan::Sort { input, keys } => {
                 let rows = self.rel(input)?;
                 self.sort(rows, keys)
+            }
+            LogicalPlan::Distinct { input } => {
+                let rows = self.rel(input)?;
+                let mut seen: std::collections::BTreeSet<GroupKey> =
+                    std::collections::BTreeSet::new();
+                let mut out = Vec::new();
+                for t in rows {
+                    self.gov.check()?;
+                    let key = GroupKey(t.vals.clone());
+                    if seen.insert(key) {
+                        self.gov.charge(row_cost(&t.vals))?;
+                        out.push(t);
+                    }
+                }
+                Ok(out)
             }
             LogicalPlan::Aggregate {
                 input,

@@ -746,6 +746,8 @@ pub lattice_sql::plan::LogicalPlan::Delete::input: alloc::boxed::Box<lattice_sql
 pub lattice_sql::plan::LogicalPlan::Delete::returning: alloc::vec::Vec<lattice_sql::plan::OutputColumn>
 pub lattice_sql::plan::LogicalPlan::Delete::table: alloc::string::String
 pub lattice_sql::plan::LogicalPlan::Delete::table_id: u64
+pub lattice_sql::plan::LogicalPlan::Distinct
+pub lattice_sql::plan::LogicalPlan::Distinct::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Filter
 pub lattice_sql::plan::LogicalPlan::Filter::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Filter::predicate: lattice_sql::plan::TypedExpr
