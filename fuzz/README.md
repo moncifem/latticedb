@@ -1,6 +1,6 @@
 # fuzz
 
-`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire`, `sql_parse`, `wal_record`, `row_ops`, `catalog_decode`, `typed_row_decode`, `feed_decode`, `sync_frame`, `plugin_jsonl`, `mcp_message`, `outbox_decode`, `crdt_text_decode`, `crdt_tree_decode`, `conflict_decode`, `scram_exchange` and `credential_file`.
+`cargo-fuzz` targets for the parsers and decoders that read untrusted bytes: `changeset_decode`, `id_parse`, `log_open`, `lsl_parse`, `pgwire`, `sql_parse`, `wal_record`, `row_ops`, `catalog_decode`, `typed_row_decode`, `feed_decode`, `sync_frame`, `plugin_jsonl`, `mcp_message`, `outbox_decode`, `crdt_text_decode`, `crdt_tree_decode`, `conflict_decode`, `scram_exchange`, `credential_file`, `tls_pem` and `subscribe_host`.
 
 ```sh
 cd fuzz
@@ -109,4 +109,12 @@ The `upgrade_*` seeds and the codec tests use the public sample `Sec-WebSocket-K
 ## Bearer token target
 
 `bearer_verify` feeds `header NUL file` (or just a header) to `lattice_api::bearer`. The header is checked against a fixed store: only the one stored token, byte for byte after a case-insensitive `Bearer ` scheme, may authenticate, at three clock values. The file part, when it is valid UTF-8, goes to `CredentialStore::parse`; a store that parses must render back to exactly the same bytes and answer the header without panicking. Seeds in `seeds/bearer_verify/` cover the valid token, a lower-case scheme, a non-canonical base64 tail, an upper-case id, an unknown id, a wrong or short secret, other schemes, extra spaces, an empty token, and files with a repeated id, a missing final newline, a wrong version, a revoked or expired entry, an empty account, a trailing field, three active tokens for one account and a blank line. `crates/latticed/tests/bearer_seeds.rs` replays the seeds in the pull request gate. The target is registered in the nightly, weekly and manual 24-hour matrices; registration is not evidence that those runs have completed.
+
+## TLS PEM and subscription host targets
+
+`tls_pem` splits its input at the first NUL byte (or in half when there is none) into a certificate chain and a private key, and passes them to `latticed::TlsConfig::from_pem`. An input whose chain is over 64 KiB or whose key is over 16 KiB must be refused; any other input may be accepted or refused, and neither outcome may panic. The seeds in `seeds/tls_pem/` are a public self-signed test certificate followed by truncated or garbled key blocks. No complete private key is committed, so the secret scanner's private-key rule does not match them.
+
+`subscribe_host` reads a control byte, a tuning byte and then sync frames. The control byte picks the behaviour of an in-memory source (honest, unavailable, too old or out of order) and the length of its log; the tuning byte picks the batch size, the subscription limit and the frames per pump, each inside the range the host accepts. Frames are decoded with `lattice_api::sync::decode` and passed to `SubscriptionHost::handle` and `poll`. Every frame the host sends must encode within the payload limit. A delivered batch must hold one to `batch_events` events whose cursors are each strictly after the one before, and the host's last cursor for a subscription must match what the client was sent. Every read must be made for the connection's principal, and a closed host must answer nothing. The seeds in `seeds/subscribe_host/` cover the honest path with resume and acknowledgement, each source failure, and each protocol rule the host enforces.
+
+Both targets are registered in the nightly, weekly and manual 24-hour matrices. Registration is not evidence that those runs have completed.
 

@@ -18,6 +18,7 @@ lattice-sim = { path = "../crates/lattice-sim" }
 lattice-api = { path = "../crates/lattice-api" }
 lattice-sql = { path = "../crates/lattice-sql" }
 lattice-sdk = { path = "../crates/lattice-sdk" }
+latticed = { path = "../crates/latticed" }
 
 # Not part of the main workspace: fuzzing needs nightly.
 [workspace]
@@ -186,6 +187,20 @@ bench = false
 [[bin]]
 name = "credential_file"
 path = "fuzz_targets/credential_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tls_pem"
+path = "fuzz_targets/tls_pem.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "subscribe_host"
+path = "fuzz_targets/subscribe_host.rs"
 test = false
 doc = false
 bench = false

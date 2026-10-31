@@ -112,3 +112,11 @@ basis = "a SASL body is at most 8 KiB (MAX_SASL_BODY_LEN, lattice-api pgwire); 1
 [targets.credential_file]
 max_len = 262208
 basis = "MAX_CREDENTIAL_BYTES is 256 KiB (lattice-api auth) plus slack, so the over-limit branch is reachable by the input length itself"
+
+[targets.tls_pem]
+max_len = 83968
+basis = "TlsConfig::from_pem refuses a chain over 65536 bytes and a key over 16384 bytes (crates/latticed/src/transport.rs); 82 KiB plus the NUL separator reaches both over-limit branches"
+
+[targets.subscribe_host]
+max_len = 16384
+basis = "a scope is at most 512 bytes and a cursor at most 64 (MAX_SCOPE_LEN and MAX_CURSOR_LEN, lattice-proto sync), so one subscribe frame is under 600 bytes; 16 KiB holds a session of dozens of frames, an over-long scope and a truncated frame"

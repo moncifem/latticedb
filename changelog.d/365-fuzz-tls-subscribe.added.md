@@ -1,0 +1,1 @@
+Two more fuzz targets. `tls_pem` feeds certificate and key bytes to the TLS configuration loader, and `subscribe_host` drives the sync subscription host with decoded frames over an in-memory event source. Both have checked-in seeds and run in the nightly, weekly and 24-hour fuzz matrices. Neither has completed a scheduled run yet.
