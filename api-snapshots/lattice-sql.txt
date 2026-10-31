@@ -556,6 +556,7 @@ pub lattice_sql::binder::BindErrorKind::AmbiguousColumn
 pub lattice_sql::binder::BindErrorKind::CannotCoerce
 pub lattice_sql::binder::BindErrorKind::DatatypeMismatch
 pub lattice_sql::binder::BindErrorKind::DivisionByZero
+pub lattice_sql::binder::BindErrorKind::DuplicateAlias
 pub lattice_sql::binder::BindErrorKind::DuplicateColumn
 pub lattice_sql::binder::BindErrorKind::Grouping
 pub lattice_sql::binder::BindErrorKind::InconsistentParamTypes
@@ -757,6 +758,12 @@ pub lattice_sql::plan::LogicalPlan::Insert::source: lattice_sql::plan::InsertSou
 pub lattice_sql::plan::LogicalPlan::Insert::table: alloc::string::String
 pub lattice_sql::plan::LogicalPlan::Insert::table_id: u64
 pub lattice_sql::plan::LogicalPlan::Insert::targets: alloc::vec::Vec<usize>
+pub lattice_sql::plan::LogicalPlan::Join
+pub lattice_sql::plan::LogicalPlan::Join::left: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Join::on: core::option::Option<lattice_sql::plan::TypedExpr>
+pub lattice_sql::plan::LogicalPlan::Join::outer: bool
+pub lattice_sql::plan::LogicalPlan::Join::right: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
+pub lattice_sql::plan::LogicalPlan::Join::right_width: usize
 pub lattice_sql::plan::LogicalPlan::Limit
 pub lattice_sql::plan::LogicalPlan::Limit::input: alloc::boxed::Box<lattice_sql::plan::LogicalPlan>
 pub lattice_sql::plan::LogicalPlan::Limit::limit: core::option::Option<lattice_sql::plan::TypedExpr>

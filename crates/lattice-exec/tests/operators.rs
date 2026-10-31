@@ -844,7 +844,7 @@ fn a_table_without_a_key_keeps_duplicate_rows_and_updates_them_individually() {
 fn unsupported_statements_are_refused_with_0a000() {
     let (mut db, mut s) = session_with_notes();
     for sql in [
-        "SELECT * FROM notes a JOIN notes b ON a.id = b.id",
+        "SELECT * FROM notes a RIGHT JOIN notes b ON a.id = b.id",
         "SELECT count(*) FROM notes WHERE count(*) > 0",
         "SELECT DISTINCT ON (score) score FROM notes",
         "CREATE INDEX i ON notes (score)",

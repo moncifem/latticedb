@@ -46,6 +46,8 @@ pub enum BindErrorKind {
     Syntax,
     /// A column named twice in one list (`42701`).
     DuplicateColumn,
+    /// Two tables in one `FROM` with the same name or alias (`42712`).
+    DuplicateAlias,
     /// A string literal that is not a valid value of its type (`22P02`).
     InvalidText,
     /// A parameter used with two different types (`42P08`).
@@ -120,6 +122,7 @@ impl BindError {
             BindErrorKind::Unsupported => "0A000",
             BindErrorKind::Syntax => "42601",
             BindErrorKind::DuplicateColumn => "42701",
+            BindErrorKind::DuplicateAlias => "42712",
             BindErrorKind::InvalidText => "22P02",
             BindErrorKind::InconsistentParamTypes => "42P08",
             BindErrorKind::IndeterminateParam => "42P18",
@@ -207,8 +210,10 @@ const MAX_PARAMS: u32 = 65_535;
 /// The table a statement reads, and the names that can qualify its columns.
 struct Scope {
     info: TableInfo,
-    /// The alias if there is one, else the table name.
+    /// The alias if there is one, else the table name; for a join, the leftmost table's.
     qualifier: String,
+    /// The qualifier of each column of `info`, in order. Several tables share `info` after a join.
+    qualifiers: Vec<String>,
 }
 
 impl Scope {
@@ -226,7 +231,36 @@ impl Scope {
                 indexes: Vec::new(),
             },
             qualifier: String::new(),
+            qualifiers: Vec::new(),
         }
+    }
+
+    /// The scope of `self JOIN right`: the columns of both, left first. Two tables may not share a
+    /// qualifier (`42712`); give one an alias.
+    fn join(self, right: Scope, span: Span) -> R<Scope> {
+        if let Some(q) = right
+            .qualifiers
+            .iter()
+            .find(|q| self.qualifiers.contains(q))
+        {
+            return err(
+                BindErrorKind::DuplicateAlias,
+                format!("table name \"{q}\" specified more than once"),
+                span,
+            );
+        }
+        let mut info = self.info;
+        info.id = 0;
+        info.name = String::new();
+        info.indexes = Vec::new();
+        info.columns.extend(right.info.columns);
+        let mut qualifiers = self.qualifiers;
+        qualifiers.extend(right.qualifiers);
+        Ok(Scope {
+            info,
+            qualifier: self.qualifier,
+            qualifiers,
+        })
     }
 }
 
@@ -396,7 +430,12 @@ impl Binder<'_> {
     fn scope(&self, name: &ObjectName, alias: Option<&ast::Ident>) -> R<Scope> {
         let info = self.lookup(name)?;
         let qualifier = alias.map_or_else(|| info.name.clone(), |a| a.value.clone());
-        Ok(Scope { info, qualifier })
+        let qualifiers = vec![qualifier.clone(); info.columns.len()];
+        Ok(Scope {
+            info,
+            qualifier,
+            qualifiers,
+        })
     }
 
     // ----- parameters and coercion -----
@@ -1178,25 +1217,73 @@ impl Binder<'_> {
         self.scope(&f.name, f.alias.as_ref())
     }
 
+    /// Binds a `FROM` list: each item is a table followed by its joins, and items are cross joined
+    /// left to right. `ON` sees the tables to its left and the one it joins.
+    fn bind_from(&mut self, items: &[ast::TableWithJoins]) -> R<(Scope, LogicalPlan)> {
+        let mut acc: Option<(Scope, LogicalPlan)> = None;
+        for item in items {
+            let mut cur = self.table_source(&item.relation)?;
+            for j in &item.joins {
+                let right = self.table_source(&j.relation)?;
+                cur = self.join_pair(cur, right, j.on.as_ref(), j.kind == ast::JoinKind::Left)?;
+            }
+            acc = Some(match acc {
+                None => cur,
+                Some(left) => self.join_pair(left, cur, None, false)?,
+            });
+        }
+        match acc {
+            Some(a) => Ok(a),
+            None => unsupported("an empty FROM list", Span::default()),
+        }
+    }
+
+    fn table_source(&mut self, f: &ast::TableFactor) -> R<(Scope, LogicalPlan)> {
+        let scope = self.lookup_table_factor(f)?;
+        let as_of = match &f.as_of {
+            Some(a) => Some(self.as_of(a)?),
+            None => None,
+        };
+        let plan = LogicalPlan::Scan {
+            table: scope.info.name.clone(),
+            table_id: scope.info.id,
+            as_of,
+        };
+        Ok((scope, plan))
+    }
+
+    fn join_pair(
+        &mut self,
+        (ls, lp): (Scope, LogicalPlan),
+        (rs, rp): (Scope, LogicalPlan),
+        on: Option<&Expr>,
+        outer: bool,
+    ) -> R<(Scope, LogicalPlan)> {
+        let right_width = rs.info.columns.len();
+        let scope = ls.join(rs, Span::default())?;
+        let on = match on {
+            Some(e) => {
+                let p = self.expr(e, &scope)?;
+                Some(self.require_bool(p, e.span)?)
+            }
+            None => None,
+        };
+        let plan = LogicalPlan::Join {
+            left: Box::new(lp),
+            right: Box::new(rp),
+            on,
+            outer,
+            right_width,
+        };
+        Ok((scope, plan))
+    }
+
     /// Binds a `SELECT`. `targets` are the column types an `INSERT ... SELECT` stores into.
     fn query(&mut self, q: &Query, targets: Option<&[ColumnInfo]>) -> R<LogicalPlan> {
         let (scope, mut plan) = match q.from.as_slice() {
             // No FROM clause: one row with no columns, so only constants and functions bind.
             [] => (Scope::empty(), LogicalPlan::OneRow),
-            [one] if one.joins.is_empty() => {
-                let scope = self.lookup_table_factor(&one.relation)?;
-                let as_of = match &one.relation.as_of {
-                    Some(a) => Some(self.as_of(a)?),
-                    None => None,
-                };
-                let plan = LogicalPlan::Scan {
-                    table: scope.info.name.clone(),
-                    table_id: scope.info.id,
-                    as_of,
-                };
-                (scope, plan)
-            }
-            _ => return unsupported("joins and multi-table FROM", Span::default()),
+            items => self.bind_from(items)?,
         };
         if let Some(w) = &q.selection {
             let p = self.expr(w, &scope)?;
@@ -1630,16 +1717,16 @@ impl Binder<'_> {
                         Span::default(),
                     );
                 }
-                SelectItem::Wildcard => out.extend(all_columns(scope)),
+                SelectItem::Wildcard => out.extend(all_columns(scope, None)),
                 SelectItem::QualifiedWildcard(q) => {
-                    if q.value != scope.qualifier {
+                    if !scope.qualifiers.contains(&q.value) {
                         return err(
                             BindErrorKind::UndefinedTable,
                             format!("missing FROM-clause entry for table \"{}\"", q.value),
                             q.span,
                         );
                     }
-                    out.extend(all_columns(scope));
+                    out.extend(all_columns(scope, Some(&q.value)));
                 }
                 SelectItem::Expr { expr, alias } => {
                     let bound = self.expr(expr, scope)?;
@@ -1959,7 +2046,7 @@ fn column(parts: &[ast::Ident], scope: &Scope, span: Span) -> R<TypedExpr> {
         _ => return unsupported("schema-qualified column references", span),
     };
     if let Some(q) = qualifier
-        && q.value != scope.qualifier
+        && !scope.qualifiers.contains(&q.value)
     {
         return err(
             BindErrorKind::UndefinedTable,
@@ -1967,21 +2054,23 @@ fn column(parts: &[ast::Ident], scope: &Scope, span: Span) -> R<TypedExpr> {
             q.span,
         );
     }
-    match scope
-        .info
-        .columns
-        .iter()
-        .enumerate()
-        .find(|(_, c)| c.name == name.value)
-    {
-        Some((index, c)) => Ok(typed(
+    let mut found = scope.info.columns.iter().enumerate().filter(|(i, c)| {
+        c.name == name.value && qualifier.is_none_or(|q| scope.qualifiers.get(*i) == Some(&q.value))
+    });
+    match (found.next(), found.next()) {
+        (Some(_), Some(_)) => err(
+            BindErrorKind::AmbiguousColumn,
+            format!("column reference \"{}\" is ambiguous", name.value),
+            name.span,
+        ),
+        (Some((index, c)), None) => Ok(typed(
             ExprNode::Column {
                 index,
                 name: c.name.clone(),
             },
             c.ty,
         )),
-        None => err(
+        (None, _) => err(
             BindErrorKind::UndefinedColumn,
             format!("column \"{}\" does not exist", name.value),
             name.span,
@@ -1989,12 +2078,15 @@ fn column(parts: &[ast::Ident], scope: &Scope, span: Span) -> R<TypedExpr> {
     }
 }
 
-fn all_columns(scope: &Scope) -> Vec<OutputColumn> {
+fn all_columns(scope: &Scope, qualifier: Option<&str>) -> Vec<OutputColumn> {
     scope
         .info
         .columns
         .iter()
         .enumerate()
+        .filter(|(i, _)| {
+            qualifier.is_none_or(|q| scope.qualifiers.get(*i).map(String::as_str) == Some(q))
+        })
         .map(|(index, c)| OutputColumn {
             expr: typed(
                 ExprNode::Column {

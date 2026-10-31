@@ -146,6 +146,10 @@ impl ActorPolicy {
                         return Err(denied(table, "read"));
                     }
                 }
+                LogicalPlan::Join { left, right, .. } => {
+                    stack.push(left);
+                    stack.push(right);
+                }
                 LogicalPlan::Filter { input, .. }
                 | LogicalPlan::Project { input, .. }
                 | LogicalPlan::Sort { input, .. }
@@ -519,6 +523,41 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
             LogicalPlan::Sort { input, keys } => {
                 let rows = self.rel(input)?;
                 self.sort(rows, keys)
+            }
+            LogicalPlan::Join {
+                left,
+                right,
+                on,
+                outer,
+                right_width,
+            } => {
+                let l = self.rel(left)?;
+                let r = self.rel(right)?;
+                let mut out = Vec::new();
+                for a in &l {
+                    let mut matched = false;
+                    for b in &r {
+                        self.gov.check()?;
+                        let mut vals = Vec::with_capacity(a.vals.len() + b.vals.len());
+                        vals.extend(a.vals.iter().cloned());
+                        vals.extend(b.vals.iter().cloned());
+                        if let Some(p) = on
+                            && !truthy(&eval(p, &vals, &self.ctx())?)
+                        {
+                            continue;
+                        }
+                        matched = true;
+                        self.gov.charge(row_cost(&vals))?;
+                        out.push(Tuple { key: None, vals });
+                    }
+                    if *outer && !matched {
+                        let mut vals = a.vals.clone();
+                        vals.extend(std::iter::repeat_n(Datum::Null, *right_width));
+                        self.gov.charge(row_cost(&vals))?;
+                        out.push(Tuple { key: None, vals });
+                    }
+                }
+                Ok(out)
             }
             LogicalPlan::Distinct { input } => {
                 let rows = self.rel(input)?;

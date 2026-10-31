@@ -298,6 +298,17 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         keys: Vec<SortKey>,
     },
+    /// The pairs of a row of `left` and a row of `right` for which `on` is true (all pairs when it is
+    /// `None`, a cross join). A pair is the left columns and then the right columns. Nested loop: every
+    /// right row is looked at for every left row. With `outer` (`LEFT JOIN`) a left row that pairs with
+    /// nothing is kept once, followed by `right_width` `NULL`s.
+    Join {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        on: Option<TypedExpr>,
+        outer: bool,
+        right_width: usize,
+    },
     /// The rows of `input` without repeats: two rows are the same when every column is equal, with
     /// `NULL` equal to `NULL`. The first of equal rows is kept, in input order. `SELECT DISTINCT`
     /// puts it directly above the `Project`.
@@ -374,7 +385,7 @@ impl LogicalPlan {
                     Some(returning)
                 }
             }
-            LogicalPlan::Scan { .. } | LogicalPlan::OneRow => None,
+            LogicalPlan::Scan { .. } | LogicalPlan::Join { .. } | LogicalPlan::OneRow => None,
         }
     }
 
@@ -411,6 +422,21 @@ impl LogicalPlan {
                     .collect();
                 writeln!(out, "{pad}Sort [{}]", keys.join(", "))?;
                 input.write_tree(out, depth + 1)?;
+            }
+            LogicalPlan::Join {
+                left,
+                right,
+                on,
+                outer,
+                ..
+            } => {
+                let name = if *outer { "LeftJoin" } else { "Join" };
+                match on {
+                    Some(p) => writeln!(out, "{pad}{name} ON {p}")?,
+                    None => writeln!(out, "{pad}{name}")?,
+                }
+                left.write_tree(out, depth + 1)?;
+                right.write_tree(out, depth + 1)?;
             }
             LogicalPlan::Distinct { input } => {
                 writeln!(out, "{pad}Distinct")?;

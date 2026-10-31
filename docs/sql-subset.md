@@ -3,7 +3,7 @@
 Status: draft (Phase 2, requirement P2-09). This is the **target** SQL subset, declared before
 implementation. A bounded parser and AST, PostgreSQL wire session state machine and development
 listener exist; the listener serves the single-table subset from `lattice-exec` when started with
-`--data-dir` (and answers a `SELECT 1` placeholder otherwise); joins, subqueries,
+`--data-dir` (and answers a `SELECT 1` placeholder otherwise); subqueries,
 indexes and full Lattice conformance remain pending. Ungrouped aggregates run. The constructs below describe the intended
 contract, not commands available today.
 
@@ -214,7 +214,7 @@ with its reason.
 | A column default that does not fit its column (`a INT DEFAULT 2147483648`) | the table is created and the first insert that uses the default fails (`22003`) | `CREATE TABLE` fails with `22003` | the default is checked when the table is defined |
 | A numeric constant of more than 38 digits, and a float literal in exponent form that large (`1e308` into a `double precision` column) | exact `numeric` of any size; the literal then casts to double | `22003` | the decimal type holds 38 digits ([#691](https://github.com/moncifem/latticedb/issues/691)); `'1e308'::float8` works |
 | `double precision % integer` | `42883` (no such operator) | computed | the operator is accepted for any two numbers |
-| Joins, `DISTINCT ON`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
+| `RIGHT`/`FULL JOIN`, `DISTINCT ON`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
 
 ### Contract with the host catalog
 

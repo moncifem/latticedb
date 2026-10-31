@@ -494,18 +494,18 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
             None,
         ),
         (
-            "SELECT t.name FROM teams t INNER JOIN members m ON m.team_id = t.id",
-            "0A000",
-            Some("LSQL-0002"),
+            "SELECT name FROM teams t INNER JOIN members m ON m.team_id = t.id",
+            "42702",
+            None,
         ),
-        ("SELECT * FROM teams, members", "0A000", Some("LSQL-0002")),
+        ("SELECT * FROM teams, teams", "42712", None),
         (
             "SELECT id FROM notes WHERE id IN (SELECT id FROM acct)",
             "0A000",
             Some("LSQL-0002"),
         ),
         ("SELECT (SELECT 1) FROM notes", "0A000", Some("LSQL-0002")),
-        ("SELECT a FROM notes, tags", "0A000", Some("LSQL-0002")),
+        ("SELECT a FROM notes, tags", "42P01", Some("LSQL-0003")),
         ("CREATE TABLE t (a INT)", "0A000", Some("LSQL-0002")),
         ("BEGIN", "0A000", Some("LSQL-0002")),
         ("SELECT a.b.c FROM notes", "0A000", Some("LSQL-0002")),
@@ -784,7 +784,7 @@ fn expected_bind(sql: &str, script_expects: &str) -> &'static str {
     ) {
         return "0A000";
     }
-    let unsupported = [" JOIN ", "CROSS JOIN", "OVER ("];
+    let unsupported = ["OVER ("];
     if unsupported.iter().any(|u| upper.contains(u)) {
         return "0A000";
     }
@@ -833,7 +833,7 @@ fn script_records_bind_as_the_subset_says() {
         }
     }
     assert!(bound >= 25, "only {bound} records bound");
-    assert!(refused >= 20, "only {refused} records refused");
+    assert!(refused >= 15, "only {refused} records refused");
     assert_eq!(skipped, 7, "parser-refused records");
 }
 
@@ -883,6 +883,13 @@ fn plan_exprs(p: &LogicalPlan, f: &mut impl FnMut(&TypedExpr)) {
         LogicalPlan::Sort { input, keys } => {
             keys.iter().for_each(|k| walk(&k.expr, f));
             plan_exprs(input, f);
+        }
+        LogicalPlan::Join {
+            left, right, on, ..
+        } => {
+            on.iter().for_each(|x| walk(x, f));
+            plan_exprs(left, f);
+            plan_exprs(right, f);
         }
         LogicalPlan::Distinct { input } => plan_exprs(input, f),
         LogicalPlan::Aggregate {
