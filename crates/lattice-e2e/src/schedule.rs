@@ -1,9 +1,10 @@
 //! Seeded schedules for the kill and reconnect scenarios. Pure arithmetic: no clock, no ambient
 //! randomness, so a failing seed can be replayed exactly.
 
-/// A reproducible connection-kill schedule: `count` strictly increasing frame counts, each one
-/// between 1 and 64 frames after the previous point. The same seed gives the same schedule on every
-/// machine. The harness does not inject kills yet; the reconnect packages consume this list.
+/// A reproducible connection-kill schedule: `count` strictly increasing counts (of frames or events,
+/// as the test defines), each one between 1 and 64 after the previous point. The same seed gives the
+/// same schedule on every machine. The harness injects no kills itself: a test applies a point by
+/// dropping its client socket after that many events (`tests/reconnect_kill.rs`).
 pub fn kill_points(seed: u64, count: usize) -> Vec<u64> {
     let mut state = seed;
     let mut at = 0u64;

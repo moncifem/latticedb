@@ -75,6 +75,12 @@ impl Fixture {
     /// Starts a server for the scenario `name`. The data directory is keyed by name and process id,
     /// so tests in one binary do not share state.
     pub fn start(name: &str) -> Result<Fixture> {
+        Fixture::start_batched(name, GatewayConfig::default().batch_events)
+    }
+
+    /// Like [`Fixture::start`], with at most `batch_events` events in each `Events` frame (the
+    /// gateway accepts `1..=256`), so a test knows where a frame boundary falls.
+    pub fn start_batched(name: &str, batch_events: usize) -> Result<Fixture> {
         let dir = std::env::temp_dir().join(format!("lattice-e2e-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = CredentialStore::empty();
@@ -88,6 +94,7 @@ impl Fixture {
             auth: GatewayAuth::Bearer(store),
             slice: Duration::from_millis(10),
             fallback_poll: Duration::from_millis(50),
+            batch_events,
             ..GatewayConfig::default()
         };
         let server = SqlServer::start_with_gateway(
@@ -283,6 +290,32 @@ impl Ws {
             scope: scope.into(),
             cursor: Vec::new(),
         })
+    }
+
+    /// Subscribes `sub` to `scope`, resuming after `cursor` (empty starts from the beginning).
+    pub fn subscribe_from(&mut self, sub: u32, scope: &str, cursor: &[u8]) -> Result<()> {
+        self.send(&Message::Subscribe {
+            sub,
+            scope: scope.into(),
+            cursor: cursor.to_vec(),
+        })
+    }
+
+    /// Tells the server that everything up to and including `cursor` of `sub` has been processed.
+    pub fn ack(&mut self, sub: u32, cursor: &[u8]) -> Result<()> {
+        self.send(&Message::Ack {
+            sub,
+            cursor: cursor.to_vec(),
+        })
+    }
+
+    /// The events of the next `Events` frame of `sub`, exactly as the server framed them. Errors
+    /// if anything else arrives, or nothing does within the patience of the client.
+    pub fn frame_events(&mut self, sub: u32) -> Result<Vec<Event>> {
+        match self.next_within(PATIENCE)? {
+            Some(Got::Sync(Message::Events { sub: s, events })) if s == sub => Ok(events),
+            other => Err(format!("expected an events frame for {sub}, got {other:?}")),
+        }
     }
 
     /// Reads until `count` events of subscription `sub` have arrived and returns them all.

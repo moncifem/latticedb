@@ -1,0 +1,1 @@
+A new end-to-end test, `reconnect_with_cursor_has_no_gap_and_no_duplicate_after_a_kill_mid_batch`, cuts a sync client in the middle of an `Events` frame on a seeded schedule and resumes it from its last processed cursor over real sockets; the rows it ends with match a hand-written list with no gap and no duplicate. This is the evidence shape of E3-3, not E3-3 itself.

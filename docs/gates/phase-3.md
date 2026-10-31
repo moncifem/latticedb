@@ -133,7 +133,7 @@ runner, and verification of the install one-liner against a published tag.
 |---|---|---|
 | E3-1 | I5 and I12 across 1,000,000 seeds per night for seven nights | Not started |
 | E3-2 | Contract suite green for the reference plugin and all four SDKs | Not started |
-| E3-3 | Reconnect with cursor yields zero gaps and duplicates | Not started |
+| E3-3 | Reconnect with cursor yields zero gaps and duplicates | Not started. Related evidence, not E3-3: `crates/lattice-e2e/tests/reconnect_kill.rs` (4 seeds of a seeded kill schedule, each cut at least once inside a frame, resume from the last processed cursor, 110 rows, no gap or duplicate; one table, no SDK supervisor). Not run locally; passed in CI run 41207082634 (PR 852, head b4192fc2, rerun after an unrelated `server_config` port failure; the final head differs from it only in this sentence), verified with gh |
 | E3-4 | Fan-out and merge benchmarks recorded | Not started |
 | E3-5 | NS7 passes end to end through the SDK | Not started |
 | E3-6 | Text CRDT ADR from Phase 1 confirmed or reversed with data | Not started |
