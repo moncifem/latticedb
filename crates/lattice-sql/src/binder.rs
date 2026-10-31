@@ -985,6 +985,28 @@ impl Binder<'_> {
                 }
                 Ok(call(vec![a], SqlType::Integer))
             }
+            // The function forms of `trim(BOTH | LEADING | TRAILING chars FROM s)`.
+            "btrim" | "ltrim" | "rtrim" => {
+                if !(1..=2).contains(&n) {
+                    return bad_arity("1 or 2");
+                }
+                let mut out = Vec::with_capacity(n);
+                for a in args {
+                    out.push(self.require_text(a, span)?);
+                }
+                let canonical = match name {
+                    "btrim" => "trim_both",
+                    "ltrim" => "trim_leading",
+                    _ => "trim_trailing",
+                };
+                Ok(typed(
+                    ExprNode::Function {
+                        name: canonical.to_string(),
+                        args: out,
+                    },
+                    SqlType::Text,
+                ))
+            }
             "substring" => {
                 if !(2..=3).contains(&n) {
                     return bad_arity("2 or 3");
