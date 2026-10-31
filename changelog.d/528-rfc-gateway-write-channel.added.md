@@ -1,0 +1,1 @@
+Draft RFC 0015 sets out the options for a gateway write channel and the outbox pump (reuse `POST /mcp`, a sync v2 write frame, SQL, or the plugin contract), the dedupe, fence and principal rules each needs, and the decisions left to the owner. It changes no behaviour and freezes no format; issues #528 and #620 stay blocked until a decision is recorded.
