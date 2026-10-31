@@ -1,0 +1,1 @@
+The nightly Miri job runs `lattice-abi` and `lattice-core` and skips the hostile-peer CRDT tests, which had made it run past its 300-minute limit. `lattice-engines` is left out until its time under Miri is measured.
