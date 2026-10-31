@@ -24,9 +24,13 @@
 \*   MatchesSerial a replica's tree equals a fresh replay of its own log in timestamp order, so the
 \*                 tree depends on the operation set and not on delivery order
 \*
-\* CheckCycles, Reorder and CheckDepth switch the three protections off. tla/negative/*.cfg do that,
-\* and tla/check-negative.sh requires TLC to report the matching violation: without the cycle check
-\* Acyclic fails, without undo/redo Convergent fails, without the depth rule DepthBounded fails.
+\* CheckCycles, Reorder, CheckDepth and CheckParent switch four protections off. tla/negative/*.cfg do
+\* that, and tla/check-negative.sh requires TLC to report the matching violation: without the cycle
+\* check Acyclic fails, without undo/redo Convergent fails, without the depth rule DepthBounded fails,
+\* without the known-parent rule Rooted fails (a node hung under an unplaced node dangles). MatchesSerial
+\* has its own config: with undo/redo off a replica keeps the order in which it received the operations,
+\* so its tree differs from the replay of its log in timestamp order; that config checks MatchesSerial
+\* alone.
 \* The Rust code keeps the height of each subtree instead of walking it; the model checks every node's
 \* depth after the move, which is the same condition.
 \*
@@ -34,7 +38,7 @@
 \* integers, not hybrid clocks; no crash, no snapshot, no log compaction; two replicas, three nodes
 \* and four operations in the checked configuration.
 EXTENDS Naturals, FiniteSets, TLC
-CONSTANTS Nodes, Root, Trash, None, MaxTs, MaxDepth, CheckCycles, CheckDepth, Reorder
+CONSTANTS Nodes, Root, Trash, None, MaxTs, MaxDepth, CheckCycles, CheckDepth, Reorder, CheckParent
 VARIABLES tree, log, sent, used
 vars == <<tree, log, sent, used>>
 
@@ -79,7 +83,7 @@ Fits(tr, m) ==
 
 \* Decide one move against `tr` and perform it if valid. Returns the new tree and the log entry.
 Perform(tr, m) ==
-  LET known == m.parent \in {Root, Trash} \/ tr[m.parent] # None
+  LET known == ~CheckParent \/ m.parent \in {Root, Trash} \/ tr[m.parent] # None
       cycle == CheckCycles /\ Reaches(tr, m.parent, m.node, K)
       ok    == known /\ ~cycle /\ (~CheckDepth \/ Fits(tr, m))
   IN [tree  |-> IF ok THEN [tr EXCEPT ![m.node] = m.parent] ELSE tr,

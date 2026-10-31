@@ -26,7 +26,11 @@ under reordering. `check-all.sh` runs every `.cfg`, so it picks this one up.
 Negative tests: each config in `negative/` removes one protection from a model, and
 `check-negative.sh` requires TLC to fail with the named invariant. `TreeMoveNoCycleCheck` must violate
 `Acyclic`, `TreeMoveNoUndoRedo` must violate `Convergent` and `TreeMoveNoDepthCheck` must violate
-`DepthBounded`. A negative run that passes, or fails with
+`DepthBounded`. `TreeMoveNoRooted` drops the known-parent rule (`CheckParent = FALSE`) and must violate
+`Rooted`; `TreeMoveNotSerial` turns undo and redo off and checks `MatchesSerial` alone, which must fail
+because a replica then keeps arrival order while the replay uses timestamp order. `HlcCounterUnbounded`
+turns off the `MaxC` guard of `Tick` (`GuardCounter = FALSE`) and must violate `CounterBounded`; without
+the switch that property is true only because of the guard. A negative run that passes, or fails with
 a different invariant, fails `check-all.sh`.
 
 The other four models switch a protection off with a boolean constant, one per planted bug of the
@@ -46,6 +50,7 @@ timestamps, the members), not over the guard of the action that the switch remov
 | `FenceNotRebuiltGoesBack` | `FenceNotRebuilt` | `NeverGoesBack` | `FenceNotRebuilt` |
 | `HlcRegress` | `Regress` | `StrictlyIncreasing` | `HlcRegress` |
 | `HlcCounterStuck` | `CounterStuck` | `StrictlyIncreasing` | `HlcCounterStuck` |
+| `HlcCounterUnbounded` | `GuardCounter = FALSE` | `CounterBounded` | none (a model-only protection) |
 | `SetConvergenceNoTombstone` | `Tombstones = FALSE` | `Convergent` | none (a model-only protection) |
 
 `Commit` over-approximates recovery: `Replay` is enabled at any time, not only after a `Crash`.

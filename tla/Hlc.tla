@@ -8,16 +8,23 @@
 \* which mirror the kernel's planted bugs `HlcRegress` and `HlcCounterStuck`. tla/negative/Hlc*.cfg set
 \* them and TLC must report StrictlyIncreasing violated.
 \*
+\* CounterBounded (c <= MaxC) holds only because Tick refuses to count past MaxC. `GuardCounter` is the
+\* switch for that refusal: with it off Tick increments the counter without the bound, and
+\* tla/negative/HlcCounterUnbounded.cfg requires TLC to report CounterBounded violated.
+\*
 \* LIMITS: one node, no receive/merge of remote timestamps, counter bounded by MaxC, at most MaxIssued
 \* timestamps. Tick differs from crates/lattice-core/src/hlc.rs: on counter exhaustion the kernel moves
 \* the wall part forward by 1, the model refuses the tick. HlcClock::restore after a restart and the
 \* drift bound of observe are not modelled.
 EXTENDS Naturals, Sequences
-CONSTANTS MaxP, MaxC, MaxIssued, Regress, CounterStuck
+CONSTANTS MaxP, MaxC, MaxIssued, Regress, CounterStuck, GuardCounter
 VARIABLES pt, l, c, hist
 vars == <<pt, l, c, hist>>
 
 Gt(l1, c1, l2, c2) == l1 > l2 \/ (l1 = l2 /\ c1 > c2)
+
+\* Room for one more count. With GuardCounter off the bound is not enforced.
+Room == ~GuardCounter \/ c < MaxC
 
 Init == pt = 0 /\ l = 0 /\ c = 0 /\ hist = <<>>
 
@@ -29,12 +36,12 @@ Wall == pt' \in 0..MaxP /\ UNCHANGED <<l, c, hist>>
 Tick == /\ Len(hist) < MaxIssued
         /\ IF Regress
               THEN /\ l' = pt
-                   /\ IF pt = l THEN c < MaxC /\ c' = c + 1 ELSE c' = 0
+                   /\ IF pt = l THEN Room /\ c' = c + 1 ELSE c' = 0
               ELSE IF pt > l
                       THEN l' = pt /\ c' = 0
                       ELSE IF CounterStuck
                               THEN l' = l /\ c' = c
-                              ELSE c < MaxC /\ l' = l /\ c' = c + 1
+                              ELSE Room /\ l' = l /\ c' = c + 1
         /\ hist' = Append(hist, <<l', c'>>)
         /\ UNCHANGED pt
 

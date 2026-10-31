@@ -36,5 +36,8 @@ FenceNotRebuiltGoesBack Fence NeverGoesBack
 HlcRegress Hlc StrictlyIncreasing
 HlcCounterStuck Hlc StrictlyIncreasing
 SetConvergenceNoTombstone SetConvergence Convergent
+HlcCounterUnbounded Hlc CounterBounded
+TreeMoveNoRooted TreeMove Rooted
+TreeMoveNotSerial TreeMove MatchesSerial
 EOF
 exit "$status"
