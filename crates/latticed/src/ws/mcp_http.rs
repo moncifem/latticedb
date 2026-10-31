@@ -32,10 +32,17 @@
 //! passes, never longer. The body is bounded by [`MAX_BODY`] and the head by `max_head`; the response
 //! is written under the response budget. A long `lattice_subscribe` holds its live-connection place
 //! (not a handshake place) for up to its `wait_ms`.
+//!
+//! Per-principal limits (issue #529): once the token verified, the request takes one of the
+//! principal's connection places (`503` with `Retry-After: 1` when it holds its share), and a
+//! `lattice_subscribe` that may wait also takes a long-poll place, per principal and for the whole
+//! gateway (`503` without waiting). Both are held until this function returns, that is after the response
+//! is written and the linger has ended, exactly as long as the request holds its live-connection place
+//! (a client that never reads cannot keep the global place while the principal's count is free).
 
 use super::{
-    AuthRefusal, CLOSE_GRACE, GatewayConfig, Identity, MCP_PATH, Shared, Slot, authorization,
-    unix_secs, write_all_by,
+    AuthRefusal, GatewayConfig, Identity, LimitRefusal, MCP_PATH, Shared, Slot, authorization,
+    limit_message, principal_key, unix_secs, write_all_by,
 };
 use crate::mcp_backend::McpBackend;
 use crate::transport::Transport;
@@ -525,6 +532,16 @@ pub(super) fn answer(
     };
     // Authenticated: a long poll below holds no handshake place, only its connection place.
     slot.upgraded();
+    // The per-principal connection limits (issue #529) apply to this request as to an upgrade. The
+    // share lives as long as the live-connection place (until this function returns, the response
+    // and the linger included): a client that stops reading holds both or neither.
+    let _share = match shared.quotas.enter(
+        &principal_key(&principal),
+        shared.counters.live.load(Ordering::Acquire),
+    ) {
+        Ok(share) => share,
+        Err(refusal) => return send_limit(socket, cfg, refusal),
+    };
 
     if !content_type_ok(&head.values("content-type")) {
         return refuse(
@@ -608,12 +625,41 @@ pub(super) fn answer(
         );
     };
     let caller = call_caller(backend.caller(), &body);
+    // A call that may wait takes a long-poll place for as long as it can wait, and gives it back on
+    // every way out (the guard drops on return and on a panic). A refused call does not wait.
+    let _place = if is_long_poll(&body) {
+        match shared.quotas.poll(&principal_key(&principal)) {
+            Ok(place) => Some(place),
+            Err(refusal) => return send_limit(socket, cfg, refusal),
+        }
+    } else {
+        None
+    };
     // One message, no session: `_meta` is optional here, as standard HTTP MCP clients send none.
     let mut server: Server<McpBackend> = Server::sessionless(backend);
-    match server.handle(&caller, &body) {
-        Some(response) => send(socket, cfg, 200, "OK", JSON_TYPE, response.as_bytes()),
+    let response = server.handle(&caller, &body);
+    match response {
+        Some(text) => send(socket, cfg, 200, "OK", JSON_TYPE, text.as_bytes()),
         None => send(socket, cfg, 202, "Accepted", "", b""),
     }
+}
+
+/// Whether a body may make `lattice_subscribe` wait: `params.name` is the tool and
+/// `params.arguments.wait_ms` is present and is not the integer zero. It reads the same bounded JSON
+/// the server does (which refuses duplicate keys, so no second member can hide a wait). It over-counts
+/// a call the server then refuses as malformed, for an instant, and never under-counts one that waits.
+fn is_long_poll(body: &[u8]) -> bool {
+    let Ok(root) = parse_json(body) else {
+        return false;
+    };
+    let Some(params) = root.get("params") else {
+        return false;
+    };
+    matches!(params.get("name"), Some(Json::Str(name)) if name == "lattice_subscribe")
+        && params
+            .get("arguments")
+            .and_then(|args| args.get("wait_ms"))
+            .is_some_and(|wait| !matches!(wait, Json::Int(0)))
 }
 
 /// Reads until the head ends. Returns the head without its blank line and the bytes that followed it.
@@ -711,6 +757,18 @@ fn read_body(
     Some(body)
 }
 
+/// A `503` for a limit, with the same `Retry-After` the upgrade path sends.
+fn send_limit(socket: &mut Transport, cfg: &GatewayConfig, refusal: LimitRefusal) {
+    send(
+        socket,
+        cfg,
+        503,
+        "Service Unavailable",
+        &format!("Retry-After: 1\r\n{TEXT}"),
+        limit_message(refusal).as_bytes(),
+    );
+}
+
 fn refuse(socket: &mut Transport, cfg: &GatewayConfig, status: u16, phrase: &str, message: &str) {
     send(socket, cfg, status, phrase, TEXT, message.as_bytes());
 }
@@ -751,7 +809,7 @@ fn send(
 /// body was read.
 fn linger(socket: &mut Transport, cfg: &GatewayConfig) {
     let _ = socket.half_close();
-    let until = Instant::now() + CLOSE_GRACE;
+    let until = Instant::now() + cfg.mcp_linger;
     let mut sink = [0u8; 512];
     while Instant::now() < until {
         socket.set_deadline(Instant::now() + cfg.slice);
@@ -1054,5 +1112,36 @@ mod tests {
         assert_eq!(parse_length("-1"), None);
         assert_eq!(parse_length("1 2"), None);
         assert_eq!(parse_length("123456789012345678901"), None);
+    }
+
+    fn call(name: &str, arguments: &str) -> Vec<u8> {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{arguments}}}}}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn only_a_subscribe_that_may_wait_is_a_long_poll() {
+        let wait = r#"{"scope":"s","table":"t","wait_ms":250}"#;
+        assert!(is_long_poll(&call("lattice_subscribe", wait)));
+        // A float or negative wait is not the integer zero, so it counts (the server refuses it, which
+        // costs the place for an instant).
+        assert!(is_long_poll(&call(
+            "lattice_subscribe",
+            r#"{"scope":"s","table":"t","wait_ms":1.5}"#
+        )));
+        assert!(!is_long_poll(&call(
+            "lattice_subscribe",
+            r#"{"scope":"s","table":"t","wait_ms":0}"#
+        )));
+        assert!(!is_long_poll(&call(
+            "lattice_subscribe",
+            r#"{"scope":"s","table":"t"}"#
+        )));
+        assert!(!is_long_poll(&call("lattice_read", wait)));
+        assert!(!is_long_poll(b"not json"));
+        assert!(!is_long_poll(b"{}"));
+        assert!(!is_long_poll(b"[]"));
     }
 }
