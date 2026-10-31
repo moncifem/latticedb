@@ -118,7 +118,7 @@ fn varchar_length_is_between_one_and_ten_million_and_a_bit() {
     for bad in ["0", "10485761"] {
         refused(
             &format!("SELECT CAST(a AS varchar({bad})) FROM t"),
-            ErrorKind::Syntax,
+            ErrorKind::InvalidParameter,
             "varchar length must be between 1 and 10485760",
         );
     }

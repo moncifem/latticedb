@@ -51,6 +51,8 @@ pub enum ErrorKind {
     Unsupported,
     /// The input exceeds a size or nesting limit (SQLSTATE `54001`).
     TooLarge,
+    /// A type modifier PostgreSQL rejects as a value, such as `numeric(0)` (SQLSTATE `22023`).
+    InvalidParameter,
 }
 
 /// A parse failure with the place it happened.
@@ -78,6 +80,10 @@ impl ParseError {
         Self::new(ErrorKind::Unsupported, feature, span)
     }
 
+    pub(crate) fn invalid_parameter(message: impl Into<String>, span: Span) -> Self {
+        Self::new(ErrorKind::InvalidParameter, message, span)
+    }
+
     pub(crate) fn too_large(message: impl Into<String>, span: Span) -> Self {
         Self::new(ErrorKind::TooLarge, message, span)
     }
@@ -103,6 +109,7 @@ impl ParseError {
             ErrorKind::Syntax => "42601",
             ErrorKind::Unsupported => "0A000",
             ErrorKind::TooLarge => "54001",
+            ErrorKind::InvalidParameter => "22023",
         }
     }
 
@@ -111,7 +118,7 @@ impl ParseError {
         match self.kind {
             ErrorKind::Syntax => Some("LSQL-0001"),
             ErrorKind::Unsupported => Some("LSQL-0002"),
-            ErrorKind::TooLarge => None,
+            ErrorKind::TooLarge | ErrorKind::InvalidParameter => None,
         }
     }
 
@@ -142,6 +149,7 @@ impl fmt::Display for ParseError {
                 write!(f, "LSQL-0002 unsupported feature: {}", self.message)?;
             }
             ErrorKind::TooLarge => write!(f, "limit exceeded: {}", self.message)?,
+            ErrorKind::InvalidParameter => write!(f, "invalid parameter: {}", self.message)?,
         }
         write!(f, " (at byte {})", self.span.start)
     }
