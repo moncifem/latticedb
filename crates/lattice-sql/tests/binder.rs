@@ -309,7 +309,7 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
         ("SELECT id FROM notes WHERE NOT title", "42804", None),
         ("SELECT id FROM notes WHERE title AND true", "42804", None),
         ("SELECT title + 1 FROM notes", "42804", None),
-        ("SELECT title || 1 FROM notes", "42804", None),
+        ("SELECT score || score FROM notes", "42804", None),
         ("SELECT id FROM notes WHERE id LIKE 'a'", "42804", None),
         (
             "SELECT id FROM notes WHERE id IN (1, 'x', title)",
