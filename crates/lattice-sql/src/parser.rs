@@ -116,6 +116,8 @@ const FUNCTIONS: &[&str] = &[
     "abs",
     "avg",
     "coalesce",
+    "concat",
+    "concat_ws",
     "count",
     "date_trunc",
     "length",
