@@ -755,6 +755,7 @@ impl<H: QueryHandler> Session<H> {
                         cancellation,
                     )?
                 };
+                let param_types = statement_param_types(&query, param_types);
                 let charged = statement_bytes(&query, &param_types, &columns);
                 // Parsing over the unnamed statement replaces it, so its bytes do not count against
                 // the new one. Check first: a refused Parse must leave the old statement in place.
@@ -793,7 +794,7 @@ impl<H: QueryHandler> Session<H> {
                         format!("prepared statement \"{statement}\" does not exist"),
                     )
                 })?;
-                if !stmt.param_types.is_empty() && stmt.param_types.len() != params.len() {
+                if stmt.param_types.len() != params.len() {
                     return Err(QueryError::new(
                         "08P01",
                         format!(
@@ -1092,6 +1093,153 @@ fn shape(columns: &[Column]) -> Result<Backend, QueryError> {
 }
 
 /// Only whitespace and semicolons: PostgreSQL answers `EmptyQueryResponse`.
+/// Most parameters one statement can carry: the Bind message counts them in an `i16`.
+const MAX_PARAMETERS: usize = i16::MAX as usize;
+
+fn is_identifier_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
+}
+
+/// The highest `$n` placeholder the statement text refers to, or 0 when it has none.
+///
+/// PostgreSQL's parameter count is the highest number referenced (gaps count) or the number of
+/// types declared in `Parse`, whichever is larger. A `$` inside a string literal, a quoted
+/// identifier, a comment or a dollar-quoted string is not a placeholder, and neither is one that
+/// continues an identifier (`a$1`). The text is untrusted: the scan is one pass, never recurses
+/// and never indexes, and a number past `i16::MAX` is ignored.
+fn highest_placeholder(sql: &str) -> usize {
+    let b = sql.as_bytes();
+    let at = |i: usize| b.get(i).copied();
+    let mut highest = 0usize;
+    let mut i = 0usize;
+    // The byte just before `i` outside any quoted region, for the `E'...'` and `a$1` rules.
+    let mut prev: Option<u8> = None;
+    while let Some(c) = at(i) {
+        match c {
+            b'\'' => {
+                // `E'...'` strings also treat a backslash as an escape.
+                let escapes = matches!(prev, Some(b'e' | b'E'))
+                    && i.checked_sub(2)
+                        .and_then(at)
+                        .is_none_or(|before| !is_identifier_byte(before));
+                i = i.saturating_add(1);
+                while let Some(d) = at(i) {
+                    if escapes && d == b'\\' {
+                        i = i.saturating_add(2);
+                    } else if d == b'\'' {
+                        // A doubled quote stays inside the string.
+                        if at(i.saturating_add(1)) == Some(b'\'') {
+                            i = i.saturating_add(2);
+                        } else {
+                            break;
+                        }
+                    } else {
+                        i = i.saturating_add(1);
+                    }
+                }
+                i = i.saturating_add(1);
+                prev = Some(b'\'');
+            }
+            b'"' => {
+                i = i.saturating_add(1);
+                while let Some(d) = at(i) {
+                    if d == b'"' {
+                        if at(i.saturating_add(1)) == Some(b'"') {
+                            i = i.saturating_add(2);
+                        } else {
+                            break;
+                        }
+                    } else {
+                        i = i.saturating_add(1);
+                    }
+                }
+                i = i.saturating_add(1);
+                prev = Some(b'"');
+            }
+            b'-' if at(i.saturating_add(1)) == Some(b'-') => {
+                while at(i).is_some_and(|d| d != b'\n' && d != b'\r') {
+                    i = i.saturating_add(1);
+                }
+                prev = Some(b' ');
+            }
+            b'/' if at(i.saturating_add(1)) == Some(b'*') => {
+                // Block comments nest; a counter keeps the scan iterative.
+                let mut depth = 1usize;
+                i = i.saturating_add(2);
+                while depth > 0 && at(i).is_some() {
+                    match (at(i), at(i.saturating_add(1))) {
+                        (Some(b'/'), Some(b'*')) => {
+                            depth = depth.saturating_add(1);
+                            i = i.saturating_add(2);
+                        }
+                        (Some(b'*'), Some(b'/')) => {
+                            depth = depth.saturating_sub(1);
+                            i = i.saturating_add(2);
+                        }
+                        _ => i = i.saturating_add(1),
+                    }
+                }
+                prev = Some(b' ');
+            }
+            b'$' if !prev.is_some_and(is_identifier_byte) => {
+                let start = i.saturating_add(1);
+                let digits = (start..)
+                    .map_while(|j| at(j).filter(u8::is_ascii_digit))
+                    .count();
+                if digits > 0 {
+                    let number = (start..start.saturating_add(digits)).filter_map(at).fold(
+                        0usize,
+                        |n, d| {
+                            n.saturating_mul(10)
+                                .saturating_add(usize::from(d.saturating_sub(b'0')))
+                        },
+                    );
+                    if number <= MAX_PARAMETERS {
+                        highest = highest.max(number);
+                    }
+                    i = start.saturating_add(digits);
+                    // Not an identifier byte: `$1$2` is two placeholders.
+                    prev = Some(b' ');
+                    continue;
+                }
+                // `$tag$ ... $tag$`: the tag is empty or an identifier that does not start with a digit.
+                let tag_len = (start..)
+                    .map_while(|j| at(j).filter(|d| is_identifier_byte(*d) && *d != b'$'))
+                    .count();
+                let tag_end = start.saturating_add(tag_len);
+                if at(tag_end) == Some(b'$') {
+                    let tag = b.get(i..=tag_end).unwrap_or_default();
+                    i = tag_end.saturating_add(1);
+                    while i < b.len() && b.get(i..i.saturating_add(tag.len())) != Some(tag) {
+                        i = i.saturating_add(1);
+                    }
+                    i = i.saturating_add(tag.len());
+                    prev = Some(b' ');
+                } else {
+                    i = start;
+                    prev = Some(b'$');
+                }
+            }
+            _ => {
+                prev = Some(c);
+                i = i.saturating_add(1);
+            }
+        }
+    }
+    highest
+}
+
+/// The parameter types a prepared statement reports: the ones `Parse` declared, then OID 0
+/// (unspecified) for every further placeholder. The server infers no types, so 0 is the honest
+/// answer; a driver that declared none uses the count to build its Bind message.
+fn statement_param_types(sql: &str, mut declared: Vec<i32>) -> Vec<i32> {
+    let wanted = highest_placeholder(sql);
+    if declared.len() < wanted {
+        declared.resize(wanted, 0);
+    }
+    declared
+}
+
 fn is_blank(sql: &str) -> bool {
     sql.chars().all(|c| c.is_whitespace() || c == ';')
 }

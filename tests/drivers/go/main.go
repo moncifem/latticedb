@@ -3,11 +3,12 @@
 // Runs against the server named by LATTICE_DSN (a postgresql:// URL) and prints one JSON object per
 // step. tests/drivers/smoke.sh compares the lines with expected.jsonl and the pins in known.jsonl.
 //
-// pgx's default query execution mode (cache_statement) prepares the statement and checks the
-// parameter count the server describes. latticed describes no parameter types for a statement that
-// declares none (#703), so that mode fails before the query is sent. Every step here uses
-// QueryExecModeExec, which pgx documents as one extended-protocol round trip with text parameters and
-// text results. The default mode is a known failure (known.jsonl).
+// pgx's default query execution mode (cache_statement) prepares the statement, checks the parameter
+// count the server describes and then asks for binary formats. latticed describes the placeholder
+// count (#703) but refuses binary formats with 0A000 (#608), so that mode still fails before the
+// query runs. Every step here uses QueryExecModeExec, which pgx documents as one extended-protocol
+// round trip with text parameters and text results. The default mode is a known failure
+// (known.jsonl).
 package main
 
 import (

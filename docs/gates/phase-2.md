@@ -691,7 +691,7 @@ the drivers: `node/package-lock.json` (installed with `npm ci --ignore-scripts`)
 | Driver | Setting needed for text mode | Result | Pinned known failures (in `known.jsonl`, with the issue) |
 |---|---|---|---|
 | pg 8.23.1 | none: values use the extended protocol with text results; bigint comes back as a string | 16 of 16 steps pass | none |
-| pgx v5.11.0 | `default_query_exec_mode=exec` (`QueryExecModeExec` in the script) | 16 of 17 steps pass | the default query mode fails with `expected 0 arguments, got 1`, because the server describes no parameter types (#703) |
+| pgx v5.11.0 | `default_query_exec_mode=exec` (`QueryExecModeExec` in the script) | 16 of 17 steps pass | the default query mode fails with SQLSTATE `0A000` because binary formats are refused (#608); `Describe` now reports the placeholder count (#703), which is not enough to make that mode work |
 
 Each known failure is a step whose output must equal the pinned latticed output. The run fails when it changes
 to anything else, and when it starts to match PostgreSQL (then it moves out of `known.jsonl`). A driver script

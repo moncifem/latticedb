@@ -1,1 +1,1 @@
-{"step":"known_default_mode_select","issue":"#703","latticed":{"step":"known_default_mode_select","tags":["select","parameter","int"],"client_error":"expected 0 arguments, got 1"}}
+{"step":"known_default_mode_select","issue":"#703","latticed":{"step":"known_default_mode_select","tags":["select","parameter","int"],"sqlstate":"0A000"}}

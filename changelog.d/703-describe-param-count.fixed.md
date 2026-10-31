@@ -1,0 +1,1 @@
+`Describe` of a prepared statement now reports every `$n` placeholder in its text, not only the types `Parse` declared. A client that declares no types, such as pgx in its default mode, gets one unspecified (OID 0) parameter per placeholder, and `Bind` is checked against that count. The server still infers no parameter types.

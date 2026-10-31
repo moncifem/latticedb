@@ -624,3 +624,194 @@ fn a_row_of_more_than_i16_max_columns_is_refused_and_i16_max_is_sent() {
             .is_err()
     );
 }
+
+// Parameter counts. The protocol document (PostgreSQL, "Message Formats") says ParameterDescription
+// carries one OID per parameter of the statement, and that Parse may declare fewer types than the
+// statement has parameters; OID 0 means the type is unspecified. The expected counts below come
+// from reading each statement text by hand, not from running the scanner.
+
+fn describe_params(sql: &str, declared: Vec<i32>) -> Vec<i32> {
+    let mut s = ready();
+    let parsed = s.on_message(Frontend::Parse {
+        name: "d".into(),
+        query: sql.into(),
+        param_types: declared,
+    });
+    assert_eq!(parsed.messages, vec![Backend::ParseComplete], "{sql}");
+    let out = s.on_message(Frontend::Describe(Target::Statement("d".into())));
+    match out.messages.first() {
+        Some(Backend::ParameterDescription(types)) => types.clone(),
+        other => panic!("{sql}: {other:?}"),
+    }
+}
+
+#[test]
+fn a_statement_with_undeclared_placeholders_is_described_with_the_real_count() {
+    let cases: &[(&str, usize)] = &[
+        ("SELECT 1", 0),
+        ("INSERT INTO t VALUES ($1, $2, $3, $4)", 4),
+        ("SELECT id FROM t WHERE id = $1 OR name = $2", 2),
+        ("SELECT $3", 3),
+        ("SELECT $1, $1", 1),
+        ("SELECT $1::int, $2::text", 2),
+        ("SELECT '$5'", 0),
+        ("SELECT 'it''s $5', $1", 1),
+        ("SELECT E'a\\'$5', $2", 2),
+        ("SELECT \"c$5\", $1", 1),
+        ("SELECT $$ $7 $$, $1", 1),
+        ("SELECT $q$ $$ $7 $q$, $2", 2),
+        ("-- $9\nSELECT $1", 1),
+        ("/* $9 /* $8 */ $7 */ SELECT $2", 2),
+        ("SELECT a$5", 0),
+        ("SELECT $a$ x $a$ $1", 1),
+        ("SELECT $32767", 32_767),
+        ("SELECT $32768", 0),
+        ("SELECT $99999999999999999999999999", 0),
+        ("SELECT $0", 0),
+        ("SELECT 'x $5", 0),
+        ("SELECT $a$ $5", 0),
+        ("SELECT /* $5", 0),
+        ("SELECT \"x $5", 0),
+        ("SELECT $", 0),
+        ("SELECT $01", 1),
+        ("SELECT $1a", 1),
+        ("SELECT 1 -- $9\r, $1", 1),
+        ("SELECT U&'\\0041$5', $1", 1),
+        ("SELECT $1$2", 2),
+        ("SELECT $1$$ $7 $$", 1),
+    ];
+    for &(sql, count) in cases {
+        assert_eq!(describe_params(sql, vec![]), vec![0; count], "{sql}");
+    }
+}
+
+#[test]
+fn declared_types_are_kept_and_only_the_missing_ones_are_unspecified() {
+    assert_eq!(describe_params("SELECT $1, $2", vec![25]), [25, 0]);
+    assert_eq!(describe_params("SELECT $1", vec![25, 23, 20]), [25, 23, 20]);
+    assert_eq!(describe_params("SELECT $3", vec![0, 23]), [0, 23, 0]);
+}
+
+#[test]
+fn bind_must_supply_the_count_the_statement_text_implies() {
+    let mut s = ready();
+    s.on_message(Frontend::Parse {
+        name: "two".into(),
+        query: "SELECT $1, $2".into(),
+        param_types: vec![],
+    });
+    let bind_with = |s: &mut Session<Tagged>, n: usize| {
+        s.on_message(Frontend::Bind {
+            portal: String::new(),
+            statement: "two".into(),
+            param_formats: vec![],
+            params: vec![Some(b"1".to_vec()); n],
+            result_formats: vec![],
+        })
+        .messages
+    };
+    for wrong in [1, 3] {
+        let out = bind_with(&mut s, wrong);
+        assert!(
+            matches!(out.first(), Some(Backend::ErrorResponse { code, .. }) if code == "08P01"),
+            "{wrong}: {out:?}"
+        );
+        s.on_message(Frontend::Sync);
+    }
+    assert_eq!(bind_with(&mut s, 2), vec![Backend::BindComplete]);
+}
+
+#[test]
+fn bind_to_a_statement_without_placeholders_must_supply_no_parameters() {
+    let mut s = ready();
+    s.on_message(Frontend::Parse {
+        name: "none".into(),
+        query: "SELECT 1".into(),
+        param_types: vec![],
+    });
+    let bind_with = |s: &mut Session<Tagged>, n: usize| {
+        s.on_message(Frontend::Bind {
+            portal: String::new(),
+            statement: "none".into(),
+            param_formats: vec![],
+            params: vec![Some(b"1".to_vec()); n],
+            result_formats: vec![],
+        })
+        .messages
+    };
+    let out = bind_with(&mut s, 1);
+    assert!(
+        matches!(out.first(), Some(Backend::ErrorResponse { code, .. }) if code == "08P01"),
+        "{out:?}"
+    );
+    s.on_message(Frontend::Sync);
+    assert_eq!(bind_with(&mut s, 0), vec![Backend::BindComplete]);
+}
+
+#[test]
+fn a_statement_with_the_most_placeholders_is_charged_and_refused_over_a_small_budget() {
+    // $32767 pads the type list to 32,767 four-byte entries (131,068 bytes), past this budget.
+    let mut s = ready().with_portal_budget(100_000);
+    let parse = |s: &mut Session<Tagged>, sql: &str| {
+        s.on_message(Frontend::Parse {
+            name: String::new(),
+            query: sql.into(),
+            param_types: vec![],
+        })
+        .messages
+    };
+    assert_eq!(parse(&mut s, "SELECT $1"), vec![Backend::ParseComplete]);
+    let out = parse(&mut s, "SELECT $32767");
+    assert!(
+        matches!(out.first(), Some(Backend::ErrorResponse { code, .. }) if code == "53200"),
+        "{out:?}"
+    );
+    s.on_message(Frontend::Sync);
+    // The refused Parse left the old unnamed statement in place.
+    let out = s.on_message(Frontend::Describe(Target::Statement(String::new())));
+    assert_eq!(
+        out.messages.first(),
+        Some(&Backend::ParameterDescription(vec![0]))
+    );
+}
+
+#[test]
+fn hostile_statements_are_counted_exactly_at_every_cut() {
+    // Each text is read by hand. A scanner that reads a quoted region wrongly moves a count.
+    let count_of = |sql: &str| describe_params(sql, vec![]).len();
+
+    // Text 1: the E-string opened at `E'` swallows the backslash-escaped quote and everything
+    // after it, because no closing quote follows. Every cut counts 0.
+    let t1 = "SELECT E'a\\' $$ $q$ /* /* -- \" $1 '' $9 $a$ */ */ $2 \"\" $$ $q$ $3 ";
+    for end in 0..=t1.len() {
+        assert_eq!(count_of(t1.get(..end).unwrap()), 0, "{end}");
+    }
+
+    // Text 2: `$$ ... $$` is a dollar quote that hides $1 and $9; `$2` after it is real; the
+    // `$q$` that follows never closes, so $3 and $4 are inert. Count: 0 before `$2`, 2 from there.
+    let t2 = "SELECT $$ $q$ /* /* -- \" $1 '' $9 $a$ */ */ $$ $2 $q$ $3 $$ $4 ";
+    let at2 = t2.find("$2").unwrap();
+    for end in 0..=t2.len() {
+        let want = if end > at2 + 1 { 2 } else { 0 };
+        assert_eq!(count_of(t2.get(..end).unwrap()), want, "{end}");
+    }
+
+    // Text 3: the nested comment closes, the line comment ends at the newline, `$5` is real, the
+    // quoted identifier and the string hide $6 and $7, and `$8` is real.
+    let t3 = "SELECT 1 /* /* */ */ -- x\n, $5 \"q\"\"$6\" 'a''$7' $8";
+    let at5 = t3.find("$5").unwrap();
+    let at8 = t3.find("$8").unwrap();
+    for end in 0..=t3.len() {
+        let want = if end > at8 + 1 {
+            8
+        } else if end > at5 + 1 {
+            5
+        } else {
+            0
+        };
+        assert_eq!(count_of(t3.get(..end).unwrap()), want, "{end}");
+    }
+
+    assert_eq!(count_of(&"$".repeat(100_000)), 0);
+    assert_eq!(count_of(&"/*".repeat(100_000)), 0);
+}

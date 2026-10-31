@@ -25,6 +25,12 @@ remain stable independently of fresh nonce RNG. Rotation changes unknown-account
 account existence across that event; no unobservable-rotation or measured timing-safety claim is made.
 See [RFC 0007](../../docs/rfc/0007-pgwire-scram-tls-integration.md) (accepted, with ADR 0021).
 
+A prepared statement's parameter count is the larger of the types `Parse` declared and the highest `$n`
+its text refers to (a gap counts). `Describe` reports the declared types first and OID 0 (unspecified)
+for the rest, because the session infers no types, and `Bind` must supply exactly that many values (`08P01`
+otherwise, also for a statement with no placeholders). The scan skips string literals (including `E'...'`), quoted identifiers, comments, dollar
+quotes and a `$` that continues an identifier, ignores numbers above 32767, and is one bounded pass.
+
 `Session` keeps what a suspended portal still has to send exactly once and reads it with a cursor, so an
 `Execute` with a row limit costs the rows it sends, not the rows left. Open portals are charged to a
 per-session budget (`MAX_PORTAL_BYTES`, 64 MiB; `Session::with_portal_budget` changes it): the statement
