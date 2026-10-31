@@ -191,15 +191,21 @@ These two checks are not Kani proofs; they are recorded here because the same fi
 ## Property test case counts
 
 Every `proptest!` block takes its case count from the `PROPTEST_CASES` environment variable (256 when it
-is unset). Pull requests run 10,000 (256 on the ARM job) and the nightly runs `lattice-core`,
-`lattice-abi` and `lattice-lsl` at 1,000,000. A block that calls `ProptestConfig::with_cases(N)` ignores
-the variable, so none of those volumes applies to it. Three blocks did that and now use
-`ProptestConfig::default()`: the vacuum-versus-snapshot model in `lattice-engines/src/mvcc.rs` (was 256),
-the definition-history lookups in `lattice-engines/tests/unknown_index.rs` (was 64) and the parser depth
-round trip in `lattice-sql/tests/depth_and_keywords.rs` (was 32). Without the variable they run 256 cases,
-so the two smaller ones run more than before. Do not reintroduce `with_cases` in a test: set the
-volume in the workflow. The deterministic crates may not read the environment themselves
-(`clippy.toml`), which is why the variable is left to proptest rather than read by a helper.
+is unset). Pull requests run 10,000 (256 on the ARM job). The nightly 1,000,000-case run covers
+`lattice-core`, `lattice-abi` and `lattice-lsl` every night. `lattice-sql` runs at that volume only when the
+nightly workflow is dispatched by hand with `sql_proptest` set. A block that calls
+`ProptestConfig::with_cases(N)` ignores the variable, so none of those volumes applies to it. Six blocks
+did that and now use `ProptestConfig::default()`: the vacuum-versus-snapshot model in
+`lattice-engines/src/mvcc.rs` (was 256), the author-id injectivity check in
+`lattice-engines/src/authors.rs` (was 64), the resolver against a linear model in
+`lattice-engines/src/grants.rs` (was 256), the definition-history lookups in
+`lattice-engines/tests/unknown_index.rs` (was 64), the table-grant SQL outcomes in
+`lattice-api/src/table_grants_tests.rs` (was 32) and the parser depth round trip in
+`lattice-sql/tests/depth_and_keywords.rs` (was 32). Without the variable they run 256 cases, so the four
+smaller ones (authors, unknown-index, table-grant and depth) run more than before. Do not reintroduce
+`with_cases` in a test: set the volume in the workflow. The deterministic crates may not read the
+environment themselves (`clippy.toml`), which is why the variable is left to proptest rather than read by
+a helper.
 
 Crates the nightly volume run does not cover yet, with the time one local run of the whole crate test
 suite took at `PROPTEST_CASES=1000` (laptop, test profile, one crate at a time; a measurement of the

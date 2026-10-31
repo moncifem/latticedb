@@ -723,7 +723,8 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        // The default reads `PROPTEST_CASES` (256 when unset); `with_cases` would ignore the knob.
+        #![proptest_config(ProptestConfig::default())]
         #[test]
         fn resolver_agrees_with_a_linear_model(
             entries in prop::collection::btree_map(name_strategy(), bits_strategy(), 0..6),

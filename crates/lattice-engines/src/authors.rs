@@ -610,7 +610,8 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+        // The default reads `PROPTEST_CASES` (256 when unset); `with_cases` would ignore the knob.
+        #![proptest_config(ProptestConfig::default())]
 
         #[test]
         fn author_id_is_injective_over_generated_account_sets(
