@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Driver smoke scripts against a built latticed, text mode (issue 576, issue 710): node-postgres (pg,
-# node/), pgx (go/) and pg8000 (python/). Each script connects over loopback trust, runs the same steps
+# Driver smoke scripts against a built latticed, text mode (issues 576, 607, 710): node-postgres (pg,
+# node/), pgx (go/), pg8000 (python/), pgjdbc (jdbc/) and tokio-postgres (tokio/). Each script connects over loopback trust, runs the same steps
 # (connect, DDL, insert and select with parameters including NULL, bool, int and text, update and delete,
 # a transaction committed and one rolled back, an error with its SQLSTATE, a clean close) and prints one
 # JSON object per step. The pg8000 script adds a last step for DDL inside the implicit transaction its
-# DBAPI opens. smoke_compare.py (standard library only) checks the lines against the hand-written
+# DBAPI opens. tokio-postgres has no text mode for parameters, so its parameter steps are pinned as known
+# failures (see tokio/src/main.rs). smoke_compare.py (standard library only) checks the lines against the hand-written
 # expected.jsonl and the pinned known failures in known.jsonl. psycopg 3 is not used: it is LGPL-3.0 and
 # outside the licence allow list (docs/dependency-policy.md).
 #
@@ -17,7 +18,9 @@
 #
 # Environment: NODE (default node, with node/package-lock.json installed: npm ci in node/), GO (default go;
 # go/ fetches its pinned pgx), PYTHON (default python3, with python/requirements.txt installed and hash-checked:
-# python3 -m pip install --require-hashes --no-deps -r python/requirements.txt), LATTICE_DRIVERS_WORK (work directory,
+# python3 -m pip install --require-hashes --no-deps -r python/requirements.txt), JAVA (default java, 17 or
+# newer: the script runs in source-launcher mode) with JDBC_JAR (the pgjdbc jar that jdbc/fetch.sh downloads
+# and checks), CARGO (default cargo; tokio/ is built with --locked), LATTICE_DRIVERS_WORK (work directory,
 # never deleted), LATTICE_DRIVERS_KEEP (keep the temporary work directory). The comparison and the port pick
 # run with python3 (standard library).
 set -euo pipefail
@@ -28,6 +31,8 @@ bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")  # absolute: the scripts
 node_bin=${NODE:-node}
 go_bin=${GO:-go}
 python_bin=${PYTHON:-python3}
+java_bin=${JAVA:-java}
+cargo_bin=${CARGO:-cargo}
 
 [ -x "$bin" ] || { echo "latticed binary not found or not executable: $bin" >&2; exit 1; }
 work_is_temporary=""
@@ -42,6 +47,8 @@ echo "work directory: $work"
 "$node_bin" --version
 "$go_bin" version
 "$python_bin" --version
+"$java_bin" -version
+"$cargo_bin" --version
 
 server_pid=""
 
@@ -110,6 +117,10 @@ go_smoke() {
   (cd "$here/go" && "$go_bin" run .)
 }
 
+jdbc_smoke() {
+  (cd "$here/jdbc" && "$java_bin" -cp "$jdbc_jar" Smoke.java)
+}
+
 # run_driver <name> <command...>: runs one driver script against a fresh latticed and compares it.
 run_driver() {
   local name=$1; shift
@@ -149,10 +160,18 @@ run_driver() {
 [ -f "$here/node/smoke.mjs" ] || { echo "missing node/smoke.mjs" >&2; exit 1; }
 [ -f "$here/go/main.go" ] || { echo "missing go/main.go" >&2; exit 1; }
 [ -f "$here/python/smoke.py" ] || { echo "missing python/smoke.py" >&2; exit 1; }
+[ -f "$here/jdbc/Smoke.java" ] || { echo "missing jdbc/Smoke.java" >&2; exit 1; }
+[ -f "$here/tokio/src/main.rs" ] || { echo "missing tokio/src/main.rs" >&2; exit 1; }
+jdbc_jar=${JDBC_JAR:-}
+[ -n "$jdbc_jar" ] && [ -f "$jdbc_jar" ] || { echo "JDBC_JAR must name the pgjdbc jar (jdbc/fetch.sh)" >&2; exit 1; }
+jdbc_jar=$(cd "$(dirname "$jdbc_jar")" && pwd)/$(basename "$jdbc_jar")  # absolute: the script changes directory
 
 run_driver node "$node_bin" "$here/node/smoke.mjs"
 run_driver go go_smoke
 run_driver python "$python_bin" "$here/python/smoke.py"
+run_driver jdbc jdbc_smoke
+(cd "$here/tokio" && "$cargo_bin" build --release --locked --quiet)
+run_driver tokio "$here/tokio/target/release/smoke"
 
 if [ "$failed" -ne 0 ]; then
   echo "driver smoke: $failed failed" >&2

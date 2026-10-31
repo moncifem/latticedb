@@ -1,0 +1,20 @@
+[package]
+name = "lattice-driver-tokio-smoke"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99.1"
+license = "Apache-2.0"
+publish = false
+
+# Test-tool dependencies must not enter the shipped workspace dependency graph.
+[workspace]
+
+[dependencies]
+tokio-postgres = "=0.7.18"
+# tokio is pinned below the 1.54 line: 1.54.1 was published on 2026-10-21, less than the two weeks that
+# docs/dependency-policy.md asks for. Cargo.lock holds the checksum of every crate.
+tokio = { version = "=1.53.3", features = ["rt", "macros"] }
+
+[[bin]]
+name = "smoke"
+path = "src/main.rs"

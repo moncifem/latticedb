@@ -670,8 +670,8 @@ equal the latticed output pinned next to it in a `.latticed` file, checked by ha
   `FATAL:  password authentication failed` and psql exit status 2, not the code.
 - `date - date` and `date + integer` answer `42804` ("arithmetic is not defined for date"); the subset
   does not list date arithmetic, so no script asserts it.
-- Binary result formats, `PREPARE`/`EXECUTE` (refused by the executor), `COPY`, JDBC and the driver
-  matrix (#413). The psql suite is one client; the three drivers in the next section are text mode only.
+- Binary result formats, `PREPARE`/`EXECUTE` (refused by the executor), `COPY` and the full driver
+  matrix (#413). The psql suite is one client; the drivers in the next section are text mode only.
   No Phase 2 exit criterion is claimed.
 
 ## Driver smoke scripts in text mode (issue 576)
@@ -687,6 +687,12 @@ bigint as a string), never from a run of latticed. It also checks that the expec
 parameter, null, bool, int, text and error, and that a run with its last step cut off fails. The lockfiles pin
 the drivers: `node/package-lock.json` (installed with `npm ci --ignore-scripts`) and `go/go.sum`. CI job
 `driver-smoke` (`.github/workflows/driver-smoke.yml`) installs from them and runs the same script.
+
+Pull request 863 adds pgjdbc 42.7.14 (`jdbc/`, jar checked against `pgjdbc.sha256`) and tokio-postgres 0.7.18
+(`tokio/`, `--locked`) with the same 17 steps. Result of driver-smoke run 41243398072 on that branch: pgjdbc, every
+step matches, nothing pinned; tokio-postgres, the 7 steps without parameters pass and the 10 steps with parameters
+are pinned as `0A000` against #608 (the driver sends binary formats only). This is evidence about two drivers, not
+a gate claim.
 
 | Driver | Setting needed for text mode | Result | Pinned known failures (in `known.jsonl`, with the issue) |
 |---|---|---|---|
@@ -711,7 +717,7 @@ were run by hand: a single changed value and a missing step each fail the compar
 exits at start fails the run. The first CI result and the exact versions it prints are recorded here when that
 run exists.
 
-Not covered, and why: JDBC and binary formats (#413, #608); restart and reconnect from drivers (the psql restart
+Not covered, and why: binary formats (#413, #608); restart and reconnect from drivers (the psql restart
 scripts cover the server restart); TLS and SCRAM for these drivers (the psql suite covers SCRAM over TLS); pgx's
 `simple_protocol` mode and its default mode once #703 is fixed (not run yet); cancellation of a statement from a
 driver; Python (#710). Each of these is listed here rather than claimed. No Phase 2 exit criterion is claimed.

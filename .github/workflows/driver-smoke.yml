@@ -1,10 +1,12 @@
 name: driver-smoke
-# Runs the node-postgres (pg), pgx and pg8000 smoke scripts in tests/drivers (text mode) against the
-# release-built latticed over loopback trust (issues 576 and 710). Each driver is installed from its lockfile
-# or hash-pinned requirements: package-lock.json for node, go.sum for Go, requirements.txt (--require-hashes)
-# for Python. The expected output is written by hand; a case that latticed does not pass yet is pinned in
-# known.jsonl with its issue, and the job fails when that case changes or starts to match PostgreSQL. This is
-# not the driver matrix (#413), which also covers the binary formats.
+# Runs the node-postgres (pg), pgx, pg8000, pgjdbc and tokio-postgres smoke scripts in tests/drivers (text
+# mode where the driver has one) against the release-built latticed over loopback trust (issues 576, 607
+# and 710). Each driver is installed from its lockfile or hash-pinned requirements: package-lock.json for
+# node, go.sum for Go, requirements.txt (--require-hashes) for Python, pgjdbc.sha256 for the JDBC jar
+# (checked after the download), Cargo.lock (--locked) for tokio-postgres. The expected output is written
+# by hand; a case that latticed does not pass yet is pinned in known.jsonl with its issue, and the job
+# fails when that case changes or starts to match PostgreSQL. This is not the driver matrix (#413), which
+# also covers the binary formats.
 on:
   pull_request:
     paths:
@@ -61,14 +63,22 @@ jobs:
       - name: install the pg8000 driver from requirements.txt, hashes checked
         run: python3 -m pip install --require-hashes --no-deps -r requirements.txt
         working-directory: tests/drivers/python
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with: { distribution: temurin, java-version: "21" }
+      - name: download the pgjdbc jar, sha256 checked
+        id: jdbc
+        run: echo "jar=$(tests/drivers/jdbc/fetch.sh)" >> "$GITHUB_OUTPUT"
       - name: shellcheck
-        run: shellcheck -x tests/drivers/smoke.sh
+        run: shellcheck -x tests/drivers/smoke.sh tests/drivers/jdbc/fetch.sh
       - name: driver smoke scripts, text mode
         env:
           LATTICE_DRIVERS_WORK: ${{ runner.temp }}/driver-smoke
+          JDBC_JAR: ${{ steps.jdbc.outputs.jar }}
         run: tests/drivers/smoke.sh target/release/latticed
       - name: driver versions
         if: always()
+        env:
+          JDBC_JAR: ${{ steps.jdbc.outputs.jar }}
         run: |
           {
             echo "### driver smoke scripts"
@@ -76,6 +86,8 @@ jobs:
             echo "- node-postgres: \`$(cd tests/drivers/node && node -p 'require("pg/package.json").version')\` on node \`$(node --version)\`"
             echo "- pgx: \`$(cd tests/drivers/go && go list -m -f '{{.Version}}' github.com/jackc/pgx/v5)\` on \`$(go version)\`"
             echo "- pg8000: \`$(python3 -c 'import importlib.metadata as m; print(m.version("pg8000"))')\` on \`$(python3 --version)\`"
+            echo "- pgjdbc: \`$(basename "$JDBC_JAR")\` on \`$(java -version 2>&1 | head -1)\`"
+            echo "- tokio-postgres: \`$(cd tests/drivers/tokio && grep -A1 '^name = "tokio-postgres"' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')\` on \`$(cargo --version)\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: server logs and driver output
         if: failure()

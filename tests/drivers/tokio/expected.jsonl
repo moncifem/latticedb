@@ -1,0 +1,17 @@
+{"step":"select_literals","tags":["select","int","text","bool"],"rows":[[1,"x",true]]}
+{"step":"create_table","tags":["ddl"],"ok":true}
+{"step":"insert_bolt","tags":["dml","parameter","int","text","bool","bigint"],"rowcount":1}
+{"step":"insert_nut_null","tags":["dml","parameter","int","text","bool","null"],"rowcount":1}
+{"step":"select_with_params","tags":["select","parameter","int","text","bool","bigint","null"],"rows":[[1,"bolt",9000000000,true],[2,"nut",null,false]]}
+{"step":"update_with_params","tags":["dml","parameter","bigint"],"rowcount":1}
+{"step":"delete_with_params","tags":["dml","parameter"],"rowcount":1}
+{"step":"transaction_commit","tags":["transaction","dml","parameter"],"rowcount":1}
+{"step":"select_after_commit","tags":["select"],"rows":[[1],[3]]}
+{"step":"transaction_rollback","tags":["transaction","dml","parameter"],"rowcount":1}
+{"step":"select_after_rollback","tags":["select","parameter"],"rows":[]}
+{"step":"error_duplicate_key","tags":["error","dml","parameter","null"],"sqlstate":"23505"}
+{"step":"error_syntax","tags":["error"],"sqlstate":"42601"}
+{"step":"select_after_errors","tags":["select"],"rows":[[1],[3]]}
+{"step":"drop_table","tags":["ddl"],"ok":true}
+{"step":"known_default_mode_select","tags":["select","parameter","int"],"rows":[[7]]}
+{"step":"close","tags":["close"],"ok":true}

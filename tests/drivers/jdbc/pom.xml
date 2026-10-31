@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tracks the pgjdbc version for Dependabot only; nothing builds with Maven. fetch.sh reads the version
+     below and checks the jar against pgjdbc.sha256, so a version bump without a new hash fails the job. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.lattice</groupId>
+  <artifactId>driver-jdbc-smoke</artifactId>
+  <version>0.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>42.7.14</version>
+    </dependency>
+  </dependencies>
+</project>

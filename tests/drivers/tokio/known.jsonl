@@ -1,0 +1,10 @@
+{"step":"insert_bolt","issue":"#608","latticed":{"step":"insert_bolt","tags":["dml","parameter","int","text","bool","bigint"],"sqlstate":"0A000"}}
+{"step":"insert_nut_null","issue":"#608","latticed":{"step":"insert_nut_null","tags":["dml","parameter","int","text","bool","null"],"sqlstate":"0A000"}}
+{"step":"select_with_params","issue":"#608","latticed":{"step":"select_with_params","tags":["select","parameter","int","text","bool","bigint","null"],"sqlstate":"0A000"}}
+{"step":"update_with_params","issue":"#608","latticed":{"step":"update_with_params","tags":["dml","parameter","bigint"],"sqlstate":"0A000"}}
+{"step":"delete_with_params","issue":"#608","latticed":{"step":"delete_with_params","tags":["dml","parameter"],"sqlstate":"0A000"}}
+{"step":"transaction_commit","issue":"#608","latticed":{"step":"transaction_commit","tags":["transaction","dml","parameter"],"sqlstate":"0A000"}}
+{"step":"transaction_rollback","issue":"#608","latticed":{"step":"transaction_rollback","tags":["transaction","dml","parameter"],"sqlstate":"0A000"}}
+{"step":"select_after_rollback","issue":"#608","latticed":{"step":"select_after_rollback","tags":["select","parameter"],"sqlstate":"0A000"}}
+{"step":"error_duplicate_key","issue":"#608","latticed":{"step":"error_duplicate_key","tags":["error","dml","parameter","null"],"sqlstate":"0A000"}}
+{"step":"known_default_mode_select","issue":"#608","latticed":{"step":"known_default_mode_select","tags":["select","parameter","int"],"sqlstate":"0A000"}}

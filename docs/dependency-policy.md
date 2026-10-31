@@ -166,6 +166,8 @@ outside the root workspace (each has a nested `[workspace]`), which the root `ca
 | npm | `/tests/drivers/node` | The node-postgres (`pg`) client of the driver smoke script, exact-pinned, grouped |
 | gomod | `/tests/drivers/go` | The pgx client of the Go driver smoke script (`go.mod`, `go.sum`), grouped |
 | pip | `/tests/drivers/python` | The pg8000 client of the Python driver smoke script (`requirements.txt`, hash-pinned, grouped as `driver-smoke`); test-only, see "Python test-only dependencies" below |
+| maven | `/tests/drivers/jdbc` | The pgjdbc version of the JDBC driver smoke script, read from `pom.xml` (Dependabot only; nothing builds with Maven) and checked against `pgjdbc.sha256`, grouped as `driver-smoke` |
+| cargo | `/tests/drivers/tokio` | The tokio-postgres client of the Rust driver smoke script (own `Cargo.lock`, nested `[workspace]`), grouped as `driver-smoke` |
 
 The experiment and loom lockfiles stay out of the production graph on purpose; their update pull
 requests are reviewed like any other, but they do not change what ships. The classifier's
@@ -218,3 +220,20 @@ them. The rules for them are:
   dual licensed); six 1.17.0 (MIT). The MIT-0 entry was accepted by the tech lead in pull request #783;
   it does not cover anything that ships.
 - Dependabot opens weekly pull requests for `/tests/drivers/python`, grouped as `driver-smoke`.
+
+## JDBC and Rust driver test dependencies (`tests/drivers/jdbc`, `tests/drivers/tokio`)
+
+Both smoke scripts are test-only; CI builds or downloads them for the driver smoke job and nothing ships.
+
+- pgjdbc 42.7.14 (BSD-2-Clause), published to Maven Central on 2026-10-07. `jdbc/fetch.sh` downloads the jar
+  and checks it against the sha256 in `jdbc/pgjdbc.sha256` (taken from the downloaded file, and its sha1
+  matches the `.sha1` Maven Central lists). `pom.xml` exists so Dependabot sees the version; a version bump
+  without a new hash fails the job at the download step. The pom lists `checker-qual` as a runtime
+  dependency; it only holds annotations and the script does not fetch it (the CI run connects without it).
+- tokio-postgres 0.7.18 (MIT or Apache-2.0) with tokio 1.53.3 pinned exactly in `tokio/Cargo.toml`. The
+  lockfile was generated with `cargo +nightly generate-lockfile -Zunstable-options --publish-time
+  2026-10-17T00:00:00Z`, and every crate in it was checked against the crates.io API to be at least two weeks
+  old on 2026-10-31 (tokio 1.54.1 was not). CI builds it with `--locked`; Cargo.lock holds each crate's checksum.
+  The crate is outside the root workspace and `deny.toml` does not cover its lockfile; the licences of its
+  transitive crates are unaudited.
+- Dependabot opens weekly pull requests for both directories, grouped as `driver-smoke`.

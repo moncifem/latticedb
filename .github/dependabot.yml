@@ -70,3 +70,17 @@ updates:
     groups:
       driver-smoke:
         patterns: ["*"]
+  - package-ecosystem: maven
+    directory: /tests/drivers/jdbc
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups:
+      driver-smoke:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directory: /tests/drivers/tokio
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups:
+      driver-smoke:
+        patterns: ["*"]

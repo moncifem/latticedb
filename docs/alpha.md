@@ -205,8 +205,9 @@ messages itself. node-postgres, pgx and pg8000 are run in text mode by `tests/dr
 [#710](https://github.com/moncifem/latticedb/issues/710)) against a release build over loopback trust; each
 needs the setting in the known issues table below. psycopg 3 is not used: it is LGPL-3.0, outside the
 licence policy, so pg8000 is the Python driver that runs.
-JDBC has not been run ([#413](https://github.com/moncifem/latticedb/issues/413)). Results are text format
-only.
+pgjdbc 42.7.14 runs the same 17 steps in text mode and every step matches; tokio-postgres 0.7.18 has no text mode
+for parameters, so its 10 parameter steps are pinned as `0A000` ([#608](https://github.com/moncifem/latticedb/issues/608))
+and its 7 text steps pass (driver-smoke run 41243398072). Results are text format only.
 
 SQL supported: single-table `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `DROP TABLE`, and
 transaction control. Joins, aggregates, `GROUP BY`, `DISTINCT` and subqueries answer SQLSTATE `0A000`.
@@ -320,7 +321,7 @@ optional models plugin; Windows.
 | Issue | What you will see |
 |---|---|
 | [#574](https://github.com/moncifem/latticedb/issues/574) | Restart is tested in-process, with a power-cut sweep and psql scripts; the `kill -9` seed sweep with the real binary and the simulator workload are not done yet. Process kill is not power loss. |
-| [#413](https://github.com/moncifem/latticedb/issues/413) | JDBC has not been run, and there is no driver matrix. Only text results and parameters work. |
+| [#413](https://github.com/moncifem/latticedb/issues/413) | The driver smoke job covers five drivers in text mode (pgjdbc passes all steps; tokio-postgres parameter steps are pinned against #608), but binary formats are not supported and there is no full driver matrix. Only text results and parameters work. |
 | [#608](https://github.com/moncifem/latticedb/issues/608) | Binary parameter and result formats are refused with `0A000`. A driver that sends binary parameters by default fails until it is set to text; psycopg 3's default `%s` placeholder does this (observed). |
 | [#703](https://github.com/moncifem/latticedb/issues/703) | A statement is described with the parameter count its text implies (the highest `$n`), with type 0 (unspecified) for every placeholder the client did not declare; the server infers no parameter types. pgx's default query mode still fails, now with `0A000` because binary formats are refused (#608). Use `default_query_exec_mode=exec`. |
 | [#382](https://github.com/moncifem/latticedb/issues/382) | `CREATE TABLE` and `DROP TABLE` inside a transaction block are refused with `25001`. A driver that opens a block before DDL fails until autocommit is on; psycopg 3's default connection does this (observed). |
