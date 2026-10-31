@@ -499,6 +499,13 @@ impl Binder<'_> {
             );
         }
         check_const_range(&e, to, span)?;
+        // A numeric literal stored in a double column takes the double route, so `1e308` is not
+        // refused by the 38-digit limit of `numeric`.
+        if to == SqlType::DoublePrecision
+            && let ExprNode::Const(Value::Number(n)) = e.kind
+        {
+            return Ok(konst(Value::Number(n), to));
+        }
         Ok(e)
     }
 
