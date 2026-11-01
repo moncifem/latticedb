@@ -283,6 +283,33 @@ fn go(e: &TypedExpr, row: &[Datum], ctx: &EvalCtx<'_>, depth: usize) -> Result<D
                         x
                     })
                 }
+                "concat" | "concat_ws" => {
+                    let mut vals = Vec::with_capacity(args.len());
+                    for a in args {
+                        vals.push(sub(a)?);
+                    }
+                    let (sep, rest) = if name == "concat_ws" {
+                        match vals.split_first() {
+                            Some((Datum::Null, _)) => return Ok(Datum::Null),
+                            Some((s, rest)) => (s.to_pg_text().unwrap_or_default(), rest),
+                            None => return Err(ExecError::internal("concat_ws needs a separator")),
+                        }
+                    } else {
+                        (String::new(), vals.as_slice())
+                    };
+                    let mut out = String::new();
+                    let mut first = true;
+                    for v in rest {
+                        let Some(t) = v.to_pg_text() else { continue };
+                        if !first {
+                            out.push_str(&sep);
+                        }
+                        first = false;
+                        out.push_str(&t);
+                        admit_value(ctx.bounds, out.len() as u64)?;
+                    }
+                    Ok(Datum::Text(out))
+                }
                 _ => {
                     let mut vals = Vec::with_capacity(args.len());
                     for a in args {
@@ -1238,6 +1265,7 @@ mod tests {
                             "upper",
                             "length",
                             "substring",
+                            "concat_ws",
                             "position",
                             "trim_both",
                             "trim_leading",
