@@ -11,7 +11,7 @@ use crate::ast::{
     AlterAction, AlterTable, AsOf, Assignment, BinaryOp, ColumnDef, CreateIndex, CreateTable,
     DataType, Delete, Expr, ExprKind, Function, FunctionArgs, Ident, Insert, InsertSource,
     IsolationLevel, Join, JoinKind, Literal, ObjectName, OrderByItem, Query, SelectItem, SetValue,
-    Statement, TableConstraint, TableFactor, TableWithJoins, TrimSide, UnaryOp, Update,
+    Statement, TableConstraint, TableFactor, TableWithJoins, TrimSide, Truth, UnaryOp, Update,
 };
 use crate::error::{ParseError, Span};
 use crate::lexer::{Tok, Token, is_reserved, lex_partial};
@@ -1458,6 +1458,18 @@ impl Parser {
         }
     }
 
+    /// Consumes `TRUE`, `FALSE` or `UNKNOWN` after `IS [NOT]`.
+    fn truth_word(&mut self) -> Option<Truth> {
+        let truth = match self.word()? {
+            "true" => Truth::True,
+            "false" => Truth::False,
+            "unknown" => Truth::Unknown,
+            _ => return None,
+        };
+        self.bump();
+        Some(truth)
+    }
+
     fn expr_loop(&mut self, min_bp: u8) -> PResult<Expr> {
         let mut left = self.prefix()?;
         let mut left_depth = self.td;
@@ -1500,26 +1512,44 @@ impl Parser {
                     self.bump();
                     let negated = self.eat_kw("not");
                     let end = self.peek().span;
-                    if !self.eat_kw("null") {
-                        return Err(match self.word() {
-                            Some(w @ ("true" | "false" | "unknown" | "distinct")) => {
-                                ParseError::unsupported(
-                                    format!("IS {}", w.to_ascii_uppercase()),
-                                    end,
-                                )
-                            }
-                            _ => self.unexpected("NULL"),
-                        });
+                    if self.eat_kw("null") {
+                        let span = left.span.join(end);
+                        left = self.grow(
+                            left_depth,
+                            ExprKind::IsNull {
+                                expr: Box::new(left),
+                                negated,
+                            },
+                            span,
+                        )?;
+                    } else if let Some(truth) = self.truth_word() {
+                        let span = left.span.join(self.prev_span());
+                        left = self.grow(
+                            left_depth,
+                            ExprKind::IsTruth {
+                                expr: Box::new(left),
+                                truth,
+                                negated,
+                            },
+                            span,
+                        )?;
+                    } else if self.eat_kw("distinct") {
+                        self.expect_kw("from")?;
+                        let right = self.expr_bp(bp + 1)?;
+                        let span = left.span.join(right.span);
+                        let depth = left_depth.max(self.td);
+                        left = self.grow(
+                            depth,
+                            ExprKind::IsDistinct {
+                                left: Box::new(left),
+                                right: Box::new(right),
+                                negated,
+                            },
+                            span,
+                        )?;
+                    } else {
+                        return Err(self.unexpected("NULL, TRUE, FALSE, UNKNOWN or DISTINCT FROM"));
                     }
-                    let span = left.span.join(end);
-                    left = self.grow(
-                        left_depth,
-                        ExprKind::IsNull {
-                            expr: Box::new(left),
-                            negated,
-                        },
-                        span,
-                    )?;
                 }
                 Infix::Cast => {
                     self.bump();

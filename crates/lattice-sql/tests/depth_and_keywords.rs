@@ -122,3 +122,31 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn truth_tests_and_distinct_from_round_trip() {
+    for sql in [
+        "SELECT a IS TRUE",
+        "SELECT a IS NOT TRUE",
+        "SELECT a IS FALSE",
+        "SELECT a IS NOT FALSE",
+        "SELECT a IS UNKNOWN",
+        "SELECT a IS NOT UNKNOWN",
+        "SELECT a IS DISTINCT FROM b",
+        "SELECT a IS NOT DISTINCT FROM b",
+        "SELECT a + 1 IS DISTINCT FROM b * 2 AND c IS TRUE",
+        "SELECT a FROM t WHERE (a = 1) IS NOT TRUE",
+    ] {
+        round_trips(sql);
+    }
+    // After IS [NOT] only NULL, a truth value or DISTINCT FROM may follow.
+    for sql in [
+        "SELECT a IS",
+        "SELECT a IS NOT",
+        "SELECT a IS 1",
+        "SELECT a IS DISTINCT b",
+        "SELECT a IS DISTINCT FROM",
+    ] {
+        assert_eq!(err(sql).kind(), ErrorKind::Syntax, "{sql}");
+    }
+}
