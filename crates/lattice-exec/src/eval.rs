@@ -640,7 +640,40 @@ fn function(name: &str, a: &[Datum], ty: SqlType, ctx: &EvalCtx<'_>) -> Result<D
             Datum::Bytes(b) => Ok(Datum::Int(i64::try_from(b.len()).unwrap_or(i64::MAX))),
             _ => Err(ExecError::bind_type("length needs text or bytea")),
         },
-        "substring" => {
+        "reverse" => Ok(Datum::Text(text_arg(arg(0)?)?.chars().rev().collect())),
+        "starts_with" => Ok(Datum::Bool(
+            text_arg(arg(0)?)?.starts_with(text_arg(arg(1)?)?),
+        )),
+        "ascii" => Ok(Datum::Int(
+            text_arg(arg(0)?)?
+                .chars()
+                .next()
+                .map_or(0, |c| i64::from(u32::from(c))),
+        )),
+        "chr" => {
+            let n = int_arg(arg(0)?)?;
+            if n < 0 {
+                return Err(ExecError::eval(
+                    "22023",
+                    "character number must be positive",
+                ));
+            }
+            if n == 0 {
+                return Err(ExecError::eval("54000", "null character not permitted"));
+            }
+            match u32::try_from(n).ok().and_then(char::from_u32) {
+                Some(c) => Ok(Datum::Text(c.to_string())),
+                None if n > 0x10FFFF => Err(ExecError::eval(
+                    "54000",
+                    format!("requested character too large for encoding: {n}"),
+                )),
+                None => Err(ExecError::eval(
+                    "54000",
+                    format!("requested character not valid for encoding: {n}"),
+                )),
+            }
+        }
+        "substring" | "substr" => {
             let s = text_arg(arg(0)?)?;
             let start = int_arg(arg(1)?)?;
             let len = a.get(2).map(int_arg).transpose()?;
@@ -1238,6 +1271,8 @@ mod tests {
                             "upper",
                             "length",
                             "substring",
+                            "reverse",
+                            "chr",
                             "position",
                             "trim_both",
                             "trim_leading",
