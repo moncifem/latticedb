@@ -985,6 +985,17 @@ impl Binder<'_> {
                 }
                 Ok(call(vec![a], SqlType::Integer))
             }
+            // The same as `a % b`, including its typing and its `22012` on a zero divisor.
+            "mod" => {
+                if n != 2 {
+                    return bad_arity("2");
+                }
+                let mut it = args.into_iter();
+                match (it.next(), it.next()) {
+                    (Some(l), Some(r)) => self.binary(BinaryOp::Mod, l, r, span),
+                    _ => bad_arity("2"),
+                }
+            }
             "substring" => {
                 if !(2..=3).contains(&n) {
                     return bad_arity("2 or 3");
