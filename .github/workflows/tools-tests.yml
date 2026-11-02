@@ -1,10 +1,12 @@
 name: tools-tests
-# Runs the unit tests of the Python tools under tools/. The tests use PATH shims for git and gh, so
-# they need no network and no token. Tests that need a built lattice-cli skip themselves.
+# Runs the unit tests of the Python tools under tools/ and of the board console under
+# integrations/console/. The tests use PATH shims for git, gh and psql, so they need no network, no
+# token and no database. Tests that need a built lattice-cli skip themselves.
 on:
   pull_request:
     paths:
       - "tools/**"
+      - "integrations/console/**"
       - ".github/workflows/**"
   push:
     branches: [main]
@@ -30,3 +32,5 @@ jobs:
           python-version: "3.14"
       - name: Run the tools unit tests
         run: python3 -m unittest discover -s tools -p "test_*.py"
+      - name: Run the board console unit tests
+        run: python3 -m unittest discover -s integrations/console/tests -p "test_*.py"

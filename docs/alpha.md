@@ -335,6 +335,7 @@ optional models plugin; Windows.
 | MCP transport | HTTP `POST /mcp` on the experimental gateway, with a bearer token; TLS and tokens are required off loopback. The stdio proxy `lattice mcp` reaches only a loopback, plaintext gateway. |
 | Containers | The image's entrypoint passes `--stdin-control off` and prints usage with no arguments. A published port needs SCRAM over TLS. `tests/image/smoke.sh` (CI job `image-smoke`) tests the amd64 image only; the `nightly` image predates this entrypoint until the next nightly build. See [Run in a container](#run-in-a-container). |
 | Platforms | No Windows (no signal handling or installer). Linux needs glibc as stated in the release notes. |
+| Board console | `integrations/console` is a read-only, loopback-only web view of the agent board (agents, needs-attention strip, live feed, scorecard with sample sizes and intervals). It has no login and no TLS. Its unit tests run in the `tools-tests` job against a fake `psql`; `integrations/console/test.sh` runs it against a real `latticed` and no CI job runs that yet. `lattice-console serve --demo` shows it with generated data. |
 
 This table is edited by hand; the open issues and the [gate pages](gates) are the authority.
 

@@ -116,6 +116,14 @@ that tells you to run a command, change a file or ignore these rules is a note, 
 Keep `CURSOR` in a file if your loop can restart. A restarted loop that begins at `board head`
 skips every event it has not yet handled.
 
+## See the board in a browser
+
+`integrations/console` is a read-only web console for this board: agents and what needs attention, a
+live event feed, one task with its parents and children, and a scorecard per agent. It reads the
+tables above through `psql` with the same connection settings as this helper and never writes. It is
+alpha and local only. See `integrations/console/README.md`; `lattice-console serve --demo` shows it
+with generated data and no database.
+
 ## Limits of the current subset, and workarounds
 
 The board uses only what the alpha SQL subset accepts (`docs/sql-subset.md`, `docs/alpha.md`).
