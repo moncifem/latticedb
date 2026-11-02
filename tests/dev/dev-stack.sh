@@ -76,10 +76,10 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
-# Whole-run watchdog: a hang anywhere fails the run after 20 minutes instead of the job timeout.
+# Whole-run watchdog: a hang anywhere fails the run after 30 minutes instead of the job timeout.
 # TERM runs the EXIT trap, so cleanup still removes the project and the state dir.
 trap 'exit 124' TERM
-(sleep 1200 && kill -TERM $$) >/dev/null 2>&1 &
+(sleep 1800 && kill -TERM $$) >/dev/null 2>&1 &
 watchdog=$!
 
 fail() {
@@ -242,6 +242,34 @@ expect_ok status "$dev" status
 if ! grep -q 'accounts: alice bob$' "$work/status.out"; then fail "status does not list both accounts"; fi
 grep -qF -- "$alice_pw" "$work/status.out" && fail "status printed alice's password"
 ok "status_lists_the_accounts_without_passwords"
+
+# --- 5b. the board helper's end-to-end test (integrations/board/test.sh) against this server, in its
+# existing-server mode: a dedicated account `board` with grants on the five board tables, a private
+# state dir, unique author names inside the script. The account's env file is sourced in a subshell
+# and its password is never printed. The checks that need a server of their own (password in a URL,
+# restart and durability) are skipped by that mode and say so in the output. The account is removed
+# afterwards so the later steps see the accounts they expect.
+board_tables=counters,tasks,events,decisions,task_leases
+expect_ok add-board "$dev" account add board --read "$board_tables" --write "$board_tables" --ddl "$board_tables"
+board_state=$(mktemp -d "$work/board-state.XXXXXX")
+chmod 700 "$board_state"
+if ! (
+  set -a
+  # shellcheck source=/dev/null
+  . "$LATTICE_DEV_HOME/accounts/board.env"
+  set +a
+  BOARD_TEST_EXISTING=1 BOARD_STATE_DIR="$board_state/fences" TMPDIR="$board_state" \
+    sh "$root/integrations/board/test.sh"
+) >"$work/board-test.out" 2>"$work/board-test.err"; then
+  grep -v '^ok ' "$work/board-test.out" | tail -n 40 >&2
+  tail -n 20 "$work/board-test.err" >&2
+  fail "integrations/board/test.sh failed against the dev stack"
+fi
+grep -q '^passed: [0-9][0-9]*  failed: 0$' "$work/board-test.out" || fail "board test.sh did not report failed: 0"
+grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/board-test.out" "$work/board-test.err" \
+  && fail "the board test output contains the board account's password"
+expect_ok remove-board "$dev" account remove board
+ok "board_helper_end_to_end_test_passes_against_the_dev_stack"
 
 # --- 6. down, then up on the same volumes: the rows are durable
 expect_ok down "$dev" down
@@ -432,7 +460,14 @@ run_gateway_steps() {
   [ "$plain" = 000 ] || fail "plain http to the gateway got status '$plain', wanted no answer (000)"
   ok "plain_http_to_the_gateway_gets_no_answer"
 
-  gw_post gw-list-a "$work/gate-a.auth" "$list_body"
+  # latticed reloads its bearer-token file by polling (GatewayConfig::credential_poll), so a token that
+  # was created a moment ago is refused with 401 until the next poll. Poll, bounded, for the first
+  # 200 instead of asserting on the first answer (this raced and failed in CI).
+  for i in $(seq 1 30); do
+    gw_post gw-list-a "$work/gate-a.auth" "$list_body"
+    if [ "$(gw_status gw-list-a)" = 200 ]; then break; fi
+    sleep 1
+  done
   [ "$(gw_status gw-list-a)" = 200 ] || fail "tools/list with gate-a's token got status $(gw_status gw-list-a)"
   # The shapes below are the ones docs/mcp-v0.md gives: tools/list names the tools in result.tools; a
   # tool result is one text block holding a JSON envelope; a refused call is a JSON-RPC error whose

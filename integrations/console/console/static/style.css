@@ -90,6 +90,11 @@ main { padding: 0 16px 2rem; max-width: 1200px; margin: 0 auto; }
 .attn .rule { color: var(--muted); font-size: .8rem; }
 
 .scroll { overflow-x: auto; }
+.qsec { margin: 1.2rem 0; }
+.qsec .rule { color: var(--muted); font-size: .8rem; margin-bottom: .4rem; }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+a.linkbox { text-decoration: none; color: inherit; }
+a.linkbox:hover { border-color: var(--accent); }
 table { border-collapse: collapse; width: 100%; background: var(--panel); }
 th, td { border-bottom: 1px solid var(--line); padding: .45rem .6rem; text-align: left; vertical-align: top; }
 th { font-size: .8rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
@@ -100,6 +105,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .badge.stale, .badge.bad { background: var(--bad-bg); color: var(--bad); }
 .badge.idle, .badge.open { background: var(--idle-bg); color: var(--muted); }
 .badge.claimed { background: var(--warn-bg); color: var(--warn); }
+.badge.dead, .badge.cancelled { background: var(--bad-bg); color: var(--bad); }
+.badge.awaiting_approval, .badge.retrying, .badge.waiting { background: var(--warn-bg); color: var(--warn); }
+.badge.kind.fail, .badge.kind.expired, .badge.kind.fenced, .badge.kind.cancel { background: var(--bad-bg); color: var(--bad); }
+.badge.kind.approve, .badge.kind.release { background: var(--ok-bg); color: var(--ok); }
 .badge.kind { background: var(--idle-bg); color: var(--ink); text-transform: none; font-weight: 600; }
 .badge.kind.decision { background: var(--warn-bg); color: var(--warn); }
 .badge.kind.done { background: var(--ok-bg); color: var(--ok); }

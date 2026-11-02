@@ -36,6 +36,10 @@ class Snapshot:
     truncated_tasks: bool = False
     truncated_events: bool = False
     truncated_decisions: bool = False
+    leases: list = field(default_factory=list)
+    leases_available: bool = False
+    clock: str = "database"
+    _queue: Optional[dict] = None
     _facts: Optional[list] = None
     _by_id: Optional[dict] = None
 
@@ -50,6 +54,13 @@ class Snapshot:
         if self._facts is None:
             self._facts = model.task_facts(self.tasks, self.events, self.decisions)
         return self._facts
+
+    @property
+    def queue(self) -> dict:
+        if self._queue is None:
+            self._queue = model.build_queue(self.tasks, self.leases, self.now, self.leases_available,
+                                            self.truncated_tasks)
+        return self._queue
 
     @property
     def head(self) -> int:
@@ -135,7 +146,12 @@ class BoardService:
                 decisions = decisions[-DECISION_WINDOW:]
                 trunc_dec = True
         self._loaded = True
-        self._snap = Snapshot(old.version + 1, tasks, events, decisions, src.now(), tr, trunc_ev, trunc_dec)
+        read_leases = getattr(src, "leases", None)
+        leases, available = read_leases(TASK_LIMIT) if read_leases else ([], False)
+        now = src.now()  # after the reads: the source learns which clock answered
+        clock = getattr(src, "clock_source", "database")
+        self._snap = Snapshot(old.version + 1, tasks, events, decisions, now, tr, trunc_ev, trunc_dec,
+                              leases, available, clock)
         self._cache = OrderedDict()
 
     # ---------------------------------------------------------------- answers
@@ -145,6 +161,8 @@ class BoardService:
             "demo": self.demo,
             "banner": "DEMO DATA, not your board" if self.demo else None,
             "now": snap.now,
+            "clock": snap.clock,
+            "leases_available": snap.leases_available,
             "stale_minutes": self.stale_s // 60,
             "open_hours": self.open_s // 3600,
             "truncated": {"tasks": snap.truncated_tasks, "events": snap.truncated_events,
@@ -159,9 +177,34 @@ class BoardService:
             "counts": model.counts_by_state(s.tasks),
             "total_tasks": len(s.tasks),
             "agents": agents,
-            "attention": model.attention(s.tasks, s.facts, s.now, self.stale_s, self.open_s),
+            "attention": self._attention(s),
+            "queue_totals": s.queue["totals"],
             "head": s.head,
         }
+
+    def _attention(self, s: Snapshot) -> dict:
+        a = model.attention(s.tasks, s.facts, s.now, self.stale_s, self.open_s)
+        extra = model.queue_attention(s.queue)
+        rules = dict(a["rules"])
+        rules.update(extra.pop("queue_rules"))
+        a.update(extra)
+        a["rules"] = rules
+        return a
+
+    def queue_payload(self) -> dict:
+        s = self.snapshot()
+        q = dict(s.queue)
+        q["meta"] = self.meta(s)
+        q["head"] = s.head
+        q["rules"] = {
+            "runnable": "open, past its retry delay, every blocker done: what `board next` would take",
+            "blocked": "open with a blocker that is not done yet",
+            "claimed": "held under a lease; remaining time is lease_until minus the database clock",
+            "retrying": "open again after a failure or an expired lease, waiting out its delay",
+            "dead": "used all its attempts",
+            "awaiting": "created with --needs-approval, waiting for `board approve`",
+        }
+        return q
 
     def task_payload(self, task_id: str) -> Optional[dict]:
         s = self.snapshot()

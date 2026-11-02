@@ -21,6 +21,7 @@ case "$FAKE_MODE" in
   huge) head -c 5000000 /dev/zero ;;
   hang) sleep 30 ;;
   quiet-fail) exit 3 ;;
+  nolease) printf 'ERROR:  relation "task_leases" does not exist\n' >&2; exit 2 ;;
 esac
 """
 
@@ -345,6 +346,93 @@ class PsqlSourceTests(unittest.TestCase):
                 del os.environ["BOARD_PSQL"]
             else:
                 os.environ["BOARD_PSQL"] = old
+
+
+LEASE_ROW = ("t1", "1700000600", "1700000100", "1", "3", "1700000200", "CI red", "ta,tb")
+
+
+class LeaseSourceTests(unittest.TestCase):
+    """The two additions to the read-only source: the task_leases table and the database clock."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.psql = os.path.join(self.dir, "psql")
+        with open(self.psql, "w") as f:
+            f.write(FAKE_PSQL)
+        os.chmod(self.psql, os.stat(self.psql).st_mode | stat.S_IXUSR)
+
+    def src(self, mode="out", out=b"", url="postgresql://dev@127.0.0.1:5999/lattice", **kw):
+        with open(os.path.join(self.dir, "out"), "wb") as f:
+            f.write(out)
+        env = {"FAKE_DIR": self.dir, "FAKE_MODE": mode, "PATH": os.environ.get("PATH", ""),
+               "PGPASSWORD": "pw-from-env-9"}
+        return PsqlSource(url, psql=self.psql, env=env, **kw)
+
+    def read(self, name):
+        with open(os.path.join(self.dir, name)) as f:
+            return f.read()
+
+    def test_leases_send_one_plain_select_and_parse_every_column(self):
+        s = self.src(out=nul(*LEASE_ROW))
+        rows, available = s.leases(50)
+        self.assertTrue(available)
+        self.assertEqual(rows[0], {"task_id": "t1", "lease_until": 1700000600, "heartbeat_at": 1700000100,
+                                   "attempts": 1, "max_attempts": 3, "not_before": 1700000200,
+                                   "last_error": "CI red", "blocked_by": "ta,tb"})
+        self.assertEqual(self.read("stdin").strip(),
+                         "SELECT task_id, lease_until, heartbeat_at, attempts, max_attempts, not_before, "
+                         "last_error, blocked_by FROM task_leases ORDER BY task_id LIMIT 51;")
+
+    def test_leases_cut_at_the_limit(self):
+        s = self.src(out=nul(*LEASE_ROW) + nul(*(("t2",) + LEASE_ROW[1:])))
+        rows, _ = s.leases(1)
+        self.assertEqual([r["task_id"] for r in rows], ["t1"])
+
+    def test_a_board_without_the_table_is_an_empty_answer_not_an_error(self):
+        s = self.src(mode="nolease")
+        rows, available = s.leases(10)
+        self.assertEqual((rows, available), ([], False))
+
+    def test_other_failures_are_still_errors(self):
+        with self.assertRaises(SourceError):
+            self.src(mode="fail").leases(10)
+
+    def test_a_lease_row_with_a_bad_number_is_an_error_not_a_guess(self):
+        bad = ("t1", "soon") + LEASE_ROW[2:]
+        with self.assertRaises(SourceError):
+            self.src(out=nul(*bad)).leases(10)
+
+    def test_now_reads_the_database_clock_with_the_fixed_statement(self):
+        s = self.src(out=b"1700000999\0")
+        self.assertEqual(s.now(), 1700000999)
+        self.assertEqual(s.clock_source, "database")
+        self.assertEqual(self.read("stdin").strip(), "SELECT CAST(extract(epoch FROM now()) AS bigint);")
+
+    def test_now_falls_back_to_this_machines_clock_and_says_so(self):
+        s = self.src(mode="fail")
+        before = int(time.time())
+        got = s.now()
+        self.assertGreaterEqual(got, before)
+        self.assertEqual(s.clock_source, "client")
+
+    def test_now_with_garbage_falls_back_too(self):
+        s = self.src(out=b"soon\0")
+        s.now()
+        self.assertEqual(s.clock_source, "client")
+
+    def test_the_sender_still_refuses_anything_else(self):
+        s = self.src(out=b"")
+        for sql in ("DELETE FROM task_leases;", "SELECT 1;", "SELECT * FROM task_leases;",
+                    "SELECT task_id FROM task_leases; DROP TABLE tasks;",
+                    "SELECT CAST(extract(epoch FROM now()) AS bigint); SELECT 1;"):
+            with self.assertRaises(ValueError, msg=sql):
+                s._run(sql)
+
+    def test_build_select_knows_the_lease_table(self):
+        sql = build_select(source.LEASE_COLUMNS, "task_leases", "task_id", False, 10)
+        self.assertTrue(sql.endswith("FROM task_leases ORDER BY task_id LIMIT 10;"))
 
 
 if __name__ == "__main__":

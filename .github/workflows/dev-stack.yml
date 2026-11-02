@@ -1,6 +1,7 @@
 name: dev-stack
 # Runs tests/dev/dev-stack.sh on the runner's Docker daemon: the published image, compose v2, SCRAM over
-# TLS and libpq, driven through dev/lattice-dev.sh. The script picks its own compose project, state dir
+# TLS and libpq, driven through dev/lattice-dev.sh. Step 5b also runs integrations/board/test.sh against
+# the stack (the board helper's SQL: leases, fences, retries, dependencies). The script picks its own compose project, state dir
 # and loopback port, so it does not touch a stack on the runner. Not a required check yet (#737).
 on:
   pull_request:
@@ -8,6 +9,7 @@ on:
       - "dev/**"
       - "tests/dev/**"
       - "docker/**"
+      - "integrations/board/**"
       - ".github/workflows/dev-stack.yml"
   push:
     branches: [main]
@@ -15,6 +17,7 @@ on:
       - "dev/**"
       - "tests/dev/**"
       - "docker/**"
+      - "integrations/board/**"
       - ".github/workflows/dev-stack.yml"
 
 permissions:
@@ -28,7 +31,7 @@ jobs:
   dev-stack:
     name: dev-stack
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

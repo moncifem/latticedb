@@ -13,8 +13,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 MAX_CHAIN = 50  # a parent chain longer than this is reported as too deep, not followed
-TASK_STATES = ("open", "claimed", "done")
-EVENT_KINDS = ("add", "claim", "note", "done", "decision")
+TASK_STATES = ("open", "claimed", "done", "dead", "cancelled", "awaiting_approval")
+EVENT_KINDS = ("add", "claim", "note", "done", "decision", "fail", "expired", "release", "approve",
+               "cancel", "block", "unblock", "fenced")
+QUEUE_LIST_LIMIT = 200  # rows per queue section; the section also reports its total
+BLOCKER_WALK_LIMIT = 256  # tasks visited when looking for a dependency cycle
 MAX_TEXT = 4096  # the helper's limit; direct writers may exceed it, the API cuts there
 TASK_EVENT_LIMIT = 500  # events (and decisions) one task answer carries, newest first
 TASK_CHILD_LIMIT = 200
@@ -328,3 +331,144 @@ def feed_after(events: list, tasks_by_id: dict, after: int, limit: int, agent, k
         used += cost
     out.reverse()
     return out, max(cursor, after)
+
+
+# ---------------------------------------------------------------- the queue (leases, retries, deps)
+
+LEASE_DEFAULT = {"lease_until": 0, "heartbeat_at": 0, "attempts": 0, "max_attempts": 3,
+                 "not_before": 0, "last_error": "", "blocked_by": ""}
+
+
+def split_blockers(text) -> list:
+    """The ids in a blocked_by text (comma separated), in order, without repeats or blanks."""
+    out: list = []
+    for part in ("" if text is None else str(text)).split(","):
+        part = part.strip()
+        if part and part not in out:
+            out.append(part)
+    return out[:64]
+
+
+def lease_of(leases_by_id: dict, task_id: str) -> dict:
+    """A task's lease row, or the defaults a task without a row has (made by an older helper)."""
+    return leases_by_id.get(task_id) or LEASE_DEFAULT
+
+
+def _in_cycle(task_id: str, waits: dict) -> bool:
+    """True when task_id can reach itself through the blocked_by lists in `waits` (bounded)."""
+    seen: set = set()
+    stack = list(waits.get(task_id, ()))
+    visited = 0
+    while stack and visited < BLOCKER_WALK_LIMIT:
+        cur = stack.pop()
+        if cur == task_id:
+            return True
+        if cur in seen:
+            continue
+        seen.add(cur)
+        visited += 1
+        stack.extend(waits.get(cur, ()))
+    return False
+
+
+def _short(t: dict) -> dict:
+    return {"id": t["id"], "title": clip(t["title"], 300), "priority": t["priority"]}
+
+
+def build_queue(tasks: list, leases: list, now: int, leases_available: bool = True,
+                tasks_truncated: bool = False) -> dict:
+    """Sort every task into one queue section, from the task rows and the lease rows.
+
+    runnable   open, past its retry delay, every blocker done (what `board next` would offer)
+    blocked    open with a blocker that is not done; `forever` when a blocker is dead, cancelled,
+               missing or the task waits (through others) for itself
+    claimed    held under a lease; `expired` when lease_until has passed and nobody reaped it yet
+    retrying   open, failed or expired before, still inside its retry delay
+    dead       out of attempts
+    awaiting   waiting for board approve
+    All times are database-clock seconds and `now` must be on that clock. When the task window was
+    cut (tasks_truncated), a blocker id that is not in it is `not_in_window`: unknown, not missing,
+    and it does not mark the task as blocked for ever."""
+    by_id = {t["id"]: t for t in tasks}
+    lease_by_id = {r["task_id"]: r for r in leases}
+    waits = {t["id"]: split_blockers(lease_of(lease_by_id, t["id"])["blocked_by"]) for t in tasks}
+    sections: dict = {k: [] for k in ("runnable", "blocked", "claimed", "retrying", "dead", "awaiting")}
+    for t in sorted(tasks, key=lambda x: (-x["priority"], x["created_seq"], x["id"])):
+        lease = lease_of(lease_by_id, t["id"])
+        base = dict(_short(t), attempts=lease["attempts"], max_attempts=lease["max_attempts"])
+        state = t["state"]
+        if state == "open":
+            blockers = []
+            for b in waits[t["id"]]:
+                bt = by_id.get(b)
+                bstate = bt["state"] if bt else None
+                if bstate == "done":
+                    continue
+                problem = None
+                if bt is None:
+                    problem = "not_in_window" if tasks_truncated else "missing"
+                elif bstate in ("dead", "cancelled"):
+                    problem = bstate
+                blockers.append({"id": b, "state": bstate, "title": clip(bt["title"], 300) if bt else None,
+                                 "problem": problem})
+            cyc = bool(blockers) and _in_cycle(t["id"], waits)
+            if blockers:
+                forever = cyc or any(b["problem"] in ("dead", "cancelled", "missing") for b in blockers)
+                sections["blocked"].append(dict(base, blockers=blockers, forever=forever, cycle=cyc,
+                                                age_s=max(0, now - t["created_at"])))
+            elif lease["not_before"] > now:
+                sections["retrying"].append(dict(base, not_before=lease["not_before"],
+                                                 wait_s=lease["not_before"] - now,
+                                                 last_error=clip(lease["last_error"], 300)))
+            else:
+                sections["runnable"].append(dict(base, age_s=max(0, now - t["created_at"]),
+                                                 last_error=clip(lease["last_error"], 300)))
+        elif state == "claimed":
+            until = lease["lease_until"]
+            hb = lease["heartbeat_at"]
+            sections["claimed"].append(dict(
+                base, owner=t.get("owner"), lease_until=until,
+                remaining_s=(until - now) if until else None,
+                expired=bool(until) and until < now,
+                heartbeat_at=hb, heartbeat_age_s=(max(0, now - hb) if hb else None),
+                has_lease=bool(until)))
+        elif state == "dead":
+            sections["dead"].append(dict(base, last_error=clip(lease["last_error"], 300),
+                                         updated_at=t["updated_at"]))
+        elif state == "awaiting_approval":
+            sections["awaiting"].append(dict(base, age_s=max(0, now - t["created_at"])))
+    totals = {k: len(v) for k, v in sections.items()}
+    out = {k: v[:QUEUE_LIST_LIMIT] for k, v in sections.items()}
+    # most urgent first inside the sections where order carries meaning
+    out["claimed"].sort(key=lambda r: (r["remaining_s"] is None, r["remaining_s"] if r["remaining_s"] is not None else 0))
+    out["retrying"].sort(key=lambda r: r["not_before"])
+    out["totals"] = totals
+    out["truncated"] = {k: totals[k] > QUEUE_LIST_LIMIT for k in totals}
+    out["leases_available"] = leases_available
+    out["now"] = now
+    return out
+
+
+def queue_attention(queue: dict) -> dict:
+    """The queue's contribution to the needs-attention strip, from build_queue's answer."""
+    expired = [{"task_id": r["id"], "title": r["title"], "owner": r["owner"],
+                "overdue_s": max(0, -r["remaining_s"])} for r in queue["claimed"] if r["expired"]]
+    dead = [{"task_id": r["id"], "title": r["title"], "attempts": r["attempts"],
+             "max_attempts": r["max_attempts"], "last_error": r["last_error"]} for r in queue["dead"]]
+    forever = [{"task_id": r["id"], "title": r["title"],
+                "reasons": [b["id"] + " (%s)" % b["problem"]
+                            for b in r["blockers"] if b["problem"] in ("dead", "cancelled", "missing")] + (["a cycle"] if r["cycle"] else [])}
+               for r in queue["blocked"] if r["forever"]]
+    expired.sort(key=lambda x: -x["overdue_s"])
+    return {
+        "expired_leases": expired,
+        "dead_tasks": dead,
+        "blocked_forever": forever,
+        "queue_rules": {
+            "expired_leases": "claimed task whose lease ran out and that nobody has reaped yet "
+                              "(any agent's `board reap` or `board next` expires it)",
+            "dead_tasks": "task that used all its attempts; it needs a person",
+            "blocked_forever": "open task waiting for a blocker that is dead, cancelled, missing, "
+                               "or for a cycle: it can never become runnable",
+        },
+    }

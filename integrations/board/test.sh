@@ -8,6 +8,15 @@
 #
 #   LATTICE_BIN_DIR=/path/to/bin integrations/board/test.sh
 #
+# EXISTING-SERVER MODE: with BOARD_TEST_EXISTING=1 the script starts no server. It runs against the
+# server the usual PG* variables (and PGSSLMODE, PGSSLROOTCERT, PGPASSWORD, ...) point at, and
+# needs no latticed binary. The board there may already hold tasks: checks that count rows use the
+# count they find first, and the orchestration part cancels the open tasks it did not create (a
+# state change, nothing is deleted) so `next` has a known queue. Skipped in this mode, and said so
+# in the output: the password-in-URL checks (they build a URL for the local trust listener), and
+# the stop, restart and durability checks. Give it a fresh BOARD_STATE_DIR of its own (the default
+# is a directory in the work area) and unique author names are used throughout.
+#
 # Exit status 0 when every check passes, 1 otherwise.
 
 set -u
@@ -15,12 +24,16 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 BOARD="$HERE/board"
 
-if [ -n "${LATTICE_BIN_DIR:-}" ]; then
-  LATTICED="$LATTICE_BIN_DIR/latticed"
-else
-  LATTICED=$(command -v latticed) || { echo "test: latticed not found; set LATTICE_BIN_DIR" >&2; exit 1; }
+EXISTING=${BOARD_TEST_EXISTING:-}
+LATTICED=
+if [ -z "$EXISTING" ]; then
+  if [ -n "${LATTICE_BIN_DIR:-}" ]; then
+    LATTICED="$LATTICE_BIN_DIR/latticed"
+  else
+    LATTICED=$(command -v latticed) || { echo "test: latticed not found; set LATTICE_BIN_DIR" >&2; exit 1; }
+  fi
+  [ -x "$LATTICED" ] || { echo "test: $LATTICED is not executable" >&2; exit 1; }
 fi
-[ -x "$LATTICED" ] || { echo "test: $LATTICED is not executable" >&2; exit 1; }
 command -v psql >/dev/null 2>&1 || { echo "test: psql not found" >&2; exit 1; }
 
 TAB=$(printf '\t')
@@ -92,11 +105,15 @@ pick_port() {
   fi
 }
 
-PORT=$(pick_port) || exit 1
-export PGHOST=127.0.0.1
-export PGPORT="$PORT"
-export PGUSER=dev
-export PGPASSWORD=unused-under-trust
+if [ -z "$EXISTING" ]; then
+  PORT=$(pick_port) || exit 1
+  export PGHOST=127.0.0.1
+  export PGPORT="$PORT"
+  export PGUSER=dev
+  export PGPASSWORD=unused-under-trust
+else
+  PORT=${PGPORT:-}
+fi
 export LC_MESSAGES=C
 
 # start_server: start latticed on $PORT with a per-start log, and wait until (a) its own log says it
@@ -151,8 +168,12 @@ stop_server() {
   return "$rc"
 }
 
-echo "test: latticed=$LATTICED port=$PORT data=$DATA"
-start_server || exit 1
+if [ -z "$EXISTING" ]; then
+  echo "test: latticed=$LATTICED port=$PORT data=$DATA"
+  start_server || exit 1
+else
+  echo "test: EXISTING-SERVER MODE, host=${PGHOST:-local} port=${PORT:-default}; skipping: password-in-URL checks, restart and durability checks"
+fi
 
 # --- init and idempotence -------------------------------------------------------------------
 check "init creates the tables" "$BOARD" init
@@ -171,16 +192,20 @@ check "two inits at once both succeed" two_inits
 # --- authors: required for writes, validated, unique per agent ------------------------------
 BOARD_AUTHOR=maint
 export BOARD_AUTHOR
+BOARD_STATE_DIR="${BOARD_STATE_DIR:-$WORK/fences}"
+RUN=r$$
+export BOARD_STATE_DIR
 
+LIST_BASE=$("$BOARD" list | wc -l | tr -d ' ')
 T_PLAIN=$("$BOARD" add "Plain task") || FAILS=$((FAILS + 1))
 T_BIG=$("$BOARD" add "Urgent refactor" --priority 5 --body "details here") || FAILS=$((FAILS + 1))
 T_CHILD=$("$BOARD" add "Child of plain" --parent "$T_PLAIN") || FAILS=$((FAILS + 1))
 check "add returns an id" test -n "$T_PLAIN"
 
 LIST=$("$BOARD" list)
-FIRST=$(printf '%s\n' "$LIST" | sed -n '2p' | cut -f1)
+FIRST=$(printf '%s\n' "$LIST" | grep -E "^($T_PLAIN|$T_BIG|$T_CHILD)" | head -n 1 | cut -f1)
 expect_eq "list puts the highest priority first" "$T_BIG" "$FIRST"
-check "list has the header and three tasks" test "$(printf '%s\n' "$LIST" | wc -l | tr -d ' ')" = 4
+check "list has the header and three more tasks" test "$(printf '%s\n' "$LIST" | wc -l | tr -d ' ')" = "$((LIST_BASE + 3))"
 
 expect_rc "a write without BOARD_AUTHOR is refused" 1 env -u BOARD_AUTHOR "$BOARD" add "No author"
 expect_rc "claim without BOARD_AUTHOR is refused" 1 env -u BOARD_AUTHOR "$BOARD" claim "$T_PLAIN"
@@ -189,7 +214,7 @@ expect_rc "done without BOARD_AUTHOR is refused" 1 env -u BOARD_AUTHOR "$BOARD" 
 expect_rc "decide without BOARD_AUTHOR is refused" 1 env -u BOARD_AUTHOR "$BOARD" decide "$T_PLAIN" "x"
 expect_rc "a read needs no BOARD_AUTHOR" 0 env -u BOARD_AUTHOR "$BOARD" list
 expect_rc "an author with a space is refused" 1 env BOARD_AUTHOR='agent one' "$BOARD" claim "$T_PLAIN"
-check "the refused writes created no task" test "$("$BOARD" list | wc -l | tr -d ' ')" = 4
+check "the refused writes created no task" test "$("$BOARD" list | wc -l | tr -d ' ')" = "$((LIST_BASE + 3))"
 
 if "$BOARD" add "Orphan" --parent t0000000000 >/dev/null 2>"$WORK/orphan.err"; then
   FAILS=$((FAILS + 1))
@@ -199,18 +224,18 @@ else
   echo "ok   - add with a missing parent fails"
 fi
 check "a failed add with a missing parent leaves no task" \
-  test "$("$BOARD" list | wc -l | tr -d ' ')" = 4
+  test "$("$BOARD" list | wc -l | tr -d ' ')" = "$((LIST_BASE + 3))"
 
 # --- quoting and injection ------------------------------------------------------------------
 EVIL="Robert'); DROP TABLE tasks; -- \"q\" ; é 日本語 :'author' :\"x\" %s 'end"
 T_EVIL=$("$BOARD" add "$EVIL") || FAILS=$((FAILS + 1))
 SHOWN=$("$BOARD" show "$T_EVIL" | grep '^title|' | cut -d'|' -f2-)
 expect_eq "a hostile title is stored and read back verbatim" "$EVIL" "$SHOWN"
-check "the tasks table survived the hostile title" test "$("$BOARD" list | wc -l | tr -d ' ')" = 5
+check "the tasks table survived the hostile title" test "$("$BOARD" list | wc -l | tr -d ' ')" = "$((LIST_BASE + 4))"
 expect_rc "a title with a backslash is refused" 1 "$BOARD" add 'path C:\temp'
 expect_rc "a title with a carriage return is refused" 1 "$BOARD" add "$(printf 'bad\rtitle')"
 expect_rc "a title with a bell character is refused" 1 "$BOARD" add "$(printf 'bell\007')"
-check "the refused titles stored nothing" test "$("$BOARD" list | wc -l | tr -d ' ')" = 5
+check "the refused titles stored nothing" test "$("$BOARD" list | wc -l | tr -d ' ')" = "$((LIST_BASE + 4))"
 
 # --- claim race: three claimers, five tasks, exactly one winner each ------------------------
 race_task() {
@@ -327,7 +352,7 @@ expect_eq "event ids for the task rise in order" "0" "$ORDER_BAD"
 # The test runs another note in that window, so the held note's commit must conflict once.
 HOLD="$WORK/hold"
 rm -f "$HOLD" "$HOLD.started"
-BOARD_TEST_HOLD_FILE="$HOLD" BOARD_AUTHOR=held "$BOARD" note "$T_BIG" "held note" \
+BOARD_TEST_MODE=1 BOARD_TEST_HOLD_FILE="$HOLD" BOARD_AUTHOR=held "$BOARD" note "$T_BIG" "held note" \
   >"$WORK/held.out" 2>"$WORK/held.err" &
 HELD_PID=$!
 i=0
@@ -343,8 +368,8 @@ check "the held note is in the log" test -n "$("$BOARD" show "$T_BIG" | grep 'he
 # --- done, decide, closed tasks -------------------------------------------------------------
 "$BOARD" "done" "$T_CHILD" "closing by hand" >/dev/null || FAILS=$((FAILS + 1))
 check "done moves the task to done" test "$("$BOARD" list "done" | cut -f1 | grep -c "$T_CHILD")" = 1
-expect_rc "a second done on the same task is refused" 1 "$BOARD" "done" "$T_CHILD" "again"
-check "the refused second done wrote no event" \
+expect_rc "a second done on the same task is a no-op (exit 0)" 0 "$BOARD" "done" "$T_CHILD" "again"
+check "the second done wrote no event" \
   test "$("$BOARD" since 0 | awk -F"$TAB" -v t="$T_CHILD" -v k=done '$2 == t && $4 == k' | wc -l | tr -d ' ')" = 1
 "$BOARD" claim "$T_CHILD" >/dev/null 2>&1 ; DONE_RC=$?
 check "a done task cannot be claimed (exit 2)" test "$DONE_RC" = 2
@@ -396,9 +421,9 @@ expect_eq "since --task takes the event id too, in either order" "2" \
 expect_rc "since --task with a bad id fails" 1 "$BOARD" since --task 'bad id'
 expect_rc "since --task with no id fails" 1 "$BOARD" since --task
 
-BOARD_AUTHOR=lister1 "$BOARD" claim "$W_B" >/dev/null || FAILS=$((FAILS + 1))
+BOARD_AUTHOR=lister1$RUN "$BOARD" claim "$W_B" >/dev/null || FAILS=$((FAILS + 1))
 expect_eq "list --owner shows only that owner's tasks" "$W_B" \
-  "$("$BOARD" list --owner lister1 | tail -n +2 | cut -f1)"
+  "$("$BOARD" list --owner lister1$RUN | tail -n +2 | cut -f1)"
 expect_rc "list --owner with a bad name fails" 1 "$BOARD" list --owner 'bad name'
 expect_rc "list --owner with no name fails" 1 "$BOARD" list --owner
 expect_rc "list rejects an unknown option" 1 "$BOARD" list --bogus
@@ -446,6 +471,7 @@ help_lists_watch() {
 }
 check "help lists watch" help_lists_watch
 
+if [ -z "$EXISTING" ]; then
 # --- passwords stay out of argv ------------------------------------------------------------
 # A spy stands in for psql (BOARD_PSQL). It records its arguments and PGPASSWORD, then runs psql.
 SPY="$WORK/psql-spy"
@@ -470,7 +496,202 @@ expect_rc "a password in a key=value connection string is refused" 1 env \
   LATTICE_BOARD_URL="host=127.0.0.1 port=$PORT user=dev password=x" "$BOARD" list
 expect_rc "a password query parameter in the URL is refused" 1 env \
   LATTICE_BOARD_URL="postgresql://dev@127.0.0.1:$PORT/lattice?password=x" "$BOARD" list
+fi
 
+# --- orchestration: leases, fences, retries, dependencies, next, approval -------------------
+# These need the database clock: extract(epoch FROM now()) and CAST (docs/sql-subset.md; the
+# executor implements both). The lease lengths below are seconds of real time, so this part sleeps.
+SQL_RAW() {
+  # A failed connect is retried, as the helper does (alpha.1 drops some new connections).
+  sr_try=0
+  while :; do
+    sr_try=$((sr_try + 1))
+    sr_out=$(psql -X -w -q -A -t -v ON_ERROR_STOP=1 -c "$1" 2>"$WORK/sqlraw.err") && { printf '%s\n' "$sr_out"; return 0; }
+    if [ "$sr_try" -lt 20 ] && grep -q 'psql: error: connection to server' "$WORK/sqlraw.err" \
+      && ! grep -q FATAL "$WORK/sqlraw.err"; then
+      sleep 0.2
+      continue
+    fi
+    cat "$WORK/sqlraw.err" >&2
+    return 1
+  done
+}
+row_state() {
+  "$BOARD" list --all | awk -F"$TAB" -v t="$1" '$1 == t { print $2 }'
+}
+event_count() {
+  # event_count TASK KIND
+  "$BOARD" since 0 | awk -F"$TAB" -v t="$1" -v k="$2" '$2 == t && $4 == k' | wc -l | tr -d ' '
+}
+author_rc() {
+  # author_rc NAME COMMAND...: the exit status of a board command run as NAME
+  ar_name=$1
+  shift
+  BOARD_AUTHOR=$ar_name "$BOARD" "$@" >/dev/null 2>&1
+  echo $?
+}
+
+# Open tasks that existed before this run would disturb `next`: cancel them (nothing is deleted).
+PRE_OPEN=$("$BOARD" list open | tail -n +2 | cut -f1 | grep -v -E "^($T_PLAIN|$T_BIG|$T_CHILD|$T_EVIL)\$")
+for tid in $PRE_OPEN; do
+  "$BOARD" cancel "$tid" "test.sh clears the queue" >/dev/null 2>&1
+done
+check "migrate on a current board adds nothing" test "$("$BOARD" migrate)" = "board migrated: 0 lease rows added"
+OLD_T=t0ld$$
+SQL_RAW "INSERT INTO tasks (id, title, state, owner, priority, parent_id, created_by, body, created_at, updated_at, created_seq)
+  VALUES ('$OLD_T', 'made by an older helper', 'open', NULL, 0, NULL, 'maint', '', 1, 1, 1);" >/dev/null \
+  || FAILS=$((FAILS + 1))
+check "show works for a task with no lease row" "$BOARD" show "$OLD_T"
+check "migrate adds the missing lease row" test "$("$BOARD" migrate)" = "board migrated: 1 lease rows added"
+check "the migrated task has a lease row" test -n "$(SQL_RAW "SELECT task_id FROM task_leases WHERE task_id = '$OLD_T'")"
+"$BOARD" cancel "$OLD_T" "test fixture" >/dev/null || FAILS=$((FAILS + 1))
+
+# lease, heartbeat, expiry, fence
+L1=$("$BOARD" add "Lease task" --priority 3) || FAILS=$((FAILS + 1))
+check "a new task has a lease row at once" test -n "$(SQL_RAW "SELECT task_id FROM task_leases WHERE task_id = '$L1'")"
+expect_rc "claim with a bad lease is refused" 1 env BOARD_AUTHOR=zed$RUN "$BOARD" claim "$L1" --lease 0
+expect_rc "zed claims with a 3 second lease" 0 env BOARD_AUTHOR=zed$RUN "$BOARD" claim "$L1" --lease 3
+check "the claim stored a fence file" test -f "$BOARD_STATE_DIR/zed$RUN.$L1"
+FENCE_Z=$(cat "$BOARD_STATE_DIR/zed$RUN.$L1")
+expect_eq "the fence is the claim event id" "$("$BOARD" since 0 | awk -F"$TAB" -v t="$L1" '$2 == t && $4 == "claim" { print $1 }')" "$FENCE_Z"
+LEASE_UNTIL=$(SQL_RAW "SELECT lease_until FROM task_leases WHERE task_id = '$L1'")
+DB_NOW=$(SQL_RAW "SELECT CAST(extract(epoch FROM now()) AS bigint)")
+check "lease_until is on the database clock, about 3 seconds ahead" \
+  test "$LEASE_UNTIL" -ge "$DB_NOW" -a "$LEASE_UNTIL" -le "$((DB_NOW + 4))"
+expect_rc "the holder's heartbeat extends the lease" 0 env BOARD_AUTHOR=zed$RUN "$BOARD" heartbeat "$L1" --lease 3
+expect_rc "another author's heartbeat is refused with 3" 3 env BOARD_AUTHOR=yan$RUN "$BOARD" heartbeat "$L1"
+expect_rc "a wrong --fence is refused with 3" 3 env BOARD_AUTHOR=zed$RUN "$BOARD" heartbeat "$L1" --fence 1
+expect_rc "reap before the lease runs out expires nothing" 0 env BOARD_AUTHOR=reaper$RUN "$BOARD" reap
+expect_eq "the task is still claimed" "claimed" "$(row_state "$L1")"
+sleep 5
+REAP_OUT=$(BOARD_AUTHOR=reaper$RUN "$BOARD" reap)
+check "reap expires the lease" test "$(printf '%s\n' "$REAP_OUT" | grep -c "^expired $L1: open again\$")" = 1
+expect_eq "the expired task is open again" "open" "$(row_state "$L1")"
+expect_eq "reap wrote one expired event" "1" "$(event_count "$L1" expired)"
+expect_eq "a second reap does not touch the task again" "0" "$(BOARD_AUTHOR=reaper$RUN "$BOARD" reap | grep -c "$L1")"
+expect_eq "and wrote no second event" "1" "$(event_count "$L1" expired)"
+check "the expiry counted an attempt" test "$(SQL_RAW "SELECT attempts FROM task_leases WHERE task_id = '$L1'")" = 1
+check "the retry delay is on the database clock" \
+  test "$(SQL_RAW "SELECT not_before > CAST(extract(epoch FROM now()) AS bigint) FROM task_leases WHERE task_id = '$L1'")" = t
+expect_rc "a claim inside the retry delay is refused with 2" 2 env BOARD_AUTHOR=yan$RUN "$BOARD" claim "$L1"
+# the zombie
+BEFORE_EVENTS=$("$BOARD" head)
+expect_rc "the zombie's heartbeat is refused with 3" 3 env BOARD_AUTHOR=zed$RUN "$BOARD" heartbeat "$L1"
+check "the fence file of a lost lease is removed" test ! -f "$BOARD_STATE_DIR/zed$RUN.$L1"
+mkdir -p "$BOARD_STATE_DIR"
+printf '%s\n' "$FENCE_Z" >"$BOARD_STATE_DIR/zed$RUN.$L1"
+expect_rc "the zombie's done is refused with 3" 3 env BOARD_AUTHOR=zed$RUN "$BOARD" "done" "$L1" "late"
+printf '%s\n' "$FENCE_Z" >"$BOARD_STATE_DIR/zed$RUN.$L1"
+expect_rc "the zombie's note is refused with 3" 3 env BOARD_AUTHOR=zed$RUN "$BOARD" note "$L1" "late note"
+expect_eq "the zombie changed nothing: still open" "open" "$(row_state "$L1")"
+expect_eq "the refusals are recorded as fenced events" "2" "$(event_count "$L1" fenced)"
+expect_eq "no done or note event was written by the zombie" "0" \
+  "$("$BOARD" since "$BEFORE_EVENTS" --task "$L1" | awk -F"$TAB" '$4 == "done" || $4 == "note"' | wc -l | tr -d ' ')"
+# a new holder gets a higher fence, and the old fence stays refused even for the same name
+SQL_RAW "UPDATE task_leases SET not_before = 0 WHERE task_id = '$L1';" >/dev/null || FAILS=$((FAILS + 1))
+expect_rc "yan claims after the delay" 0 env BOARD_AUTHOR=yan$RUN "$BOARD" claim "$L1" --lease 60
+FENCE_Y=$(cat "$BOARD_STATE_DIR/yan$RUN.$L1")
+check "the new fence is higher" test "$FENCE_Y" -gt "$FENCE_Z"
+printf '%s\n' "$FENCE_Z" >"$BOARD_STATE_DIR/zed$RUN.$L1"
+expect_rc "the old holder is still refused" 3 env BOARD_AUTHOR=zed$RUN "$BOARD" "done" "$L1"
+expect_rc "the holder's note lands" 0 env BOARD_AUTHOR=yan$RUN "$BOARD" note "$L1" "working"
+expect_rc "the holder's done lands" 0 env BOARD_AUTHOR=yan$RUN "$BOARD" "done" "$L1" "finished"
+expect_rc "done twice is a no-op with exit 0" 0 env BOARD_AUTHOR=yan$RUN "$BOARD" "done" "$L1" "again"
+expect_eq "and wrote no second done event" "1" "$(event_count "$L1" "done")"
+expect_rc "done by someone with a stale fence on a done task is also a no-op" 0 env BOARD_AUTHOR=zed$RUN "$BOARD" "done" "$L1"
+expect_rc "a heartbeat on a done task is refused with 3" 3 env BOARD_AUTHOR=yan$RUN "$BOARD" heartbeat "$L1"
+
+# retry, backoff and dead letter
+D1=$("$BOARD" add "Doomed" --max-attempts 2) || FAILS=$((FAILS + 1))
+expect_rc "first claim" 0 env BOARD_AUTHOR=dan$RUN "$BOARD" claim "$D1"
+expect_rc "first fail reopens the task" 0 env BOARD_AUTHOR=dan$RUN "$BOARD" fail "$D1" "no luck" --retry-in 0
+expect_eq "it is open again" "open" "$(row_state "$D1")"
+check "one attempt used" test "$(SQL_RAW "SELECT attempts FROM task_leases WHERE task_id = '$D1'")" = 1
+check "the error text is kept" test "$(SQL_RAW "SELECT last_error FROM task_leases WHERE task_id = '$D1'")" = "no luck"
+expect_rc "second claim" 0 env BOARD_AUTHOR=dan$RUN "$BOARD" claim "$D1"
+FAIL_OUT=$(BOARD_AUTHOR=dan$RUN "$BOARD" fail "$D1" "still no luck" --retry-in 0)
+check "the last attempt moves the task to dead" test "$(row_state "$D1")" = dead
+case $FAIL_OUT in
+  *dead*) PASS=$((PASS + 1)); echo "ok   - the message says dead" ;;
+  *) FAILS=$((FAILS + 1)); echo "FAIL - the message says dead: $FAIL_OUT" ;;
+esac
+expect_rc "a dead task cannot be claimed" 2 env BOARD_AUTHOR=dan$RUN "$BOARD" claim "$D1"
+expect_rc "a dead task cannot be marked done" 1 env BOARD_AUTHOR=dan$RUN "$BOARD" "done" "$D1"
+check "list dead shows it" test "$("$BOARD" list dead | cut -f1 | grep -c "^$D1\$")" = 1
+check "show prints the lease with the last error" test -n "$("$BOARD" show "$D1" | grep 'still no luck')"
+R1=$("$BOARD" add "Released") || FAILS=$((FAILS + 1))
+BOARD_AUTHOR=rae$RUN "$BOARD" claim "$R1" >/dev/null || FAILS=$((FAILS + 1))
+expect_rc "release gives the task back" 0 env BOARD_AUTHOR=rae$RUN "$BOARD" release "$R1"
+check "release does not count an attempt" test "$(SQL_RAW "SELECT attempts FROM task_leases WHERE task_id = '$R1'")" = 0
+expect_eq "and the task is open" "open" "$(row_state "$R1")"
+
+# dependencies
+DEP_A=$("$BOARD" add "Dependency A" --priority 9) || FAILS=$((FAILS + 1))
+DEP_B=$("$BOARD" add "Dependency B" --priority 9 --blocked-by "$DEP_A") || FAILS=$((FAILS + 1))
+expect_rc "a blocked task is not claimed" 2 env BOARD_AUTHOR=bea$RUN "$BOARD" claim "$DEP_B"
+expect_rc "blocking on a missing task is refused" 1 "$BOARD" block "$DEP_A" t0000000000
+expect_rc "a cycle is refused" 1 "$BOARD" block "$DEP_A" "$DEP_B"
+expect_rc "waiting for yourself is refused" 1 "$BOARD" block "$DEP_A" "$DEP_A"
+DEP_C=$("$BOARD" add "Dependency C" --priority 9) || FAILS=$((FAILS + 1))
+expect_rc "block adds a blocker" 0 "$BOARD" block "$DEP_C" "$DEP_B"
+expect_rc "a longer cycle is refused" 1 "$BOARD" block "$DEP_A" "$DEP_C"
+expect_eq "next skips the blocked tasks" "$DEP_A" "$(BOARD_AUTHOR=bea$RUN "$BOARD" next)"
+expect_rc "bea is at capacity: next exits 4" 4 env BOARD_AUTHOR=bea$RUN "$BOARD" next
+BOARD_AUTHOR=bea$RUN "$BOARD" "done" "$DEP_A" "ok" >/dev/null || FAILS=$((FAILS + 1))
+expect_eq "once A is done, next takes B" "$DEP_B" "$(BOARD_AUTHOR=bea$RUN "$BOARD" next)"
+expect_rc "unblock removes a blocker" 0 "$BOARD" unblock "$DEP_C" "$DEP_B"
+expect_eq "C is runnable without B" "$DEP_C" "$(BOARD_AUTHOR=cy$RUN "$BOARD" next)"
+BOARD_AUTHOR=bea$RUN "$BOARD" "done" "$DEP_B" >/dev/null; BOARD_AUTHOR=cy$RUN "$BOARD" "done" "$DEP_C" >/dev/null
+
+# next: priority order, the cap, nothing to do
+for tid in $("$BOARD" list open | tail -n +2 | cut -f1); do "$BOARD" cancel "$tid" "clear the queue" >/dev/null; done
+N_LO=$("$BOARD" add "Next low" --priority 1) || FAILS=$((FAILS + 1))
+N_HI=$("$BOARD" add "Next high" --priority 8) || FAILS=$((FAILS + 1))
+N_HI2=$("$BOARD" add "Next high, newer" --priority 8) || FAILS=$((FAILS + 1))
+expect_eq "next takes the highest priority first" "$N_HI" "$(BOARD_AUTHOR=nell$RUN "$BOARD" next)"
+expect_eq "with --max-active 3 it takes the next oldest" "$N_HI2" "$(BOARD_AUTHOR=nell$RUN "$BOARD" next --max-active 3)"
+expect_eq "then the lowest" "$N_LO" "$(BOARD_AUTHOR=nell$RUN "$BOARD" next --max-active 3)"
+expect_rc "and then nothing is runnable (4)" 4 env BOARD_AUTHOR=nell$RUN "$BOARD" next --max-active 9
+expect_eq "next --owner names the claimer" "nell$RUN" "$("$BOARD" list claimed | awk -F"$TAB" -v t="$N_LO" '$1 == t { print $4 }')"
+
+# many agents at once: each gets a different task
+for k in 1 2 3 4 5 6; do "$BOARD" add "Parallel $k" --priority 5 >/dev/null || FAILS=$((FAILS + 1)); done
+NEXT_DIR="$WORK/nextrace"
+mkdir -p "$NEXT_DIR"
+next_pids=
+k=1
+while [ "$k" -le 6 ]; do
+  (BOARD_AUTHOR=racer-n$RUN-$k "$BOARD" next >"$NEXT_DIR/out.$k" 2>/dev/null; echo $? >"$NEXT_DIR/rc.$k") &
+  next_pids="$next_pids $!"
+  k=$((k + 1))
+done
+# shellcheck disable=SC2086
+wait $next_pids
+check "six concurrent next calls all succeed" test "$(cat "$NEXT_DIR"/rc.* | grep -c '^0$')" = 6
+check "and take six different tasks" test "$(cat "$NEXT_DIR"/out.* | sort -u | grep -c .)" = 6
+
+# approval
+AP=$("$BOARD" add "Needs a human" --needs-approval --priority 6) || FAILS=$((FAILS + 1))
+expect_eq "it waits for approval" "awaiting_approval" "$(row_state "$AP")"
+expect_rc "an unapproved task is not claimable" 2 env BOARD_AUTHOR=apu$RUN "$BOARD" claim "$AP"
+expect_rc "next does not offer it" 4 env BOARD_AUTHOR=apu$RUN "$BOARD" next
+expect_rc "approve opens it" 0 env BOARD_AUTHOR=boss$RUN "$BOARD" approve "$AP" "go ahead"
+expect_eq "the approval is an event with its author" "boss$RUN" \
+  "$("$BOARD" since 0 | awk -F"$TAB" -v t="$AP" '$2 == t && $4 == "approve" { print $3 }')"
+expect_rc "approving again is a no-op" 0 env BOARD_AUTHOR=boss$RUN "$BOARD" approve "$AP"
+expect_eq "now next offers it" "$AP" "$(BOARD_AUTHOR=apu$RUN "$BOARD" next)"
+
+# reap makes a lost claim runnable again for next, and next reaps first
+RP=$("$BOARD" add "Abandoned" --priority 99) || FAILS=$((FAILS + 1))
+BOARD_AUTHOR=gone$RUN "$BOARD" claim "$RP" --lease 2 >/dev/null || FAILS=$((FAILS + 1))
+sleep 4
+expect_rc "next reaps first: the task is open but in its retry delay, so nothing is runnable" 4 env BOARD_AUTHOR=heir$RUN "$BOARD" next
+check "the abandoned claim was expired by next" test "$(event_count "$RP" expired)" = 1
+expect_eq "and the task is open again" "open" "$(row_state "$RP")"
+SQL_RAW "UPDATE task_leases SET not_before = 0 WHERE task_id = '$RP';" >/dev/null || FAILS=$((FAILS + 1))
+expect_eq "after the delay next takes it" "$RP" "$(BOARD_AUTHOR=heir$RUN "$BOARD" next)"
+
+if [ -z "$EXISTING" ]; then
 # --- durability: stop, restart on the same data directory, check --------------------------
 BEFORE_LIST=$("$BOARD" list)
 BEFORE_HEAD=$("$BOARD" head)
@@ -488,6 +709,7 @@ check "the counter continues after a restart" test "$AFTER_HEAD" -gt "$BEFORE_HE
 
 stop_server
 expect_eq "latticed stops cleanly after the second start" "0" "$?"
+fi
 
 echo
 echo "passed: $PASS  failed: $FAILS"

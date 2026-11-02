@@ -161,5 +161,69 @@ class RevealTests(unittest.TestCase):
         self.assertEqual(demo.make_demo(0.0).visible(), len(demo.make_demo(0.0).events))
 
 
+class OrchestrationExamplesTests(unittest.TestCase):
+    """The demo board shows every part of the queue, so the screens are never empty."""
+
+    def setUp(self):
+        from console.service import BoardService
+        self.s = BoardService(demo.DemoSource(reveal_every=0), ttl=0.0)
+        self.q = self.s.queue_payload()
+
+    def test_every_queue_section_has_a_row(self):
+        for k in ("runnable", "blocked", "claimed", "retrying", "dead", "awaiting"):
+            self.assertGreaterEqual(self.q["totals"][k], 1, k)
+
+    def test_there_are_lease_states_of_each_kind(self):
+        claimed = self.q["claimed"]
+        self.assertTrue([r for r in claimed if r["expired"]])
+        self.assertTrue([r for r in claimed if not r["expired"] and r["remaining_s"] is not None and r["remaining_s"] > 0])
+        self.assertTrue([r for r in claimed if r["heartbeat_age_s"] is not None])
+
+    def test_blocked_has_an_ordinary_wait_and_a_wait_for_ever(self):
+        flags = {r["forever"] for r in self.q["blocked"]}
+        self.assertEqual(flags, {True, False})
+        problems = {b["problem"] for r in self.q["blocked"] for b in r["blockers"]}
+        self.assertTrue({"dead", "cancelled"} <= problems)
+
+    def test_the_retrying_and_dead_rows_have_attempts_and_an_error(self):
+        r = self.q["retrying"][0]
+        self.assertEqual((r["attempts"], r["max_attempts"]), (1, 3))
+        self.assertTrue(r["last_error"])
+        d = self.q["dead"][0]
+        self.assertEqual(d["attempts"], d["max_attempts"])
+        self.assertTrue(d["last_error"])
+
+    def test_attention_has_the_new_items(self):
+        a = self.s.now_payload()["attention"]
+        self.assertGreaterEqual(len(a["expired_leases"]), 1)
+        self.assertGreaterEqual(len(a["dead_tasks"]), 1)
+        self.assertGreaterEqual(len(a["blocked_forever"]), 2)
+
+    def test_the_new_event_kinds_appear_in_the_feed(self):
+        kinds = {e["kind"] for e in demo.generate(7)["events"]}
+        self.assertTrue({"fail", "expired", "cancel", "block", "fenced", "claim"} <= kinds)
+
+    def test_the_overlay_is_deterministic(self):
+        a = demo.DemoSource(reveal_every=0).leases(5000)
+        b = demo.DemoSource(reveal_every=0).leases(5000)
+        self.assertEqual(a, b)
+
+    def test_every_task_has_a_lease_row(self):
+        src = demo.DemoSource(reveal_every=0)
+        tasks, _ = src.tasks(5000)
+        leases, available = src.leases(5000)
+        self.assertTrue(available)
+        self.assertEqual(sorted(t["id"] for t in tasks), sorted(r["task_id"] for r in leases))
+
+    def test_a_dead_task_has_no_owner_and_no_live_lease(self):
+        src = demo.DemoSource(reveal_every=0)
+        tasks, _ = src.tasks(5000)
+        leases = {r["task_id"]: r for r in src.leases(5000)[0]}
+        for t in tasks:
+            if t["state"] in ("dead", "cancelled", "open"):
+                self.assertIsNone(t["owner"], t["id"])
+                self.assertEqual(leases[t["id"]]["lease_until"], 0, t["id"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,8 @@ done
 "$BOARD" init >/dev/null || { echo "test: board init failed" >&2; exit 1; }
 BOARD_AUTHOR=console-e2e-maint
 export BOARD_AUTHOR
+BOARD_STATE_DIR="$WORK/fences"
+export BOARD_STATE_DIR
 T1=$("$BOARD" add "console e2e task" --body "seeded by test.sh") || exit 1
 T2=$("$BOARD" add "console e2e open task" --parent "$T1") || exit 1
 BOARD_AUTHOR=console-e2e-agent "$BOARD" claim "$T1" >/dev/null || exit 1
@@ -160,6 +162,14 @@ check("the task view has its events in order",
 s, _, score = get("/api/scorecard")
 check("the scorecard answers and says 'not enough data' for two tasks",
       s == 200 and all(m["status"] == "insufficient" for m in score["overall"]["metrics"]))
+
+s, _, queue = get("/api/queue")
+check("the queue answers on the database clock", s == 200 and queue["meta"]["clock"] == "database", queue["meta"])
+check("the queue has the claimed task under a running lease",
+      [r["id"] for r in queue["claimed"]] == [t1]
+      and queue["claimed"][0]["remaining_s"] is not None and 0 < queue["claimed"][0]["remaining_s"] <= 600
+      and not queue["claimed"][0]["expired"], queue["claimed"])
+check("the queue offers the open child as runnable", [r["id"] for r in queue["runnable"]] == [t2], queue["runnable"])
 
 try:
     urllib.request.urlopen(urllib.request.Request(base + "/api/now", method="POST"), timeout=10)

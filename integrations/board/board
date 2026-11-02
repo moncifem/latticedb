@@ -1,12 +1,15 @@
 #!/bin/sh
 # board: an agent coordination board on Lattice, driven through psql.
-# Usage and rules: integrations/board/CONVENTIONS.md. Exit status: 0 ok, 1 error, 2 claim not won.
+# Usage and rules: integrations/board/CONVENTIONS.md. Exit status: 0 ok, 1 error, 2 claim not won,
+# 3 lease lost (the write was refused by the fence), 4 nothing runnable.
 #
 # Connection: LATTICE_BOARD_URL (a postgres:// URI without a password) or the usual PG* variables.
 # A password belongs in PGPASSWORD or ~/.pgpass, never in the URL or on the command line.
-# Author of every write: BOARD_AUTHOR, required for add, claim, note, done and decide. Give each
-# agent its own name: two agents with the same name are treated as one.
+# Author of every write: BOARD_AUTHOR, required for every command that writes. Give each agent its
+# own name: two agents with the same name are treated as one.
 # BOARD_PSQL names the psql program to run (default psql); the test suite uses it to spy on argv.
+# BOARD_STATE_DIR is where the fence of each claim is kept (default ~/.local/state/lattice-board).
+# BOARD_STRICT_FENCE=1 refuses done, heartbeat, fail and release when no fence is known.
 #
 # Every user value reaches SQL only as a psql variable (-v) and is quoted by psql with :'name',
 # so titles and notes with quotes, semicolons or unicode are stored as given.
@@ -19,7 +22,8 @@ NL='
 HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 SCHEMA="$HERE/schema.sql"
 TMP_ERR=$(mktemp "${TMPDIR:-/tmp}/board.XXXXXX") || exit 1
-trap 'rm -f "$TMP_ERR"' EXIT HUP INT TERM
+TMP_LST=$(mktemp "${TMPDIR:-/tmp}/board.XXXXXX") || exit 1
+trap 'rm -f "$TMP_ERR" "$TMP_LST"' EXIT HUP INT TERM
 LC_MESSAGES=C
 export LC_MESSAGES
 # The longest text a title, body, note, decision or closing text may have, in bytes. Bytes, not
@@ -31,21 +35,37 @@ usage() {
 usage: board <command> [arguments]
 
   init                          create or update the tables (safe to run again)
-  add TITLE [--priority N] [--parent ID] [--body TEXT]
-                                create an open task and print its id
-  list [open|claimed|done] [--owner NAME] [--all]
-                                list tasks, highest priority first; done tasks are shown only
+  migrate                       init, then add the lease row of every task made by an older helper
+  add TITLE [--priority N] [--parent ID] [--body TEXT] [--blocked-by ID,ID] [--max-attempts N]
+            [--needs-approval]  create a task and print its id (open, or awaiting_approval)
+  list [STATE] [--owner NAME] [--all]
+                                list tasks, highest priority first; STATE is open, claimed, done,
+                                dead, cancelled or awaiting_approval; done tasks are shown only
                                 when a state is given or with --all
-  show ID                      one task with its events and decisions
-  claim ID                      take an open task; exit 0 if won (or already yours), 2 if not
-  note ID TEXT                  append a progress note
-  done ID [TEXT]                mark a task done, with an optional closing note (once)
+  show ID                      one task with its events, decisions and lease
+  claim ID [--lease SECONDS]    take an open task for SECONDS (default 600); exit 0 if won (or
+                                already yours), 2 if not
+  next [--owner NAME] [--lease SECONDS] [--max-active N]
+                                claim the best runnable task and print its id; exit 4 when none
+  heartbeat ID [--lease SECONDS] [--fence N]
+                                extend your lease; exit 3 when it was lost
+  note ID TEXT [--fence N]      append a progress note
+  done ID [TEXT] [--fence N]    mark a task done, with an optional closing note (twice is a no-op)
+  fail ID [TEXT] [--retry-in SECONDS] [--fence N]
+                                give the task back as failed: retried later, or dead when the
+                                attempts are used up
+  release ID [--fence N]        give the task back without counting a failure
+  reap                          expire every claim whose lease has run out (any client may run it)
+  block ID BLOCKER[,BLOCKER]    make ID wait for the blockers (refuses a cycle)
+  unblock ID BLOCKER            remove one blocker
+  approve ID [TEXT]             move an awaiting_approval task to open
+  cancel ID [TEXT]              cancel a task that is not done
   decide ID TEXT                record a decision on a task
   since [EVENT_ID] [--task ID]  print events after EVENT_ID (default 0), oldest first
   watch ID [--after EVENT_ID]   print one task's events after EVENT_ID (default 0), oldest first
   head                         print the newest event id (0 when there is none)
 
-add, claim, note, done and decide need BOARD_AUTHOR set to this agent's unique name.
+Every write needs BOARD_AUTHOR set to this agent's unique name.
 USAGE
 }
 
@@ -61,7 +81,8 @@ psql_run() {
   pr_mode=$1
   pr_sql=$2
   shift 2
-  set -- -X -q -A -P footer=off -v ON_ERROR_STOP=1 -v VERBOSITY=verbose "$@"
+  # -w: never prompt for a password (a missing one is an error, not a wait on a terminal).
+  set -- -X -w -q -A -P footer=off -v ON_ERROR_STOP=1 -v VERBOSITY=verbose "$@"
   case $pr_mode in
     tuples) set -- -t -F "$TAB" "$@" ;;
     table) set -- -F "$TAB" "$@" ;;
@@ -70,10 +91,38 @@ psql_run() {
   if [ -n "$BOARD_URL" ]; then
     set -- -d "$BOARD_URL" "$@"
   fi
-  if OUT=$(printf '%s\n' "$pr_sql" | "${BOARD_PSQL:-psql}" "$@" 2>"$TMP_ERR"); then
-    return 0
+  # A failed CONNECT is retried when psql says one of a few transient things: psql then exits 2
+  # with "psql: error: connection to server ..." and has sent no statement, so running it again
+  # cannot repeat a write. The alpha.1 server drops a share of new connections ("server closed the
+  # connection unexpectedly", integrations/board/CONVENTIONS.md, known issues). Never retried: a
+  # missing or wrong password ("no password supplied", FATAL), TLS and certificate errors, any SQL
+  # error, and anything once a statement may have been sent (a connection lost mid-script says
+  # "connection to the server was lost"). The wait grows 0.1, 0.2, 0.4, 0.8 s and stays at 1 s,
+  # plus up to 0.1 s of jitter; BOARD_CONNECT_TRIES (default 12) bounds the attempts.
+  pr_try=0
+  while :; do
+    pr_try=$((pr_try + 1))
+    OUT=$(printf '%s\n' "$pr_sql" | "${BOARD_PSQL:-psql}" "$@" 2>"$TMP_ERR") && return 0
+    pr_rc=$?
+    if [ "$pr_rc" = 2 ] && [ "$pr_try" -lt "${BOARD_CONNECT_TRIES:-12}" ] && transient_connect_error; then
+      pr_ms=$((100 << (pr_try - 1 > 4 ? 4 : pr_try - 1)))
+      [ "$pr_ms" -le 1000 ] || pr_ms=1000
+      pr_ms=$((pr_ms + $(od -An -N1 -tu1 /dev/urandom) % 100))
+      sleep "$((pr_ms / 1000)).$(printf '%03d' $((pr_ms % 1000)))"
+      continue
+    fi
+    return 1
+  done
+}
+
+# transient_connect_error: TMP_ERR holds a connect-phase failure worth retrying.
+transient_connect_error() {
+  grep -q 'psql: error: connection to server' "$TMP_ERR" || return 1
+  if grep -q -i -e 'FATAL' -e 'no password supplied' -e 'SSL' -e 'TLS' -e 'certificate' "$TMP_ERR"; then
+    return 1
   fi
-  return 1
+  grep -q -i -e 'server closed the connection unexpectedly' -e 'Connection reset' \
+    -e 'Connection refused' -e 'timeout expired' "$TMP_ERR"
 }
 
 # fail_db: report psql's last error and stop. Used when a read or a schema step fails.
@@ -83,8 +132,13 @@ fail_db() {
 }
 
 # tx SQL [-v name=value ...]: one write transaction. It is retried while the server reports a
-# serialization failure (40001), which is safe because nothing from a failed attempt commits.
-# On commit the rows the script printed are in OUT. Any other error ends the command.
+# serialization failure (40001), which is safe because nothing from a failed attempt commits. The
+# wait between attempts is random (1 to 9 hundredths of a second) so writers do not stay in step.
+# On commit the rows the script printed are in OUT. Any other error ends the command. After TX_MAX
+# attempts (default 500) the command ends too, or with TX_SOFT=1 tx returns 1 so the caller can
+# try something else. BOARD_TX_MAX lowers the limit (the test suite uses it).
+TX_MAX=${BOARD_TX_MAX:-500}
+TX_SOFT=0
 tx() {
   tx_sql=$1
   shift
@@ -96,9 +150,12 @@ tx() {
     fi
     case $(cat "$TMP_ERR") in
       *40001:*)
-        [ "$tx_try" -lt 500 ] || die "gave up after $tx_try conflicting attempts"
+        if [ "$tx_try" -ge "$TX_MAX" ]; then
+          [ "$TX_SOFT" = 1 ] && return 1
+          die "gave up after $tx_try conflicting attempts"
+        fi
         printf 'board: retrying after a write conflict (attempt %s)\n' "$tx_try" >&2
-        sleep "0.0$(((tx_try + $$) % 9 + 1))"
+        sleep "0.0$((($(od -An -N1 -tu1 /dev/urandom) + tx_try) % 9 + 1))"
         ;;
       *)
         fail_db
@@ -123,6 +180,7 @@ need_id() {
   case $1 in
     '' | *[!A-Za-z0-9_-]*) die "not a task id: '$1'" ;;
   esac
+  [ ${#1} -le 64 ] || die "not a task id (longer than 64 characters)"
 }
 
 # need_line NAME VALUE REQUIRED: one line of text. Refused: tabs, newlines, other control
@@ -145,21 +203,47 @@ need_line() {
   fi
 }
 
+# need_int NAME VALUE: a whole number of at most 18 digits (an event id), or for NAME priority
+# an optionally negative number of at most 9 digits (the column is a 32-bit integer).
 need_int() {
+  ni_v=$2
+  if [ "$1" = priority ]; then
+    ni_v=${ni_v#-}
+    case $ni_v in '' | *[!0-9]*) die "$1 must be a whole number of at most 9 digits" ;; esac
+    [ ${#ni_v} -le 9 ] || die "$1 must be a whole number of at most 9 digits"
+    return 0
+  fi
+  case $ni_v in '' | *[!0-9]*) die "$1 must be a non-negative whole number" ;; esac
+  [ ${#ni_v} -le 18 ] || die "$1 must be a whole number of at most 18 digits"
+}
+
+# need_range NAME VALUE LOW HIGH: a whole number from LOW to HIGH.
+need_range() {
   case $2 in
-    '' | -) die "$1 must be a whole number" ;;
-    -*) case ${2#-} in '' | *[!0-9]*) die "$1 must be a whole number" ;; esac ;;
-    *[!0-9]*) die "$1 must be a whole number" ;;
+    '' | *[!0-9]*) die "$1 must be a whole number from $3 to $4" ;;
   esac
+  { [ ${#2} -le 9 ] && [ "$2" -ge "$3" ] && [ "$2" -le "$4" ]; } || die "$1 must be a whole number from $3 to $4"
+}
+
+need_name() {
+  case $2 in
+    '' | *[!A-Za-z0-9._-]*) die "$1 may use only letters, digits, '.', '_' and '-'" ;;
+  esac
+  [ ${#2} -le 64 ] || die "$1 is longer than 64 characters"
 }
 
 new_id() {
   printf 't%s\n' "$(od -An -N5 -tx1 /dev/urandom | tr -d ' \n')"
 }
 
+# count_lines TEXT: the number of non-empty lines.
+count_lines() {
+  printf '%s\n' "$1" | grep -c .
+}
+
 # The counter step every write starts with. It bumps the shared counter, which makes
 # concurrent writers conflict, and reads back the id this transaction will use.
-# Test seam: when BOARD_TEST_HOLD_FILE is set, the transaction then waits (up to 20 s) until that
+# Test seam: when BOARD_TEST_MODE=1 and BOARD_TEST_HOLD_FILE are both set, the transaction then waits (up to 20 s) until that
 # file exists, after creating FILE.started. The test suite uses it to force a 40001 retry.
 bump_sql() {
   cat <<'SQL'
@@ -167,15 +251,325 @@ BEGIN;
 UPDATE counters SET n = n + 1 WHERE name = 'events';
 SELECT n AS seq FROM counters WHERE name = 'events' \gset
 SQL
-  if [ -n "${BOARD_TEST_HOLD_FILE:-}" ]; then
+  if [ "${BOARD_TEST_MODE:-}" = 1 ] && [ -n "${BOARD_TEST_HOLD_FILE:-}" ]; then
     cat <<'SQL'
 \! : > "$BOARD_TEST_HOLD_FILE.started"; i=0; while [ ! -f "$BOARD_TEST_HOLD_FILE" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i + 1)); done
 SQL
   fi
 }
 
-cmd_init() {
-  [ $# -eq 0 ] || die "init takes no arguments"
+# ---- argument parsing -----------------------------------------------------------------------
+
+# parse_args ALLOWED ARGS...: split ARGS into up to two positional words (P1 P2, count NARGS) and
+# the options named in ALLOWED (a space separated list without the leading dashes). An option that
+# is not allowed is a positional word, so text such as "--x" still reaches note and done. The
+# values land in O_FENCE O_LEASE O_RETRY_IN O_MAX_ACTIVE O_OWNER O_PRIORITY O_PARENT O_BODY
+# O_BLOCKED_BY O_MAX_ATTEMPTS, and O_NEEDS_APPROVAL (0 or 1). The caller validates them.
+parse_args() {
+  pa_allowed=$1
+  shift
+  P1='' P2='' NARGS=0
+  O_FENCE='' O_LEASE='' O_RETRY_IN='' O_MAX_ACTIVE='' O_OWNER='' O_PRIORITY='' O_PARENT=''
+  O_BODY='' O_BLOCKED_BY='' O_MAX_ATTEMPTS='' O_NEEDS_APPROVAL=0 O_GIVEN=' '
+  pa_rest=0
+  while [ $# -gt 0 ]; do
+    pa_opt=
+    if [ "$pa_rest" = 0 ] && [ "$1" = -- ]; then
+      pa_rest=1
+      shift
+      continue
+    fi
+    case $1 in
+      --*)
+        if [ "$pa_rest" = 0 ]; then
+          pa_name=${1#--}
+          case " $pa_allowed " in *" $pa_name "*) pa_opt=$pa_name ;; esac
+        fi
+        ;;
+    esac
+    if [ -z "$pa_opt" ]; then
+      NARGS=$((NARGS + 1))
+      case $NARGS in
+        1) P1=$1 ;;
+        2) P2=$1 ;;
+        *) die "too many arguments for $cmd" ;;
+      esac
+      shift
+      continue
+    fi
+    if [ "$pa_opt" = needs-approval ]; then
+      O_NEEDS_APPROVAL=1
+      shift
+      continue
+    fi
+    [ $# -ge 2 ] || die "--$pa_opt needs a value"
+    O_GIVEN="$O_GIVEN$pa_opt "
+    case $pa_opt in
+      fence) O_FENCE=$2 ;;
+      lease) O_LEASE=$2 ;;
+      retry-in) O_RETRY_IN=$2 ;;
+      max-active) O_MAX_ACTIVE=$2 ;;
+      owner) O_OWNER=$2 ;;
+      priority) O_PRIORITY=$2 ;;
+      parent) O_PARENT=$2 ;;
+      body) O_BODY=$2 ;;
+      blocked-by) O_BLOCKED_BY=$2 ;;
+      max-attempts) O_MAX_ATTEMPTS=$2 ;;
+    esac
+    shift 2
+  done
+}
+
+# given NAME: true when the option --NAME was on the command line, even with an empty value.
+given() {
+  case $O_GIVEN in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+# ---- the database clock, the fence and the lease row ----------------------------------------
+# Every lease, heartbeat and backoff time is the DATABASE clock, read with now() in the same
+# transaction that uses it. The agents' own clocks are never compared with lease_until or
+# not_before. Event and task timestamps (created_at, updated_at) stay on the agent's clock.
+LEASE_SQL='SELECT CAST(extract(epoch FROM now()) AS bigint) AS dbnow \gset'
+
+db_now() {
+  psql_run tuples "SELECT CAST(extract(epoch FROM now()) AS bigint);" || fail_db
+  case $OUT in
+    '' | *[!0-9]*) die "the database clock gave no usable time (now() and extract(epoch ...) are needed)" ;;
+  esac
+  DBNOW=$OUT
+}
+
+# The first words of a transaction that changes a task: the event counter (one event id per
+# transaction, and the conflict that serialises board writers), the database time, and the flags
+# the \if blocks test. A flag that a skipped \gset would never set must still exist.
+head_sql() {
+  bump_sql
+  printf '%s\n' "$LEASE_SQL"
+  printf '%s\n' '\set ok f' '\set exhausted f'
+}
+
+# The fence test. A task is held by AUTHOR when it is claimed, the owner is AUTHOR and, when a
+# fence is known (:fence >= 0), claim_seq is that fence.
+HELD_SQL="state = 'claimed' AND coalesce(owner, '') = :'author' AND (claim_seq = :fence OR :fence < 0)"
+
+# Where the fence of a claim is kept, one small file per agent and task.
+fence_dir() {
+  printf '%s' "${BOARD_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/lattice-board}"
+}
+
+fence_path() {
+  printf '%s/%s.%s' "$(fence_dir)" "$AUTHOR" "$1"
+}
+
+# check_state_dir: the fence directory is trusted input (a fence in it lets a write through), so a
+# directory that is a symlink, belongs to someone else or is not mode 0700 is refused. A directory
+# that does not exist yet is fine: fence_write creates it with mode 0700.
+check_state_dir() {
+  csd=$(fence_dir)
+  if [ -L "$csd" ]; then
+    die "the state directory $csd is a symbolic link; refusing it (set BOARD_STATE_DIR)"
+  fi
+  [ -e "$csd" ] || return 0
+  [ -d "$csd" ] || die "the state path $csd is not a directory (set BOARD_STATE_DIR)"
+  # shellcheck disable=SC2012
+  csd_ls=$(ls -ldn "$csd")
+  csd_uid=$(printf '%s\n' "$csd_ls" | awk '{ print $3 }')
+  [ "$csd_uid" = "$(id -u)" ] \
+    || die "the state directory $csd is not owned by you; refusing it (set BOARD_STATE_DIR)"
+  [ "$(printf '%s\n' "$csd_ls" | cut -c1-10)" = 'drwx------' ] \
+    || die "the state directory $csd must have mode 0700; refusing it (chmod 700 it, or set BOARD_STATE_DIR)"
+}
+
+fence_write() {
+  fw_dir=$(fence_dir)
+  if ( umask 077 && mkdir -p "$fw_dir" ) 2>/dev/null; then
+    check_state_dir
+    fw_tmp=$(umask 077 && mktemp "$fw_dir/.tmp.XXXXXX" 2>/dev/null) || fw_tmp=
+    if [ -n "$fw_tmp" ] && printf '%s\n' "$2" >"$fw_tmp" && mv "$fw_tmp" "$(fence_path "$1")" 2>/dev/null; then
+      return 0
+    fi
+    [ -z "$fw_tmp" ] || rm -f "$fw_tmp"
+  fi
+  printf 'board: warning: could not save the fence in %s; pass --fence %s to later commands\n' "$fw_dir" "$2" >&2
+}
+
+fence_clear() {
+  rm -f "$(fence_path "$1")" 2>/dev/null
+  return 0
+}
+
+# resolve_fence TASK: FENCE becomes the number to check against tasks.claim_seq, or -1
+# when none is known (then only the owner is checked, as before leases existed). An explicit
+# --fence wins over the state file. BOARD_STRICT_FENCE=1 refuses to go on without one.
+resolve_fence() {
+  FENCE=-1
+  if given fence; then
+    need_range --fence "$O_FENCE" 0 999999999
+    FENCE=$O_FENCE
+    return 0
+  fi
+  check_state_dir
+  rf_path=$(fence_path "$1")
+  [ ! -L "$rf_path" ] || die "the fence file $rf_path is a symbolic link; refusing it"
+  if [ -f "$rf_path" ]; then
+    rf_val=$(cat "$rf_path")
+    case $rf_val in
+      '' | *[!0-9]*) die "the fence file $rf_path is damaged; remove it or pass --fence" ;;
+    esac
+    FENCE=$rf_val
+    return 0
+  fi
+  if [ "${BOARD_STRICT_FENCE:-0}" = 1 ]; then
+    die "no fence is known for $1 (claim it first, or pass --fence N); BOARD_STRICT_FENCE is set"
+  fi
+  return 0
+}
+
+# task_info ID: T_STATE, T_OWNER (empty when none) and T_SEQ (claim_seq) of a task, or die.
+task_info() {
+  psql_run tuples "SELECT state, coalesce(owner, ''), claim_seq FROM tasks WHERE id = :'task';" \
+    -v task="$1" || fail_db
+  [ -n "$OUT" ] || die "no such task: $1"
+  T_STATE=$(printf '%s\n' "$OUT" | cut -f1)
+  T_OWNER=$(printf '%s\n' "$OUT" | cut -f2)
+  T_SEQ=$(printf '%s\n' "$OUT" | cut -f3)
+}
+
+# ensure_lease ID: make sure the task has its task_leases row. A racing writer that adds the same
+# row first is fine.
+ensure_lease() {
+  psql_run tuples "SELECT task_id FROM task_leases WHERE task_id = :'task';" -v task="$1" || fail_db
+  [ -z "$OUT" ] || return 0
+  psql_run tuples "SELECT id FROM tasks WHERE id = :'task';" -v task="$1" || fail_db
+  [ -n "$OUT" ] || die "no such task: $1"
+  if ! psql_run tuples "INSERT INTO task_leases (task_id) VALUES (:'task');" -v task="$1"; then
+    case $(cat "$TMP_ERR") in
+      *23505:* | *40001:*) ;;
+      *) fail_db ;;
+    esac
+  fi
+}
+
+# record_fenced ACTION: an informational event for a write the fence refused. Failing to write it
+# never changes the exit status of the command that was refused. Uses task, FENCE and T_*.
+record_fenced() {
+  rfe_text="refused $1 with fence $FENCE: task is $T_STATE, owner ${T_OWNER:-none}, fence $T_SEQ"
+  rfe_sql=$(bump_sql; cat <<'SQL'
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', 'fenced', :'text', :ts FROM tasks WHERE id = :'task';
+COMMIT;
+SQL
+)
+  psql_run tuples "$rfe_sql" -v author="$AUTHOR" -v task="$task" -v text="$rfe_text" -v ts="$(now)" || :
+  return 0
+}
+
+# backoff_for ATTEMPTS: the default wait before a failed task may be claimed again, in seconds:
+# 30 doubled once for every earlier failure, at most 3600.
+backoff_for() {
+  bo_n=$1
+  bo_s=30
+  while [ "$bo_n" -gt 0 ] && [ "$bo_s" -lt 3600 ]; do
+    bo_s=$((bo_s * 2))
+    bo_n=$((bo_n - 1))
+  done
+  [ "$bo_s" -le 3600 ] || bo_s=3600
+  printf '%s' "$bo_s"
+}
+
+# need_ids NAME LIST: a comma separated list of 1 to 32 distinct task ids.
+need_ids() {
+  case $2 in
+    '' | , | ,* | *, | *,,*) die "$1 must be task ids separated by single commas" ;;
+  esac
+  ni_n=0
+  ni_seen=,
+  ni_old=$IFS
+  IFS=,
+  for ni_id in $2; do
+    IFS=$ni_old
+    need_id "$ni_id"
+    case $ni_seen in *",$ni_id,"*) die "$1 lists $ni_id twice" ;; esac
+    ni_seen="$ni_seen$ni_id,"
+    ni_n=$((ni_n + 1))
+    IFS=,
+  done
+  IFS=$ni_old
+  [ "$ni_n" -le 32 ] || die "$1 lists more than 32 ids (see integrations/board/CONVENTIONS.md, limits)"
+}
+
+# psql_in BEFORE LIST AFTER: run "BEFORE (:'in1', :'in2', ...) AFTER" with the ids of the comma
+# separated LIST as quoted psql variables. An empty LIST gives an empty OUT and runs nothing.
+psql_in() {
+  pi_before=$1
+  pi_list=$2
+  pi_after=$3
+  set --
+  pi_ph=
+  pi_n=0
+  pi_old=$IFS
+  IFS=,
+  for pi_id in $pi_list; do
+    pi_n=$((pi_n + 1))
+    set -- "$@" -v "in$pi_n=$pi_id"
+    pi_ph="$pi_ph${pi_ph:+, }:'in$pi_n'"
+  done
+  IFS=$pi_old
+  if [ "$pi_n" -eq 0 ]; then
+    OUT=
+    return 0
+  fi
+  psql_run tuples "$pi_before ($pi_ph) $pi_after" "$@"
+}
+
+# pending_blockers LIST: the blockers in LIST that are not done yet, comma separated, in PENDING.
+# A blocker only ever moves towards done and a done task never reopens, so reading this outside the
+# claim's transaction cannot go stale in the harmful direction. A blocker that is dead, cancelled
+# or unknown stays pending for ever (the console flags it).
+pending_blockers() {
+  PENDING=
+  [ -n "$1" ] || return 0
+  psql_in "SELECT id FROM tasks WHERE state = 'done' AND id IN" "$1" ";" || fail_db
+  pb_done=,$(printf '%s\n' "$OUT" | tr '\n' ',')
+  pb_old=$IFS
+  IFS=,
+  for pb_id in $1; do
+    IFS=$pb_old
+    case $pb_done in *",$pb_id,"*) ;; *) PENDING="$PENDING${PENDING:+,}$pb_id" ;; esac
+    IFS=,
+  done
+  IFS=$pb_old
+}
+
+# check_no_cycle TASK LIST: refuse when TASK is reachable from the blockers in LIST through their own
+# blocked_by lists. A bounded walk: one single-table SELECT per task visited, at most 256 tasks.
+# Two block commands racing on different tasks can still close a cycle between them (each checked
+# before the other committed); the console flags a task that waits for itself.
+check_no_cycle() {
+  cc_task=$1
+  cc_queue=$(printf '%s' "$2" | tr ',' ' ')
+  cc_seen=" $cc_queue "
+  cc_visited=0
+  while [ -n "$cc_queue" ]; do
+    cc_cur=${cc_queue%% *}
+    case $cc_queue in *" "*) cc_queue=${cc_queue#* } ;; *) cc_queue= ;; esac
+    [ "$cc_cur" != "$cc_task" ] || die "refusing a dependency cycle: $cc_task would wait for itself"
+    cc_visited=$((cc_visited + 1))
+    [ "$cc_visited" -le 256 ] || die "the dependency graph reaches more than 256 tasks; refusing to check it (limit)"
+    psql_run tuples "SELECT blocked_by FROM task_leases WHERE task_id = :'task';" -v task="$cc_cur" || fail_db
+    for cc_b in $(printf '%s' "$OUT" | tr ',' ' '); do
+      case $cc_seen in
+        *" $cc_b "*) ;;
+        *) cc_seen="$cc_seen$cc_b "; cc_queue="$cc_queue${cc_queue:+ }$cc_b" ;;
+      esac
+    done
+  done
+}
+
+# ---- init and migrate -----------------------------------------------------------------------
+
+apply_schema() {
   attempt=0
   while :; do
     attempt=$((attempt + 1))
@@ -199,47 +593,93 @@ cmd_init() {
       esac
     fi
   fi
+}
+
+cmd_init() {
+  [ $# -eq 0 ] || die "init takes no arguments"
+  apply_schema
   printf 'board ready\n'
 }
 
-cmd_add() {
-  [ $# -ge 1 ] || die "add needs a title"
-  title=$1
-  shift
-  priority=0
-  parent=
-  body=
-  while [ $# -gt 0 ]; do
-    case $1 in
-      --priority)
-        [ $# -ge 2 ] || die "--priority needs a value"
-        need_int priority "$2"
-        priority=$2
-        shift 2
-        ;;
-      --parent)
-        [ $# -ge 2 ] || die "--parent needs a task id"
-        need_id "$2"
-        parent=$2
-        shift 2
-        ;;
-      --body)
-        [ $# -ge 2 ] || die "--body needs a value"
-        body=$2
-        shift 2
-        ;;
-      *) die "unknown option for add: $1" ;;
-    esac
+# migrate: a board made by an earlier helper has tasks without a task_leases row. init creates the
+# table; this adds the missing rows (the helper also adds one when it first needs it, so migrate is
+# optional, and safe to run again or while agents work).
+cmd_migrate() {
+  [ $# -eq 0 ] || die "migrate takes no arguments"
+  apply_schema
+  mg_added=0
+  mg_round=0
+  while :; do
+    mg_round=$((mg_round + 1))
+    psql_run tuples "SELECT id FROM tasks ORDER BY id;" || fail_db
+    mg_tasks=$OUT
+    psql_run tuples "SELECT task_id FROM task_leases ORDER BY task_id;" || fail_db
+    printf '%s\n' "$OUT" >"$TMP_LST"
+    mg_have=$(cat "$TMP_LST")
+    printf '%s\n' "$mg_tasks" | sort >"$TMP_LST.t"
+    printf '%s\n' "$mg_have" | sort >"$TMP_LST.h"
+    mg_missing=$(comm -23 "$TMP_LST.t" "$TMP_LST.h" | grep .)
+    rm -f "$TMP_LST.t" "$TMP_LST.h"
+    [ -n "$mg_missing" ] || break
+    [ "$mg_round" -le 20 ] || die "migrate did not finish after 20 rounds; run it again"
+    printf '%s\n' "$mg_missing" | head -n 50 >"$TMP_LST"
+    mg_sql=
+    set --
+    mg_i=0
+    while IFS= read -r mg_id; do
+      mg_i=$((mg_i + 1))
+      set -- "$@" -v "m$mg_i=$mg_id"
+      mg_sql="$mg_sql
+INSERT INTO task_leases (task_id) VALUES (:'m$mg_i');"
+    done <"$TMP_LST"
+    if psql_run tuples "$mg_sql" "$@"; then
+      mg_added=$((mg_added + mg_i))
+    else
+      # A writer that added one of these rows first is fine: look again.
+      case $(cat "$TMP_ERR") in
+        *23505:* | *40001:*) ;;
+        *) fail_db ;;
+      esac
+    fi
   done
+  printf 'board migrated: %s lease rows added\n' "$mg_added"
+}
+
+# ---- add, list, show ------------------------------------------------------------------------
+
+cmd_add() {
+  parse_args "priority parent body blocked-by max-attempts needs-approval" "$@"
+  [ "$NARGS" -eq 1 ] || die "add needs a title"
+  title=$P1
+  priority=0
+  if given priority; then priority=$O_PRIORITY; need_int priority "$priority"; fi
+  parent=$O_PARENT
+  body=$O_BODY
+  blocked=$O_BLOCKED_BY
+  maxa=3
+  if given max-attempts; then maxa=$O_MAX_ATTEMPTS; fi
+  if [ -n "$parent" ]; then need_id "$parent"; fi
+  if given max-attempts; then need_range --max-attempts "$maxa" 1 100; fi
   need_line title "$title" 1
   need_line body "$body" 0
+  if [ -n "$blocked" ]; then
+    need_ids --blocked-by "$blocked"
+    psql_in "SELECT id FROM tasks WHERE id IN" "$blocked" ";" || fail_db
+    [ "$(count_lines "$OUT")" -eq "$(printf '%s' "$blocked" | tr ',' '\n' | grep -c .)" ] \
+      || die "--blocked-by names a task that does not exist"
+  fi
+  state=open
+  if [ "$O_NEEDS_APPROVAL" = 1 ]; then state=awaiting_approval; fi
   task=$(new_id)
+  # The new task has no dependents yet, so its blockers cannot close a cycle through it.
   if [ -n "$parent" ]; then
     sql=$(bump_sql; cat <<'SQL'
 INSERT INTO tasks (id, title, state, owner, priority, parent_id, created_by, body, created_at, updated_at, created_seq)
-  SELECT :'task', :'title', 'open', NULL, :priority, :'parent', :'author', :'body', :ts, :ts, :seq FROM tasks WHERE id = :'parent';
+  SELECT :'task', :'title', :'state', NULL, :priority, :'parent', :'author', :'body', :ts, :ts, :seq FROM tasks WHERE id = :'parent';
 INSERT INTO events (id, task_id, author, kind, body, created_at)
   SELECT :seq, :'task', :'author', 'add', :'title', :ts FROM tasks WHERE id = :'task';
+INSERT INTO task_leases (task_id, max_attempts, blocked_by)
+  SELECT id, :maxa, :'blocked' FROM tasks WHERE id = :'task';
 SELECT id FROM events WHERE id = :seq;
 COMMIT;
 SQL
@@ -247,16 +687,19 @@ SQL
   else
     sql=$(bump_sql; cat <<'SQL'
 INSERT INTO tasks (id, title, state, owner, priority, parent_id, created_by, body, created_at, updated_at, created_seq)
-  VALUES (:'task', :'title', 'open', NULL, :priority, NULL, :'author', :'body', :ts, :ts, :seq);
+  VALUES (:'task', :'title', :'state', NULL, :priority, NULL, :'author', :'body', :ts, :ts, :seq);
 INSERT INTO events (id, task_id, author, kind, body, created_at)
   VALUES (:seq, :'task', :'author', 'add', :'title', :ts);
+INSERT INTO task_leases (task_id, max_attempts, blocked_by)
+  SELECT id, :maxa, :'blocked' FROM tasks WHERE id = :'task';
 SELECT id FROM events WHERE id = :seq;
 COMMIT;
 SQL
 )
   fi
   tx "$sql" -v author="$AUTHOR" -v task="$task" -v title="$title" -v body="$body" \
-    -v priority="$priority" -v parent="$parent" -v ts="$(now)" || exit 1
+    -v priority="$priority" -v parent="$parent" -v state="$state" -v maxa="$maxa" \
+    -v blocked="$blocked" -v ts="$(now)" || exit 1
   if [ -z "$OUT" ]; then
     die "parent task not found: $parent"
   fi
@@ -270,7 +713,7 @@ cmd_list() {
   seen_state=0
   while [ $# -gt 0 ]; do
     case $1 in
-      open | claimed | done)
+      open | claimed | done | dead | cancelled | awaiting_approval)
         [ "$seen_state" = 0 ] || die "list takes at most one state"
         state=$1
         seen_state=1
@@ -289,7 +732,7 @@ cmd_list() {
         showdone=1
         shift
         ;;
-      *) die "list takes a state (open, claimed or done), --owner NAME and --all" ;;
+      *) die "list takes a state (open, claimed, done, dead, cancelled or awaiting_approval), --owner NAME and --all" ;;
     esac
   done
   # Done tasks are hidden unless a state is named or --all is given. Equal priorities list
@@ -317,86 +760,644 @@ FROM tasks WHERE id = :'task';" -v task="$1" || fail_db
   psql_run table "SELECT id, author, body FROM decisions WHERE task_id = :'task' ORDER BY id;" \
     -v task="$1" || fail_db
   printf 'decisions:\n%s\n' "$OUT"
+  psql_run expanded "SELECT lease_until, heartbeat_at, attempts, max_attempts, not_before, last_error, blocked_by
+FROM task_leases WHERE task_id = :'task';" -v task="$1" || fail_db
+  printf 'lease:\n%s\n' "${OUT:-none (no lease row yet)}"
 }
 
-cmd_claim() {
-  [ $# -eq 1 ] || die "claim takes one task id"
-  need_id "$1"
-  task=$1
-  sql=$(bump_sql; cat <<'SQL'
+# ---- claim and next -------------------------------------------------------------------------
+
+# do_claim ID LEASE: try to take the task. Prints nothing. CL_RESULT is won, yours, lost, backoff,
+# blocked or busy (the conflict budget ran out, with TX_SOFT=1); CL_MSG is the text for the
+# caller; CL_SEQ the fence. Returns 0 for won and yours, 2 otherwise.
+do_claim() {
+  dc_task=$1
+  dc_lease=$2
+  task=$dc_task
+  check_state_dir
+  CL_RESULT=
+  CL_MSG=
+  CL_SEQ=
+  ensure_lease "$dc_task"
+  psql_run tuples "SELECT blocked_by FROM task_leases WHERE task_id = :'task';" -v task="$dc_task" || fail_db
+  if [ -n "$OUT" ]; then
+    pending_blockers "$OUT"
+    if [ -n "$PENDING" ]; then
+      CL_RESULT=blocked
+      CL_MSG="not claimed: $dc_task is blocked by $PENDING"
+      return 2
+    fi
+  fi
+  # The not_before check and the claim share one transaction, so a task cannot be taken a second
+  # early: ready is read at the transaction's snapshot and the claim conflicts with any other writer.
+  dc_sql=$(head_sql; cat <<'SQL'
+\set won f
+SELECT (not_before <= :dbnow) AS ok FROM task_leases WHERE task_id = :'task' \gset
+\if :ok
 UPDATE tasks SET owner = :'author', state = 'claimed', claim_seq = :seq, updated_at = :ts
   WHERE id = :'task' AND owner IS NULL AND state = 'open';
 INSERT INTO events (id, task_id, author, kind, body, created_at)
   SELECT :seq, id, :'author', 'claim', '', :ts FROM tasks WHERE id = :'task' AND claim_seq = :seq;
-SELECT claim_seq = :seq AS won, owner, state FROM tasks WHERE id = :'task';
+SELECT (claim_seq = :seq) AS won FROM tasks WHERE id = :'task' \gset
+\if :won
+UPDATE task_leases SET lease_until = :dbnow + :lease, heartbeat_at = :dbnow
+  WHERE task_id = :'task';
+\endif
+\endif
+SELECT claim_seq = :seq AS won, coalesce(owner, '') AS owner, state, claim_seq, :'ok' AS ready
+  FROM tasks WHERE id = :'task';
 COMMIT;
 SQL
 )
-  tx "$sql" -v author="$AUTHOR" -v task="$task" -v ts="$(now)" || exit 1
+  tx "$dc_sql" -v author="$AUTHOR" -v task="$dc_task" -v lease="$dc_lease" -v ts="$(now)" || {
+    CL_RESULT=busy
+    CL_MSG="not claimed: $dc_task is busy (too many write conflicts)"
+    return 2
+  }
   if [ -z "$OUT" ]; then
-    die "no such task: $task"
+    die "no such task: $dc_task"
   fi
-  won=$(printf '%s\n' "$OUT" | cut -f1)
-  owner=$(printf '%s\n' "$OUT" | cut -f2)
-  state=$(printf '%s\n' "$OUT" | cut -f3)
-  if [ "$won" = t ]; then
-    printf 'claimed %s\n' "$task"
+  dc_won=$(printf '%s\n' "$OUT" | cut -f1)
+  dc_owner=$(printf '%s\n' "$OUT" | cut -f2)
+  dc_state=$(printf '%s\n' "$OUT" | cut -f3)
+  CL_SEQ=$(printf '%s\n' "$OUT" | cut -f4)
+  dc_ready=$(printf '%s\n' "$OUT" | cut -f5)
+  if [ "$dc_won" = t ]; then
+    CL_RESULT=won
+    CL_MSG="claimed $dc_task"
+    fence_write "$dc_task" "$CL_SEQ"
     return 0
   fi
   # Same name twice is treated as the same agent: both calls succeed, one claim is recorded.
-  if [ "$owner" = "$AUTHOR" ]; then
-    printf 'already yours: %s\n' "$task"
+  if [ "$dc_owner" = "$AUTHOR" ] && [ "$dc_state" = claimed ]; then
+    CL_RESULT=yours
+    CL_MSG="already yours: $dc_task"
+    fence_write "$dc_task" "$CL_SEQ"
     return 0
   fi
-  printf 'not claimed: %s is %s, owner %s\n' "$task" "$state" "${owner:-none}"
+  if [ "$dc_ready" = f ]; then
+    CL_RESULT=backoff
+    CL_MSG="not claimed: $dc_task is waiting out its retry delay"
+    return 2
+  fi
+  CL_RESULT=lost
+  CL_MSG="not claimed: $dc_task is $dc_state, owner ${dc_owner:-none}"
   return 2
 }
 
+cmd_claim() {
+  parse_args "lease" "$@"
+  [ "$NARGS" -eq 1 ] || die "claim takes one task id"
+  need_id "$P1"
+  lease=600
+  if given lease; then lease=$O_LEASE; fi
+  need_range --lease "$lease" 1 604800
+  do_claim "$P1" "$lease"
+  rc=$?
+  printf '%s\n' "$CL_MSG"
+  return "$rc"
+}
+
+# next: the best runnable task for this agent, claimed. Runnable: state open, not_before reached on
+# the database clock, every blocker done. Best: highest priority, then oldest. It first expires dead
+# leases (reap), refuses to go past --max-active tasks held by this agent, looks at the first 200
+# open tasks, and tries each runnable one with a bounded number of conflict retries.
+cmd_next() {
+  parse_args "owner lease max-active" "$@"
+  [ "$NARGS" -eq 0 ] || die "next takes no task id"
+  if given owner; then
+    need_name --owner "$O_OWNER"
+    AUTHOR=$O_OWNER
+  fi
+  need_author
+  lease=600
+  if given lease; then lease=$O_LEASE; fi
+  need_range --lease "$lease" 1 604800
+  cap=1
+  if given max-active; then cap=$O_MAX_ACTIVE; fi
+  need_range --max-active "$cap" 1 100
+  psql_run tuples "SELECT id FROM tasks WHERE state = 'claimed' AND owner = :'author' ORDER BY id LIMIT :cap;" \
+    -v author="$AUTHOR" -v cap="$cap" || fail_db
+  if [ "$(count_lines "$OUT")" -ge "$cap" ]; then
+    printf 'board: at capacity: %s already holds %s task(s) (--max-active %s)\n' "$AUTHOR" "$cap" "$cap" >&2
+    return 4
+  fi
+  # Best effort: a failing reap must not stop the claim, and reap writes events as this author.
+  (cmd_reap) >/dev/null 2>&1 || :
+  db_now
+  TX_MAX=25
+  TX_SOFT=1
+  nx_busy=0
+  nx_pass=0
+  while [ "$nx_pass" -lt 3 ]; do
+    nx_pass=$((nx_pass + 1))
+    nx_busy=0
+    nx_off=0
+    nx_page=0
+    while [ "$nx_page" -lt 4 ]; do
+      nx_page=$((nx_page + 1))
+      psql_run tuples "SELECT id FROM tasks WHERE state = 'open' AND owner IS NULL
+ORDER BY priority DESC, created_seq LIMIT 50 OFFSET :off;" -v off="$nx_off" || fail_db
+      nx_cands=$(printf '%s\n' "$OUT" | grep . | paste -s -d, -)
+      [ -n "$nx_cands" ] || break
+      psql_in "SELECT task_id, not_before, blocked_by FROM task_leases WHERE task_id IN" "$nx_cands" ";" \
+        || fail_db
+      nx_leases=$OUT
+      for nx_id in $(printf '%s' "$nx_cands" | tr ',' ' '); do
+        nx_row=$(printf '%s\n' "$nx_leases" | awk -F"$TAB" -v i="$nx_id" '$1 == i { print; exit }')
+        nx_nb=$(printf '%s' "$nx_row" | cut -f2)
+        nx_bl=$(printf '%s' "$nx_row" | cut -f3)
+        [ "${nx_nb:-0}" -le "$DBNOW" ] || continue
+        if [ -n "$nx_bl" ]; then
+          pending_blockers "$nx_bl"
+          [ -z "$PENDING" ] || continue
+        fi
+        do_claim "$nx_id" "$lease"
+        case $CL_RESULT in
+          won | yours)
+            printf 'board: %s\n' "$CL_MSG" >&2
+            printf '%s\n' "$nx_id"
+            return 0
+            ;;
+          busy) nx_busy=1 ;;
+        esac
+      done
+      nx_off=$((nx_off + 50))
+    done
+    [ "$nx_busy" = 1 ] || break
+    sleep 0.2
+  done
+  printf 'board: nothing runnable\n' >&2
+  return 4
+}
+
+# ---- heartbeat, note, done, fail, release ---------------------------------------------------
+
+# refused ACTION: the task is not held by this agent under this fence. Records the refusal and
+# ends the command with status 3.
+refused() {
+  task_info "$task"
+  record_fenced "$1"
+  fence_clear "$task"
+  printf 'board: lease lost: %s is %s, owner %s, fence %s (yours: %s)\n' \
+    "$task" "$T_STATE" "${T_OWNER:-none}" "$T_SEQ" "$FENCE" >&2
+  exit 3
+}
+
+cmd_heartbeat() {
+  parse_args "lease fence" "$@"
+  [ "$NARGS" -eq 1 ] || die "heartbeat takes one task id"
+  need_id "$P1"
+  task=$P1
+  lease=600
+  if given lease; then lease=$O_LEASE; fi
+  need_range --lease "$lease" 1 604800
+  resolve_fence "$task"
+  task_info "$task"
+  ensure_lease "$task"
+  # A heartbeat writes only the lease row, with no event and no counter bump: it must not conflict
+  # with every other board writer. It does conflict with whatever else writes this lease row (reap,
+  # done, fail, release, claim), and the retry then sees the new state.
+  sql=$(cat <<SQL
+BEGIN;
+$LEASE_SQL
+\\set ok f
+SELECT ($HELD_SQL) AS ok FROM tasks WHERE id = :'task' \\gset
+\\if :ok
+UPDATE task_leases SET lease_until = :dbnow + :lease, heartbeat_at = :dbnow WHERE task_id = :'task';
+\\endif
+SELECT :'ok' AS ok, :dbnow + :lease AS until;
+COMMIT;
+SQL
+)
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v fence="$FENCE" -v lease="$lease" || exit 1
+  if [ "$(printf '%s\n' "$OUT" | cut -f1)" != t ]; then
+    task_info "$task"
+    fence_clear "$task"
+    printf 'board: lease lost: %s is %s, owner %s, fence %s (yours: %s)\n' \
+      "$task" "$T_STATE" "${T_OWNER:-none}" "$T_SEQ" "$FENCE" >&2
+    exit 3
+  fi
+  printf 'lease on %s runs until %s (database clock)\n' "$task" "$(printf '%s\n' "$OUT" | cut -f2)"
+}
+
 cmd_note() {
-  [ $# -eq 2 ] || die "note takes a task id and a text"
-  need_id "$1"
-  need_line text "$2" 1
-  task=$1
+  parse_args "fence" "$@"
+  [ "$NARGS" -eq 2 ] || die "note takes a task id and a text"
+  need_id "$P1"
+  need_line text "$P2" 1
+  task=$P1
+  # With a fence (from --fence or the state file) the note is written only by the current holder of
+  # that claim. Without one, any author may note any task, as before.
+  resolve_fence_soft "$task"
   sql=$(bump_sql; cat <<'SQL'
+\set ok f
+SELECT (:fence < 0 OR (state = 'claimed' AND coalesce(owner, '') = :'author' AND claim_seq = :fence)) AS ok
+  FROM tasks WHERE id = :'task' \gset
+\if :ok
 UPDATE tasks SET updated_at = :ts WHERE id = :'task';
 INSERT INTO events (id, task_id, author, kind, body, created_at)
   SELECT :seq, id, :'author', 'note', :'text', :ts FROM tasks WHERE id = :'task';
-SELECT id FROM events WHERE id = :seq;
+\endif
+SELECT :'ok' AS ok, :seq AS seq;
 COMMIT;
 SQL
 )
-  tx "$sql" -v author="$AUTHOR" -v task="$task" -v text="$2" -v ts="$(now)" || exit 1
-  if [ -z "$OUT" ]; then
-    die "no such task: $task"
+  task_info "$task"
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v text="$P2" -v fence="$FENCE" -v ts="$(now)" || exit 1
+  if [ "$(printf '%s\n' "$OUT" | cut -f1)" != t ]; then
+    refused note
   fi
-  printf 'noted %s as event %s\n' "$task" "$OUT"
+  printf 'noted %s as event %s\n' "$task" "$(printf '%s\n' "$OUT" | cut -f2)"
+}
+
+# resolve_fence_soft TASK: like resolve_fence, but a missing fence is never an error
+# (a note without a claim is allowed).
+resolve_fence_soft() {
+  rfs_strict=${BOARD_STRICT_FENCE:-0}
+  BOARD_STRICT_FENCE=0
+  resolve_fence "$1"
+  BOARD_STRICT_FENCE=$rfs_strict
 }
 
 cmd_done() {
-  [ $# -ge 1 ] && [ $# -le 2 ] || die "done takes a task id and an optional text"
-  need_id "$1"
-  text=${2:-}
+  parse_args "fence" "$@"
+  { [ "$NARGS" -ge 1 ] && [ "$NARGS" -le 2 ]; } || die "done takes a task id and an optional text"
+  need_id "$P1"
+  text=$P2
   need_line text "$text" 0
-  task=$1
+  task=$P1
+  resolve_fence "$task"
+  task_info "$task"
+  if [ "$T_STATE" = "done" ]; then
+    fence_clear "$task"
+    printf 'already done: %s (no change)\n' "$task"
+    return 0
+  fi
+  ensure_lease "$task"
+  # An open task (never claimed, or given back) may still be closed by hand when no fence is known;
+  # an agent that holds a fence, or sets BOARD_STRICT_FENCE, can only close the claim it holds.
   # done_seq is set only when this transaction changes the state, so a second done writes nothing.
-  sql=$(bump_sql; cat <<'SQL'
-UPDATE tasks SET state = 'done', done_seq = :seq, updated_at = :ts WHERE id = :'task' AND state <> 'done';
+  sql=$(head_sql; cat <<'SQL'
+SELECT ((state = 'claimed' AND coalesce(owner, '') = :'author' AND (claim_seq = :fence OR :fence < 0))
+        OR (state = 'open' AND :fence < 0)) AS ok
+  FROM tasks WHERE id = :'task' \gset
+\if :ok
+UPDATE tasks SET state = 'done', done_seq = :seq, updated_at = :ts WHERE id = :'task';
 INSERT INTO events (id, task_id, author, kind, body, created_at)
   SELECT :seq, id, :'author', 'done', :'text', :ts FROM tasks WHERE id = :'task' AND done_seq = :seq;
-SELECT id FROM events WHERE id = :seq;
+UPDATE task_leases SET lease_until = 0 WHERE task_id = :'task';
+\endif
+SELECT :'ok' AS ok, :seq AS seq;
 COMMIT;
 SQL
 )
-  tx "$sql" -v author="$AUTHOR" -v task="$task" -v text="$text" -v ts="$(now)" || exit 1
-  if [ -z "$OUT" ]; then
-    psql_run tuples "SELECT state FROM tasks WHERE id = :'task';" -v task="$task" || fail_db
-    if [ -z "$OUT" ]; then
-      die "no such task: $task"
-    fi
-    die "already done: $task"
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v text="$text" -v fence="$FENCE" -v ts="$(now)" || exit 1
+  if [ "$(printf '%s\n' "$OUT" | cut -f1)" = t ]; then
+    fence_clear "$task"
+    printf 'done %s as event %s\n' "$task" "$(printf '%s\n' "$OUT" | cut -f2)"
+    return 0
   fi
-  printf 'done %s as event %s\n' "$task" "$OUT"
+  task_info "$task"
+  case $T_STATE in
+    done)
+      # Another writer finished it between the first look and the transaction.
+      fence_clear "$task"
+      printf 'already done: %s (no change)\n' "$task"
+      return 0
+      ;;
+    dead | cancelled | awaiting_approval)
+      # A holder that knows its fence lost the task (reaped to dead, cancelled): that is a refusal
+      # by the fence (exit 3, a fenced event), not a bad request.
+      if [ "$FENCE" -ge 0 ]; then
+        refused "done"
+      fi
+      die "cannot mark $task done: it is $T_STATE"
+      ;;
+  esac
+  refused "done"
 }
+
+# give_back KIND: shared by fail and release. The task goes back to open (or to dead for fail when
+# the attempts are used up), the lease is cleared, and one event of KIND is written. Needs task,
+# text, FENCE and, for fail, delay.
+cmd_fail() {
+  parse_args "retry-in fence" "$@"
+  { [ "$NARGS" -ge 1 ] && [ "$NARGS" -le 2 ]; } || die "fail takes a task id and an optional text"
+  need_id "$P1"
+  task=$P1
+  text=${P2:-failed}
+  need_line text "$text" 1
+  if given retry-in; then need_range --retry-in "$O_RETRY_IN" 0 604800; fi
+  resolve_fence "$task"
+  task_info "$task"
+  ensure_lease "$task"
+  if given retry-in; then
+    delay=$O_RETRY_IN
+  else
+    psql_run tuples "SELECT attempts FROM task_leases WHERE task_id = :'task';" -v task="$task" || fail_db
+    delay=$(backoff_for "${OUT:-0}")
+  fi
+  sql=$(head_sql; cat <<SQL
+SELECT ($HELD_SQL) AS ok FROM tasks WHERE id = :'task' \\gset
+SQL
+cat <<'SQL'
+\if :ok
+SELECT (attempts + 1 >= max_attempts) AS exhausted FROM task_leases WHERE task_id = :'task' \gset
+\if :exhausted
+UPDATE tasks SET state = 'dead', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET attempts = attempts + 1, lease_until = 0, last_error = :'text' WHERE task_id = :'task';
+\else
+UPDATE tasks SET state = 'open', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET attempts = attempts + 1, lease_until = 0, not_before = :dbnow + :delay,
+  last_error = :'text' WHERE task_id = :'task';
+\endif
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', 'fail', :'text', :ts FROM tasks WHERE id = :'task';
+\endif
+SELECT :'ok' AS ok, :'exhausted' AS exhausted;
+COMMIT;
+SQL
+)
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v text="$text" -v fence="$FENCE" -v delay="$delay" \
+    -v ts="$(now)" || exit 1
+  [ "$(printf '%s\n' "$OUT" | cut -f1)" = t ] || refused fail
+  fence_clear "$task"
+  if [ "$(printf '%s\n' "$OUT" | cut -f2)" = t ]; then
+    printf 'failed %s: no attempts left, the task is dead\n' "$task"
+  else
+    printf 'failed %s: open again in %s seconds\n' "$task" "$delay"
+  fi
+}
+
+cmd_release() {
+  parse_args "fence" "$@"
+  [ "$NARGS" -eq 1 ] || die "release takes one task id"
+  need_id "$P1"
+  task=$P1
+  resolve_fence "$task"
+  task_info "$task"
+  ensure_lease "$task"
+  sql=$(head_sql; cat <<SQL
+SELECT ($HELD_SQL) AS ok FROM tasks WHERE id = :'task' \\gset
+SQL
+cat <<'SQL'
+\if :ok
+UPDATE tasks SET state = 'open', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET lease_until = 0 WHERE task_id = :'task';
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', 'release', '', :ts FROM tasks WHERE id = :'task';
+\endif
+SELECT :'ok' AS ok, :seq AS seq;
+COMMIT;
+SQL
+)
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v fence="$FENCE" -v ts="$(now)" || exit 1
+  [ "$(printf '%s\n' "$OUT" | cut -f1)" = t ] || refused release
+  fence_clear "$task"
+  printf 'released %s\n' "$task"
+}
+
+# ---- reap -----------------------------------------------------------------------------------
+
+# reap_one TASK ATTEMPTS: expire one claim. Compare and set inside the transaction: the task must
+# still be claimed under the claim_seq read a moment ago AND its lease must still be past, so a
+# heartbeat, a done or a new claim that landed in between wins. Returns 0 when it expired the claim.
+reap_one() {
+  task=$1
+  task_info "$task"
+  [ "$T_STATE" = claimed ] || return 1
+  ro_delay=$(backoff_for "$2")
+  ro_sql=$(head_sql; cat <<'SQL'
+SELECT (state = 'claimed' AND claim_seq = :fence) AS ok FROM tasks WHERE id = :'task' \gset
+\if :ok
+SELECT (lease_until > 0 AND lease_until < :dbnow) AS ok FROM task_leases WHERE task_id = :'task' \gset
+\endif
+\if :ok
+SELECT (attempts + 1 >= max_attempts) AS exhausted FROM task_leases WHERE task_id = :'task' \gset
+\if :exhausted
+UPDATE tasks SET state = 'dead', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET attempts = attempts + 1, lease_until = 0, last_error = 'lease expired'
+  WHERE task_id = :'task';
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', 'expired', 'lease expired, no attempts left: dead', :ts FROM tasks WHERE id = :'task';
+\else
+UPDATE tasks SET state = 'open', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET attempts = attempts + 1, lease_until = 0, not_before = :dbnow + :delay,
+  last_error = 'lease expired' WHERE task_id = :'task';
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', 'expired', 'lease expired, the task is open again', :ts FROM tasks WHERE id = :'task';
+\endif
+\endif
+SELECT :'ok' AS ok, :'exhausted' AS exhausted;
+COMMIT;
+SQL
+)
+  tx "$ro_sql" -v author="$AUTHOR" -v task="$task" -v fence="$T_SEQ" -v delay="$ro_delay" \
+    -v ts="$(now)" || exit 1
+  [ "$(printf '%s\n' "$OUT" | cut -f1)" = t ] || return 1
+  if [ "$(printf '%s\n' "$OUT" | cut -f2)" = t ]; then
+    printf 'expired %s: dead\n' "$task"
+  else
+    printf 'expired %s: open again\n' "$task"
+  fi
+  return 0
+}
+
+cmd_reap() {
+  [ $# -eq 0 ] || die "reap takes no arguments"
+  need_author
+  db_now
+  psql_run tuples "SELECT task_id, attempts FROM task_leases WHERE lease_until > 0 AND lease_until < :dbnow
+ORDER BY lease_until LIMIT 100;" -v dbnow="$DBNOW" || fail_db
+  rp_done=0
+  if [ -n "$OUT" ]; then
+    printf '%s\n' "$OUT" >"$TMP_LST"
+    while IFS="$TAB" read -r rp_task rp_att; do
+      [ -n "$rp_task" ] || continue
+      if reap_one "$rp_task" "${rp_att:-0}"; then
+        rp_done=$((rp_done + 1))
+      fi
+    done <"$TMP_LST"
+  fi
+  printf 'reaped %s\n' "$rp_done"
+}
+
+# ---- dependencies, approval, cancel ---------------------------------------------------------
+
+# set_blockers TASK NEW OLD TEXT KIND: replace blocked_by (compare and set on OLD) and write one
+# event. Returns 1 when OLD no longer matched.
+set_blockers() {
+  sb_sql=$(bump_sql; cat <<'SQL'
+\set ok f
+SELECT (blocked_by = :'old') AS ok FROM task_leases WHERE task_id = :'task' \gset
+\if :ok
+UPDATE task_leases SET blocked_by = :'new' WHERE task_id = :'task';
+UPDATE tasks SET updated_at = :ts WHERE id = :'task';
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', :'kind', :'text', :ts FROM tasks WHERE id = :'task';
+\endif
+SELECT :'ok' AS ok;
+COMMIT;
+SQL
+)
+  tx "$sb_sql" -v author="$AUTHOR" -v task="$1" -v new="$2" -v old="$3" -v text="$4" -v kind="$5" \
+    -v ts="$(now)" || exit 1
+  [ "$OUT" = t ]
+}
+
+cmd_block() {
+  case " $* " in *" --by "*) die "usage: board block TASK BLOCKER[,BLOCKER] (the blockers are the second word; there is no --by)" ;; esac
+  parse_args "" "$@"
+  [ "$NARGS" -eq 2 ] || die "block takes a task id and a comma separated list of blockers"
+  need_id "$P1"
+  task=$P1
+  need_ids blockers "$P2"
+  task_info "$task"
+  case $T_STATE in done | dead | cancelled) die "cannot block $task: it is $T_STATE" ;; esac
+  psql_in "SELECT id FROM tasks WHERE id IN" "$P2" ";" || fail_db
+  [ "$(count_lines "$OUT")" -eq "$(printf '%s' "$P2" | tr ',' '\n' | grep -c .)" ] \
+    || die "a blocker does not exist"
+  check_no_cycle "$task" "$P2"
+  bl_try=0
+  while :; do
+    bl_try=$((bl_try + 1))
+    [ "$bl_try" -le 5 ] || die "gave up: the blockers of $task keep changing"
+    ensure_lease "$task"
+    psql_run tuples "SELECT blocked_by FROM task_leases WHERE task_id = :'task';" -v task="$task" || fail_db
+    bl_old=$OUT
+    bl_new=$bl_old
+    bl_old_ifs=$IFS
+    IFS=,
+    for bl_id in $P2; do
+      IFS=$bl_old_ifs
+      case ",$bl_new," in *",$bl_id,"*) ;; *) bl_new="$bl_new${bl_new:+,}$bl_id" ;; esac
+      IFS=,
+    done
+    IFS=$bl_old_ifs
+    need_ids "the blockers of $task" "$bl_new"
+    if [ "$bl_new" = "$bl_old" ]; then
+      printf '%s already waits for %s\n' "$task" "$P2"
+      return 0
+    fi
+    if set_blockers "$task" "$bl_new" "$bl_old" "blocked by $P2" block; then
+      printf '%s now waits for %s\n' "$task" "$bl_new"
+      return 0
+    fi
+  done
+}
+
+cmd_unblock() {
+  parse_args "" "$@"
+  [ "$NARGS" -eq 2 ] || die "unblock takes a task id and one blocker"
+  need_id "$P1"
+  need_id "$P2"
+  task=$P1
+  task_info "$task"
+  ub_try=0
+  while :; do
+    ub_try=$((ub_try + 1))
+    [ "$ub_try" -le 5 ] || die "gave up: the blockers of $task keep changing"
+    ensure_lease "$task"
+    psql_run tuples "SELECT blocked_by FROM task_leases WHERE task_id = :'task';" -v task="$task" || fail_db
+    ub_old=$OUT
+    ub_new=
+    ub_found=0
+    ub_ifs=$IFS
+    IFS=,
+    for ub_id in $ub_old; do
+      IFS=$ub_ifs
+      if [ "$ub_id" = "$P2" ]; then
+        ub_found=1
+      else
+        ub_new="$ub_new${ub_new:+,}$ub_id"
+      fi
+      IFS=,
+    done
+    IFS=$ub_ifs
+    if [ "$ub_found" = 0 ]; then
+      printf '%s did not wait for %s\n' "$task" "$P2"
+      return 0
+    fi
+    if set_blockers "$task" "$ub_new" "$ub_old" "no longer blocked by $P2" unblock; then
+      printf '%s no longer waits for %s\n' "$task" "$P2"
+      return 0
+    fi
+  done
+}
+
+# approve: the state change only. Who may run it is not enforced here: the board is plain SQL with
+# the author name an agent gives itself. A server that checks the account behind the connection
+# has to enforce that (integrations/board/CONVENTIONS.md, limits).
+cmd_approve() {
+  parse_args "" "$@"
+  { [ "$NARGS" -ge 1 ] && [ "$NARGS" -le 2 ]; } || die "approve takes a task id and an optional text"
+  need_id "$P1"
+  need_line text "$P2" 0
+  task=$P1
+  task_info "$task"
+  case $T_STATE in
+    open | claimed | done)
+      printf '%s is already past approval (%s)\n' "$task" "$T_STATE"
+      return 0
+      ;;
+    awaiting_approval) ;;
+    *) die "cannot approve $task: it is $T_STATE" ;;
+  esac
+  sql=$(bump_sql; cat <<'SQL'
+\set ok f
+SELECT (state = 'awaiting_approval') AS ok FROM tasks WHERE id = :'task' \gset
+\if :ok
+UPDATE tasks SET state = 'open', updated_at = :ts WHERE id = :'task';
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', 'approve', :'text', :ts FROM tasks WHERE id = :'task';
+\endif
+SELECT :'ok' AS ok, :seq AS seq;
+COMMIT;
+SQL
+)
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v text="$P2" -v ts="$(now)" || exit 1
+  if [ "$(printf '%s\n' "$OUT" | cut -f1)" != t ]; then
+    printf '%s was approved by someone else\n' "$task"
+    return 0
+  fi
+  printf 'approved %s as event %s\n' "$task" "$(printf '%s\n' "$OUT" | cut -f2)"
+}
+
+cmd_cancel() {
+  parse_args "" "$@"
+  { [ "$NARGS" -ge 1 ] && [ "$NARGS" -le 2 ]; } || die "cancel takes a task id and an optional text"
+  need_id "$P1"
+  need_line text "$P2" 0
+  task=$P1
+  task_info "$task"
+  case $T_STATE in
+    cancelled)
+      printf '%s is already cancelled\n' "$task"
+      return 0
+      ;;
+    done | dead) die "cannot cancel $task: it is $T_STATE" ;;
+  esac
+  ensure_lease "$task"
+  sql=$(bump_sql; cat <<'SQL'
+\set ok f
+SELECT (state = 'open' OR state = 'claimed' OR state = 'awaiting_approval') AS ok FROM tasks WHERE id = :'task' \gset
+\if :ok
+UPDATE tasks SET state = 'cancelled', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET lease_until = 0 WHERE task_id = :'task';
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', 'cancel', :'text', :ts FROM tasks WHERE id = :'task';
+\endif
+SELECT :'ok' AS ok, :seq AS seq;
+COMMIT;
+SQL
+)
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v text="$P2" -v ts="$(now)" || exit 1
+  [ "$(printf '%s\n' "$OUT" | cut -f1)" = t ] || die "cannot cancel $task: it changed state"
+  printf 'cancelled %s as event %s\n' "$task" "$(printf '%s\n' "$OUT" | cut -f2)"
+}
+
+# ---- decide and the read commands -----------------------------------------------------------
 
 cmd_decide() {
   [ $# -eq 2 ] || die "decide takes a task id and a text"
@@ -513,17 +1514,29 @@ AUTHOR=${BOARD_AUTHOR:-}
 cmd=$1
 shift
 case $cmd in
-  add | claim | note | done | decide) need_author ;;
+  add | claim | note | done | decide | heartbeat | fail | release | reap | block | unblock | approve | cancel)
+    need_author
+    ;;
 esac
 
 case $cmd in
   init) cmd_init "$@" ;;
+  migrate) cmd_migrate "$@" ;;
   add) cmd_add "$@" ;;
   list) cmd_list "$@" ;;
   show) cmd_show "$@" ;;
   claim) cmd_claim "$@" ;;
+  next) cmd_next "$@" ;;
+  heartbeat) cmd_heartbeat "$@" ;;
   note) cmd_note "$@" ;;
   done) cmd_done "$@" ;;
+  fail) cmd_fail "$@" ;;
+  release) cmd_release "$@" ;;
+  reap) cmd_reap "$@" ;;
+  block) cmd_block "$@" ;;
+  unblock) cmd_unblock "$@" ;;
+  approve) cmd_approve "$@" ;;
+  cancel) cmd_cancel "$@" ;;
   decide) cmd_decide "$@" ;;
   since) cmd_since "$@" ;;
   watch) cmd_watch "$@" ;;

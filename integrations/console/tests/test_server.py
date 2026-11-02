@@ -254,7 +254,8 @@ class ApiTests(ServerCase):
     def test_now(self):
         status, d, _ = self.srv.get_json("/api/now")
         self.assertEqual(status, 200)
-        self.assertEqual(d["counts"], {"open": 1, "claimed": 1, "done": 1, "other": 0})
+        self.assertEqual(d["counts"], {"open": 1, "claimed": 1, "done": 1, "dead": 0, "cancelled": 0,
+                                       "awaiting_approval": 0, "other": 0})
         self.assertEqual({a["name"] for a in d["agents"]}, {"alice", "bob", "maint"})
         self.assertFalse(d["meta"]["demo"])
         self.assertIsNone(d["meta"]["banner"])
@@ -408,6 +409,64 @@ class DemoServerTests(unittest.TestCase):
             self.assertFalse(other.get_json("/api/now")[1]["meta"]["demo"])
         finally:
             other.stop()
+
+
+class QueueApiTests(ServerCase):
+    source_factory = staticmethod(lambda: FakeSource(
+        [task("run1"), task("blk", seq=2), task("held", "claimed", "bob", seq=3),
+         task("gone", "dead", seq=4)],
+        [], [], now=9000,
+        leases=[helpers.lease("blk", blocked="gone"), helpers.lease("held", until=8900, hb=8800),
+                helpers.lease("gone", attempts=3, last_error="boom")]))
+
+    def test_queue_answer_shape(self):
+        status, d, resp = self.srv.get_json("/api/queue")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["totals"], {"runnable": 1, "blocked": 1, "claimed": 1, "retrying": 0,
+                                       "dead": 1, "awaiting": 0})
+        self.assertEqual(d["claimed"][0]["expired"], True)
+        self.assertEqual(d["blocked"][0]["forever"], True)
+        self.assertEqual(d["dead"][0]["last_error"], "boom")
+        self.assertEqual(d["now"], 9000)
+        self.assertEqual(resp.getheader("Content-Security-Policy"), EXPECTED_CSP)
+
+    def test_queue_takes_no_parameters_and_only_get(self):
+        self.assertEqual(self.srv.request("GET", "/api/queue?x=1")[0], 400)
+        self.assertEqual(self.srv.request("POST", "/api/queue", body=b"")[0], 405)
+        self.assertEqual(self.srv.request("GET", "/api/queue", host="evil.example")[0], 421)
+
+    def test_now_carries_the_attention_items_and_queue_totals(self):
+        _, d, _ = self.srv.get_json("/api/now")
+        self.assertEqual(len(d["attention"]["expired_leases"]), 1)
+        self.assertEqual(len(d["attention"]["dead_tasks"]), 1)
+        self.assertEqual(len(d["attention"]["blocked_forever"]), 1)
+        self.assertEqual(d["queue_totals"]["runnable"], 1)
+
+    def test_the_new_event_kinds_are_valid_feed_filters(self):
+        for kind in ("fail", "expired", "release", "approve", "cancel", "block", "unblock", "fenced"):
+            self.assertEqual(self.srv.request("GET", "/api/feed?kind=" + kind)[0], 200, kind)
+        self.assertEqual(self.srv.request("GET", "/api/feed?kind=bogus")[0], 400)
+
+    def test_demo_queue_has_the_banner(self):
+        demo_srv = Running(DemoSource(reveal_every=0))
+        try:
+            _, d, _ = demo_srv.get_json("/api/queue")
+            self.assertEqual(d["meta"]["banner"], "DEMO DATA, not your board")
+            self.assertGreaterEqual(d["totals"]["dead"], 1)
+        finally:
+            demo_srv.stop()
+
+    def test_the_queue_answer_has_no_html_in_text_fields(self):
+        src = FakeSource([task("a", "dead", title="<img src=x onerror=alert(1)>")], [], [], now=9000,
+                         leases=[helpers.lease("a", last_error="<script>alert(1)</script>")])
+        srv = Running(src)
+        try:
+            status, resp, data = srv.request("GET", "/api/queue")
+            self.assertEqual(status, 200)
+            self.assertTrue(data.isascii())  # ASCII-escaped JSON; the text is data, not markup
+            self.assertEqual(resp.getheader("Content-Type"), "application/json; charset=utf-8")
+        finally:
+            srv.stop()
 
 
 if __name__ == "__main__":

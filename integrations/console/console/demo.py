@@ -16,6 +16,7 @@ T0 = 1_793_000_000  # a fixed start; the demo never reads the real clock for its
 SPAN = 5 * 24 * 3600
 AGENTS = ["maintainer", "impl-a", "impl-b", "impl-c", "reviewer", "tester", "docs-bot"]
 WORKERS = ["impl-a", "impl-b", "impl-c", "reviewer", "tester", "docs-bot"]
+STALE_AGENT = "docs-bot"
 SPEED = {"impl-a": 100, "impl-b": 140, "impl-c": 70, "reviewer": 60, "tester": 90, "docs-bot": 50}
 
 VERBS = ["Add", "Fix", "Document", "Test", "Refactor", "Measure", "Review", "Bound", "Trim", "Pin"]
@@ -99,13 +100,18 @@ def generate(seed: int = 7) -> dict:
     abandoned = {specs[n // 3]["id"], specs[n // 2]["id"]}
     old_open = {specs[3]["id"], specs[7]["id"], specs[11]["id"]}
     live_claims = {s["id"] for s in specs[-9:-4]}
-    still_open = {s["id"] for s in specs[-4:]} | old_open
+    still_open = {s["id"] for s in specs[-4:]} | old_open | {specs[15]["id"], specs[17]["id"]}
     for s in specs:
         tid = s["id"]
         ev(s["created"], tid, "maintainer", "add", s["title"])
         if tid in still_open:
             continue
         agent = rng.pick(WORKERS)
+        # The stale agent is always the same one and holds nothing else, so the demo shows it.
+        if tid in abandoned:
+            agent = STALE_AGENT
+        elif agent == STALE_AGENT and tid in live_claims:
+            agent = "impl-a"
         claim_at = s["created"] + 300 + rng.below(3600) * (1 + rng.below(3))
         if tid in abandoned:
             claim_at = final_now - 3 * 3600
@@ -135,6 +141,25 @@ def generate(seed: int = 7) -> dict:
     other = "impl-b" if first_by == "impl-c" else "impl-c"
     ev(specs[n // 4]["created"] + 7200 + 86400, double, other, "claim", "")  # a second claim, by a direct write
     ev(final_now - 60, specs[-6]["id"], "reviewer", "note", "looks fine, two nits left in the thread")
+
+    # orchestration examples: a dead letter, a cancelled task, a retry in its delay, dependencies, an
+    # approval gate and a refused write. The task states and lease rows come from overlay() below.
+    roles = overlay_roles(specs)
+    claimant = {}
+    for r in raw:
+        if r[4] == "claim":
+            claimant.setdefault(r[2], r[3])
+    dead_by = claimant.get(roles["dead"], "impl-b")
+    ev(final_now - 2 * 3600, roles["dead"], dead_by, "expired", "lease expired, the task is open again")
+    ev(final_now - 3000, roles["dead"], "reviewer", "expired", "lease expired, no attempts left: dead")
+    ev(final_now - 2 * 3600 + 30, roles["cancelled"], "maintainer", "cancel", "no longer needed")
+    ev(final_now - 1200, roles["retrying"], "impl-b", "claim", "")
+    ev(final_now - 900, roles["retrying"], "impl-b", "fail", "CI red on the draft; will retry")
+    ev(specs[-1]["created"] + 60, roles["blocked"], "maintainer", "block", "blocked by " + roles["runnable"])
+    ev(specs[7]["created"] + 60, roles["dead_blocker"], "maintainer", "block", "blocked by " + roles["dead"])
+    ev(specs[11]["created"] + 60, roles["cancel_blocker"], "maintainer", "block", "blocked by " + roles["cancelled"])
+    ev(final_now - 500, roles["live"][0], "impl-c", "fenced",
+       "refused done with fence 120: task is claimed, owner %s, fence 130" % claimant.get(roles["live"][0], "impl-a"))
 
     raw.sort()
     events = []
@@ -175,6 +200,61 @@ def fold(specs: list, events: list) -> list:
     return sorted(tasks.values(), key=lambda r: r["created_seq"])
 
 
+def overlay_roles(specs: list) -> dict:
+    """Which generated task plays which part in the orchestration examples."""
+    n = len(specs)
+    return {
+        "awaiting": specs[-4]["id"], "runnable": specs[-3]["id"], "retrying": specs[-2]["id"],
+        "blocked": specs[-1]["id"], "plain": specs[3]["id"], "dead_blocker": specs[7]["id"],
+        "cancel_blocker": specs[11]["id"], "dead": specs[15]["id"],
+        "cancelled": specs[17]["id"], "live": [s["id"] for s in specs[-9:-4]],
+    }
+
+
+def overlay(specs: list, rows: list, final_now: int) -> list:
+    """Apply the orchestration examples to the folded task rows and return one lease row per task
+    (what `board add` writes). Times are on the demo's own clock, which plays the database clock."""
+    roles = overlay_roles(specs)
+    by_id = {r["id"]: r for r in rows}
+    waits = {
+        roles["blocked"]: roles["runnable"],
+        roles["dead_blocker"]: roles["dead"],
+        roles["cancel_blocker"]: roles["cancelled"],
+    }
+    leases = {}
+    for r in rows:
+        leases[r["id"]] = {"task_id": r["id"], "lease_until": 0, "heartbeat_at": 0, "attempts": 0,
+                           "max_attempts": 3, "not_before": 0, "last_error": "",
+                           "blocked_by": waits.get(r["id"], "")}
+    t = by_id.get(roles["awaiting"])
+    if t:
+        t["state"] = "awaiting_approval"
+    t = by_id.get(roles["dead"])
+    if t:
+        t["state"], t["owner"] = "dead", None
+        leases[t["id"]].update(attempts=3, last_error="lease expired")
+    t = by_id.get(roles["cancelled"])
+    if t:
+        t["state"], t["owner"] = "cancelled", None
+    t = by_id.get(roles["retrying"])
+    if t:
+        t["state"], t["owner"] = "open", None
+        leases[t["id"]].update(attempts=1, not_before=final_now + 300,
+                               last_error="CI red on the draft; will retry")
+    for r in rows:  # a claim nobody renewed: its lease ran out long ago and was never reaped
+        if r["state"] == "claimed" and r["id"] not in roles["live"]:
+            leases[r["id"]].update(lease_until=r["updated_at"] + 600, heartbeat_at=r["updated_at"])
+    for i, tid in enumerate(roles["live"]):
+        t = by_id.get(tid)
+        if t is None or t["state"] != "claimed":
+            continue
+        if i == 2:  # a lease that ran out and was not reaped
+            leases[tid].update(lease_until=final_now - 900, heartbeat_at=final_now - 1500)
+        else:
+            leases[tid].update(lease_until=final_now + 400 + 100 * i, heartbeat_at=final_now - 60 * (i + 1))
+    return [leases[r["id"]] for r in rows]
+
+
 def plant_graph_defects(rows: list) -> None:
     """An orphan parent and a two-task parent cycle, as a direct SQL write could leave them."""
     if len(rows) < 30:
@@ -212,14 +292,20 @@ class DemoSource:
         last = self.events[k - 1]["created_at"]
         return last + 60
 
-    def _tasks_at(self, k: int) -> list:
+    clock_source = "database"
+
+    def _tasks_at(self, k: int) -> tuple:
         rows = fold(self.data["specs"], self.events[:k])
         plant_graph_defects(rows)
-        return rows
+        return rows, overlay(self.data["specs"], rows, self.data["final_now"])
 
     def tasks(self, limit: int) -> tuple:
-        rows = self._tasks_at(self.visible())
+        rows, _ = self._tasks_at(self.visible())
         return rows[-limit:], len(rows) > limit
+
+    def leases(self, limit: int) -> tuple:
+        _, leases = self._tasks_at(self.visible())
+        return leases[-limit:], True
 
     def events_latest(self, limit: int) -> tuple:
         ev = self.events[: self.visible()]

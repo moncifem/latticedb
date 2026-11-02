@@ -30,7 +30,7 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(snap.head, 8)
         self.assertEqual(len(snap.decisions), 1)
         self.assertEqual(snap.now, 5000)
-        self.assertEqual(src.calls, ["tasks", "events_latest", "decisions_latest"])
+        self.assertEqual(src.calls, ["tasks", "events_latest", "decisions_latest", "leases"])
 
     def test_ttl_limits_refreshes(self):
         src, clock, s = make(ttl=1.0)
@@ -50,7 +50,7 @@ class RefreshTests(unittest.TestCase):
         src.event_rows.append(event(9, "tparent", "alice", "note", 3000, "new"))
         snap = s.snapshot()
         self.assertEqual(snap.head, 9)
-        self.assertEqual(src.calls, ["tasks", "events_after", "decisions_after"])
+        self.assertEqual(src.calls, ["tasks", "events_after", "decisions_after", "leases"])
         self.assertEqual(len(snap.events), 9)
 
     def test_new_decisions_are_picked_up(self):

@@ -205,12 +205,22 @@
         }),
         attnList("Open for too long", r.open_too_long, a.open_too_long, function (x) {
           return [taskLink(x.task_id, x.title), ", open for ", fmtDur(x.age_s)];
+        }),
+        attnList("Lease ran out, not reaped yet", r.expired_leases, a.expired_leases || [], function (x) {
+          return [taskLink(x.task_id, x.title), " held by ", x.owner || "nobody", ", ", fmtDur(x.overdue_s), " past its lease"];
+        }),
+        attnList("Dead: out of attempts", r.dead_tasks, a.dead_tasks || [], function (x) {
+          return [taskLink(x.task_id, x.title), ", ", x.attempts + "/" + x.max_attempts + " attempts", x.last_error ? ", last error: " + x.last_error : ""];
+        }),
+        attnList("Blocked for ever", r.blocked_forever, a.blocked_forever || [], function (x) {
+          return [taskLink(x.task_id, x.title), " waits for ", x.reasons.join(", ")];
         })
       ].filter(Boolean);
-      var total = a.stale.length + a.double_claims.length + a.owner_mismatch.length + a.open_too_long.length;
+      var total = a.stale.length + a.double_claims.length + a.owner_mismatch.length + a.open_too_long.length +
+        (a.expired_leases || []).length + (a.dead_tasks || []).length + (a.blocked_forever || []).length;
       var attn = h("section", { class: "attn" + (total ? " has" : ""), "aria-label": "Needs attention" },
         h("h2", { text: total ? "Needs attention (" + total + ")" : "Needs attention: nothing" }),
-        sections.length ? sections : h("p", { class: "muted", text: "No stale claims, double claims or old open tasks under the current rules (stale after " + d.meta.stale_minutes + " min, open for more than " + d.meta.open_hours + " h)." }));
+        sections.length ? sections : h("p", { class: "muted", text: "No stale claims, double claims, old open tasks, expired leases, dead tasks or tasks blocked for ever under the current rules (stale after " + d.meta.stale_minutes + " min, open for more than " + d.meta.open_hours + " h)." }));
 
       var rows = d.agents.map(function (g) {
         return h("tr", null,
@@ -233,9 +243,13 @@
       if (d.meta.truncated.tasks) note.push("Only the newest 5000 tasks are loaded.");
       if (d.meta.truncated.events) note.push("Only the newest events are loaded; older history is not counted.");
       if (d.meta.truncated.decisions) note.push("Only the newest decisions are loaded.");
+      if (d.meta.clock === "client") note.push("The database clock could not be read: lease times are compared with this machine's clock.");
       show([
         h("div", { class: "counts" }, countBox("open", c.open), countBox("claimed", c.claimed), countBox("done", c.done),
-          c.other ? countBox("other state", c.other) : null, countBox("agents", d.agents.length)),
+          c.dead ? countBox("dead", c.dead) : null, c.cancelled ? countBox("cancelled", c.cancelled) : null,
+          c.awaiting_approval ? countBox("awaiting approval", c.awaiting_approval) : null,
+          c.other ? countBox("other state", c.other) : null, countBox("agents", d.agents.length),
+          h("a", { class: "count linkbox", href: "#/queue" }, h("b", { text: d.queue_totals.runnable }), h("span", { class: "muted", text: "runnable: open the queue" }))),
         attn,
         h("h2", { text: "Agents" }),
         d.agents.length ? table : h("p", { class: "muted", text: "No agents yet: the board has no events and no owners." }),
@@ -619,6 +633,89 @@
     return { name: "scorecard", start: function () { return load(); }, poll: null };
   }
 
+
+  // ------------------------------------------------------------------ QUEUE
+
+  function emptyNote(text) {
+    return h("p", { class: "muted", text: text });
+  }
+
+  function qTable(headers, rows, render) {
+    var head = h("tr", null, headers.map(function (t) { return h("th", { scope: "col", text: t }); }));
+    var body = rows.map(function (r) { return h("tr", null, render(r)); });
+    return h("div", { class: "scroll" }, h("table", null, h("thead", null, head), h("tbody", null, body)));
+  }
+
+  function td(kid) {
+    return h("td", null, kid);
+  }
+
+  function qSection(title, rule, rows, total, truncated, render, headers) {
+    var kids = [h("h2", { text: title + " (" + total + ")" }), h("div", { class: "rule", text: rule })];
+    if (!rows.length) kids.push(emptyNote("None."));
+    else kids.push(qTable(headers, rows, render));
+    if (truncated) kids.push(h("p", { class: "note-line", text: "Only the first " + rows.length + " are shown." }));
+    return h("section", { class: "qsec" }, kids);
+  }
+
+  var queueScreen = {
+    name: "queue",
+    start: function () { return this.poll(); },
+    poll: async function () {
+      var gen = navGen;
+      var d = await api("/api/queue");
+      if (gen !== navGen) return;
+      applyMeta(d.meta);
+      var t = d.totals;
+      var tr = d.truncated;
+      var r = d.rules;
+      var notes = [];
+      if (!d.leases_available) notes.push("This board has no task_leases table yet: run `board init` (or `board migrate`). Every task is shown with default lease values.");
+      if (d.meta.clock === "client") notes.push("The database clock could not be read, so lease times are compared with this machine's clock and can be off by the clock difference.");
+      var sections = [
+        qSection("Runnable now", r.runnable, d.runnable, t.runnable, tr.runnable, function (x) {
+          return [td(taskLink(x.id, x.title)), h("td", { class: "num", text: x.priority }),
+            td(fmtDur(x.age_s)), td(x.attempts + "/" + x.max_attempts), td(x.last_error || "")];
+        }, ["Task", "Priority", "Open for", "Attempts", "Last error"]),
+        qSection("Blocked", r.blocked, d.blocked, t.blocked, tr.blocked, function (x) {
+          var kids = x.blockers.map(function (b) {
+            var unknown = b.problem === "not_in_window";
+            var never = b.problem && !unknown;
+            return h("li", null, taskLink(b.id, b.title), " ", badge(b.state || (unknown ? "not in window" : "missing"), never ? "bad" : (b.state || "open")),
+              never ? " (never done)" : (unknown ? " (older than the loaded tasks)" : ""));
+          });
+          return [td(taskLink(x.id, x.title)), td(x.forever ? badge(x.cycle ? "cycle" : "for ever", "bad") : badge("waiting", "open")),
+            td(h("ul", { class: "plain" }, kids))];
+        }, ["Task", "Outlook", "Waiting for"]),
+        qSection("Claimed", r.claimed, d.claimed, t.claimed, tr.claimed, function (x) {
+          var lease;
+          if (!x.has_lease) lease = h("span", { class: "muted", text: "no lease (claimed before leases)" });
+          else if (x.expired) lease = [badge("expired", "bad"), " " + fmtDur(-x.remaining_s) + " ago"];
+          else lease = fmtDur(x.remaining_s) + " left";
+          return [td(taskLink(x.id, x.title)), td(x.owner || "nobody"), td(lease),
+            td(x.heartbeat_age_s === null ? h("span", { class: "muted", text: "none" }) : fmtAge(x.heartbeat_age_s)),
+            td(x.attempts + "/" + x.max_attempts)];
+        }, ["Task", "Held by", "Lease", "Last heartbeat", "Attempts"]),
+        qSection("Retrying", r.retrying, d.retrying, t.retrying, tr.retrying, function (x) {
+          return [td(taskLink(x.id, x.title)), td(x.attempts + "/" + x.max_attempts),
+            td("in " + fmtDur(x.wait_s) + " (" + fmtTime(x.not_before) + ")"), td(x.last_error || "")];
+        }, ["Task", "Attempts", "Next try", "Last error"]),
+        qSection("Dead letter", r.dead, d.dead, t.dead, tr.dead, function (x) {
+          return [td(taskLink(x.id, x.title)), td(x.attempts + "/" + x.max_attempts), td(x.last_error || h("span", { class: "muted", text: "none recorded" }))];
+        }, ["Task", "Attempts", "Last error"]),
+        qSection("Awaiting approval", r.awaiting, d.awaiting, t.awaiting, tr.awaiting, function (x) {
+          return [td(taskLink(x.id, x.title)), h("td", { class: "num", text: x.priority }), td(fmtDur(x.age_s))];
+        }, ["Task", "Priority", "Waiting for"])
+      ];
+      show([
+        h("h2", { text: "Queue" }),
+        h("p", { class: "muted", text: "Who can claim what, from the board tables. Times are the database clock. Anyone can run `board approve`: the board does not check who approves." }),
+        notes.length ? h("p", { class: "note-line", text: notes.join(" ") }) : null,
+        sections
+      ]);
+    }
+  };
+
   // ------------------------------------------------------------------ routing and polling
 
   function parseRoute() {
@@ -630,6 +727,7 @@
     }
     if (path === "#/feed") return { name: "feed" };
     if (path === "#/scorecard") return { name: "scorecard" };
+    if (path === "#/queue") return { name: "queue" };
     return { name: "now" };
   }
 
@@ -663,6 +761,7 @@
     if (r.name === "task") screen = makeTaskScreen(r.id);
     else if (r.name === "feed") screen = makeFeedScreen();
     else if (r.name === "scorecard") screen = makeScorecardScreen();
+    else if (r.name === "queue") screen = queueScreen;
     else screen = nowScreen;
     var s = screen;
     try {

@@ -199,6 +199,9 @@ def make_handler(service, allowed_hosts_ref):
                 elif path == "/api/now":
                     parse_query(parts.query, {})
                     self._json(200, service.now_payload())
+                elif path == "/api/queue":
+                    parse_query(parts.query, {})
+                    self._json(200, service.queue_payload())
                 elif path == "/api/task":
                     q = parse_query(parts.query, TASK_PARAMS)
                     if "id" not in q:

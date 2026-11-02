@@ -166,6 +166,9 @@ TASK_COLUMNS = ("id", "title", "state", "owner", "priority", "parent_id", "creat
                 "created_at", "updated_at", "claim_seq", "done_seq", "created_seq")
 EVENT_COLUMNS = ("id", "task_id", "author", "kind", "body", "created_at")
 DECISION_COLUMNS = ("id", "task_id", "author", "body", "created_at")
+LEASE_COLUMNS = ("task_id", "lease_until", "heartbeat_at", "attempts", "max_attempts", "not_before",
+                 "last_error", "blocked_by")
+LEASE_INTS = ("lease_until", "heartbeat_at", "attempts", "max_attempts", "not_before")
 TASK_INTS = ("priority", "created_at", "updated_at", "claim_seq", "done_seq", "created_seq")
 TASK_NULLS = ("owner", "parent_id")
 EVENT_INTS = ("id", "created_at")
@@ -174,10 +177,13 @@ DECISION_INTS = ("id", "created_at")
 # The only statements the console may send. Anything else is refused before psql starts.
 # Used with fullmatch: "$" would also accept a trailing newline.
 _SQL_ALLOWED = re.compile(
-    r"SELECT [a-z_]+(?:, [a-z_]+)* FROM (?:tasks|events|decisions)"
+    r"SELECT [a-z_]+(?:, [a-z_]+)* FROM (?:tasks|events|decisions|task_leases)"
     r"(?: WHERE id > [0-9]{1,18})?"
     r" ORDER BY [a-z_]+(?: DESC)? LIMIT [0-9]{1,6};"
 )
+
+# The one other statement: the database clock, which leases and retry delays are measured on.
+_SQL_NOW = "SELECT CAST(extract(epoch FROM now()) AS bigint);"
 
 MAX_INT = 2**53  # ids stay exact in JSON numbers up to here
 
@@ -229,8 +235,8 @@ class PsqlSource:
             a += ["-d", self.url]
         return a
 
-    def _rows(self, sql: str, columns: tuple, ints=(), nulls=()) -> list:
-        if not _SQL_ALLOWED.fullmatch(sql):
+    def _run(self, sql: str) -> bytes:
+        if not (_SQL_ALLOWED.fullmatch(sql) or sql == _SQL_NOW):
             raise ValueError("refusing to send a statement that is not a plain SELECT")
         rc, out, err = run_bounded(self.argv(), sql + "\n", self.timeout, self.max_bytes, self.env)
         if rc != 0:
@@ -238,12 +244,37 @@ class PsqlSource:
             line = scrub(first_line(err.decode("utf-8", "replace")), secrets)
             hint = "check that latticed is running and LATTICE_BOARD_URL or PG* point to it"
             raise SourceError("the database query failed (%s)%s" % (hint, ": " + line if line else ""))
-        return parse_rows(out, columns, ints, nulls)
+        return out
+
+    def _rows(self, sql: str, columns: tuple, ints=(), nulls=()) -> list:
+        return parse_rows(self._run(sql), columns, ints, nulls)
 
     # -- the questions
 
     def now(self) -> int:
-        return int(time.time())
+        """The database clock when it answers, else this machine's clock (clock_source says which).
+        Lease and retry times are database-clock seconds, so they are only exact in the first case."""
+        try:
+            out = self._run(_SQL_NOW).decode("utf-8", "replace").strip("\0\n ")
+            self.clock_source = "database"
+            return _to_int("now", out)
+        except SourceError:
+            self.clock_source = "client"
+            return int(time.time())
+
+    clock_source = "database"
+
+    def leases(self, limit: int) -> tuple:
+        """(rows, available). A board made before leases existed has no task_leases table: that is
+        an empty answer, not an error."""
+        sql = build_select(LEASE_COLUMNS, "task_leases", "task_id", False, limit + 1)
+        try:
+            rows = self._rows(sql, LEASE_COLUMNS, LEASE_INTS)
+        except SourceError as e:
+            if "task_leases" in str(e) and ("exist" in str(e) or "42P01" in str(e)):
+                return [], False
+            raise
+        return rows[:limit], True
 
     def tasks(self, limit: int) -> tuple:
         sql = build_select(TASK_COLUMNS, "tasks", "created_seq", True, limit + 1)

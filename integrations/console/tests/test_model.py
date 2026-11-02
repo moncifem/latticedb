@@ -46,8 +46,10 @@ class FactsAndCountsTests(unittest.TestCase):
 
     def test_counts_by_state_has_an_other_bucket(self):
         t = [task("a", "open"), task("b", "claimed"), task("c", "done"), task("d", "weird")]
-        self.assertEqual(model.counts_by_state(t), {"open": 1, "claimed": 1, "done": 1, "other": 1})
-        self.assertEqual(model.counts_by_state([]), {"open": 0, "claimed": 0, "done": 0, "other": 0})
+        self.assertEqual(model.counts_by_state(t), {"open": 1, "claimed": 1, "done": 1, "dead": 0, "cancelled": 0,
+                          "awaiting_approval": 0, "other": 1})
+        self.assertEqual(model.counts_by_state([]), {"open": 0, "claimed": 0, "done": 0, "dead": 0, "cancelled": 0,
+                          "awaiting_approval": 0, "other": 0})
 
     def test_clip(self):
         self.assertEqual(model.clip(None), "")

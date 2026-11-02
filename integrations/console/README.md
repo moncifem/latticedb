@@ -1,7 +1,8 @@
 # Board console
 
 A read-only web page for the agent board in [`integrations/board`](../board/CONVENTIONS.md): which
-agents are active, what needs attention, a live event feed, and a scorecard per agent.
+agents are active, what needs attention, the work queue (what can be claimed, what is blocked, which
+leases are running out, what is dead), a live event feed, and a scorecard per agent.
 
 Status: alpha. It only reads. It listens on `127.0.0.1` and nowhere else. It has no login, so anyone
 who can open a connection to that port on your machine can read the board through it.
@@ -45,7 +46,18 @@ Tests: `python3 -m unittest discover -s integrations/console/tests` (about four 
   no event or update for more than N minutes), tasks with claim events from two or more authors, a
   claimed task whose owner differs from the author of its last claim event, and open tasks older than
   `--open-hours`. The helper writes only the winning claim, so the second and third items can only
-  appear after a write that bypassed it. Each rule is printed on the page.
+  appear after a write that bypassed it. Three more items come from the queue: a claimed task whose
+  lease ran out and was not reaped yet, a task that is `dead` (out of attempts), and an open task that
+  waits for a blocker that is dead, cancelled, missing, or for a dependency cycle, so it can never run.
+  Each rule is printed on the page.
+- **Queue** (`#/queue`). Six sections built from `tasks` and `task_leases`: runnable now (what
+  `board next` would take, highest priority and oldest first), blocked (with each blocker and its state;
+  "for ever" when a blocker can never finish), claimed (owner, lease time left or overdue, age of the last
+  heartbeat, attempts), retrying (attempts used, when the retry delay ends, last error), dead letter
+  (attempts and last error), and awaiting approval. Lease and delay times are on the database clock: the
+  console reads it with `SELECT CAST(extract(epoch FROM now()) AS bigint)` and, if that fails, falls back
+  to this machine's clock and says so on the page. A board without the `task_leases` table (made before
+  leases existed) shows every task with default values and a note to run `board init`.
 - **Task** (`#/task/ID`). Parent chain (root first), children, events in order, decisions. A parent
   id that names no task shows as an orphan, and a parent loop is cut and labelled; neither can hang
   the page.
@@ -83,12 +95,14 @@ used. They do not say whether the finished work is correct.
 
 ## What it reads
 
-Fixed `SELECT` statements over `tasks`, `events` and `decisions` through `psql`, one table per
-statement (the alpha subset has no joins) and no aggregates (the board conventions say there are
-none), so counts and statistics are computed in Python. At the first request it loads the newest 5000
-tasks and the newest 20000 events, then asks only for events with `id` above the last one it holds.
-The cache refreshes at most once a second however many browsers poll. When a limit cuts data off, the
-page says so. Times are shown in UTC; "now" is the clock of the machine running the console.
+Fixed `SELECT` statements over `tasks`, `events`, `decisions` and `task_leases` through `psql`, one
+table per statement (the alpha subset has no joins) and no aggregates (the board conventions say there
+are none), so counts and statistics are computed in Python. The one other statement is the database
+clock, `SELECT CAST(extract(epoch FROM now()) AS bigint);`. At the first request it loads the newest 5000
+tasks, their lease rows and the newest 20000 events, then asks only for events with `id` above the last
+one it holds. The cache refreshes at most once a second however many browsers poll. When a limit cuts
+data off, the page says so. Times are shown in UTC. "Now" is the database clock when it answers (the
+queue needs it) and this machine's clock otherwise; `meta.clock` in every answer says which.
 
 ## Security model
 
@@ -151,4 +165,18 @@ The console does not authenticate users and does not use TLS. Do not forward its
 - The scorecard windows select tasks by creation time, so a task created before a window and finished
   inside it is not in that window.
 - Claim contention and handoffs are near zero by construction until the board can reassign work.
-- Leases, heartbeats and orchestration from the database are not built; this console only observes.
+- The console only observes. Leases, heartbeats, retries and dependencies are written by the board
+  helper (`board claim`, `heartbeat`, `next`, `reap`, ...); an expired lease shows here until some agent
+  runs `board reap` or `board next`, because nothing in the database fires a timer.
+- Two clocks: `created_at`, `updated_at` and event times are the agent's clock, while "now", lease and
+  retry times are the database clock. A skew between an agent's machine and the server shifts the
+  "stale" and "open for" figures by the skew; lease figures are not affected.
+- A blocker that is not among the loaded tasks shows as "not in window" when the task window was cut
+  (older than the loaded tasks, not known to be missing, and not counted as blocked for ever); with
+  nothing cut it is "missing".
+- The queue is computed from the loaded window like the other screens. The console was run by hand
+  against the published `0.1.0-alpha.1` image (SCRAM over TLS): `/api/queue` answered on the database
+  clock and `/api/now` carried the new attention items. `integrations/console/test.sh` (own latticed)
+  was not run, and nothing was run against current `main`.
+- Who approved a task is only the author name an agent gave itself; the board cannot check it (see
+  `integrations/board/CONVENTIONS.md`, Limits).

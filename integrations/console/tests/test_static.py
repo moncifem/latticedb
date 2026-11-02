@@ -231,5 +231,41 @@ class ShippedFilesTests(unittest.TestCase):
         self.assertIn("new event", js)
 
 
+class QueueScreenTests(unittest.TestCase):
+    def test_the_page_links_to_the_queue(self):
+        self.assertIn('href="#/queue"', read("index.html"))
+
+    def test_the_script_routes_and_fetches_the_queue(self):
+        js = strip_comments(read("app.js"))
+        self.assertIn('path === "#/queue"', js)
+        self.assertIn('api("/api/queue")', js)
+        self.assertIn("queueScreen", js)
+
+    def test_the_queue_screen_names_every_section(self):
+        js = read("app.js")
+        for title in ("Runnable now", "Blocked", "Claimed", "Retrying", "Dead letter", "Awaiting approval"):
+            self.assertIn('"%s"' % title, js)
+
+    def test_the_new_attention_sections_are_rendered(self):
+        js = read("app.js")
+        for key in ("expired_leases", "dead_tasks", "blocked_forever"):
+            self.assertIn(key, js)
+
+    def test_the_queue_screen_polls_like_the_others(self):
+        js = read("app.js")
+        i = js.index("var queueScreen")
+        self.assertIn("poll: async function", js[i:i + 200])
+
+    def test_new_screens_add_no_dangerous_construct(self):
+        js = strip_comments(read("app.js"))
+        i = js.index("var queueScreen")
+        self.assertEqual(findings(js[i:], FORBIDDEN_JS), [])
+
+    def test_state_badges_have_styles(self):
+        css = read("style.css")
+        for cls in (".badge.dead", ".badge.awaiting_approval", ".badge.kind.fenced"):
+            self.assertIn(cls, css)
+
+
 if __name__ == "__main__":
     unittest.main()

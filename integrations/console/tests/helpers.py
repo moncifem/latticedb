@@ -32,13 +32,22 @@ def decision(did, tid, author, ts, body="because"):
     return {"id": did, "task_id": tid, "author": author, "body": body, "created_at": ts}
 
 
+def lease(tid, until=0, hb=0, attempts=0, max_attempts=3, not_before=0, last_error="", blocked=""):
+    return {"task_id": tid, "lease_until": until, "heartbeat_at": hb, "attempts": attempts,
+            "max_attempts": max_attempts, "not_before": not_before, "last_error": last_error,
+            "blocked_by": blocked}
+
+
 class FakeSource:
     """Answers like PsqlSource from lists the test owns; counts the calls it gets."""
 
     demo = False
     label = "fake"
 
-    def __init__(self, tasks=None, events=None, decisions=None, now=100000):
+    clock_source = "database"
+
+    def __init__(self, tasks=None, events=None, decisions=None, now=100000, leases=None):
+        self.lease_rows = list(leases or [])
         self.task_rows = list(tasks or [])
         self.event_rows = list(events or [])
         self.decision_rows = list(decisions or [])
@@ -58,6 +67,10 @@ class FakeSource:
         self._check("tasks")
         rows = self.task_rows
         return rows[-limit:], len(rows) > limit
+
+    def leases(self, limit):
+        self._check("leases")
+        return list(self.lease_rows[:limit]), True
 
     def events_latest(self, limit):
         self._check("events_latest")
