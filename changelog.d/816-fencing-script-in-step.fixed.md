@@ -1,0 +1,1 @@
+The fencing race test keeps its script in step with the kernel when a takeover cannot reach it (disk-faulty volume seeds 16221 and 31739 no longer report false `TURN_BEGIN`, `NOT_FENCED`, `LATE_AFTER_RECOVERY` and `CURRENT_REFUSED` failures).

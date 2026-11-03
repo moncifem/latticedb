@@ -234,11 +234,13 @@ struct Sim<S: Sut> {
     in_doubt: BTreeSet<ChangeSetId>,
     fails: Vec<String>,
     censored: bool,
+    script_unsure: bool,
     // Counters, reported as measured facts.
     stale_attempts: u64,
     fenced: u64,
     takeovers: u64,
     reconnects: u64,
+    rolled_back: u64,
     // The watcher's cursor and what it has seen.
     cursor: u64,
     feed: Vec<(u64, ChangeSetId)>,
@@ -269,16 +271,28 @@ impl<S: Sut> Sim<S> {
             in_doubt: BTreeSet::new(),
             fails: Vec::new(),
             censored: false,
+            script_unsure: false,
             stale_attempts: 0,
             fenced: 0,
             takeovers: 0,
             reconnects: 0,
+            rolled_back: 0,
             cursor: 0,
             feed: Vec::new(),
         }
     }
 
     fn fail(&mut self, tag: &str, detail: String) {
+        // Only the verdicts that compare the script's turn with the kernel's are in doubt; a
+        // superseded write being accepted or logged is still a failure.
+        if self.script_unsure
+            && matches!(
+                tag,
+                NOT_FENCED | TURN_BEGIN | LATE_AFTER_RECOVERY | CURRENT_REFUSED
+            )
+        {
+            return;
+        }
         self.fails.push(format!(
             "{tag}: profile {} seed {}: {detail}",
             self.profile, self.seed
@@ -358,11 +372,26 @@ impl<S: Sut> Sim<S> {
         self.current.insert(session, n);
         self.reconnected.remove(&session);
         self.takeovers += 1;
+        let mut attempted = false;
         for _ in 0..16 {
             if !self.ensure_open() {
+                if !attempted {
+                    // The kernel never saw this takeover, so the script must not run ahead of it.
+                    if n == 1 {
+                        self.current.remove(&session);
+                    } else {
+                        self.current.insert(session, n - 1);
+                    }
+                    self.takeovers -= 1;
+                    self.rolled_back += 1;
+                } else {
+                    // An earlier attempt may or may not have reached the disk.
+                    self.script_unsure = true;
+                }
                 return;
             }
             let k = self.k.as_mut().unwrap();
+            attempted = true;
             match k.begin_turn(TurnRef { session, turn: n }) {
                 Ok(()) => return,
                 // An earlier ambiguous attempt reached the disk.
@@ -378,6 +407,7 @@ impl<S: Sut> Sim<S> {
             }
         }
         self.censored = true;
+        self.script_unsure = true;
     }
 
     fn submit(&mut self, batch: Vec<ChangeSet>) {
@@ -847,6 +877,8 @@ struct Totals {
     fenced: u64,
     takeovers: u64,
     reconnects: u64,
+    rolled_back: u64,
+    unsure: u64,
 }
 
 fn run_seed<S: Sut>(
@@ -871,6 +903,8 @@ fn run_seed<S: Sut>(
         totals.fenced += sim.fenced;
         totals.takeovers += sim.takeovers;
         totals.reconnects += sim.reconnects;
+        totals.rolled_back += sim.rolled_back;
+        totals.unsure += u64::from(sim.script_unsure);
         fails.extend(sim.fails);
     }
     fails
@@ -1047,4 +1081,28 @@ fn late_retry_of_a_stored_write_is_fenced_per_the_contract() {
     assert!(matches!(k.commit(cs.clone()), Ok(Receipt::Recorded { .. })));
     k.begin_turn(turn(2)).unwrap();
     assert!(matches!(k.commit(cs), Err(TxnError::Fenced { .. })));
+}
+
+/// Two volume-run seeds (16221 and 31739 on `disk-faulty`) where a takeover could not reach the
+/// kernel: the script must stay in step with the log instead of running a turn ahead of it.
+#[test]
+fn a_takeover_that_never_reached_the_kernel_leaves_the_script_in_step() {
+    for (name, fp) in profiles() {
+        if name != "disk-faulty" {
+            continue;
+        }
+        // Outer seed 31739 (sim seed 63478): the kernel never saw the takeover, so it is rolled back.
+        let mut t = Totals::default();
+        let fails = run_seed(31739, name, fp, || Honest, &mut t);
+        assert!(fails.is_empty(), "{fails:#?}");
+        assert!(
+            t.rolled_back > 0,
+            "seed 31739 no longer takes the rollback route"
+        );
+        // Outer seed 16221 (sim seed 32442): an earlier attempt may have reached the disk.
+        let mut t = Totals::default();
+        let fails = run_seed(16221, name, fp, || Honest, &mut t);
+        assert!(fails.is_empty(), "{fails:#?}");
+        assert!(t.unsure > 0, "seed 16221 no longer takes the unsure route");
+    }
 }
