@@ -1,12 +1,14 @@
 # Board console
 
-A read-only web page for the agent board in [`integrations/board`](../board/CONVENTIONS.md): which
+A local web page for the agent board in [`integrations/board`](../board/CONVENTIONS.md), read-only unless you start it with
+`--allow-writes` (see "Write mode: decisions by a person"): which
 agents are active, what needs attention, the work queue (what can be claimed, what is blocked, which
 leases are running out, what is dead), a live event feed, a scorecard per agent, and the experiments of
 `board-bench` (agent configurations compared on the same tasks).
 
-Status: alpha. It only reads. It listens on `127.0.0.1` and nowhere else. It has no login, so anyone
-who can open a connection to that port on your machine can read the board through it.
+Status: alpha. It reads by default. It listens on `127.0.0.1` and nowhere else. It has no login, so anyone
+who can open a connection to that port on your machine can read the board through it (and, in write mode, anyone who also
+has the write token can change it).
 
 It is Python 3.10 or newer from the standard library only (no pip install, no CDN, no framework). The
 page is plain HTML, one script and one stylesheet, and makes requests only to the server that served it.
@@ -125,6 +127,89 @@ used. They do not say whether the finished work is correct.
   inconclusive, a clear difference on 40 tasks with flaky rows, errors and unrecorded attempts, and one that has
   not started.
 
+## Write mode: decisions by a person
+
+People need an inbox of what is waiting for them and a safe way to act on it from the browser. Write mode adds the
+**Inbox** screen (`#/inbox`) and six decisions: **approve**, **reject**, **cancel**, **requeue**, **priority** and
+**note**. It is off unless you ask for it:
+
+```sh
+integrations/console/lattice-console serve --allow-writes --actor alice     # a real board
+integrations/console/lattice-console serve --demo --allow-writes            # generated data, decisions simulated
+```
+
+The console prints a **write token** once, to the terminal, and nothing else prints it. Open the Inbox, paste the token
+into the box under the header (it is kept in the page's memory, never in storage or the URL, and a reload forgets it),
+and the buttons work. Without `--allow-writes` the page shows no buttons and the server answers **403 to every POST**.
+
+What the Inbox lists is only what needs a person, each with its rule written under "What puts a task here": a task waiting
+for approval, a dead letter, a claimed task whose lease is alive while its owner's tool activity stopped (the
+"stuck?" state of the activity feature, self-reported), and an open task that waits for a blocker that can never finish
+or for longer than `--open-hours`. Each card shows the task's text as plain text before any button is pressed: its
+body, who produced it, its last five events and a short content hash.
+
+### Decisions and the rules behind them
+
+| Decision | Applies to | Rule |
+|---|---|---|
+| approve | waiting for approval | needs the content hash shown on the card; refused if the text changed since, and refused for the person who produced the task |
+| reject | waiting for approval | needs a comment; cancels the task; refused for the person who produced it |
+| cancel | open, claimed, waiting | the holder's next write is refused by its fence |
+| requeue | dead, claimed | opens the task again with its attempts reset and the lease dropped |
+| priority | open, claimed, waiting, dead | a whole number |
+| note | any task | needs a comment; an event only |
+
+- **One audited path.** The console never writes SQL. Each decision is one call of `board act`
+  ([`../board/CONVENTIONS.md`](../board/CONVENTIONS.md), "`board act`"), run as `human.NAME` (`--actor NAME`, the OS user
+  when you give none). The helper writes the task change, an event of the same kind (author `human.NAME`) and a row in
+  `human_actions` (who, what, which task, the comment, the sha-256 of the task's title and body at that moment, the id of
+  the event, the time) in **one transaction**, so there is no state change without its audit record. The page cannot name
+  the person: the identity is fixed when the console starts.
+- **Self-approval is refused by the helper, not hidden by the page.** `approve` and `reject` refuse when the task's
+  creator or owner is the person (as `human.NAME` or as plain `NAME`), or when `NAME` wrote any event on the task. The
+  button is also disabled with an explanation, but the refusal does not depend on it. The transaction repeats the test
+  against the row it writes.
+- **An approval is bound to the text that was shown.** The card carries `sha256(title + "\n" + body)`; the approval sends it
+  back and the helper recomputes it from the database. A task edited in between is refused as stale, with a clear message.
+- **A comment is required to reject and to note**, so the reason is on the record.
+- **No bulk approve, and no approve on a timer, ever.** Bulk exists only for cancel and requeue (at most 25 tasks): the
+  first request is a dry run that returns the count and the tasks, the second must send that count back (`confirm`), and
+  is refused if the set changed.
+- **Each decision carries a request id** made by the browser (random, one per dialog, reused if you press Confirm again
+  after an error). Repeating an id changes nothing and answers with the same event: the console remembers the last 512, and
+  the database remembers all of them (`human_actions.request_id` is the primary key). An id reused for a different decision is
+  refused.
+- **Answers are fixed sentences.** The helper's own messages (stderr) are never passed to the browser; the console maps
+  `done` / `noop` / `refused CODE` to its own text.
+
+### Threat model of write mode
+
+What each check is for, and the test that fails if it is removed (`tests/test_actions_mutations.py` plants each fault):
+
+| Threat | Check |
+|---|---|
+| A web page in your browser posts to `127.0.0.1` (CSRF) | The write token travels in a custom header, which a page of another origin cannot add without a CORS preflight, and this server never answers one. The `Origin` must be exactly this console's own (`http://127.0.0.1:PORT` or `http://localhost:PORT`); a missing or `null` Origin is refused. The body is JSON only and the content type is checked. |
+| DNS rebinding: a hostile name that resolves to `127.0.0.1` | The `Host` header is checked on **every** route, reads and POSTs, before anything else is answered (421). The token is never served to the page: you paste it, so a rebound page has nothing to read. |
+| Guessing the token | 256 bits from `secrets`, compared with `hmac.compare_digest`, new on every start; five wrong tokens lock every write for a minute (the right token too), and writes are limited to 60 a minute. |
+| State change by a `GET` | `GET` and `HEAD` never reach the write path; `/api/act` is not readable. |
+| Smuggled or odd requests | Strict JSON (no duplicate keys, no `NaN`), at most 8 KiB, an exact `Content-Length` (no chunked bodies), unknown fields and unknown actions are 400, every field matched in full. |
+| An agent approving its own work | The helper's self-approval rule (above) and the reserved `human.` names: every `board` command except `act` refuses a `BOARD_AUTHOR` that starts with `human.`, and `act` accepts nothing else. |
+| Output of a failing helper reaching the page | Dropped; fixed sentences only. The token and the connection settings are never printed or logged. |
+| New script or external request | None: the Content-Security-Policy is unchanged, the dialog is built with DOM calls, and a test scans the script. |
+
+**What is not protected.** The identity is a name this process was given: `--actor` is whatever you type, and at the
+database level every author on this board is self-declared (`docs/alpha.md`). The self-approval rule compares names, so a
+person who creates a task as `bob` with the CLI and approves it as `--actor carol` is not stopped, and an agent that
+sets `BOARD_AUTHOR=human.x` for `board act` can write as a person (it would need the database account's write grant, which
+it has). Anyone who can read the terminal where the token was printed, or the page's memory, or who can run `board act`
+themselves, can decide. The console has no TLS and no login; a local attacker with the token can write. The
+`human_actions` table is append-only by use, not enforced by the database: the account that runs the helper can write
+to it, so anything holding that account can edit the audit trail.
+
+Demo mode (`--demo --allow-writes`) answers `board act` from the generated board in memory: the toast says "DEMO,
+simulated", nothing outside the process changes, and the board stops growing so event ids stay in order. Start it with
+`--actor maintainer` to see the self-approval refusal on the demo's waiting task.
+
 ## What it reads
 
 Fixed `SELECT` statements over `tasks`, `events`, `decisions` and `task_leases` (and, for live activity,
@@ -154,7 +239,8 @@ Board text is written by agents and is untrusted.
   frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
   `Cache-Control: no-store`. There are no CORS headers.
 - Bound address `127.0.0.1` only. A `Host` header other than `127.0.0.1:PORT` or `localhost:PORT` gets
-  421 (DNS rebinding). Only `GET` and `HEAD` are served; the rest get 405. Query parameters are checked
+  421 (DNS rebinding), on every route and every method. `GET` and `HEAD` read; `POST` exists for two routes and only in
+  write mode (403 everywhere otherwise, see "Write mode"); the other methods get 405. Query parameters are checked
   strictly (unknown, repeated or malformed ones are 400; cursors are integers up to 2^53; `limit` is 1
   to 500; names and ids are limited to letters, digits, `.`, `_`, `-`; the patterns are matched in full,
   so a trailing newline is refused). Scorecard window edges are rounded down to a minute.
@@ -212,7 +298,10 @@ The console does not authenticate users and does not use TLS. Do not forward its
 - The scorecard windows select tasks by creation time, so a task created before a window and finished
   inside it is not in that window.
 - Claim contention and handoffs are near zero by construction until the board can reassign work.
-- The console only observes. Leases, heartbeats, retries and dependencies are written by the board
+- Write mode is verified by unit tests against a fake helper and a fake `psql`, planted faults, the demo in a browser,
+  and `integrations/board/tests/act_devstack.py` against the dev stack (the `dev-stack` job). A real browser session
+  against a real board with write mode was not run.
+- Without `--allow-writes` the console only observes. Leases, heartbeats, retries and dependencies are written by the board
   helper (`board claim`, `heartbeat`, `next`, `reap`, ...); an expired lease shows here until some agent
   runs `board reap` or `board next`, because nothing in the database fires a timer.
 - Two clocks: `created_at`, `updated_at` and event times are the agent's clock, while "now", lease and

@@ -13,6 +13,8 @@ import copy
 import time
 from typing import Optional
 
+from . import actions as actions_mod
+
 T0 = 1_793_000_000  # a fixed start; the demo never reads the real clock for its data
 SPAN = 5 * 24 * 3600
 AGENTS = ["maintainer", "impl-a", "impl-b", "impl-c", "reviewer", "tester", "docs-bot"]
@@ -233,6 +235,8 @@ def overlay(specs: list, rows: list, final_now: int) -> list:
     t = by_id.get(roles["awaiting"])
     if t:
         t["state"] = "awaiting_approval"
+        t["body"] = ("Proposed: change the retry delay from 5 s to 30 s for the export path, and run the full "
+                     "export test twice. Needs a person because it changes how long a failed export waits.")
     t = by_id.get(roles["dead"])
     if t:
         t["state"], t["owner"] = "dead", None
@@ -257,6 +261,28 @@ def overlay(specs: list, rows: list, final_now: int) -> list:
         else:
             leases[tid].update(lease_until=final_now + 400 + 100 * i, heartbeat_at=final_now - 60 * (i + 1))
     return [leases[r["id"]] for r in rows]
+
+
+def apply_human(rows: list, leases: list, user_log: list) -> None:
+    """The effect of the decisions made through the page, in order, on the folded rows and lease rows."""
+    by_id = {r["id"]: r for r in rows}
+    lease_by_id = {x["task_id"]: x for x in leases}
+    for u in user_log:
+        e = u["event"]
+        t = by_id.get(e["task_id"])
+        if t is None:
+            continue
+        k = e["kind"]
+        t["updated_at"] = e["created_at"]
+        if k == "approve":
+            t["state"] = "open"
+        elif k in ("reject", "cancel"):
+            t["state"], t["owner"] = "cancelled", None
+        elif k == "requeue":
+            t["state"], t["owner"] = "open", None
+            lease_by_id[t["id"]].update(attempts=0, lease_until=0, not_before=0, last_error="")
+        elif k == "priority":
+            t["priority"] = u["value"]
 
 
 def plant_graph_defects(rows: list) -> None:
@@ -287,6 +313,8 @@ class DemoSource:
         self.bench = generate_bench(seed)
         self._act_cache = (None, None)
         self.act_profiles = activity_profiles(self.data)
+        self.user_log = []  # decisions made through the page, newest last (write mode only)
+        self.user_requests = {}  # request id -> (task, author, kind, event id)
 
     def visible(self) -> int:
         if not self.reveal_every:
@@ -304,7 +332,9 @@ class DemoSource:
     def _tasks_at(self, k: int) -> tuple:
         rows = fold(self.data["specs"], self.events[:k])
         plant_graph_defects(rows)
-        return rows, overlay(self.data["specs"], rows, self.data["final_now"])
+        leases = overlay(self.data["specs"], rows, self.data["final_now"])
+        apply_human(rows, leases, self.user_log)
+        return rows, leases
 
     def tasks(self, limit: int) -> tuple:
         rows, _ = self._tasks_at(self.visible())
@@ -314,12 +344,15 @@ class DemoSource:
         _, leases = self._tasks_at(self.visible())
         return leases[-limit:], True
 
+    def _visible_events(self) -> list:
+        return self.events[: self.visible()] + [u["event"] for u in self.user_log]
+
     def events_latest(self, limit: int) -> tuple:
-        ev = self.events[: self.visible()]
+        ev = self._visible_events()
         return [dict(e) for e in ev[-limit:]], len(ev) > limit
 
     def events_after(self, after: int, limit: int) -> list:
-        ev = self.events[: self.visible()]
+        ev = self._visible_events()
         return [dict(e) for e in ev if e["id"] > after][:limit]
 
     def decisions_latest(self, limit: int) -> list:
@@ -329,6 +362,67 @@ class DemoSource:
     def decisions_after(self, after: int, limit: int) -> list:
         k = self.visible()
         return [dict(d) for d in self.decisions if after < d["id"] <= k][:limit]
+
+    # -- write mode: `board act` simulated against this in-memory board (nothing outside this process changes)
+
+    def act_runner(self, actor: str):
+        """A runner for actions.Actions that answers like `board act` run as ACTOR. The demo board stops growing
+        (every generated event is shown at once), so the ids of the decisions it records follow the last one."""
+        self.reveal_every = 0
+        self.initial = len(self.events)
+        return lambda args: self.act(actor, args)
+
+    def act(self, actor: str, args: list) -> tuple:
+        try:
+            return self._act(actor, args)
+        except (IndexError, ValueError):
+            return 1, ""
+
+    def _act(self, actor: str, args: list) -> tuple:
+        if len(args) < 3 or args[0] != "act":
+            return 1, ""
+        action, task = args[1], args[2]
+        opts = {}
+        i = 3
+        while i + 1 < len(args):
+            opts[args[i]] = args[i + 1]
+            i += 2
+        if i != len(args) or action not in actions_mod.ACTIONS or not actor.startswith("human."):
+            return 1, ""
+        rid = opts.get("--request-id", "")
+        comment = opts.get("--comment", "")
+        plain = actor[len("human."):]
+        prior = self.user_requests.get(rid)
+        if prior is not None:
+            if prior[:3] == (task, actor, action):
+                return 0, "noop %d\n" % prior[3]
+            return 5, "refused request_reused\n"
+        if action in ("reject", "note") and not comment:
+            return 5, "refused comment_required\n"
+        if action == "approve" and not opts.get("--hash"):
+            return 5, "refused hash_required\n"
+        rows, _ = self._tasks_at(self.visible())
+        t = next((r for r in rows if r["id"] == task), None)
+        if t is None:
+            return 5, "refused not_found\n"
+        if t["state"] not in actions_mod.APPLIES[action]:
+            return 5, "refused wrong_state\n"
+        if action in ("approve", "reject"):
+            wrote = {e["author"] for e in self.events[: self.visible()] if e["task_id"] == task}
+            if {t["created_by"], t.get("owner") or ""} & {actor, plain} or plain in wrote:
+                return 5, "refused self_approval\n"
+        if action == "approve" and opts.get("--hash") != actions_mod.task_sha(t["title"], t["body"]):
+            return 5, "refused stale\n"
+        eid = len(self.events) + len(self.user_log) + 1
+        text = {"approve": "approved content sha256:%s" % actions_mod.task_sha(t["title"], t["body"]),
+                "priority": "priority set to %s" % opts.get("--priority", "0"), "note": comment}.get(action, action)
+        if comment and action != "note":
+            text += ": " + comment
+        value = int(opts["--priority"]) if action == "priority" else None
+        event = {"id": eid, "task_id": task, "author": actor, "kind": action, "body": text, "created_at": self.now()}
+        self.user_log.append({"event": event, "value": value})
+        self.user_requests[rid] = (task, actor, action, eid)
+        return 0, "done %d\n" % eid
 
     # -- live activity: generated from the clock the demo shows, so the same moment always gives the same rows
 

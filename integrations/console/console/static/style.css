@@ -183,3 +183,36 @@ td.gridcell.empty { background: var(--idle-bg); color: var(--muted); }
 .spark .bar { fill: var(--accent); }
 .spark .bar0 { fill: var(--line); }
 td.doing { max-width: 22rem; overflow-wrap: anywhere; }
+
+/* Inbox and decisions */
+.pill { display: inline-block; min-width: 1.3rem; padding: 0 .35rem; border-radius: 999px; background: var(--bad); color: #fff; font-size: .72rem; font-weight: 700; text-align: center; vertical-align: top; }
+.pill:empty { display: none; }
+.write-panel { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; padding: .5rem 16px; background: var(--warn-bg); border-bottom: 1px solid var(--line); }
+.write-panel[hidden], .toast[hidden] { display: none; }
+.write-panel input { min-width: 14rem; flex: 1 1 14rem; max-width: 28rem; }
+input[type="text"], input[type="password"], input[type="number"] { font: inherit; padding: .35rem .5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); }
+.btn { font: inherit; padding: .4rem .8rem; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); cursor: pointer; min-height: 2.4rem; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+.btn.small { min-height: 0; padding: .2rem .6rem; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btnrow { display: flex; flex-wrap: wrap; gap: .5rem; margin: .6rem 0 .2rem; }
+.bulk { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .8rem 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 6px; padding: .6rem .9rem; margin: .8rem 0; }
+.card.dead, .card.blocked { border-left-color: var(--bad); }
+.card.quiet { border-left-color: var(--accent); }
+.card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem .7rem; }
+.card-head .pick { margin-left: auto; font-size: .85rem; }
+.card .summary { margin: .3rem 0; font-weight: 600; }
+.panel { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: .5rem .7rem; max-height: 16rem; overflow: auto; }
+.toast { position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 40rem; margin: 0 auto; z-index: 20; background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok); border-radius: 6px; padding: .6rem .9rem; font-weight: 600; }
+.toast.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+.modal-bg { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .55); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 12px 12px; overflow: auto; }
+.modal { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; width: 100%; max-width: 38rem; padding: .8rem 1rem 1rem; }
+.modal h3 { margin-top: .2rem; }
+.modal input[type="text"], .modal input[type="number"] { width: 100%; margin-top: .3rem; }
+.dlg-body { max-height: 12rem; }
+.dlg-msg { color: var(--bad); min-height: 1.3rem; margin: .4rem 0 0; }
+@media (max-width: 600px) { .btn { flex: 1 1 40%; } .modal-bg { padding-top: 2vh; } }

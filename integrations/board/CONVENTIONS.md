@@ -41,7 +41,8 @@ Status: alpha. This is a dogfooding tool, not a product. Test it before you rely
 | `board release ID [--fence N]` | Give the task back without counting a failure. |
 | `board reap` | Expire every claim whose lease has run out. Any client may run it. |
 | `board block ID BLOCKER[,BLOCKER]` / `board unblock ID BLOCKER` | Add or remove dependencies. A cycle is refused. |
-| `board approve ID [TEXT]` | Move an `awaiting_approval` task to open. |
+| `board approve ID [TEXT]` | Move an `awaiting_approval` task to open. For agents and scripts; checks nothing about who calls it. |
+| `board act ACTION ID --request-id R ...` | A person's decision (approve, reject, cancel, requeue, priority, note) as `human.NAME`, with the self-approval, stale-hash and repeated-request rules and an audit row (see "`board act`" below). Exit 5 when refused. |
 | `board cancel ID [TEXT]` | Cancel a task that is not done. |
 | `board get ID` | One task as one tab separated line for programs: id, state, owner, fence, attempts, max attempts, title, body. Read only. |
 | `board run [OPTIONS] -- COMMAND` | A worker: take tasks with `next` and run COMMAND for each (see "`board run`: a worker for any command or agent"). |
@@ -51,7 +52,7 @@ Status: alpha. This is a dogfooding tool, not a product. Test it before you rely
 
 `note` and `done` also take `--fence N`. Exit codes: 0 ok, 1 error (bad input, no such task, task
 dead or cancelled, database down), 2 claim not won, 3 lease lost (the fence refused the write), 4
-nothing runnable.
+nothing runnable, 5 `act` refused the decision (the code is on standard output).
 
 ## Leases, fences, retries and dependencies
 
@@ -509,6 +510,47 @@ The rules it adds to the board:
 - Read side: `board bench-rows NAME` (tagged tab separated lines: `experiment`, `arm`, `task`, `attempt`) and
   `board bench-list`; the console reads the same tables with fixed `SELECT`s.
 
+## `board act`: a person's decisions
+
+`board act ACTION ID --request-id R [--hash SHA256] [--comment TEXT] [--priority N]` is the one path a person's decision
+takes (the console's write mode calls it; you can too). `BOARD_AUTHOR` must be `human.NAME`: `act` accepts nothing else,
+and every other command that writes refuses a `human.` name, so the two namespaces do not mix.
+
+| ACTION | Applies to | Needs | Writes |
+|---|---|---|---|
+| `approve` | `awaiting_approval` | `--hash` (sha-256 of the title, a newline and the body that the person was shown) | state `open`, event `approve` |
+| `reject` | `awaiting_approval` | `--comment` | state `cancelled`, event `reject` |
+| `cancel` | `open`, `claimed`, `awaiting_approval` | | state `cancelled`, the lease dropped, event `cancel` |
+| `requeue` | `dead`, `claimed` | | state `open`, owner cleared, attempts 0, lease and delay cleared, event `requeue` |
+| `priority` | `open`, `claimed`, `awaiting_approval`, `dead` | `--priority N` | the priority, event `priority` |
+| `note` | any | `--comment` | event `note` only |
+
+Every decision is **one transaction**: the task change, the event (author `human.NAME`, kind as above, body naming the
+hash or the comment) and a row of `human_actions` (`request_id` primary key, `task_id`, `author`, `kind`, `body_sha`, `remark`,
+`event_id`, `created_at`). The conditions of the change are part of the transaction (the state, the title and the body
+are those that were read), so a task that moved in between is refused (`changed`) and nothing is written. Prints one line
+and exits:
+
+| Output | Exit | Meaning |
+|---|---|---|
+| `done EVENT_ID` | 0 | recorded |
+| `noop EVENT_ID` | 0 | this request id was already recorded for the same task, person and action; nothing was written |
+| `refused CODE` | 5 | understood and refused, nothing written |
+
+Codes: `self_approval` (the creator or owner is the person, as `human.NAME` or `NAME`, or `NAME` wrote an event on the task;
+`approve` and `reject` only), `stale` (the hash is not that of the text now), `hash_required`, `comment_required`,
+`wrong_state`, `changed`, `not_found`, `request_reused` (that id was used for another decision) and `unreadable` (the
+text is not one line). Bad input (not a task id, a request id that is not 8 to 64 of `A-Za-z0-9_-`, a comment with a
+newline, tab, backslash or control character, a name without `human.`) is an ordinary error, exit 1.
+
+What this enforces and what it does not: the helper stops the person at the console from approving or rejecting what
+they produced, approving text that changed after they read it, and recording one decision twice. It cannot know who the
+person is: `BOARD_AUTHOR` is a name the caller gives itself, like every author on this board. A person who creates a task as
+`bob` and decides as `human.carol` is two names, and an agent that sets `BOARD_AUTHOR=human.x` can run `act` (it still needs a
+database account that may write). Enforcing "only these accounts may decide" needs a server that checks the account behind
+the connection (Limits below). `board approve` and `board cancel` stay as they were, for agents and scripts, and
+check nothing about who calls them.
+
 ## Agent activity: what is each agent doing right now
 
 The board shows tasks and events; while an agent works for an hour on one task it shows "claimed, last note 14
@@ -652,7 +694,7 @@ skips every event it has not yet handled.
 
 ## See the board in a browser
 
-`integrations/console` is a read-only web console for this board: agents and what needs attention, the
+`integrations/console` is a web console for this board, read-only unless started with `--allow-writes` (then people decide through `board act`): agents and what needs attention, the
 queue (runnable, blocked, leases, retries, dead letter, approvals), a live event feed, one task with its
 parents and children, a scorecard per agent, and, when agents report it, what each one is doing now. It reads the
 tables above through `psql` with the same connection settings as this helper and never writes. It is

@@ -119,8 +119,10 @@ class MethodAndHostTests(ServerCase):
     def test_only_get_and_head(self):
         for method in ("POST", "PUT", "DELETE", "PATCH", "OPTIONS"):
             status, resp, _ = self.srv.request(method, "/api/now", body=b"x=1" if method in ("POST", "PUT", "PATCH") else None)
-            self.assertEqual(status, 405, method)
-            self.assertEqual(resp.getheader("Allow"), "GET, HEAD")
+            # POST is a 403 while writes are off (test_actions_server.py covers write mode); the rest is a 405.
+            self.assertEqual(status, 403 if method == "POST" else 405, method)
+            if method != "POST":
+                self.assertEqual(resp.getheader("Allow"), "GET, HEAD")
 
     def test_head_has_headers_and_no_body(self):
         status, resp, data = self.srv.request("HEAD", "/")
@@ -432,7 +434,7 @@ class QueueApiTests(ServerCase):
 
     def test_queue_takes_no_parameters_and_only_get(self):
         self.assertEqual(self.srv.request("GET", "/api/queue?x=1")[0], 400)
-        self.assertEqual(self.srv.request("POST", "/api/queue", body=b"")[0], 405)
+        self.assertEqual(self.srv.request("POST", "/api/queue", body=b"")[0], 403)
         self.assertEqual(self.srv.request("GET", "/api/queue", host="evil.example")[0], 421)
 
     def test_now_carries_the_attention_items_and_queue_totals(self):

@@ -11,7 +11,7 @@
   var FEED_KEEP = 500;
   var FEED_POLL_MAX = 500;
   var PLAIN_ATTRS = { id: 1, title: 1, type: 1, name: 1, colspan: 1, scope: 1, role: 1, placeholder: 1, "for": 1,
-    "class": 1, x: 1, y: 1, width: 1, height: 1, viewBox: 1, preserveAspectRatio: 1 };
+    "class": 1, x: 1, y: 1, width: 1, height: 1, viewBox: 1, preserveAspectRatio: 1, autocomplete: 1, maxlength: 1 };
   // The sparkline is the only SVG: three element names, made in the SVG namespace by h() and nowhere else.
   var SVG_NS = "http://www.w3.org/2000/svg";
   var SVG_TAGS = { svg: 1, rect: 1, title: 1 };
@@ -187,7 +187,9 @@
 
   // ------------------------------------------------------------------ network
 
-  async function api(path, params) {
+  // GET with a query string, or (opts.body given) one POST of a JSON body with the write token in its header.
+  // The only fetch call in this file.
+  async function api(path, params, opts) {
     var q = new URLSearchParams();
     var keys = Object.keys(params || {});
     for (var i = 0; i < keys.length; i++) {
@@ -198,12 +200,21 @@
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, 20000);
     try {
-      var r = await fetch(path + (qs ? "?" + qs : ""), {
-        cache: "no-store", signal: ctl.signal, headers: { Accept: "application/json" }
-      });
+      var init = { cache: "no-store", signal: ctl.signal, headers: { Accept: "application/json" } };
+      if (opts && opts.body) {
+        init.method = "POST";
+        init.body = JSON.stringify(opts.body);
+        init.headers["Content-Type"] = "application/json";
+        init.headers["X-Console-Write-Token"] = writeToken;
+      }
+      var r = await fetch(path + (qs ? "?" + qs : ""), init);
       var body = null;
       try { body = await r.json(); } catch (e) { body = null; }
-      if (!r.ok) throw new Error((body && body.error) || ("HTTP " + r.status));
+      if (!r.ok) {
+        var err = new Error((body && body.error) || ("HTTP " + r.status));
+        err.status = r.status;
+        throw err;
+      }
       return body;
     } finally {
       clearTimeout(to);
@@ -216,6 +227,10 @@
 
   function applyMeta(meta) {
     if (!meta) return;
+    var w = meta.writes || { enabled: false, actor: null };
+    var changed = writes.enabled !== !!w.enabled || writes.actor !== w.actor;
+    writes = { enabled: !!w.enabled, actor: w.actor, demo: !!meta.demo };
+    if (changed) renderWritePanel();
     if (meta.demo) {
       bannerEl.hidden = false;
       bannerEl.textContent = meta.banner || "DEMO DATA, not your board";
@@ -247,6 +262,7 @@
       var d = await api("/api/now");
       if (gen !== navGen) return;
       applyMeta(d.meta);
+      setInboxCount(d.inbox_total);
       var a = d.attention;
       var r = a.rules;
       var sections = [
@@ -1058,6 +1074,296 @@
     };
   }
 
+  // ------------------------------------------------------------------ INBOX and decisions
+
+  // Write mode. The token is a per-run secret the person pastes after reading it on the terminal. It lives in
+  // this variable only: no storage, no cookie, no URL. A reload forgets it.
+  var writes = { enabled: false, actor: null };
+  var writeToken = "";
+  var selected = {}; // task id -> true: the cards ticked for a bulk action
+  var toastTimer = null;
+  var KIND_TEXT = { approval: "Needs approval", dead: "Dead letter", quiet: "Quiet claim", blocked: "Blocked" };
+  var ACTION_TEXT = { approve: "Approve", reject: "Reject", cancel: "Cancel", requeue: "Requeue", priority: "Priority", note: "Add note" };
+  var DONE_TEXT = { approve: "approved", reject: "rejected", cancel: "cancelled", requeue: "requeued", priority: "re-prioritised", note: "noted" };
+
+  function newRequestId() {
+    var a = new Uint8Array(16);
+    crypto.getRandomValues(a);
+    var s = "r";
+    for (var i = 0; i < a.length; i++) s += (a[i] < 16 ? "0" : "") + a[i].toString(16);
+    return s;
+  }
+
+  function toast(msg, bad) {
+    var el = document.getElementById("toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.className = bad ? "toast bad" : "toast";
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.hidden = true; }, bad ? 12000 : 8000);
+  }
+
+  function setInboxCount(n) {
+    var el = document.getElementById("inbox-count");
+    if (el) el.textContent = n ? String(n) : "";
+  }
+
+  function renderWritePanel() {
+    var panel = document.getElementById("write-panel");
+    var tag = document.getElementById("mode-tag");
+    if (tag) tag.textContent = writes.enabled ? "alpha, writes on as " + writes.actor : "alpha, read-only";
+    if (!panel) return;
+    clear(panel);
+    panel.hidden = !writes.enabled;
+    if (!writes.enabled) return;
+    if (writeToken) {
+      add(panel, [h("span", null, "Decisions are recorded for ", h("strong", { text: writes.actor }), ". Write token set."),
+        h("button", { type: "button", class: "btn small", text: "Forget the token", on: { click: function () { writeToken = ""; renderWritePanel(); } } })]);
+      return;
+    }
+    var input = h("input", { type: "password", id: "write-token", autocomplete: "off", maxlength: 200, "aria-label": "write token", placeholder: "paste the write token from the terminal" });
+    function take() {
+      var v = input.value.trim();
+      if (!v) return;
+      writeToken = v;
+      renderWritePanel();
+      toast("Token held in this page only. Decisions will be recorded for " + writes.actor + ".");
+    }
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") take(); });
+    add(panel, [h("label", { "for": "write-token", text: "Write token " }), input,
+      h("button", { type: "button", class: "btn primary small", text: "Use token", on: { click: take } }),
+      h("span", { class: "muted", text: " Printed once when the console started; it is not in the URL and is forgotten on reload." })]);
+  }
+
+  // A dialog built from DOM calls: title, lines of context, one optional field, Confirm and Close. Escape closes,
+  // Tab stays inside, focus returns to the button that opened it. onConfirm(value) throws to show a message and stay.
+  function openDialog(spec) {
+    var opener = document.activeElement;
+    var input = null;
+    var msg = h("p", { class: "dlg-msg", role: "alert" });
+    if (spec.field) {
+      input = h("input", { type: spec.field.number ? "number" : "text", id: "dlg-field", autocomplete: "off",
+        maxlength: spec.field.number ? 8 : 1000, value: spec.field.value || "", placeholder: spec.field.hint || "" });
+    }
+    var ok = h("button", { type: "button", class: spec.danger ? "btn danger" : "btn primary", text: spec.confirmLabel });
+    var no = h("button", { type: "button", class: "btn", text: "Close" });
+    var box = h("div", { class: "modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "dlg-title" },
+      h("h3", { id: "dlg-title", text: spec.title }), spec.lines || null,
+      input ? h("p", null, h("label", { "for": "dlg-field", text: spec.field.label + (spec.field.required ? " (required)" : " (optional)") }), input) : null,
+      msg, h("div", { class: "btnrow" }, ok, no));
+    var bg = h("div", { class: "modal-bg" }, box);
+    function close() {
+      document.removeEventListener("keydown", onKey, true);
+      if (bg.parentNode) bg.parentNode.removeChild(bg);
+      if (opener && opener.focus) opener.focus();
+    }
+    function onKey(e) {
+      if (e.key === "Escape") { e.preventDefault(); close(); return; }
+      if (e.key !== "Tab") return;
+      var items = input ? [input, ok, no] : [ok, no];
+      var i = items.indexOf(document.activeElement);
+      var next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : (i < 0 || i === items.length - 1 ? 0 : i + 1);
+      e.preventDefault();
+      items[next].focus();
+    }
+    no.addEventListener("click", close);
+    ok.addEventListener("click", async function () {
+      var v = input ? input.value : "";
+      if (spec.field && spec.field.required && !v.trim()) {
+        msg.textContent = spec.field.label + " is required.";
+        input.focus();
+        return;
+      }
+      ok.disabled = true;
+      msg.textContent = "";
+      try {
+        await spec.onConfirm(v);
+        close();
+      } catch (e) {
+        msg.textContent = e.message;
+        ok.disabled = false;
+      }
+    });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(bg);
+    (input || ok).focus();
+  }
+
+  function postJson(path, body) {
+    return api(path, null, { body: body }).catch(function (e) {
+      if (e.status === 401) {
+        writeToken = "";
+        renderWritePanel();
+        e.message = "The write token was refused. Paste it again.";
+      } else if (e.status === 403 && /Origin/.test(e.message)) {
+        e.message = "This page is not served from the console's own address, so the console refused the write.";
+      }
+      throw e;
+    });
+  }
+
+  function afterDecision(text) {
+    toast((writes.demo ? "DEMO, simulated: " : "") + text);
+    inboxScreen.sig = "";
+    if (screen === inboxScreen) return screen.poll();
+    return null;
+  }
+
+  function needToken() {
+    if (writeToken) return false;
+    toast("Paste the write token first (the box above the page).", true);
+    var el = document.getElementById("write-token");
+    if (el) el.focus();
+    return true;
+  }
+
+  function decideDialog(item, action) {
+    if (needToken()) return;
+    var rid = newRequestId(); // one id per dialog: pressing Confirm again after an error repeats, never doubles
+    var short = item.sha.slice(0, 12);
+    var lines = [h("p", null, h("strong", { text: item.title }), " ", h("span", { class: "mono", text: item.id })),
+      h("div", { class: "panel text dlg-body", text: item.body || "(this task has no body text)" })];
+    var field = { label: "Comment", required: false, hint: "shown in the task's events" };
+    var title = ACTION_TEXT[action] + " this task?";
+    var confirmLabel = ACTION_TEXT[action];
+    var danger = action === "cancel" || action === "reject";
+    if (action === "approve") {
+      lines.push(h("p", { class: "muted", text: "You approve the text above (content hash " + short + "). The task opens for agents to take. If the text changes before this is written, the approval is refused." }));
+    } else if (action === "reject") {
+      field.required = true;
+      lines.push(h("p", { class: "muted", text: "The task is cancelled and nothing runs. The comment is recorded as the reason." }));
+    } else if (action === "cancel") {
+      lines.push(h("p", { class: "muted", text: "The task is cancelled. If an agent holds it, that agent's next write is refused." }));
+    } else if (action === "requeue") {
+      lines.push(h("p", { class: "muted", text: "The task opens again with its attempts reset. A lease an agent holds is dropped, so that agent's next write is refused." }));
+    } else if (action === "priority") {
+      field = { label: "Priority (a whole number; higher runs first)", required: true, number: true, value: String(item.priority) };
+    } else if (action === "note") {
+      field.required = true;
+      field.hint = "a note on this task";
+    }
+    openDialog({ title: title, lines: lines, field: field, confirmLabel: confirmLabel, danger: danger,
+      onConfirm: async function (value) {
+        var body = { action: action, task: item.id, request_id: rid };
+        if (action === "approve") body.sha = item.sha;
+        if (action === "priority") {
+          if (!/^-?[0-9]{1,7}$/.test(value.trim())) throw new Error("Priority must be a whole number.");
+          body.priority = parseInt(value, 10);
+        } else if (value.trim()) {
+          body.comment = value.trim();
+        }
+        var a = await postJson("/api/act", body);
+        await afterDecision(a.message + (a.repeated ? " (this request was already recorded)" : ""));
+      } });
+  }
+
+  function bulkDialog(action) {
+    if (needToken()) return;
+    var ids = Object.keys(selected);
+    if (!ids.length) return;
+    var rid = newRequestId();
+    postJson("/api/act/bulk", { action: action, ids: ids, dry_run: true }).then(function (dry) {
+      var list = h("ul", { class: "plain" }, dry.eligible.slice(0, 25).map(function (x) {
+        return h("li", null, badge(x.state, x.state), " ", x.title, " ", h("span", { class: "mono muted", text: x.id }));
+      }));
+      var lines = [h("p", { text: "Dry run: this would " + action + " " + dry.count + " of " + ids.length + " selected tasks. Nothing has been written yet." }), list];
+      if (dry.skipped.length) {
+        lines.push(h("p", { class: "muted", text: "Left out: " + dry.skipped.map(function (s) { return s.id + " (" + s.reason + ")"; }).join(", ") }));
+      }
+      if (!dry.count) {
+        toast("Nothing to " + action + " in the selection.", true);
+        return;
+      }
+      openDialog({ title: ACTION_TEXT[action] + " " + dry.count + " tasks?", lines: lines, confirmLabel: ACTION_TEXT[action] + " " + dry.count,
+        danger: true, field: { label: "Comment", required: false, hint: "recorded on each task" },
+        onConfirm: async function (value) {
+          var body = { action: action, ids: ids, dry_run: false, request_id: rid, confirm: dry.count };
+          if (value.trim()) body.comment = value.trim();
+          var a = await postJson("/api/act/bulk", body);
+          selected = {};
+          await afterDecision(DONE_TEXT[action] + " " + a.done + " of " + a.results.length + " tasks as " + a.actor +
+            (a.ok ? "" : "; some were refused, see the inbox"));
+        } });
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
+  function card(item) {
+    var can = writes.enabled;
+    var pick = null;
+    if (can && (item.allowed.indexOf("cancel") >= 0 || item.allowed.indexOf("requeue") >= 0)) {
+      pick = h("label", { class: "pick" }, h("input", { type: "checkbox", checked: !!selected[item.id], "aria-label": "select " + item.id, on: { change: function (e) {
+        if (e.target.checked) selected[item.id] = true; else delete selected[item.id];
+        updateBulkBar();
+      } } }), " select");
+    }
+    var buttons = null;
+    if (can) {
+      buttons = h("div", { class: "btnrow" }, item.allowed.map(function (a) {
+        var blocked = (a === "approve" || a === "reject") && item.you_produced;
+        return h("button", { type: "button", class: "btn" + (a === "approve" ? " primary" : ""), text: ACTION_TEXT[a], disabled: blocked,
+          title: blocked ? "You produced or touched this task, so another person has to decide on it" : "",
+          on: { click: function () { decideDialog(item, a); } } });
+      }));
+    }
+    var evs = item.notes.length ? h("ul", { class: "tl" }, item.notes.map(function (n) {
+      return h("li", null, h("span", { class: "mono", text: "#" + n.id }), " ", badge(n.kind, "kind " + n.kind), " ", n.author, n.body ? ": " : "", n.body ? h("span", { class: "text", text: n.body }) : null);
+    })) : h("p", { class: "muted", text: "No events recorded for this task." });
+    return h("section", { class: "card " + item.kind, "data-id": item.id },
+      h("div", { class: "card-head" }, badge(KIND_TEXT[item.kind] || item.kind, item.kind === "approval" ? "awaiting_approval" : "bad"),
+        h("strong", null, taskLink(item.id, item.title)), pick),
+      h("p", { class: "summary", text: item.summary }),
+      h("p", { class: "muted" }, "Produced by ", item.created_by, item.owner ? ", held by " + item.owner : "", ", priority ", item.priority,
+        ", content hash ", h("span", { class: "mono", text: item.sha.slice(0, 12) })),
+      h("div", { class: "panel text", text: item.body || "(this task has no body text)" }),
+      item.body_clipped ? h("p", { class: "note-line", text: "The body is long and shown cut; approve only what you have read." }) : null,
+      h("details", null, h("summary", { text: "Last events" }), evs),
+      can && item.you_produced && item.kind === "approval" ? h("p", { class: "note-line", text: "You (" + writes.actor + ") produced or touched this task. The board refuses an approval from the same name; ask someone else." }) : null,
+      buttons);
+  }
+
+  var bulkBar = null;
+  function updateBulkBar() {
+    if (!bulkBar) return;
+    var n = Object.keys(selected).length;
+    var spans = bulkBar.querySelectorAll("[data-count]");
+    for (var i = 0; i < spans.length; i++) spans[i].textContent = n + " selected";
+    var btns = bulkBar.querySelectorAll("button");
+    for (var j = 0; j < btns.length; j++) btns[j].disabled = n === 0;
+  }
+
+  var inboxScreen = {
+    name: "inbox",
+    sig: "",
+    start: function () { this.sig = ""; return this.poll(); },
+    poll: async function () {
+      var gen = navGen;
+      var d = await api("/api/inbox");
+      if (gen !== navGen) return;
+      applyMeta(d.meta);
+      setInboxCount(d.total);
+      // Redraw only when something changed, so a click is never lost to a poll replacing the button under it.
+      var sig = JSON.stringify([d.head, writes.enabled, !!writeToken, d.items.map(function (i) { return [i.id, i.kind, i.state, i.sha, i.priority, i.notes.length, i.you_produced]; })]);
+      if (sig === this.sig) return;
+      this.sig = sig;
+      var rules = h("ul", null, Object.keys(d.rules).map(function (k) { return h("li", null, h("strong", { text: KIND_TEXT[k] + ": " }), d.rules[k]); }));
+      bulkBar = writes.enabled ? h("div", { class: "bulk" }, h("span", { "data-count": "1", text: "0 selected" }),
+        h("button", { type: "button", class: "btn", text: "Cancel selected", disabled: true, on: { click: function () { bulkDialog("cancel"); } } }),
+        h("button", { type: "button", class: "btn", text: "Requeue selected", disabled: true, on: { click: function () { bulkDialog("requeue"); } } }),
+        h("span", { class: "muted", text: " A dry run shows the count before anything is written. There is no bulk approve." })) : null;
+      show([
+        h("h2", { text: "Inbox" }),
+        h("p", { class: "muted", text: d.total + " waiting for a person" + (d.truncated ? "; showing the first " + d.items.length : "") + ". Only items that need a decision are listed." }),
+        writes.enabled ? null : h("p", { class: "note-line", text: "Read-only. Start the console with --allow-writes to approve, reject, cancel, requeue and add notes here." }),
+        bulkBar,
+        d.items.length ? d.items.map(card) : emptyNote("Nothing is waiting for a person."),
+        h("details", null, h("summary", { text: "What puts a task here" }), rules),
+        d.activity_note ? h("p", { class: "note-line", text: d.activity_note }) : null
+      ]);
+      updateBulkBar();
+    }
+  };
+
   // ------------------------------------------------------------------ routing and polling
 
   function parseRoute() {
@@ -1079,6 +1385,7 @@
     if (path === "#/feed") return { name: "feed" };
     if (path === "#/scorecard") return { name: "scorecard" };
     if (path === "#/queue") return { name: "queue" };
+    if (path === "#/inbox") return { name: "inbox" };
     return { name: "now" };
   }
 
@@ -1114,6 +1421,7 @@
     else if (r.name === "feed") screen = makeFeedScreen();
     else if (r.name === "scorecard") screen = makeScorecardScreen();
     else if (r.name === "queue") screen = queueScreen;
+    else if (r.name === "inbox") screen = inboxScreen;
     else if (r.name === "experiments") screen = experimentsScreen;
     else if (r.name === "experiment") screen = makeExperimentScreen(r.id);
     else screen = nowScreen;

@@ -11,9 +11,10 @@
 <body>
   <div id="banner" class="demo-banner" hidden>DEMO DATA, not your board</div>
   <header class="top">
-    <h1 class="brand">Lattice board <span class="tag">alpha, read-only</span></h1>
+    <h1 class="brand">Lattice board <span class="tag" id="mode-tag">alpha, read-only</span></h1>
     <nav aria-label="Screens">
       <a href="#/now" data-nav="now">Now</a>
+      <a href="#/inbox" data-nav="inbox">Inbox <span id="inbox-count" class="pill" aria-label="items waiting"></span></a>
       <a href="#/queue" data-nav="queue">Queue</a>
       <a href="#/feed" data-nav="feed">Feed</a>
       <a href="#/scorecard" data-nav="scorecard">Scorecard</a>
@@ -21,12 +22,14 @@
     </nav>
   </header>
   <p id="status" class="status" role="status" aria-live="polite"></p>
+  <section id="write-panel" class="write-panel" aria-label="Write mode" hidden></section>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <main id="view" tabindex="-1">
     <p class="muted">Loading. This page needs JavaScript; it makes requests only to this server.</p>
   </main>
   <footer class="foot">
     Board text is written by agents and is shown as plain text, never as markup. This console
-    only reads.
+    only reads, unless it was started with --allow-writes.
   </footer>
 </body>
 </html>

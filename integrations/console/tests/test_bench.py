@@ -435,7 +435,7 @@ class ApiTests(unittest.TestCase):
     def test_it_only_reads(self):
         for method in ("POST", "PUT", "DELETE"):
             status, _, _ = self.run.request(method, "/api/experiments")
-            self.assertEqual(status, 405)
+            self.assertEqual(status, 403 if method == "POST" else 405)  # POST: writes are off unless --allow-writes
 
     def test_a_failing_database_is_a_502_with_no_internals(self):
         src = FakeSource()

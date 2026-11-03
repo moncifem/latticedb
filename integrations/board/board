@@ -68,6 +68,12 @@ usage: board <command> [arguments]
   approve ID [TEXT]             move an awaiting_approval task to open
   cancel ID [TEXT]              cancel a task that is not done
   decide ID TEXT                record a decision on a task
+  act ACTION ID --request-id R [--hash SHA256] [--comment TEXT] [--priority N]
+                                a person's decision (the console uses it): ACTION is approve, reject,
+                                cancel, requeue, priority or note. BOARD_AUTHOR must be human.NAME.
+                                approve and reject refuse the person who produced the task; approve needs
+                                the content hash the person saw; reject and note need a comment; a repeated
+                                request id changes nothing. Prints done EVENT, noop EVENT or refused CODE
   since [EVENT_ID] [--task ID]  print events after EVENT_ID (default 0), oldest first
   watch ID [--after EVENT_ID]   print one task's events after EVENT_ID (default 0), oldest first
   head                         print the newest event id (0 when there is none)
@@ -208,6 +214,12 @@ need_author() {
     *[!A-Za-z0-9._-]*) die "BOARD_AUTHOR may use only letters, digits, '.', '_' and '-'" ;;
   esac
   [ ${#AUTHOR} -le 64 ] || die "BOARD_AUTHOR is longer than 64 characters"
+  # The human. names belong to `board act`, the people's decisions (the console). Every other command
+  # refuses them, so an agent that names itself human.x still cannot claim, note or finish as a person.
+  case $cmd in
+    act) ;;
+    *) case $AUTHOR in human.*) die "BOARD_AUTHOR human.* is reserved for 'board act'; use another name for $cmd" ;; esac ;;
+  esac
 }
 
 need_id() {
@@ -298,13 +310,14 @@ SQL
 # the options named in ALLOWED (a space separated list without the leading dashes). An option that
 # is not allowed is a positional word, so text such as "--x" still reaches note and done. The
 # values land in O_FENCE O_LEASE O_RETRY_IN O_MAX_ACTIVE O_OWNER O_PRIORITY O_PARENT O_BODY
-# O_BLOCKED_BY O_MAX_ATTEMPTS, and O_NEEDS_APPROVAL (0 or 1). The caller validates them.
+# O_BLOCKED_BY O_MAX_ATTEMPTS O_REQUEST_ID O_HASH O_COMMENT, and O_NEEDS_APPROVAL (0 or 1). The caller validates them.
 parse_args() {
   pa_allowed=$1
   shift
   P1='' P2='' NARGS=0
   O_FENCE='' O_LEASE='' O_RETRY_IN='' O_MAX_ACTIVE='' O_OWNER='' O_PRIORITY='' O_PARENT=''
   O_BODY='' O_BLOCKED_BY='' O_MAX_ATTEMPTS='' O_NEEDS_APPROVAL=0 O_GIVEN=' '
+  O_REQUEST_ID='' O_HASH='' O_COMMENT=''
   pa_rest=0
   while [ $# -gt 0 ]; do
     pa_opt=
@@ -349,6 +362,9 @@ parse_args() {
       body) O_BODY=$2 ;;
       blocked-by) O_BLOCKED_BY=$2 ;;
       max-attempts) O_MAX_ATTEMPTS=$2 ;;
+      request-id) O_REQUEST_ID=$2 ;;
+      hash) O_HASH=$2 ;;
+      comment) O_COMMENT=$2 ;;
     esac
     shift 2
   done
@@ -1454,6 +1470,162 @@ SQL
   printf 'cancelled %s as event %s\n' "$task" "$(printf '%s\n' "$OUT" | cut -f2)"
 }
 
+# ---- act: a person's decision ---------------------------------------------------------------
+
+# sha256_text TEXT: SHA256 becomes the lower case hex sha-256 of TEXT, bytes exactly as given. The console
+# computes the same value from the task row it showed: sha256 of title, a newline, body.
+sha256_text() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    SHA256=$(printf '%s' "$1" | sha256sum | cut -d' ' -f1)
+  elif command -v shasum >/dev/null 2>&1; then
+    SHA256=$(printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1)
+  else
+    die "act needs sha256sum or shasum"
+  fi
+  case $SHA256 in '' | *[!0-9a-f]*) die "could not compute a sha-256" ;; esac
+  [ ${#SHA256} -eq 64 ] || die "could not compute a sha-256"
+}
+
+# act_refuse CODE: the answer for a decision that was understood and refused. A program reads the code on
+# standard output; exit status 5. Nothing was written.
+act_refuse() {
+  printf 'refused %s\n' "$1"
+  exit 5
+}
+
+# act ACTION TASK --request-id R [--hash SHA] [--comment TEXT] [--priority N]
+#
+# What a person decides about a task, written as ONE transaction that also records who decided, what, on
+# which content, in human_actions (keyed by the request id, so a repeat is a no-op) and as an event of the
+# same kind. The author is human.NAME. approve and reject refuse a person who produced the task: the creator,
+# the owner, or anyone whose name (without human.) wrote an event on it. approve needs the sha-256 of the
+# task's title and body that the person was shown, and refuses when the text is different now. This is a
+# check on a name the caller gave itself, like every author on this board: it stops the console's user from
+# approving what they created, not an agent that lies about its name.
+cmd_act() {
+  parse_args "request-id hash comment priority" "$@"
+  [ "$NARGS" -eq 2 ] || die "act takes an action and a task id"
+  action=$P1
+  task=$P2
+  case $action in
+    approve | reject | cancel | requeue | priority | note) ;;
+    *) die "act: the action must be approve, reject, cancel, requeue, priority or note" ;;
+  esac
+  case $AUTHOR in
+    human.?*) ;;
+    *) die "act: BOARD_AUTHOR must be human.NAME (a person); got a name without the human. prefix" ;;
+  esac
+  plain=${AUTHOR#human.}
+  need_id "$task"
+  req=$O_REQUEST_ID
+  case $req in
+    '' | *[!A-Za-z0-9_-]*) die "act: --request-id must be 8 to 64 letters, digits, '_' or '-'" ;;
+  esac
+  { [ ${#req} -ge 8 ] && [ ${#req} -le 64 ]; } || die "act: --request-id must be 8 to 64 letters, digits, '_' or '-'"
+  comment=$O_COMMENT
+  need_line comment "$comment" 0
+  hash=$O_HASH
+  if [ -n "$hash" ]; then
+    case $hash in *[!0-9a-f]*) die "act: --hash must be 64 lower case hex digits" ;; esac
+    [ ${#hash} -eq 64 ] || die "act: --hash must be 64 lower case hex digits"
+  fi
+  newprio=0
+  if [ "$action" = priority ]; then
+    given priority || die "act priority needs --priority N"
+    need_int priority "$O_PRIORITY"
+    newprio=$O_PRIORITY
+  fi
+  case $action in
+    reject | note) [ -n "$comment" ] || act_refuse comment_required ;;
+    approve) [ -n "$hash" ] || act_refuse hash_required ;;
+  esac
+  # A request id that was used before: the same decision again changes nothing and names the event it made.
+  psql_run tuples "SELECT task_id, author, kind, event_id FROM human_actions WHERE request_id = :'req';" \
+    -v req="$req" || fail_db
+  if [ -n "$OUT" ]; then
+    if [ "$(printf '%s\n' "$OUT" | cut -f1-3)" = "$task$TAB$AUTHOR$TAB$action" ]; then
+      printf 'noop %s\n' "$(printf '%s\n' "$OUT" | cut -f4)"
+      return 0
+    fi
+    act_refuse request_reused
+  fi
+  psql_run tuples "SELECT state, created_by, coalesce(owner, ''), title, body FROM tasks WHERE id = :'task';" \
+    -v task="$task" || fail_db
+  [ -n "$OUT" ] || act_refuse not_found
+  case $OUT in *"$NL"*) act_refuse unreadable ;; esac
+  act_state=$(printf '%s\n' "$OUT" | cut -f1)
+  act_by=$(printf '%s\n' "$OUT" | cut -f2)
+  act_owner=$(printf '%s\n' "$OUT" | cut -f3)
+  act_title=$(printf '%s\n' "$OUT" | cut -f4)
+  act_body=$(printf '%s\n' "$OUT" | cut -f5-)
+  case $action in
+    approve | reject) [ "$act_state" = awaiting_approval ] || act_refuse wrong_state ;;
+    cancel) case $act_state in open | claimed | awaiting_approval) ;; *) act_refuse wrong_state ;; esac ;;
+    requeue) case $act_state in dead | claimed) ;; *) act_refuse wrong_state ;; esac ;;
+    priority) case $act_state in done | cancelled) act_refuse wrong_state ;; esac ;;
+  esac
+  sha256_text "$act_title$NL$act_body"
+  act_sha=$SHA256
+  act_cond="state = :'state' AND title = :'title' AND body = :'body'"
+  case $action in
+    approve | reject)
+      for act_who in "$act_by" "$act_owner"; do
+        if [ "$act_who" = "$AUTHOR" ] || [ "$act_who" = "$plain" ]; then act_refuse self_approval; fi
+      done
+      psql_run tuples "SELECT id FROM events WHERE task_id = :'task' AND author = :'plain' ORDER BY id LIMIT 1;" \
+        -v task="$task" -v plain="$plain" || fail_db
+      [ -z "$OUT" ] || act_refuse self_approval
+      act_cond="$act_cond AND created_by <> :'author' AND created_by <> :'plain' AND coalesce(owner, '') <> :'author' AND coalesce(owner, '') <> :'plain'"
+      ;;
+  esac
+  if [ "$action" = approve ] && [ "$hash" != "$act_sha" ]; then act_refuse stale; fi
+  case $action in
+    cancel | requeue) ensure_lease "$task" ;;
+  esac
+  case $action in
+    approve) act_update="UPDATE tasks SET state = 'open', updated_at = :ts WHERE id = :'task';" ;;
+    reject) act_update="UPDATE tasks SET state = 'cancelled', owner = NULL, updated_at = :ts WHERE id = :'task';" ;;
+    cancel)
+      act_update="UPDATE tasks SET state = 'cancelled', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET lease_until = 0 WHERE task_id = :'task';"
+      ;;
+    requeue)
+      act_update="UPDATE tasks SET state = 'open', owner = NULL, updated_at = :ts WHERE id = :'task';
+UPDATE task_leases SET attempts = 0, lease_until = 0, not_before = 0, last_error = '' WHERE task_id = :'task';"
+      ;;
+    priority) act_update="UPDATE tasks SET priority = :prio, updated_at = :ts WHERE id = :'task';" ;;
+    note) act_update=''; act_cond="title = :'title'" ;;
+  esac
+  case $action in
+    approve) act_text="approved content sha256:$act_sha" ;;
+    priority) act_text="priority set to $newprio" ;;
+    note) act_text=$comment ;;
+    *) act_text=$action ;;
+  esac
+  if [ "$action" != note ] && [ -n "$comment" ]; then act_text="$act_text: $comment"; fi
+  need_line text "$act_text" 1
+  sql=$(bump_sql
+    printf '%s\n' '\set ok f'
+    printf '%s\n' "SELECT ($act_cond) AS ok FROM tasks WHERE id = :'task' \\gset"
+    printf '%s\n' '\if :ok'
+    printf '%s\n' "$act_update"
+    cat <<'SQL'
+INSERT INTO events (id, task_id, author, kind, body, created_at)
+  SELECT :seq, id, :'author', :'action', :'text', :ts FROM tasks WHERE id = :'task';
+INSERT INTO human_actions (request_id, task_id, author, kind, body_sha, remark, event_id, created_at)
+  VALUES (:'req', :'task', :'author', :'action', :'sha', :'comment', :seq, :ts);
+\endif
+SELECT :'ok' AS ok, :seq AS seq;
+COMMIT;
+SQL
+  )
+  tx "$sql" -v author="$AUTHOR" -v plain="$plain" -v task="$task" -v state="$act_state" -v title="$act_title" \
+    -v body="$act_body" -v action="$action" -v text="$act_text" -v req="$req" -v sha="$act_sha" \
+    -v comment="$comment" -v prio="$newprio" -v ts="$(now)" || exit 1
+  [ "$(printf '%s\n' "$OUT" | cut -f1)" = t ] || act_refuse changed
+  printf 'done %s\n' "$(printf '%s\n' "$OUT" | cut -f2)"
+}
+
 # ---- decide and the read commands -----------------------------------------------------------
 
 cmd_decide() {
@@ -2237,7 +2409,7 @@ AUTHOR=${BOARD_AUTHOR:-}
 cmd=$1
 shift
 case $cmd in
-  add | claim | note | done | decide | heartbeat | fail | release | reap | block | unblock | approve | cancel \
+  add | claim | note | done | decide | heartbeat | fail | release | reap | block | unblock | approve | cancel | act \
     | bench-experiment | bench-arm | bench-task | bench-plan | bench-record | activity | activity-purge)
     need_author
     ;;
@@ -2262,6 +2434,7 @@ case $cmd in
   unblock) cmd_unblock "$@" ;;
   approve) cmd_approve "$@" ;;
   cancel) cmd_cancel "$@" ;;
+  act) cmd_act "$@" ;;
   decide) cmd_decide "$@" ;;
   since) cmd_since "$@" ;;
   watch) cmd_watch "$@" ;;
