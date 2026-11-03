@@ -11,9 +11,9 @@ agent in step 6 can be your own script; `claude` or `codex` is optional.
 ```sh
 dev/lattice-dev.sh up
 dev/lattice-dev.sh account add board \
-  --read counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log \
-  --write counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log \
-  --ddl counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log
+  --read counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log,human_actions \
+  --write counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log,human_actions \
+  --ddl counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log,human_actions
 ```
 
 The first five tables are the board; the next four are used only by `board-bench` (step 9) and the last two only by
@@ -215,6 +215,42 @@ database host does not answer, and then once per wait, not once per call) and ne
 publishes a row for the agent it supervises when `BOARD_ACTIVITY=1` is set for the runner. What it cannot tell you:
 the rows are what the agent's own hook reported, so a compromised agent can lie, and "no tool activity for 12
 minutes" does not mean the agent is stuck.
+
+## 8c. Approve, reject and steer from the browser (optional)
+
+The console is read-only until you start it with `--allow-writes`. Then the **Inbox** lists what needs a person (tasks
+waiting for approval, dead letters, claims whose agent went quiet, tasks blocked for good) with the text of each task, and
+the buttons approve, reject, cancel, requeue, priority and note. Every decision is recorded as `human.NAME` with an event
+and an audit row, through the same `board` helper (`board act`).
+
+```sh
+# the board account needs the new table: --read/--write/--ddl human_actions (and `board init` once)
+board init
+board add "Raise the export retry delay" --body "Proposed: wait 30 s, not 5 s" --needs-approval   # as an agent
+integrations/console/lattice-console serve --allow-writes --actor alice
+# console: serving http://127.0.0.1:8765/ from the board database, writes ON as human.alice
+# console: write token (shown once, paste it into the page): <the token>
+```
+
+Open `http://127.0.0.1:8765/#/inbox`, paste the token into the box under the header, read the card, press **Approve**
+and confirm. The toast names the event id; the agent's `board next` takes the task. The same thing from a shell (which
+is what the console runs):
+
+```sh
+BOARD_AUTHOR=human.alice board act approve TASK --request-id demo-0001 --hash "$(printf '%s\n%s' "$TITLE" "$BODY" | shasum -a 256 | cut -d' ' -f1)"
+# done 786        (again with the same --request-id: noop 786)
+```
+
+An approval is refused when the task text changed since you read it (`refused stale`) and when you produced the task
+(`refused self_approval`; try `--actor` with the name the task was created under). Reject and note need a comment. To
+try the page without a database: `integrations/console/lattice-console serve --demo --allow-writes`, which simulates the
+decisions in memory and says so on every toast. What this does not do: it cannot tell who you really are (names are
+self-declared), and anyone with the token or the database account can decide. See
+[the console README](../integrations/console/README.md#write-mode-decisions-by-a-person).
+
+What was run for this section: the demo with the commands above through `curl` and a browser (token, stale hash, approve,
+repeat, a wrong Origin and a rebinding Host), and the helper commands against a fake `psql`. The commands against a real
+board are run by `integrations/board/tests/act_devstack.py` in the `dev-stack` job.
 
 ## 9. Compare two agent configurations
 

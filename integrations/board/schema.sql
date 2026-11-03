@@ -35,8 +35,10 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- Append-only progress log. Ids come from counters ('events'): they are unique and rise in
 -- commit order, so a reader that polls "id > last seen" never misses an event. Ids can skip
 -- (a claim that loses still uses one), but no committed event is skipped.
--- kind is add, claim, note, done, decision, fail, expired, release, approve, cancel, block, unblock
--- or fenced (a write refused because its agent lost the lease; informational).
+-- kind is add, claim, note, done, decision, fail, expired, release, approve, cancel, block, unblock,
+-- fenced (a write refused because its agent lost the lease; informational), or one of the kinds a person's
+-- decision writes through `board act`: approve, reject, cancel, requeue, priority and note, whose author is
+-- human.NAME.
 CREATE TABLE IF NOT EXISTS events (
     id bigint PRIMARY KEY,
     task_id text NOT NULL,
@@ -183,4 +185,21 @@ CREATE TABLE IF NOT EXISTS agent_activity_log (
     calls bigint NOT NULL DEFAULT 0,
     mix text NOT NULL DEFAULT '',
     at bigint NOT NULL
+);
+
+-- Decisions of people (`board act`, used by the console's write mode). One row per decision, written in the
+-- same transaction as the task change and the event of the same kind; request_id is the client-chosen id of the
+-- request, so asking again changes nothing. author is human.NAME, kind the action (approve, reject, cancel,
+-- requeue, priority or note), body_sha the sha-256 (hex) of the task's title, a newline and its body at the
+-- time of the decision (for approve, the text the person was shown), remark the person's comment ('' when none),
+-- event_id the id of the event it wrote. Append-only by use: the helper never updates or deletes a row.
+CREATE TABLE IF NOT EXISTS human_actions (
+    request_id text PRIMARY KEY,
+    task_id text NOT NULL,
+    author text NOT NULL,
+    kind text NOT NULL,
+    body_sha text NOT NULL,
+    remark text NOT NULL DEFAULT '',
+    event_id bigint NOT NULL,
+    created_at bigint NOT NULL
 );

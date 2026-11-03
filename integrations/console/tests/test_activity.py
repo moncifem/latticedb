@@ -579,7 +579,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(d["cursor"], 2)
 
     def test_the_agent_route_is_read_only(self):
-        self.assertEqual(self.srv.request("POST", "/api/agent?name=alice", body=b"")[0], 405)
+        self.assertEqual(self.srv.request("POST", "/api/agent?name=alice", body=b"")[0], 403)  # writes are off
 
     def test_an_answer_over_the_cap_is_an_error_not_a_download(self):
         old = server_mod.MAX_BODY

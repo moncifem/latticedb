@@ -15,7 +15,7 @@ from typing import Optional
 MAX_CHAIN = 50  # a parent chain longer than this is reported as too deep, not followed
 TASK_STATES = ("open", "claimed", "done", "dead", "cancelled", "awaiting_approval")
 EVENT_KINDS = ("add", "claim", "note", "done", "decision", "fail", "expired", "release", "approve",
-               "cancel", "block", "unblock", "fenced")
+               "cancel", "block", "unblock", "fenced", "reject", "requeue", "priority")
 QUEUE_LIST_LIMIT = 200  # rows per queue section; the section also reports its total
 BLOCKER_WALK_LIMIT = 256  # tasks visited when looking for a dependency cycle
 MAX_TEXT = 4096  # the helper's limit; direct writers may exceed it, the API cuts there

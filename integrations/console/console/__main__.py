@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
+from . import actions as actions_mod
 from .demo import DemoSource
 from .server import BIND_HOST, ConsoleServer
 from .service import BoardService
@@ -16,7 +18,7 @@ DEFAULT_PORT = 8765
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="lattice-console",
-        description="Read-only local console for the Lattice agent board (alpha).",
+        description="Local console for the Lattice agent board (alpha). Read-only unless --allow-writes is given.",
     )
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("serve", help="serve the console on 127.0.0.1")
@@ -33,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "flagged (default 10)")
     s.add_argument("--open-hours", type=int, default=24,
                    help="an open task older than this needs attention (default 24)")
+    s.add_argument("--allow-writes", action="store_true",
+                   help="let a person approve, reject, cancel, requeue, re-prioritise and note from the page, "
+                        "through `board act`; needs the per-run write token this prints once")
+    s.add_argument("--actor", default=None,
+                   help="the person the decisions are recorded for, as human.NAME (default: the OS user)")
+    s.add_argument("--board", default=None,
+                   help="the board helper to run (default: integrations/board/board next to this package)")
     return p
 
 
@@ -47,7 +56,22 @@ def main(argv=None) -> int:
         else:
             source = PsqlSource(connection_url(args.url))
         service = BoardService(source, args.stale_minutes, args.open_hours, quiet_minutes=args.quiet_minutes)
-        server = ConsoleServer(service, args.port, BIND_HOST)
+        acts = None
+        token = ""
+        if args.allow_writes:
+            actor = actions_mod.actor_identity(args.actor)
+            token = actions_mod.new_token()
+            if args.demo:
+                runner = source.act_runner(actor)  # simulated against the in-memory demo board
+            else:
+                board = args.board or actions_mod.default_board_path()
+                if not os.access(board, os.X_OK):
+                    raise ConfigError("the board helper %r is not an executable file; give --board" % board)
+                runner = actions_mod.HelperRunner(board, actor, connection_url(args.url))
+            acts = actions_mod.Actions(service, actor, token, runner)
+        elif args.actor or args.board:
+            raise ConfigError("--actor and --board only mean something with --allow-writes")
+        server = ConsoleServer(service, args.port, BIND_HOST, actions=acts)
     except (ConfigError, ValueError) as e:
         print("console: %s" % e, file=sys.stderr)
         return 2
@@ -56,8 +80,14 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 1
     # Never print the connection URL: say only where the data comes from.
-    where = "DEMO DATA (no database)" if args.demo else "the board database (read-only)"
-    print("console: serving %s from %s" % (server.url, where), flush=True)
+    where = "DEMO DATA (no database)" if args.demo else "the board database"
+    mode = ("writes ON as %s (simulated: DEMO DATA)" % acts.actor if args.demo else "writes ON as %s" % acts.actor) \
+        if acts else "read-only"
+    print("console: serving %s from %s, %s" % (server.url, where, mode), flush=True)
+    if acts:
+        # The one place the token is ever shown. Not in the URL, not in a log, not on any page: paste it into the
+        # page when it asks. A new one is made on every start.
+        print("console: write token (shown once, paste it into the page): %s" % token, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

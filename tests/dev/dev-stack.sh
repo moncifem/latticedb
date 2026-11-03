@@ -22,6 +22,9 @@
 #   5b3. live agent activity (integrations/board/tests/activity_devstack.py): 500 synthetic hook payloads become a
 #       handful of database connections and the counters add up, hostile fields are stored as clean labels, the log
 #       ring stays bounded, `board run` publishes a row for its child, the console reads the rows, purge deletes them.
+#   5b4. a person's decisions (integrations/board/tests/act_devstack.py): `board act` approve, reject, cancel, requeue,
+#       priority and note against the board, the self-approval, stale-hash and repeated-request-id rules, the audit row
+#       written with the change, and the console in write mode (token, Origin, Host, bulk dry run) over the same board.
 #   1c. the TLS start limit flags are set when the image has them, and reported when it does not.
 #   6.  down, then up on the same volumes; the rows are read back.
 #   6a. remove alice: her token is revoked, her env file goes, an old copy of it no longer logs in,
@@ -274,7 +277,7 @@ ok "status_lists_the_accounts_without_passwords"
 # and its password is never printed. The checks that need a server of their own (password in a URL,
 # restart and durability) are skipped by that mode and say so in the output. The account is removed
 # afterwards so the later steps see the accounts they expect.
-board_tables=counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log
+board_tables=counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log,human_actions
 expect_ok add-board "$dev" account add board --read "$board_tables" --write "$board_tables" --ddl "$board_tables"
 board_state=$(mktemp -d "$work/board-state.XXXXXX")
 chmod 700 "$board_state"
@@ -385,6 +388,28 @@ if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/bo
   fail "the activity driver output contains the board account's password"
 fi
 ok "agent_activity_keeps_its_rules_against_the_dev_stack"
+
+# --- 5b4. a person's decisions (integrations/board/tests/act_devstack.py): `board act` and the console's write mode against
+# this board. Small: about 80 helper calls and three short console processes, no model, no Docker of its own.
+act_state=$(mktemp -d "$work/act-state.XXXXXX")
+chmod 700 "$act_state"
+if ! (
+  set -a
+  # shellcheck source=/dev/null
+  . "$LATTICE_DEV_HOME/accounts/board.env"
+  set +a
+  BOARD_STATE_DIR="$act_state" TMPDIR="$act_state" \
+    python3 "$root/integrations/board/tests/act_devstack.py" --cancel-leftovers
+) >"$work/board-act.out" 2>"$work/board-act.err"; then
+  tail -n 40 "$work/board-act.out" >&2
+  tail -n 20 "$work/board-act.err" >&2
+  fail "integrations/board/tests/act_devstack.py failed against the dev stack"
+fi
+grep -q '^act-devstack: all checks passed$' "$work/board-act.out" || fail "the act driver did not report that all checks passed"
+if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/board-act.out" "$work/board-act.err"; then
+  fail "the act driver output contains the board account's password"
+fi
+ok "board_act_keeps_its_rules_against_the_dev_stack"
 
 if ! (
   set -a

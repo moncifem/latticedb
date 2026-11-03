@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import activity as act
-from . import bench, metrics, model
+from . import bench, inbox, metrics, model
 from .source import SourceError, scrub
 
 TASK_LIMIT = 5000
@@ -126,10 +126,18 @@ class BoardService:
         self._failure: Optional[BaseException] = None
         self._bench: OrderedDict = OrderedDict()
         self._bench_gates: dict = {}
+        self.writes: Optional[dict] = None  # {'enabled': True, 'actor': 'human.NAME'} once write mode is on
 
     @property
     def demo(self) -> bool:
         return bool(getattr(self.source, "demo", False))
+
+    def invalidate(self) -> None:
+        """Drop the cached read so the next answer comes from the database (after a decision was written)."""
+        with self._lock:
+            self._last_refresh = None
+            self._failure = None
+            self._failed_until = 0.0
 
     def snapshot(self) -> Snapshot:
         with self._lock:
@@ -242,6 +250,7 @@ class BoardService:
             "clock": snap.clock,
             "leases_available": snap.leases_available,
             "activity_available": snap.activity_available,
+            "writes": dict(self.writes) if self.writes else {"enabled": False, "actor": None},
             "stale_minutes": self.stale_s // 60,
             "open_hours": self.open_s // 3600,
             "truncated": {"tasks": snap.truncated_tasks, "events": snap.truncated_events,
@@ -269,6 +278,9 @@ class BoardService:
             "agents": agents,
             "attention": self._attention(s),
             "queue_totals": s.queue["totals"],
+            "inbox_total": inbox.total_items(
+                s.queue, act.quiet_claims(s.activity, s.by_id, s.queue, s.now) if s.activity_available else [],
+                s.now, self.open_s),
             "head": s.head,
             "activity": {"available": s.activity_available, "head": s.activity_head, "note": s.activity_note,
                          "working_s": act.WORKING_S, "quiet_minutes": self.quiet_s // 60,
@@ -301,6 +313,16 @@ class BoardService:
             "awaiting": "created with --needs-approval, waiting for `board approve`",
         }
         return q
+
+    def inbox_payload(self) -> dict:
+        s = self.snapshot()
+        quiet = act.quiet_claims(s.activity, s.by_id, s.queue, s.now) if s.activity_available else []
+        actor = (self.writes or {}).get("actor") or ""
+        out = inbox.build_inbox(s.by_id, s.events, s.queue, quiet, s.now, self.open_s, actor)
+        out["meta"] = self.meta(s)
+        out["head"] = s.head
+        out["activity_note"] = "" if s.activity_available else "Without the activity tables the inbox cannot list quiet claims."
+        return out
 
     def task_payload(self, task_id: str) -> Optional[dict]:
         s = self.snapshot()

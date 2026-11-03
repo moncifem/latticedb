@@ -28,7 +28,7 @@ class Sparkline(unittest.TestCase):
         m = re.search(r"var PLAIN_ATTRS = \{(.*?)\};", self.js, re.S)
         keys = set(re.findall(r'"?(\w+)"?: 1', m.group(1)))
         self.assertEqual(keys, {"id", "title", "type", "name", "colspan", "scope", "role", "placeholder", "for", "class",
-                                "x", "y", "width", "height", "viewBox", "preserveAspectRatio"})
+                                "x", "y", "width", "height", "viewBox", "preserveAspectRatio", "autocomplete", "maxlength"})
 
     def test_class_is_set_as_a_property_on_html_and_as_an_attribute_on_svg(self):
         self.assertIn('if (k === "class" && !isSvg) el.className = v;', self.js)

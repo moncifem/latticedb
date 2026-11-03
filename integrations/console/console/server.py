@@ -1,7 +1,9 @@
-"""The HTTP server: loopback only, GET and HEAD only, one page and a small JSON API.
+"""The HTTP server: loopback only, one page and a small JSON API.
 
-Everything the board holds is untrusted text. The server never turns it into markup (it only
-emits JSON and three fixed static files), and every response carries the same strict headers.
+GET and HEAD read. POST exists for two routes (/api/act, /api/act/bulk) and only when the console was started
+with --allow-writes; without that every POST is a 403 (actions.py says what a request must pass before the
+board helper is asked to write). Everything the board holds is untrusted text. The server never turns it
+into markup (it only emits JSON and three fixed static files), and every response carries the same strict headers.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
+from . import actions as actions_mod
 from . import model
 from .source import ConfigError, SourceError, scrub
 
@@ -30,6 +33,8 @@ MAX_CONNECTIONS = 32  # beyond this many open connections a new one is answered 
 FEED_DEFAULT_LIMIT = 100
 FEED_MAX_LIMIT = 500
 MAX_CURSOR = 2**53
+MAX_POST = 8 * 1024  # a decision is a few hundred bytes; bulk lists at most 25 ids
+POST_ROUTES = ("/api/act", "/api/act/bulk")
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
        "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -140,9 +145,10 @@ SCORE_PARAMS = {"from": EPOCH, "to": EPOCH, "from2": EPOCH, "to2": EPOCH,
                 "agent": v_regex(_NAME_RE, "letters, digits, '.', '_' or '-' (up to 64)")}
 
 
-def make_handler(service, allowed_hosts_ref):
+def make_handler(service, allowed_hosts_ref, actions=None, allowed_origins_ref=None):
     """Build the request handler class for one service. `allowed_hosts_ref` is a callable that
-    returns the accepted Host header values (known only after the socket is bound)."""
+    returns the accepted Host header values (known only after the socket is bound); `allowed_origins_ref`
+    the accepted Origin values. `actions` is None unless write mode is on."""
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "lattice-console"
@@ -194,7 +200,82 @@ def make_handler(service, allowed_hosts_ref):
         def _not_allowed(self):
             self._error(405, "method not allowed; use GET or HEAD", [("Allow", "GET, HEAD")])
 
-        do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _not_allowed
+        do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _not_allowed
+
+        # -- writes
+
+        def do_POST(self):
+            # Host first, on every route: a page reached through a rebound name must get nothing, not even a 403
+            # that tells it writes exist. Then the switch: without --allow-writes every POST is a 403.
+            host = (self.headers.get("Host") or "").strip().lower()
+            if host not in allowed_hosts_ref():
+                self._error(421, "misdirected request: unexpected Host header")
+                return
+            if actions is None:
+                self._error(403, "writes are off: this console was not started with --allow-writes")
+                return
+            try:
+                parts = urlsplit(self.path)
+            except ValueError:
+                self._error(400, "malformed request target")
+                return
+            if len(self.path) > MAX_PATH or parts.scheme or parts.netloc or "\\" in self.path:
+                self._error(400, "request target must be a path")
+                return
+            if parts.path not in POST_ROUTES:
+                self._error(405, "method not allowed; use GET or HEAD", [("Allow", "GET, HEAD")])
+                return
+            if parts.query:
+                self._error(400, "a decision takes no query string")
+                return
+            origin = self.headers.get("Origin")
+            if origin is None or origin not in (allowed_origins_ref() if allowed_origins_ref else ()):
+                self._error(403, "the Origin of this request is not this console")
+                return
+            ctype = (self.headers.get("Content-Type") or "").strip().lower().replace(" ", "")
+            if ctype not in ("application/json", "application/json;charset=utf-8"):
+                self._error(415, "send application/json")
+                return
+            if self.headers.get("Transfer-Encoding") is not None:
+                self._error(411, "send a Content-Length, not a chunked body")
+                return
+            length_header = self.headers.get("Content-Length")
+            if length_header is None or not length_header.isascii() or not length_header.isdigit() or len(length_header) > 6:
+                self._error(411, "a Content-Length is required")
+                return
+            n = int(length_header)
+            if n > MAX_POST:
+                self._error(413, "the request is larger than %d bytes" % MAX_POST)
+                return
+            verdict = actions.gate.check(self.headers.get(actions_mod.TOKEN_HEADER))
+            if verdict is not None:
+                if verdict == "bad_token":
+                    self._error(401, "the write token is missing or wrong")
+                elif verdict == "locked":
+                    self._error(429, "too many wrong tokens; writes are locked for a minute", [("Retry-After", "60")])
+                else:
+                    self._error(429, "too many decisions in a minute; wait", [("Retry-After", "30")])
+                return
+            try:
+                raw = self.rfile.read(n) if n else b""
+                if len(raw) != n:
+                    raise ValueError("short body")
+                body = actions_mod.strict_json(raw)
+            except (ValueError, RecursionError, OSError):
+                self._error(400, "the body must be one JSON object")
+                return
+            try:
+                if parts.path == "/api/act":
+                    status, answer = actions.act(body)
+                else:
+                    status, answer = actions.bulk(body)
+            except SourceError:
+                self._error(502, "the board could not be read")
+                return
+            except Exception:  # never echo internals to the browser
+                self._error(500, "internal error")
+                return
+            self._json(status, answer)
 
         # -- routing
 
@@ -230,6 +311,9 @@ def make_handler(service, allowed_hosts_ref):
                 elif path == "/api/queue":
                     parse_query(parts.query, {})
                     self._json(200, service.queue_payload())
+                elif path == "/api/inbox":
+                    parse_query(parts.query, {})
+                    self._json(200, service.inbox_payload())
                 elif path == "/api/task":
                     q = parse_query(parts.query, TASK_PARAMS)
                     if "id" not in q:
@@ -307,14 +391,19 @@ class ConsoleServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, service, port: int, host: str = BIND_HOST,
-                 max_connections: int = MAX_CONNECTIONS):
+                 max_connections: int = MAX_CONNECTIONS, actions=None):
         check_bind(host)
         self._slots = threading.BoundedSemaphore(max_connections)
         self.service = service
         self._hosts: set = set()
-        super().__init__((host, port), make_handler(service, lambda: self._hosts))
+        self._origins: set = set()
+        self.actions = actions
+        super().__init__((host, port), make_handler(service, lambda: self._hosts, actions, lambda: self._origins))
         self.port = self.server_address[1]
         self._hosts = {"127.0.0.1:%d" % self.port, "localhost:%d" % self.port}
+        self._origins = {"http://127.0.0.1:%d" % self.port, "http://localhost:%d" % self.port}
+        if actions is not None:
+            service.writes = actions.info()
 
     def process_request(self, request, client_address):
         if not self._slots.acquire(blocking=False):
