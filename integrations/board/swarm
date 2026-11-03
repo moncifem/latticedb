@@ -1,0 +1,475 @@
+#!/usr/bin/env python3
+"""swarm: a demo and a soak test for the agent board and `board run`.
+
+    swarm --workers 4 --tasks 24 [--fail-rate 0.2] [--zombie-rate 0.05] [--cancel-rate 0]
+          [--seed S] [--lease 6] [--timeout 300] [--keep] [--allow-foreign-tasks]
+
+It creates TASKS tasks on the board (a spread of priorities, some depending on earlier ones), starts
+WORKERS `board run` workers whose agent is a small scripted program, and waits until every task is
+done, dead or cancelled (or can never run because a blocker is dead). The scripted agent sleeps a
+seeded random time and then, with the chosen probabilities, exits 75 (try again), exits 1, hangs until
+the runner kills it, or kills its own worker (a "zombie": the claim is left behind and only the lease
+runs out). Zombie workers are replaced by new ones. With --cancel-rate the swarm cancels a task while
+a worker runs it, which makes the worker lose its lease.
+
+The result is checked from the board's event log, not from what the workers say:
+  * a task is never done twice, and only the agent that holds the claim marks it done, fails it or
+    releases it;
+  * a task is never claimed while another agent still holds it, nor before its blockers are done;
+  * every task ends done, dead, cancelled, or open behind a blocker that can never finish;
+  * a worker killed with its claim leaves a lease that some other worker reaps.
+Exit status: 0 every invariant held, 1 one was violated (or the run did not finish), 2 usage or setup.
+
+It is a demo: point `integrations/console/lattice-console` at the same board and watch the queue move.
+It is also a soak test of a real server (the dev-stack CI job runs a small one). Use a scratch board:
+workers take ANY runnable task, so the swarm refuses to start when the board holds tasks it did not
+create, unless --allow-foreign-tasks is given (do not, on a board with real work).
+
+Connection settings are the board helper's (LATTICE_BOARD_URL or the PG* variables, PGPASSWORD).
+Python 3.10+, standard library only.
+"""
+
+import argparse
+import collections
+import json
+import os
+import random
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+BOARD = os.environ.get("SWARM_BOARD") or os.path.join(HERE, "board")
+TERMINAL = ("done", "dead", "cancelled")
+AGENT_ENV = "SWARM_SEED,SWARM_FAIL_RATE,SWARM_ZOMBIE_RATE,SWARM_WORK_MAX"
+
+
+# ---- the scripted agent -------------------------------------------------------------------------
+
+
+def agent_main():
+    """What `board run` starts for each task. Deterministic in (seed, task title, attempt)."""
+    attempt = os.environ["TASK_ATTEMPT"]
+    # Keyed by the title ("swarm7 task 03"), not the random task id, so a seed repeats its plan.
+    rng = random.Random("%s:%s:%s" % (os.environ.get("SWARM_SEED", "0"), os.environ["TASK_TITLE"], attempt))
+    fail_rate = float(os.environ.get("SWARM_FAIL_RATE", "0"))
+    zombie_rate = float(os.environ.get("SWARM_ZOMBIE_RATE", "0"))
+    work = 0.05 + rng.random() * float(os.environ.get("SWARM_WORK_MAX", "0.6"))
+    x = rng.random()
+    kind = rng.random()
+    with open(os.environ["TASK_BODY_PATH"], encoding="utf-8") as f:
+        f.read()
+    parent = int(os.environ.get("TASK_PARENT_PID", "0") or 0)
+
+    def parent_gone():
+        # The runner sets TASK_PARENT_PID to its own pid. If we were re-parented it is gone.
+        return parent <= 1 or os.getppid() != parent
+
+    if parent_gone():
+        sys.exit(1)
+    if x < zombie_rate:
+        # The worker dies without releasing anything: SIGKILL, so no handler and no release. Only the
+        # pid the runner told us about, and only while it is still our parent.
+        os.kill(parent, signal.SIGKILL)
+        time.sleep(0.2)
+        sys.exit(0)
+    end = time.time() + work
+    while time.time() < end:
+        if parent_gone():
+            sys.exit(1)
+        time.sleep(min(0.1, max(end - time.time(), 0)))
+    if x < zombie_rate + fail_rate:
+        if kind < 0.4:
+            print("temporary trouble, try later")
+            sys.exit(75)
+        if kind < 0.8:
+            print("this attempt failed")
+            sys.exit(1)
+        end = time.time() + float(os.environ.get("SWARM_HANG_SECONDS", "3600"))  # until the runner kills us
+        while time.time() < end and not parent_gone():
+            time.sleep(0.1)
+        sys.exit(1)
+    with open(os.environ["TASK_RESULT_PATH"], "w", encoding="utf-8") as f:
+        json.dump({"status": "done", "summary": "worked %.2fs on attempt %s" % (work, attempt),
+                   "notes": ["did the work in %.2fs" % work]}, f)
+
+
+# ---- talking to the board -----------------------------------------------------------------------
+
+
+class Swarm:
+    def __init__(self, a, workdir):
+        self.a = a
+        self.workdir = workdir
+        self.env = dict(os.environ)
+        self.state = os.path.join(workdir, "state")
+        os.makedirs(self.state, mode=0o700, exist_ok=True)
+        self.env["BOARD_STATE_DIR"] = self.state
+        self.prefix = "swarm%s" % a.seed
+        self.ctl = self.prefix + "-ctl"
+        self.rng = random.Random(a.seed)
+        self.tasks = []  # ids in creation order
+        self.blockers = {}
+        self.created = set()
+        self.workers = []  # dicts: name, proc, out, err
+        self.worker_seq = 0
+        self.zombies = 0
+        self.crashes = 0
+        self.cancels = 0
+        self.problems = []
+
+    def board(self, *args, author=None):
+        env = dict(self.env, BOARD_AUTHOR=author or self.ctl)
+        p = subprocess.run([BOARD, *args], env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                           timeout=180)
+        return p.returncode, p.stdout, p.stderr
+
+    def must(self, *args, author=None):
+        rc, out, err = self.board(*args, author=author)
+        if rc != 0:
+            raise SystemExit("swarm: board %s failed (%d): %s" % (" ".join(args[:2]), rc, err.strip()[-300:]))
+        return out
+
+    # -- setup
+    def setup(self):
+        self.must("init")
+        foreign = []
+        for state in ("open", "claimed", "awaiting_approval"):
+            rows = self.must("list", state).splitlines()[1:]
+            foreign += [r.split("\t")[0] for r in rows if r.strip()]
+        if foreign and self.a.allow_foreign_tasks:
+            print("swarm: WARNING: %d task(s) on this board are not the swarm's and its workers will run them "
+                  "with the scripted agent" % len(foreign), file=sys.stderr, flush=True)
+        if foreign and not self.a.allow_foreign_tasks:
+            raise SystemExit(
+                "swarm: the board holds %d task(s) that are not the swarm's (%s...). The workers would run "
+                "them with the scripted agent. Use a scratch board, or --allow-foreign-tasks." % (
+                    len(foreign), ", ".join(foreign[:3])))
+
+    def create_tasks(self):
+        n = self.a.tasks
+        for i in range(n):
+            blockers = []
+            if i >= 3 and self.rng.random() < 0.35:
+                blockers = self.rng.sample(self.tasks, k=min(len(self.tasks), self.rng.choice((1, 1, 2))))
+            args = ["add", "%s task %02d" % (self.prefix, i), "--priority", str(self.rng.randint(0, 4)),
+                    "--max-attempts", str(self.a.max_attempts), "--body", "scripted demo task %d" % i]
+            if blockers:
+                args += ["--blocked-by", ",".join(blockers)]
+            tid = self.must(*args).strip()
+            self.tasks.append(tid)
+            self.created.add(tid)
+            self.blockers[tid] = blockers
+
+    # -- workers
+    def spawn_worker(self):
+        self.worker_seq += 1
+        name = "%s-w%d" % (self.prefix, self.worker_seq)
+        out = open(os.path.join(self.workdir, name + ".out"), "w")
+        err = open(os.path.join(self.workdir, name + ".err"), "w")
+        env = dict(self.env, BOARD_AUTHOR=name, SWARM_SEED=str(self.a.seed), SWARM_FAIL_RATE=str(self.a.fail_rate),
+                   SWARM_ZOMBIE_RATE=str(self.a.zombie_rate), SWARM_WORK_MAX=str(self.a.work_max))
+        argv = [BOARD, "run", "--owner", name, "--idle-exit", str(self.a.timeout + 60), "--max-tasks", str(self.a.tasks * self.a.max_attempts + 10),
+                "--lease", str(self.a.lease), "--poll", "0.3",
+                "--task-timeout", str(self.a.task_timeout), "--grace", "2", "--retry-base", "1",
+                "--retry-max", "4", "--result-dir", os.path.join(self.workdir, "runs-" + name),
+                "--env-allow", AGENT_ENV, "--", sys.executable, os.path.realpath(__file__), "_agent"]
+        proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+        self.workers.append({"name": name, "proc": proc, "out": out, "err": err, "counted": False})
+
+    def tend_workers(self, running):
+        """Replace a worker that died on its own. SIGKILL is the scripted zombie; anything else is a
+        crash and counted as such."""
+        for w in list(self.workers):
+            rc = w["proc"].poll()
+            if rc is None or w.get("dead"):
+                continue
+            w["dead"] = True
+            if rc == -signal.SIGKILL:
+                self.zombies += 1
+            else:
+                self.crashes += 1
+                self.problems.append("worker %s ended by itself with status %s" % (w["name"], rc))
+            if running:
+                self.spawn_worker()
+
+    def stop_workers(self):
+        for w in self.workers:
+            if w["proc"].poll() is None:
+                w["proc"].send_signal(signal.SIGTERM)
+        end = time.time() + 30
+        for w in self.workers:
+            try:
+                w["proc"].wait(timeout=max(end - time.time(), 0.1))
+            except subprocess.TimeoutExpired:
+                w["proc"].kill()
+                w["proc"].wait()
+                self.problems.append("worker %s did not stop on SIGTERM" % w["name"])
+            else:
+                if w["proc"].returncode not in (128 + signal.SIGTERM, -signal.SIGKILL) and not w.get("dead"):
+                    self.problems.append("worker %s stopped with status %s" % (w["name"], w["proc"].returncode))
+            w["out"].close()
+            w["err"].close()
+
+    # -- observing
+    def snapshot(self):
+        rows = self.must("list", "--all").splitlines()[1:]
+        snap = {}
+        for r in rows:
+            f = r.split("\t")
+            if f and f[0] in self.created:
+                snap[f[0]] = {"state": f[1], "owner": f[3] if len(f) > 3 else ""}
+        return snap
+
+    def stranded(self, snap):
+        """Open tasks that can never run: a blocker is dead or cancelled, or itself stranded."""
+        out = set()
+        changed = True
+        while changed:
+            changed = False
+            for t, info in snap.items():
+                if t in out or info["state"] != "open":
+                    continue
+                for b in self.blockers.get(t, []):
+                    if snap.get(b, {}).get("state") in ("dead", "cancelled") or b in out:
+                        out.add(t)
+                        changed = True
+                        break
+        return out
+
+    def finished(self, snap):
+        if len(snap) < len(self.created):
+            return False
+        stranded = self.stranded(snap)
+        return all(i["state"] in TERMINAL or t in stranded for t, i in snap.items())
+
+    def chaos(self, snap):
+        if not self.a.cancel_rate:
+            return
+        for t, info in snap.items():
+            if info["state"] == "claimed" and self.rng.random() < self.a.cancel_rate:
+                rc, out, _ = self.board("cancel", t, "swarm chaos: cancelled while running")
+                if rc == 0:
+                    self.cancels += 1
+
+    def run(self):
+        start = time.time()
+        for _ in range(self.a.workers):
+            self.spawn_worker()
+        last_print = 0
+        snap = {}
+        while time.time() - start < self.a.timeout:
+            time.sleep(1.0)
+            self.tend_workers(True)
+            snap = self.snapshot()
+            self.chaos(snap)
+            if time.time() - last_print >= 5:
+                last_print = time.time()
+                counts = collections.Counter(i["state"] for i in snap.values())
+                print("swarm: %3ds  %s" % (time.time() - start, "  ".join(
+                    "%s=%d" % (k, counts[k]) for k in sorted(counts))), flush=True)
+            if self.finished(snap):
+                break
+        else:
+            self.problems.append("the run did not finish in %ds: tasks are still being worked on" % self.a.timeout)
+        self.tend_workers(False)
+        self.stop_workers()
+        return snap, time.time() - start
+
+
+# ---- the invariants -----------------------------------------------------------------------------
+
+
+def parse_events(text, created):
+    events = []
+    for line in text.splitlines():
+        f = line.split("\t", 4)
+        if len(f) >= 4 and f[1] in created:
+            events.append((int(f[0]), f[1], f[2], f[3], f[4] if len(f) > 4 else ""))
+    events.sort()
+    return events
+
+
+def check_events(events, blockers):
+    """Replay the event log task by task. Returns (violations, counts)."""
+    violations = []
+    holder = {}
+    done_at = {}
+    closed = set()
+    counts = collections.Counter()
+    for eid, task, author, kind, _body in events:
+        counts[kind] += 1
+        h = holder.get(task)
+        if kind == "claim":
+            if task in closed:
+                violations.append("event %d: %s claimed %s after it was done or cancelled" % (eid, author, task))
+            if h is not None:
+                violations.append("event %d: %s claimed %s while %s still holds it" % (eid, author, task, h))
+            for b in blockers.get(task, []):
+                if b not in done_at or done_at[b] > eid:
+                    violations.append("event %d: %s was claimed before its blocker %s was done" % (eid, task, b))
+            holder[task] = author
+        elif kind == "done":
+            if task in done_at:
+                violations.append("event %d: %s was marked done twice" % (eid, task))
+            if h != author:
+                violations.append("event %d: %s marked done by %s, but the holder is %s" % (eid, task, author, h))
+            done_at.setdefault(task, eid)
+            closed.add(task)
+            holder[task] = None
+        elif kind in ("fail", "release"):
+            if h != author:
+                violations.append("event %d: %s of %s by %s, but the holder is %s" % (eid, kind, task, author, h))
+            holder[task] = None
+        elif kind == "note":
+            if h != author:
+                violations.append("event %d: note on %s by %s, but the holder is %s" % (eid, task, author, h))
+        elif kind == "expired":
+            if h is None:
+                violations.append("event %d: a lease on %s expired but nobody held it" % (eid, task))
+            holder[task] = None
+        elif kind == "cancel":
+            closed.add(task)
+            holder[task] = None
+    return violations, counts
+
+
+def report(sw, snap, elapsed, workdir):
+    events = parse_events(sw.must("since", "0"), sw.created)
+    violations, ev = check_events(events, sw.blockers)
+    states = collections.Counter(i["state"] for i in snap.values())
+    stranded = sw.stranded(snap)
+    lost = [t for t in sw.created if t not in snap]
+    for t, info in snap.items():
+        if info["state"] == "claimed":
+            violations.append("%s is still claimed by %s at the end" % (t, info["owner"]))
+        elif info["state"] in ("open", "awaiting_approval") and t not in stranded:
+            violations.append("%s is %s at the end and is not waiting for a dead or cancelled blocker: it was lost" % (t, info["state"]))
+    violations += ["%s is missing from the board" % t for t in lost]
+    done_events = collections.Counter(e[1] for e in events if e[3] == "done")
+    for t, info in snap.items():
+        if info["state"] == "done" and done_events[t] != 1:
+            violations.append("%s is done but has %d done events" % (t, done_events[t]))
+        if info["state"] != "done" and done_events[t]:
+            violations.append("%s has a done event but is %s" % (t, info["state"]))
+    attempts = collections.Counter()
+    for t in snap:
+        rc, out, _ = sw.board("get", t)
+        if rc == 0:
+            f = out.rstrip("\n").split("\t")
+            if len(f) > 5 and f[4].isdigit():
+                attempts[int(f[4])] += 1
+                if snap[t]["state"] == "dead" and f[4] != f[5]:
+                    violations.append("%s is dead after %s of %s attempts" % (t, f[4], f[5]))
+    if sw.zombies and ev["expired"] < sw.zombies:
+        violations.append("%d worker(s) died holding a claim but only %d lease(s) were reaped" % (sw.zombies, ev["expired"]))
+    if not sw.zombies and not sw.a.cancel_rate and ev["expired"]:
+        pass  # a slow machine can lose a lease without a zombie; the counts below show it
+    lost_leases = 0
+    for w in sw.workers:
+        try:
+            with open(os.path.join(workdir, w["name"] + ".err"), encoding="utf-8") as f:
+                for line in f:
+                    if " finished: " in line and "lost=" in line:
+                        lost_leases += int(line.split("lost=")[1].split()[0])
+        except OSError:
+            pass
+    violations += sw.problems
+
+    print()
+    print("swarm report (seed %s)" % sw.a.seed)
+    print("  tasks         %d created: %s%s" % (len(sw.created), ", ".join(
+        "%s %d" % (k, states[k]) for k in sorted(states)) or "none",
+        ("; %d waiting behind a dead or cancelled task" % len(stranded)) if stranded else ""))
+    print("  workers       %d started (%d zombies replaced, %d crashes), ran %.0fs" % (
+        len(sw.workers), sw.zombies, sw.crashes, elapsed))
+    print("  attempts      %s  (failed attempts before the end: tasks)" % (
+        ", ".join("%d: %d" % (k, attempts[k]) for k in sorted(attempts)) or "none"))
+    print("  events        claim %d  done %d  fail %d  release %d  expired %d  fenced %d  cancel %d" % (
+        ev["claim"], ev["done"], ev["fail"], ev["release"], ev["expired"], ev["fenced"], ev["cancel"]))
+    print("  leases lost   %d by workers (fence refusals); %d fenced events recorded; %d cancelled while running" % (
+        lost_leases, ev["fenced"], sw.cancels))
+    if violations:
+        print("  INVARIANTS    %d VIOLATED:" % len(violations))
+        for v in violations[:30]:
+            print("    - " + v)
+        return 1
+    print("  invariants    all held (no task done twice, none done by a non-holder, none claimed twice or early, none lost)")
+    return 0
+
+
+def main(argv):
+    if argv[:1] == ["_agent"]:
+        agent_main()
+        return 0
+    ap = argparse.ArgumentParser(prog="swarm", description="Run N board workers on M scripted tasks and check the board's invariants.")
+    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--tasks", type=int, default=24)
+    ap.add_argument("--fail-rate", type=float, default=0.2, metavar="P", help="chance an attempt exits 75, exits 1 or hangs")
+    ap.add_argument("--zombie-rate", type=float, default=0.05, metavar="P", help="chance an attempt kills its own worker")
+    ap.add_argument("--cancel-rate", type=float, default=0.0, metavar="P", help="chance per second that a running task is cancelled")
+    ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--lease", type=int, default=6, metavar="SECONDS")
+    ap.add_argument("--task-timeout", type=int, default=5, metavar="SECONDS")
+    ap.add_argument("--work-max", type=float, default=0.6, metavar="SECONDS", help="longest scripted work time")
+    ap.add_argument("--max-attempts", type=int, default=4)
+    ap.add_argument("--timeout", type=int, default=300, metavar="SECONDS", help="give up and fail after this long")
+    ap.add_argument("--keep", action="store_true", help="keep the work directory (worker logs) even when all is well")
+    ap.add_argument("--allow-foreign-tasks", action="store_true",
+                    help="let the workers run tasks the swarm did not create (needs --yes)")
+    ap.add_argument("--yes", action="store_true", help="confirm --allow-foreign-tasks")
+    a = ap.parse_args(argv)
+    if a.seed is None:
+        a.seed = random.SystemRandom().randrange(1, 10 ** 6)
+    if not (1 <= a.workers <= 32 and 1 <= a.tasks <= 500):
+        ap.error("--workers must be 1 to 32 and --tasks 1 to 500")
+    for name in ("fail_rate", "zombie_rate", "cancel_rate"):
+        if not 0 <= getattr(a, name) <= 1:
+            ap.error("--%s must be between 0 and 1" % name.replace("_", "-"))
+    if a.fail_rate + a.zombie_rate > 1:
+        ap.error("--fail-rate plus --zombie-rate must not exceed 1")
+    if a.lease < 3 or a.max_attempts < 1:
+        ap.error("--lease must be at least 3 and --max-attempts at least 1")
+    if a.allow_foreign_tasks and not a.yes:
+        ap.error("--allow-foreign-tasks makes the scripted agent run (and mark done) any task on the board; "
+                 "add --yes if that is really what you want")
+    if not os.access(BOARD, os.X_OK):
+        print("swarm: cannot run %s" % BOARD, file=sys.stderr)
+        return 2
+
+    def stop(signum, _frame):
+        raise KeyboardInterrupt
+
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, stop)
+    workdir = tempfile.mkdtemp(prefix="swarm.")
+    os.chmod(workdir, 0o700)
+    sw = Swarm(a, workdir)
+    status = 2
+    try:
+        print("swarm: seed %s, %d workers, %d tasks (work dir %s)" % (a.seed, a.workers, a.tasks, workdir), flush=True)
+        sw.setup()
+        sw.create_tasks()
+        print("swarm: created %d tasks" % len(sw.created), flush=True)
+        snap, elapsed = sw.run()
+        status = report(sw, snap, elapsed, workdir)
+    except SystemExit as e:
+        if e.code not in (0, None):
+            print(e.code if isinstance(e.code, str) else "swarm: stopped", file=sys.stderr)
+        status = 2 if status == 2 else status
+    except KeyboardInterrupt:
+        status = 2
+    finally:
+        sw.stop_workers() if any(w["proc"].poll() is None for w in sw.workers) else None
+        if status == 0 and not a.keep:
+            shutil.rmtree(workdir, ignore_errors=True)
+        else:
+            print("swarm: worker logs are in %s" % workdir)
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

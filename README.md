@@ -40,7 +40,11 @@ write-ahead log that survives crashes.
 | Tooling | `lattice doctor`, results ledger, scorecards, benchmark gates, a risk gate and serial merger for pull requests |
 
 A shell helper and schema for a shared agent task board (claims, notes, decisions, a polled event log)
-run over `psql` are in [integrations/board](integrations/board/CONVENTIONS.md).
+run over `psql` are in [integrations/board](integrations/board/CONVENTIONS.md). `board run` turns it into a
+queue that worker processes drain: each worker claims a task, runs your command or a built-in `claude` or
+`codex` template with a scrubbed environment, keeps the lease alive and marks the task done, failed or
+retried; `integrations/board/swarm` is a soak test that checks the board's invariants. The
+[agents quickstart](docs/quickstart-agents.md) goes from nothing to a watched queue on a laptop.
 
 ## What is not there yet
 

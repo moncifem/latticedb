@@ -1,15 +1,19 @@
 name: tools-tests
 # Runs the unit tests of the Python tools under tools/, of the board console under
 # integrations/console/ and of the board helper's orchestration rules under integrations/board/tests
-# (an executable model, plus the shell helper driven against a fake psql). The tests use PATH shims
-# for git, gh and psql, so they need no network, no token and no database. Tests that need a built
-# lattice-cli skip themselves. integrations/board/test.sh, which needs a latticed, is not run here.
+# (an executable model, plus the shell helper driven against a fake psql), of `board run` (the worker
+# runner, against a fake board helper and fake agents, with planted faults that the tests must catch),
+# of the swarm's invariant checker, and the commands named in docs/quickstart-agents.md. The tests use
+# PATH shims for git, gh and psql, so they need no network, no token and no database. Tests that need a
+# built lattice-cli skip themselves. integrations/board/test.sh and the swarm itself need a latticed;
+# the dev-stack job runs them.
 on:
   pull_request:
     paths:
       - "tools/**"
       - "integrations/console/**"
       - "integrations/board/**"
+      - "docs/quickstart-agents.md"
       - ".github/workflows/**"
   push:
     branches: [main]

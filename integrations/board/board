@@ -20,6 +20,11 @@ TAB=$(printf '\t')
 NL='
 '
 HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
+# `board run` is the worker loop (board-run, Python): it calls this helper for every database
+# operation. Handed over before the temporary files below exist, so none is left behind.
+case ${1:-} in
+  run) shift; exec python3 "$HERE/board-run" "$@" ;;
+esac
 SCHEMA="$HERE/schema.sql"
 TMP_ERR=$(mktemp "${TMPDIR:-/tmp}/board.XXXXXX") || exit 1
 TMP_LST=$(mktemp "${TMPDIR:-/tmp}/board.XXXXXX") || exit 1
@@ -43,6 +48,8 @@ usage: board <command> [arguments]
                                 dead, cancelled or awaiting_approval; done tasks are shown only
                                 when a state is given or with --all
   show ID                      one task with its events, decisions and lease
+  get ID                       one task as a single tab separated line: id, state, owner, fence,
+                                attempts, max attempts, title, body (for programs; see CONVENTIONS.md)
   claim ID [--lease SECONDS]    take an open task for SECONDS (default 600); exit 0 if won (or
                                 already yours), 2 if not
   next [--owner NAME] [--lease SECONDS] [--max-active N]
@@ -64,6 +71,7 @@ usage: board <command> [arguments]
   since [EVENT_ID] [--task ID]  print events after EVENT_ID (default 0), oldest first
   watch ID [--after EVENT_ID]   print one task's events after EVENT_ID (default 0), oldest first
   head                         print the newest event id (0 when there is none)
+  run [OPTIONS] -- COMMAND     take tasks with `next` and run COMMAND for each (board run --help)
 
 Every write needs BOARD_AUTHOR set to this agent's unique name.
 USAGE
@@ -763,6 +771,23 @@ FROM tasks WHERE id = :'task';" -v task="$1" || fail_db
   psql_run expanded "SELECT lease_until, heartbeat_at, attempts, max_attempts, not_before, last_error, blocked_by
 FROM task_leases WHERE task_id = :'task';" -v task="$1" || fail_db
   printf 'lease:\n%s\n' "${OUT:-none (no lease row yet)}"
+}
+
+# get ID: one task on one line for programs (the runner). Tab separated: id, state, owner (empty when
+# none), claim_seq (the fence of the current or last claim), attempts, max_attempts, title, body. Title
+# and body are one line without tabs (add refuses anything else), so the split is exact. Read only.
+cmd_get() {
+  [ $# -eq 1 ] || die "get takes one task id"
+  need_id "$1"
+  psql_run tuples "SELECT id, state, coalesce(owner, ''), claim_seq, title, body FROM tasks WHERE id = :'task';" \
+    -v task="$1" || fail_db
+  [ -n "$OUT" ] || die "no such task: $1"
+  get_row=$OUT
+  psql_run tuples "SELECT attempts, max_attempts FROM task_leases WHERE task_id = :'task';" -v task="$1" || fail_db
+  get_lease=${OUT:-0${TAB}3}
+  printf '%s\t%s\t%s\t%s\n' "$(printf '%s\n' "$get_row" | cut -f1-4)" \
+    "$(printf '%s\n' "$get_lease" | cut -f1)" "$(printf '%s\n' "$get_lease" | cut -f2)" \
+    "$(printf '%s\n' "$get_row" | cut -f5-)"
 }
 
 # ---- claim and next -------------------------------------------------------------------------
@@ -1525,6 +1550,7 @@ case $cmd in
   add) cmd_add "$@" ;;
   list) cmd_list "$@" ;;
   show) cmd_show "$@" ;;
+  get) cmd_get "$@" ;;
   claim) cmd_claim "$@" ;;
   next) cmd_next "$@" ;;
   heartbeat) cmd_heartbeat "$@" ;;

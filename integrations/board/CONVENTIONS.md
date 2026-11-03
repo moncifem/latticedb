@@ -43,6 +43,8 @@ Status: alpha. This is a dogfooding tool, not a product. Test it before you rely
 | `board block ID BLOCKER[,BLOCKER]` / `board unblock ID BLOCKER` | Add or remove dependencies. A cycle is refused. |
 | `board approve ID [TEXT]` | Move an `awaiting_approval` task to open. |
 | `board cancel ID [TEXT]` | Cancel a task that is not done. |
+| `board get ID` | One task as one tab separated line for programs: id, state, owner, fence, attempts, max attempts, title, body. Read only. |
+| `board run [OPTIONS] -- COMMAND` | A worker: take tasks with `next` and run COMMAND for each (see "`board run`: a worker for any command or agent"). |
 
 `note` and `done` also take `--fence N`. Exit codes: 0 ok, 1 error (bad input, no such task, task
 dead or cancelled, database down), 2 claim not won, 3 lease lost (the fence refused the write), 4
@@ -231,6 +233,122 @@ done
 
 A heartbeat that exits 3 means the lease was lost: stop the work, do not write to the task. Run
 `board reap` from a cron job or a supervisor if no agent calls `board next` often enough.
+
+`board run` (next section) is this loop done properly: a heartbeat on its own thread, a process-group kill,
+a timeout, signal handling and a scrubbed environment. Prefer it to the shell loop above.
+
+## `board run`: a worker for any command or agent
+
+```sh
+board run [--owner NAME] [--max-tasks N] [--idle-exit SECONDS | --forever] [--lease SECONDS]
+          [--task-timeout SECONDS] [--env-allow VAR[,VAR]] [--cwd DIR | --worktree-per-task REPO]
+          [--result-dir DIR] -- COMMAND [ARGS...]
+board run --agent claude|codex [agent options]
+```
+
+`board run` is `integrations/board/board-run`, Python 3.10+ from the standard library, started by the
+`board` helper. It is Python because it supervises processes (a process group per child, a kill sequence,
+a heartbeat thread beside a blocking wait, signals, a capped log, a strict JSON parse), which POSIX sh
+cannot do reliably. It contains no SQL: every database operation is a call to this helper (`next`, `get`,
+`heartbeat`, `note`, `done`, `fail`, `release`), so the fence and retry rules exist in one place.
+
+**The loop.** `board next --owner NAME` claims the best runnable task (exit 4: nothing runnable, so sleep
+`--poll` seconds with jitter, or leave after `--idle-exit` seconds; the default is to leave at once, and
+`--forever` keeps polling). `board get` reads the fence, the attempt count, the title and the body. The
+runner writes one `started` note and runs COMMAND once, with a heartbeat every `--lease`/3 seconds on a
+separate thread, so a silent or CPU-bound child cannot starve it. Use one `--owner` per process (the default,
+`run-HOST-PID`, is unique): the helper's `--max-active 1` cap counts the claims of that name, so a restart
+under a fixed name waits until the old process's lease runs out.
+
+**What the child gets.** A scrubbed environment: `PATH`, `HOME`, `LANG`, `TERM`, the names given with
+`--env-allow`, and `TASK_ID`, `TASK_TITLE`, `TASK_BODY_PATH` (a 0600 file in a 0700 directory), `TASK_FENCE`,
+`TASK_ATTEMPT`, `TASK_RESULT_PATH`, `TASK_WORKTREE`, `TASK_PARENT_PID` (the runner's pid, for a child that
+wants to stop when the runner dies). No `PG*`, `BOARD_*`, `LATTICE_*` or `TASK_*` name can be allowed, in any
+letter case (the runner refuses to start), so the database password and the board URL never reach an agent.
+Variables that change what a program loads or whom it talks to (`LD_*`, `DYLD_*`, `BASH_ENV`, `ENV`,
+`PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, `NODE_OPTIONS`, `SSH_AUTH_SOCK`, ...) are refused too unless
+`--unsafe-agent-flags` is given, and `--env-allow` of a name that looks like a credential prints a warning (the
+name, never the value). The title and the body are untrusted text: the body is never in argv or in an
+environment variable, and the title, which is, is cleaned to one line without control characters first. stdin is `/dev/null`. The child
+leads its own process group, in `--cwd` (default: the current directory) or in a fresh git worktree of
+REPO, detached at HEAD, made for each task with `--worktree-per-task` (kept afterwards for you to look at:
+`git worktree remove` them). This is not a sandbox: the child runs as you, with your `HOME`, and can read
+any file you can, including the file with the board password (for the dev stack
+`~/.lattice-dev/accounts/board.env`). The environment scrub keeps the board's credentials out of the child's
+*environment* only. `--scratch-home` gives each task an empty 0700 `HOME` instead (recommended for `codex` in
+`workspace-write`; a `claude` that logs in through your `HOME` then needs `--env-allow ANTHROPIC_API_KEY`).
+The 0600 and 0700 modes of the body, prompt, log and result files protect against other users, not against
+the child, which has your uid.
+
+**How the child ends the task.**
+
+| Child | Runner does |
+|---|---|
+| exit 0 | `board done` with the summary (from the result file, or the agent's reply) |
+| exit 75 (`EX_TEMPFAIL`) | `board fail --retry-in`: back off `--retry-base` seconds, doubled per earlier failure, at most `--retry-max` |
+| any other exit, or killed by a signal | `board fail --retry-in` with the last lines of the log as the error (one line, control characters and backslashes removed, secrets redacted, at most 900 bytes) |
+| runs longer than `--task-timeout` | SIGTERM to its process group, SIGKILL after `--grace` (10 s), then `board fail` |
+| heartbeat refused (exit 3), or no heartbeat confirmed for a whole lease | kill the group the same way and mark nothing: the lease is gone, a later `done` would only be refused |
+| the runner gets SIGTERM, SIGINT, SIGHUP or SIGQUIT | stop claiming, kill the group, `board release` (no failure counted), exit 143 / 130; a second signal skips the grace period |
+
+If the child writes `TASK_RESULT_PATH` as JSON `{"status": "done|retry|fail", "summary": "...", "notes": ["..."]}`
+(at most 64 KiB, one object, no duplicate keys, unknown keys ignored, read without following a symlink)
+it refines the outcome: on exit 0 `retry` and `fail` override `done`, the summary becomes the closing text
+and up to five notes are posted first. An invalid file is ignored and said so on stderr. The exit code stays
+authoritative for failure: exit 1 with `"status": "done"` is a failure.
+
+**Logs.** The child's stdout and stderr go to `RESULT_DIR/TASK.FENCE/run.log` (default `RESULT_DIR` is
+`$BOARD_STATE_DIR/runs`; mode 0600 in a 0700 directory, refused when it is a symlink or not yours), at most
+`--log-cap` bytes (1 MiB): the head, then a marker and the last 8 KiB. The runner prints one summary line per
+task and nothing the child wrote. Nothing is pruned: delete old run directories yourself.
+
+**Built-in agents** (documented and tested with fake agents; no real agent runs in CI). The prompt is
+written to a private file and fed through stdin, never put in argv. It begins with an instruction header
+that says the task block is untrusted data, then the title and body between two random markers.
+
+| `--agent` | Command the runner starts | Flags checked against `--help` on this machine |
+|---|---|---|
+| `claude` | `claude -p --output-format json --permission-mode dontAsk --permission-prompts none --max-budget-usd 2 --no-session-persistence --allowedTools Read,Glob,Grep,Edit,Write`, prompt on stdin | all of them, `claude` 2.1.314. `--max-turns` is **not** in that `--help`, so it is not used; `--max-budget-usd` and `--task-timeout` bound a run. That `-p` reads the prompt from stdin is the documented pipe use; it was not run here (cost). |
+| `codex` | `codex exec -s workspace-write -C DIR --skip-git-repo-check --ephemeral -o LAST_MESSAGE -`, prompt on stdin | all of them, `codex exec --help`. `exec` has no `-a` flag. |
+
+Options: `--agent-bin PATH`, `--agent-permission-mode` (`dontAsk`, `acceptEdits`, `plan`, `manual`),
+`--agent-allowed-tools LIST`, `--agent-budget USD`, `--agent-sandbox` (`read-only`, `workspace-write`),
+`--agent-arg=ARG` (repeatable; write it with `=` so a leading `--` is not read as an option of `board run`).
+`--agent-arg` accepts only `--model`, `-m` and `--effort`, each with one value. Anything else
+(`--permission-mode`, `--allowedTools`, `--add-dir`, `--settings`, `--mcp-config`, `-c/--config`, `-s/--sandbox`,
+`--yolo`, ...) can override a built-in safety setting and is refused without `--unsafe-agent-flags`, as are a
+permission mode outside `dontAsk`, `acceptEdits`, `plan`, `manual`, the sandbox `danger-full-access`, and an
+unrestricted shell tool (`Bash`, `Bash(*)`) in `--agent-allowed-tools` (`Bash(git diff *)` is fine). The flag
+is an acknowledgement that the agent may then do anything the task text talks it into. It guards only the
+built-in templates: the command after `--` is your own command, which the runner does not judge (it prints a
+note saying so). For `claude`, an `is_error` reply on exit 0 fails the task. `claude` needs your
+login (`HOME` is passed) or `--env-allow ANTHROPIC_API_KEY`.
+
+**Prompt injection.** The task body is attacker-controlled text, as every note is. The runner never
+evaluates it, never puts it in argv or the environment, and never lets it choose a flag, a path or a command.
+What it can do is what the child can do with it: a built-in agent is told the block is data and runs with
+no shell tool unless you allow one. Keep the allowed tools narrow, run agents in a worktree, and treat the
+result as a proposal.
+
+**Limits.** At-least-once, and possibly twice at once: if the runner is killed with SIGKILL (or the machine
+dies) the child keeps running, the lease runs out, a later `next` reaps the task, and another worker runs it
+while the first child may still be running. SIGHUP and SIGQUIT are handled like SIGTERM. A child can watch
+`TASK_PARENT_PID` (`os.getppid()` changes, or `kill -0` fails) and stop; the runner does not require it.
+The scripted agent of the swarm does. Record an
+idempotency key in a note before an external call. The runner does not fence the child's side effects (a
+pushed branch, a deploy); it only stops marking the task. A lost heartbeat kills the group, but a
+grandchild that left the group (`setsid`) survives. After the child ends the runner SIGKILLs anything
+left in the group.
+
+## `swarm`: a demo and a soak test
+
+`integrations/board/swarm --workers 4 --tasks 24 [--fail-rate P] [--zombie-rate P] [--cancel-rate P] [--seed S]`
+creates the tasks (priorities 0 to 4, some behind one or two earlier tasks), starts the workers (`board run`
+with a scripted agent), and replays the board's event log when it ends. It exits 1 when a task was done
+twice, done or failed by an agent that did not hold the claim, claimed while held or before its blockers
+were done, lost, or when a killed worker's lease was never reaped. Point `integrations/console` at the same
+board to watch it. Workers take any runnable task, so run it on a scratch board: it refuses a board that
+holds tasks it did not create. The `dev-stack` CI job runs a small one against a real latticed.
 
 ## Maintainer: follow the board
 

@@ -13,6 +13,8 @@
 #   3.  alice creates the table and inserts two rows; bob reads them and is refused a write.
 #   4.  a wrong password is refused.
 #   5.  status names the accounts and shows no password.
+#   5b. the board account runs two swarms (`board run` workers with scripted agents: a killed worker, failing
+#       and hanging attempts, tasks cancelled while running) and then integrations/board/test.sh.
 #   6.  down, then up on the same volumes; the rows are read back.
 #   6a. remove alice: her token is revoked, her env file goes, an old copy of it no longer logs in,
 #       bob still reads, and the name can be added again.
@@ -253,6 +255,41 @@ board_tables=counters,tasks,events,decisions,task_leases
 expect_ok add-board "$dev" account add board --read "$board_tables" --write "$board_tables" --ddl "$board_tables"
 board_state=$(mktemp -d "$work/board-state.XXXXXX")
 chmod 700 "$board_state"
+# --- 5b0. the worker runner and the swarm (integrations/board/swarm) on the empty board, before test.sh
+# adds its own tasks: three `board run` workers take twelve scripted tasks (seed 4: one worker is killed
+# holding a claim, so a lease must be reaped; two attempts fail, one of them hangs until the runner's
+# timeout), then a second, shorter swarm cancels tasks while they run, so workers lose their leases. The
+# swarm replays the event log and exits non-zero when an invariant is violated.
+swarm_state=$(mktemp -d "$work/swarm-state.XXXXXX")
+chmod 700 "$swarm_state"
+run_swarm() {
+  local name=$1
+  shift
+  if ! (
+    set -a
+    # shellcheck source=/dev/null
+    . "$LATTICE_DEV_HOME/accounts/board.env"
+    set +a
+    BOARD_STATE_DIR="$swarm_state/fences-$name" TMPDIR="$swarm_state" \
+      python3 "$root/integrations/board/swarm" "$@"
+  ) >"$work/$name.out" 2>"$work/$name.err"; then
+    tail -n 40 "$work/$name.out" >&2
+    tail -n 20 "$work/$name.err" >&2
+    fail "integrations/board/swarm ($name) failed against the dev stack"
+  fi
+  grep -q 'invariants    all held' "$work/$name.out" || fail "the $name swarm did not report that all invariants held"
+  if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/$name.out" "$work/$name.err"; then
+    fail "the $name swarm output contains the board account's password"
+  fi
+  return 0
+}
+run_swarm swarm-main --workers 3 --tasks 12 --fail-rate 0.2 --zombie-rate 0.08 --seed 4 --timeout 240
+grep -Eq 'workers +[0-9]+ started \([0-9]+ zombies replaced' "$work/swarm-main.out" || fail "no swarm worker report"
+grep -Eq '[1-9][0-9]* zombies replaced' "$work/swarm-main.out" || fail "the main swarm did not lose a worker holding a claim"
+grep -Eq 'expired +[1-9]' "$work/swarm-main.out" || fail "no expired lease was reaped in the main swarm"
+run_swarm swarm-cancel --workers 2 --tasks 6 --fail-rate 0 --zombie-rate 0 --cancel-rate 0.3 --work-max 4 --seed 11 --timeout 120
+ok "board_run_swarm_keeps_its_invariants_against_the_dev_stack"
+
 if ! (
   set -a
   # shellcheck source=/dev/null

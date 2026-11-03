@@ -290,6 +290,14 @@ for each of five tasks, checks a hostile title, restarts the server on the same 
 removes what it made. The conventions file lists the subset limits the board works around. The board has no CI
 job yet; run the script by hand with `LATTICE_BIN_DIR` set to the binaries under test.
 
+`board run` (`integrations/board/board-run`) is a worker for that queue: it takes a task with `board next`, runs
+a command or a `claude` or `codex` template for it with a scrubbed environment, heartbeats on a separate thread,
+kills the child's process group when the lease is lost or the task times out, and marks the task done, failed or
+retried. `integrations/board/swarm` starts several workers with scripted agents that fail, hang or die, and
+checks the event log for a task done twice, done by a non-holder, claimed twice, claimed early or lost. The
+[agents quickstart](quickstart-agents.md) walks through it. Both run against a real `latticed` in the
+`dev-stack` job; the built-in agent templates run only against fake agents, never a real one.
+
 The Claude Code session hooks in `integrations/claude-code/hooks` print a bounded digest of the open tasks at
 session start, and the board events after a saved cursor on each prompt. `tools/test_agent_hooks.py` runs in the
 `tools-tests` workflow. No interactive client session with these hooks is recorded here.
