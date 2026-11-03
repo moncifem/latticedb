@@ -237,6 +237,42 @@ pub enum InsertSource {
     Query(Box<LogicalPlan>),
 }
 
+/// An aggregate function without `GROUP BY`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AggFunc {
+    /// `count(*)`: every row.
+    CountStar,
+    /// `count(x)`: rows where `x` is not `NULL`.
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+impl AggFunc {
+    /// The SQL name.
+    pub fn name(self) -> &'static str {
+        match self {
+            AggFunc::CountStar | AggFunc::Count => "count",
+            AggFunc::Sum => "sum",
+            AggFunc::Avg => "avg",
+            AggFunc::Min => "min",
+            AggFunc::Max => "max",
+        }
+    }
+}
+
+/// One aggregate computed over all the rows of the input.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AggCall {
+    pub func: AggFunc,
+    /// The argument, `None` for `count(*)`.
+    pub arg: Option<TypedExpr>,
+    /// The type of the result.
+    pub ty: SqlType,
+}
+
 /// The relational and write operators of the single-table subset.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LogicalPlan {
@@ -259,6 +295,12 @@ pub enum LogicalPlan {
     Sort {
         input: Box<LogicalPlan>,
         keys: Vec<SortKey>,
+    },
+    /// Exactly one row of aggregates over every row of `input`, even when `input` is empty. Column
+    /// `i` of the row is `calls[i]`; a [`LogicalPlan::Project`] above it names and orders them.
+    Aggregate {
+        input: Box<LogicalPlan>,
+        calls: Vec<AggCall>,
     },
     Limit {
         input: Box<LogicalPlan>,
@@ -309,6 +351,7 @@ impl LogicalPlan {
             LogicalPlan::Project { columns, .. } => Some(columns),
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Aggregate { input, .. }
             | LogicalPlan::Limit { input, .. } => input.output(),
             LogicalPlan::Insert { returning, .. }
             | LogicalPlan::Update { returning, .. }
@@ -355,6 +398,17 @@ impl LogicalPlan {
                     })
                     .collect();
                 writeln!(out, "{pad}Sort [{}]", keys.join(", "))?;
+                input.write_tree(out, depth + 1)?;
+            }
+            LogicalPlan::Aggregate { input, calls } => {
+                let c: Vec<String> = calls
+                    .iter()
+                    .map(|c| match &c.arg {
+                        Some(a) => format!("{}({a})", c.func.name()),
+                        None => format!("{}(*)", c.func.name()),
+                    })
+                    .collect();
+                writeln!(out, "{pad}Aggregate [{}]", c.join(", "))?;
                 input.write_tree(out, depth + 1)?;
             }
             LogicalPlan::Limit {

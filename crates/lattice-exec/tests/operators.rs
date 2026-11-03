@@ -845,7 +845,7 @@ fn unsupported_statements_are_refused_with_0a000() {
     let (mut db, mut s) = session_with_notes();
     for sql in [
         "SELECT * FROM notes a JOIN notes b ON a.id = b.id",
-        "SELECT count(*) FROM notes",
+        "SELECT count(DISTINCT score) FROM notes",
         "SELECT DISTINCT score FROM notes",
         "CREATE INDEX i ON notes (score)",
         "ALTER TABLE notes ADD COLUMN x INT",
