@@ -279,6 +279,11 @@ impl<S: Sut> Sim<S> {
     }
 
     fn fail(&mut self, tag: &str, detail: String) {
+        // Once a run is censored the script may have moved on without a takeover the kernel never
+        // recorded, so later comparisons say nothing about the kernel.
+        if self.censored {
+            return;
+        }
         self.fails.push(format!(
             "{tag}: profile {} seed {}: {detail}",
             self.profile, self.seed
