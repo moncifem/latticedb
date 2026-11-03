@@ -10,7 +10,9 @@
 # dev/lattice-dev.sh writes an override file that replaces latticed's command and ports, adding the
 # gateway on 0.0.0.0:7070 inside the container (TLS with the same files, bearer tokens) and publishing
 # it on 127.0.0.1 only. That needs an image whose latticed serves the gateway over TLS; the pinned
-# image below predates it. The command list here is repeated in that override: keep the two in step.
+# image below predates it. The same override adds --tls-starts-per-second and
+# --tls-starts-per-second-per-address (LATTICE_DEV_TLS_STARTS_PER_SECOND, default 1000) when the
+# image's latticed has them. The command list here is repeated in that override: keep the two in step.
 name: ${LATTICE_DEV_PROJECT:-lattice-dev}
 
 x-image: &image ${LATTICE_DEV_IMAGE:-ghcr.io/moncifem/latticedb:0.1.0-alpha.1@sha256:678aba924b803c5ed198e117e36a5fd0d5c9ec05f5d1bb80fb56a5d739d948fd}

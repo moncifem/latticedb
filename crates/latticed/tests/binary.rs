@@ -259,3 +259,41 @@ fn the_server_ignores_other_stdin_lines_and_stops_on_shutdown_without_end_of_fil
     assert!(status.success());
     drop(stdin);
 }
+
+#[test]
+fn tls_start_limits_are_in_help_and_validated_to_one_through_ten_thousand() {
+    let help = stdout(&latticed(&["--help"]));
+    assert!(help.contains("--tls-starts-per-second N"));
+    assert!(help.contains("--tls-starts-per-second-per-address N"));
+    for flag in [
+        "--tls-starts-per-second",
+        "--tls-starts-per-second-per-address",
+    ] {
+        refused(
+            &[flag, "x"],
+            &format!("invalid {flag}: invalid digit found in string"),
+        );
+        for bad in ["0", "10001"] {
+            refused(&[flag, bad], &format!("invalid {flag}: must be 1..=10000"));
+        }
+        refused(
+            &[flag, "-1"],
+            &format!("invalid {flag}: invalid digit found in string"),
+        );
+        refused(&[flag], &format!("missing value for {flag}"));
+    }
+}
+
+#[test]
+fn tls_start_limits_without_scram_tls_warn_that_they_are_ignored() {
+    // Loopback, development trust, stdin at end-of-file: the server starts and stops at once.
+    let o = latticed(&["--listen", "127.0.0.1:0", "--tls-starts-per-second", "5"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("are ignored without --auth scram-tls"),
+        "{}",
+        stderr(&o)
+    );
+    let quiet = latticed(&["--listen", "127.0.0.1:0"]);
+    assert!(!stderr(&quiet).contains("ignored"), "{}", stderr(&quiet));
+}

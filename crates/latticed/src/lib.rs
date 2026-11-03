@@ -21,10 +21,14 @@
 //! registry slots. Pre-authentication startup packets are capped at [`MAX_STARTUP_PACKET_LEN`]
 //! bytes and must arrive within [`PRE_STARTUP_TIMEOUT`].
 //!
-//! TLS handshakes are limited globally (64 starts per second) and per client address (16 starts per
-//! second per IPv4 address or IPv6 /64, in a table of at most 1024 addresses). Residual risks: a
+//! TLS handshakes are limited globally (64 starts per second by default) and per client address (16
+//! starts per second per IPv4 address or IPv6 /64 by default, in a table of at most 1024 addresses);
+//! `ServerConfig::tls_starts_per_second` and `tls_starts_per_second_per_address` change them
+//! (`--tls-starts-per-second`, `--tls-starts-per-second-per-address`). A start over a limit is
+//! answered before any handshake with FATAL 53300 as the reply to the SSLRequest, and counted
+//! ([`ServerHandle::tls_start_refusals`]). Residual risks: a
 //! client with many source addresses can still exhaust the global budget; a proxy or NAT in front
-//! of many clients shares one address and is capped at 16 new TLS starts per second; and
+//! of many clients shares one address and is capped at the per-address limit; and
 //! unauthenticated clients still hold worker threads (`max_connections` plus the control reserve of
 //! 8) until their deadline. The 5 s pre-startup limit applies only to startup-phase packets (SASL
 //! frames use `read_timeout`) and drops clients that connect and then wait longer than 5 s before
@@ -95,6 +99,13 @@ pub struct ServerConfig {
     pub startup_timeout: Duration,
     /// Default is explicitly local development trust; remote binds require SCRAM/TLS.
     pub authentication: Authentication,
+    /// TLS starts per second the whole listener admits (`1..=10_000`, default 64). Only
+    /// `Authentication::ScramTls` starts TLS. A start over the limit is answered with FATAL 53300
+    /// and counted. It is not required to be at least the per-address limit.
+    pub tls_starts_per_second: usize,
+    /// TLS starts per second admitted from one client address, IPv6 by /64 (`1..=10_000`, default
+    /// 16). Everything behind one NAT, proxy or container bridge shares it.
+    pub tls_starts_per_second_per_address: usize,
 }
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -107,6 +118,8 @@ impl Default for ServerConfig {
             response_timeout: Duration::from_secs(15),
             startup_timeout: Duration::from_secs(10),
             authentication: Authentication::DevelopmentTrust,
+            tls_starts_per_second: GLOBAL_TLS_STARTS_PER_SECOND,
+            tls_starts_per_second_per_address: PER_IP_TLS_STARTS_PER_SECOND,
         }
     }
 }
@@ -147,8 +160,18 @@ pub const MAX_STARTUP_PACKET_LEN: usize = 10_000;
 /// bounded by the configured read and startup timeouts.
 pub const PRE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 
-const GLOBAL_TLS_STARTS_PER_SECOND: usize = 64;
-const PER_IP_TLS_STARTS_PER_SECOND: usize = 16;
+/// Default TLS starts per second on the whole listener.
+pub const GLOBAL_TLS_STARTS_PER_SECOND: usize = 64;
+/// Default TLS starts per second from one client address (IPv6 /64).
+pub const PER_IP_TLS_STARTS_PER_SECOND: usize = 16;
+/// Largest value accepted for either TLS start limit.
+pub const MAX_TLS_STARTS_PER_SECOND: usize = 10_000;
+/// The reply to an SSLRequest that is over a TLS start limit. Fixed and neutral text: it names no
+/// count, address, flag or other client, because any remote client can read it and the cause may be
+/// the global limit or a full address table as well as the per-address limit.
+const TLS_START_REFUSAL: &str = "too many new connections, retry shortly";
+/// Least number of client addresses the limiter tracks. The table is sized `max(this, global limit)`,
+/// so a global limit above it can never be refused for lack of table space alone.
 const MAX_TRACKED_ADDRESSES: usize = 1024;
 /// CancelRequest budgets. A cancel needs a guessed key of about 32 bits of secret plus a pid, so
 /// these only bound guessing and registry lock traffic. They are a resource bound, not a DoS
@@ -189,6 +212,7 @@ pub struct ServerHandle {
     address: SocketAddr,
     stopping: Arc<AtomicBool>,
     open: Arc<AtomicUsize>,
+    tls_refusals: Arc<AtomicUsize>,
     acceptor: Option<JoinHandle<io::Result<()>>>,
 }
 impl ServerHandle {
@@ -218,6 +242,8 @@ impl ServerHandle {
                 .checked_add(config.response_timeout)
                 .is_none()
             || config.startup_timeout.is_zero()
+            || !(1..=MAX_TLS_STARTS_PER_SECOND).contains(&config.tls_starts_per_second)
+            || !(1..=MAX_TLS_STARTS_PER_SECOND).contains(&config.tls_starts_per_second_per_address)
             || Instant::now().checked_add(config.startup_timeout).is_none()
             || (matches!(config.authentication, Authentication::DevelopmentTrust)
                 && !config.address.ip().is_loopback())
@@ -225,7 +251,7 @@ impl ServerHandle {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "nonzero bounded timeouts, 1..=1024 connections, and loopback for development trust required",
+                "nonzero bounded timeouts, 1..=1024 connections, 1..=10000 TLS starts per second (global and per address), and loopback for development trust required",
             ));
         }
         let registry = Arc::new(Mutex::new(RegistryState::new(config.max_connections)?));
@@ -236,6 +262,8 @@ impl ServerHandle {
         let stop = stopping.clone();
         let open = Arc::new(AtomicUsize::new(0));
         let open_count = open.clone();
+        let tls_refusals = Arc::new(AtomicUsize::new(0));
+        let refusal_count = tls_refusals.clone();
         let acceptor = thread::Builder::new()
             .name("pg-accept".into())
             .spawn(move || {
@@ -246,12 +274,14 @@ impl ServerHandle {
                     registry,
                     Arc::new(factory),
                     open_count,
+                    refusal_count,
                 )
             })?;
         Ok(Self {
             address,
             stopping,
             open,
+            tls_refusals,
             acceptor: Some(acceptor),
         })
     }
@@ -269,6 +299,12 @@ impl ServerHandle {
     /// connections still waiting in the kernel backlog are not counted.
     pub fn open_connections(&self) -> usize {
         self.open.load(Ordering::Acquire)
+    }
+
+    /// SSLRequests refused because a TLS start limit was used up, since the listener started. A
+    /// refused start is counted here once and never as a TLS start; admitted starts are not counted.
+    pub fn tls_start_refusals(&self) -> usize {
+        self.tls_refusals.load(Ordering::Acquire)
     }
 
     /// Actual bound address, including the selected port when binding port zero.
@@ -361,6 +397,7 @@ fn accept<H, F>(
     registry: Registry,
     factory: Arc<F>,
     open: Arc<AtomicUsize>,
+    tls_refusals: Arc<AtomicUsize>,
 ) -> io::Result<()>
 where
     H: QueryHandler + 'static,
@@ -368,7 +405,11 @@ where
 {
     let mut workers: Vec<Worker> = Vec::new();
     let limits = Limits {
-        handshakes: Mutex::new(HandshakeLimiter::default()),
+        handshakes: Mutex::new(HandshakeLimiter::with_limits(
+            config.tls_starts_per_second,
+            config.tls_starts_per_second_per_address,
+        )),
+        tls_refusals,
         cancels: Mutex::new(HandshakeLimiter::with_limits(
             GLOBAL_CANCELS_PER_SECOND,
             PER_IP_CANCELS_PER_SECOND,
@@ -677,6 +718,10 @@ struct HandshakeLimiter {
     per_address: HashMap<IpAddr, VecDeque<Instant>>,
     global_limit: usize,
     per_address_limit: usize,
+    /// Most addresses tracked at once: `max(MAX_TRACKED_ADDRESSES, global_limit)`.
+    max_tracked: usize,
+    /// When expired per-address entries were last swept out of the table.
+    last_sweep: Option<Instant>,
 }
 impl Default for HandshakeLimiter {
     fn default() -> Self {
@@ -687,6 +732,7 @@ impl Default for HandshakeLimiter {
 /// Admission windows shared by all connection workers.
 struct Limits {
     handshakes: Mutex<HandshakeLimiter>,
+    tls_refusals: Arc<AtomicUsize>,
     cancels: Mutex<HandshakeLimiter>,
 }
 const WINDOW: Duration = Duration::from_secs(1);
@@ -705,6 +751,8 @@ impl HandshakeLimiter {
             per_address: HashMap::new(),
             global_limit,
             per_address_limit,
+            max_tracked: MAX_TRACKED_ADDRESSES.max(global_limit),
+            last_sweep: None,
         }
     }
 
@@ -719,20 +767,35 @@ impl HandshakeLimiter {
         }
     }
 
-    /// Admits one handshake start, or records nothing. Memory is bounded by
-    /// `MAX_TRACKED_ADDRESSES * PER_IP_TLS_STARTS_PER_SECOND` timestamps.
+    /// Admits one handshake start, or records nothing.
+    ///
+    /// Memory: an address's queue is expired only when that address connects, so the table is also
+    /// swept at most once per window, which drops every expired entry and every empty queue. A
+    /// queue then holds only starts from the last two windows, and at most `global_limit` starts are
+    /// admitted in any window, so the table holds at most `3 * global_limit` timestamps in all
+    /// (30 000 at the maximum, about 480 KB at 16 bytes each) and at most `max_tracked` addresses.
     fn admit(&mut self, address: IpAddr, now: Instant) -> bool {
         expire(&mut self.global, now);
-        if self.global.len() >= self.global_limit {
-            return false;
-        }
-        let key = Self::key(address);
-        if !self.per_address.contains_key(&key) && self.per_address.len() >= MAX_TRACKED_ADDRESSES {
+        if self
+            .last_sweep
+            .is_none_or(|at| now.saturating_duration_since(at) >= WINDOW)
+        {
             self.per_address.retain(|_, starts| {
                 expire(starts, now);
                 !starts.is_empty()
             });
-            if self.per_address.len() >= MAX_TRACKED_ADDRESSES {
+            self.last_sweep = Some(now);
+        }
+        if self.global.len() >= self.global_limit {
+            return false;
+        }
+        let key = Self::key(address);
+        if !self.per_address.contains_key(&key) && self.per_address.len() >= self.max_tracked {
+            self.per_address.retain(|_, starts| {
+                expire(starts, now);
+                !starts.is_empty()
+            });
+            if self.per_address.len() >= self.max_tracked {
                 return false;
             }
         }
@@ -807,6 +870,20 @@ fn route_cancel(
     Ok(admitted)
 }
 
+/// Charges one TLS start against both windows. A refusal is counted here, once, and a start that
+/// is admitted is never counted, so the counter is exactly the number of refused SSLRequests.
+fn admit_tls_start(limits: &Limits, peer: IpAddr, now: Instant) -> io::Result<bool> {
+    let admitted = limits
+        .handshakes
+        .lock()
+        .map_err(|_| io::Error::other("TLS admission unavailable"))?
+        .admit(peer, now);
+    if !admitted {
+        limits.tls_refusals.fetch_add(1, Ordering::AcqRel);
+    }
+    Ok(admitted)
+}
+
 fn serve_connection<H, F>(
     socket: &mut Transport,
     config: ServerConfig,
@@ -865,15 +942,13 @@ where
                         socket.write_all(&[pgwire::ENCRYPTION_DECLINED])?
                     }
                     Authentication::ScramTls { tls, .. } => {
-                        // Bound expensive TLS starts globally (64/s) and per client address (16/s).
-                        {
-                            let mut starts = limits
-                                .handshakes
-                                .lock()
-                                .map_err(|_| io::Error::other("TLS admission unavailable"))?;
-                            if !starts.admit(peer, Instant::now()) {
-                                return Err(io::Error::other("TLS handshake rate exceeded"));
-                            }
+                        // Bound expensive TLS starts globally and per client address. Over a limit
+                        // the reply to the SSLRequest is an ErrorResponse, sent before any handshake,
+                        // so the client learns why instead of seeing a silent close. libpq reports
+                        // "server sent an error response during SSL exchange" and does not retry.
+                        if !admit_tls_start(&limits, peer, Instant::now())? {
+                            send(socket, fatal("53300", TLS_START_REFUSAL), response)?;
+                            return Ok(());
                         }
                         socket.write_all(b"S")?;
                         socket.flush()?;
@@ -1361,6 +1436,7 @@ mod tests {
         let token = registration.begin_query().unwrap();
         let limits = Limits {
             handshakes: Mutex::new(HandshakeLimiter::default()),
+            tls_refusals: Arc::new(AtomicUsize::new(0)),
             cancels: Mutex::new(HandshakeLimiter::with_limits(
                 GLOBAL_CANCELS_PER_SECOND,
                 PER_IP_CANCELS_PER_SECOND,
@@ -1381,5 +1457,142 @@ mod tests {
         let later = now + Duration::from_secs(1);
         assert!(route_cancel(&limits, &registry, peer, later, registration.key).unwrap());
         assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn tls_start_limits_are_configurable_and_independent_of_each_other() {
+        let now = Instant::now();
+        let ip = |n: u8| IpAddr::from([10, 6, 0, n]);
+        // A per-address limit above the global one is allowed; the global one binds first.
+        let mut limiter = HandshakeLimiter::with_limits(3, 5);
+        for _ in 0..3 {
+            assert!(limiter.admit(ip(1), now));
+        }
+        assert!(!limiter.admit(ip(1), now));
+        assert!(!limiter.admit(ip(2), now));
+        assert!(limiter.admit(ip(2), now + Duration::from_secs(1)));
+        // A low per-address limit leaves the rest of a high global budget to other addresses.
+        let mut limiter = HandshakeLimiter::with_limits(1000, 1);
+        assert!(limiter.admit(ip(1), now));
+        assert!(!limiter.admit(ip(1), now + Duration::from_millis(999)));
+        assert!(limiter.admit(ip(2), now));
+        assert!(limiter.admit(ip(1), now + Duration::from_secs(1)));
+        // The documented extremes behave the same way.
+        let mut limiter = HandshakeLimiter::with_limits(MAX_TLS_STARTS_PER_SECOND, 2);
+        assert!(limiter.admit(ip(3), now) && limiter.admit(ip(3), now));
+        assert!(!limiter.admit(ip(3), now));
+    }
+
+    #[test]
+    fn a_refused_tls_start_is_counted_once_and_an_admitted_one_never() {
+        let now = Instant::now();
+        let peer = IpAddr::from([10, 7, 0, 1]);
+        let limits = Limits {
+            handshakes: Mutex::new(HandshakeLimiter::with_limits(10, 2)),
+            tls_refusals: Arc::new(AtomicUsize::new(0)),
+            cancels: Mutex::new(HandshakeLimiter::with_limits(10, 10)),
+        };
+        assert!(admit_tls_start(&limits, peer, now).unwrap());
+        assert!(admit_tls_start(&limits, peer, now).unwrap());
+        assert_eq!(limits.tls_refusals.load(Ordering::Acquire), 0);
+        assert!(!admit_tls_start(&limits, peer, now).unwrap());
+        assert!(!admit_tls_start(&limits, peer, now).unwrap());
+        assert_eq!(limits.tls_refusals.load(Ordering::Acquire), 2);
+        // Another address is unaffected, and a refusal consumed no budget: the window reopens whole.
+        assert!(admit_tls_start(&limits, IpAddr::from([10, 7, 0, 2]), now).unwrap());
+        let later = now + Duration::from_secs(1);
+        assert!(admit_tls_start(&limits, peer, later).unwrap());
+        assert!(admit_tls_start(&limits, peer, later).unwrap());
+        assert_eq!(limits.tls_refusals.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn the_refusal_text_is_fixed_and_leaks_nothing() {
+        let mut bytes = Vec::new();
+        for message in fatal("53300", TLS_START_REFUSAL).messages {
+            message.encode(&mut bytes).unwrap();
+        }
+        // Expected bytes are built by hand from the PostgreSQL ErrorResponse layout.
+        let text = "too many new connections, retry shortly";
+        let mut fields = Vec::new();
+        for (tag, value) in [
+            (b'S', "FATAL"),
+            (b'V', "FATAL"),
+            (b'C', "53300"),
+            (b'M', text),
+        ] {
+            fields.push(tag);
+            fields.extend_from_slice(value.as_bytes());
+            fields.push(0);
+        }
+        fields.push(0);
+        let mut expected = vec![b'E'];
+        expected.extend_from_slice(&((fields.len() + 4) as u32).to_be_bytes());
+        expected.extend_from_slice(&fields);
+        assert_eq!(bytes, expected);
+        assert!(!text.chars().any(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn expired_addresses_are_swept_without_being_touched_again() {
+        let now = Instant::now();
+        let mut limiter = HandshakeLimiter::with_limits(1000, 5);
+        for n in 0..300u32 {
+            let address = IpAddr::from([10, 8, (n / 256) as u8, (n % 256) as u8]);
+            assert!(limiter.admit(address, now));
+        }
+        assert_eq!(limiter.per_address.len(), 300);
+        // One start from a new address a window later: the 300 silent ones are gone, not kept until
+        // they reconnect, and with them their queues.
+        assert!(limiter.admit(IpAddr::from([10, 9, 0, 1]), now + Duration::from_secs(1)));
+        assert_eq!(limiter.per_address.len(), 1);
+        let stored: usize = limiter.per_address.values().map(VecDeque::len).sum();
+        assert_eq!(stored, 1);
+        // The sweep runs at most once per window: inside one it does not rescan the table.
+        let swept_at = limiter.last_sweep;
+        assert!(limiter.admit(
+            IpAddr::from([10, 9, 0, 2]),
+            now + Duration::from_millis(1500)
+        ));
+        assert_eq!(limiter.last_sweep, swept_at);
+        assert_eq!(limiter.per_address.len(), 2);
+    }
+
+    #[test]
+    fn stored_timestamps_stay_within_three_global_windows_under_rotating_addresses() {
+        let start = Instant::now();
+        let global = 50;
+        let mut limiter = HandshakeLimiter::with_limits(global, 3);
+        let mut worst = 0;
+        // Each step a new address connects once; admits stop at the global limit per window.
+        for step in 0..2000u32 {
+            let now = start + Duration::from_millis(u64::from(step) * 7);
+            let address = IpAddr::from([10, 10, (step / 256) as u8, (step % 256) as u8]);
+            let _ = limiter.admit(address, now);
+            let stored: usize = limiter.global.len()
+                + limiter
+                    .per_address
+                    .values()
+                    .map(VecDeque::len)
+                    .sum::<usize>();
+            worst = worst.max(stored);
+        }
+        assert!(worst <= 3 * global, "stored {worst} timestamps");
+    }
+
+    #[test]
+    fn a_global_limit_above_the_table_floor_is_not_refused_for_lack_of_table_space() {
+        let now = Instant::now();
+        let mut limiter = HandshakeLimiter::with_limits(2000, 1);
+        assert_eq!(limiter.max_tracked, 2000);
+        // 1500 distinct addresses within one second, more than the 1024 floor.
+        for n in 0..1500u32 {
+            let address = IpAddr::from([10, 11, (n / 256) as u8, (n % 256) as u8]);
+            assert!(limiter.admit(address, now), "address {n}");
+        }
+        assert_eq!(
+            HandshakeLimiter::with_limits(64, 16).max_tracked,
+            MAX_TRACKED_ADDRESSES
+        );
     }
 }

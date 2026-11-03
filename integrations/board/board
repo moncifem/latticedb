@@ -132,7 +132,17 @@ psql_run() {
 # transient_connect_error: TMP_ERR holds a connect-phase failure worth retrying.
 transient_connect_error() {
   grep -q 'psql: error: connection to server' "$TMP_ERR" || return 1
-  if grep -q -i -e 'FATAL' -e 'no password supplied' -e 'SSL' -e 'TLS' -e 'certificate' "$TMP_ERR"; then
+  # A latticed over its TLS start limit or its connection limit answers the SSLRequest with an error
+  # before any handshake. libpq prints the first line below for it, and a libpq that prints the
+  # server's FATAL text shows one of the other two. They are limits, so asking again later works.
+  if grep -q -F -e 'server sent an error response during SSL exchange' \
+    -e 'too many new connections, retry shortly' -e 'sorry, too many clients already' "$TMP_ERR"; then
+    return 0
+  fi
+  if grep -q -i -e 'FATAL' -e 'no password supplied' "$TMP_ERR"; then
+    return 1
+  fi
+  if grep -q -i -e 'SSL' -e 'TLS' -e 'certificate' "$TMP_ERR"; then
     return 1
   fi
   grep -q -i -e 'server closed the connection unexpectedly' -e 'Connection reset' \

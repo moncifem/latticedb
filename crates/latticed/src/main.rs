@@ -14,7 +14,8 @@ use latticed::ws::{
     AllowedHost, GatewayAuth, GatewayConfig, check_allowed_hosts, check_gateway_exposure,
 };
 use latticed::{
-    Authentication, ServerConfig, ServerHandle, SqlConfig, SqlServer, TlsConfig, files,
+    Authentication, MAX_TLS_STARTS_PER_SECOND, ServerConfig, ServerHandle, SqlConfig, SqlServer,
+    TlsConfig, files,
 };
 use std::io::Read;
 use std::io::Write;
@@ -35,6 +36,17 @@ enum Exit {
     Forced,
 }
 
+/// A TLS start limit is a whole number from 1 to `MAX_TLS_STARTS_PER_SECOND`.
+fn tls_start_limit(value: &str, flag: &str) -> Result<usize, String> {
+    let limit: usize = value.parse().map_err(|e| format!("invalid {flag}: {e}"))?;
+    if !(1..=MAX_TLS_STARTS_PER_SECOND).contains(&limit) {
+        return Err(format!(
+            "invalid {flag}: must be 1..={MAX_TLS_STARTS_PER_SECOND}"
+        ));
+    }
+    Ok(limit)
+}
+
 fn run() -> Result<Exit, String> {
     let mut config = ServerConfig::default();
     let mut auth_mode = String::from("development-trust");
@@ -51,6 +63,7 @@ fn run() -> Result<Exit, String> {
     let mut gateway_tokens: Option<String> = None;
     let mut gateway_allowed_hosts: Vec<String> = Vec::new();
     let mut stdin_control = true;
+    let mut tls_limit_given = false;
     let mut allow_format_upgrade = false;
     let mut stop_timeout = DEFAULT_STOP_TIMEOUT;
     let mut args = std::env::args().skip(1);
@@ -61,7 +74,7 @@ fn run() -> Result<Exit, String> {
         }
         if option == "--help" || option == "-h" {
             println!(
-                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows, tables and their column definitions survive a restart. A data directory written before table definitions existed refuses its first CREATE TABLE until --allow-format-upgrade on (older builds cannot open the directory afterwards and there is no downgrade: take a verified backup first); a new directory needs nothing. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Sync gateway (WebSocket, protocol lattice.sync.v1, path /sync, and POST /mcp on the same port; requires --data-dir): --gateway-listen IP:PORT enables it; --gateway-tokens FILE makes it require 'Authorization: Bearer' tokens from a credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (a file that does not load keeps the tokens in use; after 10 minutes of failed loads no token works; SCRAM verifiers and policies are read at start only), otherwise it serves the loopback development principal and only with development-trust; --tls-cert FILE and --tls-key FILE (the same files and key rules as scram-tls) serve the gateway over TLS. A non-loopback --gateway-listen needs both TLS files and --gateway-tokens, or it refuses to start; plaintext is for loopback development only (only 127.0.0.0/8 and ::1 are loopback; an IPv4-mapped address such as [::ffff:127.0.0.1] needs TLS and tokens). The gateway and the PostgreSQL listener share one certificate, so clients must trust a certificate whose name is valid for both ports. With development-trust the TLS files are accepted only with --gateway-listen, and then apply to the gateway alone (the PostgreSQL listener stays loopback trust in plaintext). POST /mcp answers to the bound address and to localhost on the bound port, and to each --gateway-allowed-host NAME[:PORT] given (repeatable, at most 16, needs --gateway-listen; the name is an ASCII DNS name or an IP literal, IPv6 in brackets, matched exactly and case-insensitively with no wildcards; an omitted port is the bound port; a malformed value stops the start); any other Host gets 403. /sync checks only that Host is present and well formed, and refuses any browser Origin. --gateway-max-connections N (default 32) and --gateway-handshake-timeout-ms N (default 5000) bound it, and the handshake timeout covers the TLS handshake. Per principal (the account the token verified, or the one development principal): --gateway-max-connections-per-principal N (default 8, 1..=1024) is the most connections, WebSocket and POST /mcp together, one principal holds, and --gateway-reserved-connections N (default 4) keeps that many of the --gateway-max-connections places for principals that hold none, so a principal that already holds a connection is refused while more than max-connections minus reserved are open; --gateway-max-long-polls-per-principal N (default 4) and --gateway-max-long-polls N (default 16) cap the lattice_subscribe calls with a wait_ms above zero that wait at once. A connection or long poll over a limit gets 503 with Retry-After: 1 (before the WebSocket upgrade, or without waiting) and is counted. Optional --startup-timeout-ms N bounds startup/TLS/authentication. SIGTERM and SIGINT stop it cleanly (also while it is still starting or recovering: that ends the process at once with status 2, before the listening line is printed); a second signal, or --stop-timeout-ms N (default 30000) elapsing, abandons a stop that does not finish. Stdin control is --stdin-control on|off (default on): with on, the line 'shutdown' on stdin stops the server and so does end-of-file, so run it with stdin held open; under a supervisor or container pass --stdin-control off, which never reads stdin. Exit status: 0 clean stop, 1 failure, 2 forced stop or a stop signal during startup. Without --idle-timeout-ms the read timeout also disconnects idle sessions. The TLS key, SCRAM verifier, decoy secret and account policy files must not be accessible to group or others (mode 0600), and their directory must not be writable by group or others (mode 0700 or 0755); a symlink or a FIFO in their place is refused."
+                "latticed [--listen IP:PORT] [--max-connections N] [--read-timeout-ms N] [--write-timeout-ms N] [--idle-timeout-ms N] [--response-timeout-ms N] [--tls-starts-per-second N] [--tls-starts-per-second-per-address N]\nLoopback development trust by default. Without --data-dir only SELECT 1 is answered. SQL: --data-dir DIR serves SQL from a durable data directory (statement ceiling --statement-timeout-max-ms N, default 30000; budget --statement-memory-bytes N, default 67108864; staged writes of one transaction --transaction-bytes N, default 268435456). Row policy is explicit: with development-trust pass --development-policy allow-all|deny-all; with scram-tls pass --account-policies FILE (one 'account<TAB>allow-all|deny-all' per line; unlisted accounts are denied). Committed rows, tables and their column definitions survive a restart. A data directory written before table definitions existed refuses its first CREATE TABLE until --allow-format-upgrade on (older builds cannot open the directory afterwards and there is no downgrade: take a verified backup first); a new directory needs nothing. SCRAM requires --auth scram-tls --tls-cert FILE --tls-key FILE --scram-verifiers FILE --scram-decoy-secret FILE. Sync gateway (WebSocket, protocol lattice.sync.v1, path /sync, and POST /mcp on the same port; requires --data-dir): --gateway-listen IP:PORT enables it; --gateway-tokens FILE makes it require 'Authorization: Bearer' tokens from a credential file (mode 0600), re-read within 5 seconds of a change and on SIGHUP (a file that does not load keeps the tokens in use; after 10 minutes of failed loads no token works; SCRAM verifiers and policies are read at start only), otherwise it serves the loopback development principal and only with development-trust; --tls-cert FILE and --tls-key FILE (the same files and key rules as scram-tls) serve the gateway over TLS. A non-loopback --gateway-listen needs both TLS files and --gateway-tokens, or it refuses to start; plaintext is for loopback development only (only 127.0.0.0/8 and ::1 are loopback; an IPv4-mapped address such as [::ffff:127.0.0.1] needs TLS and tokens). The gateway and the PostgreSQL listener share one certificate, so clients must trust a certificate whose name is valid for both ports. With development-trust the TLS files are accepted only with --gateway-listen, and then apply to the gateway alone (the PostgreSQL listener stays loopback trust in plaintext). POST /mcp answers to the bound address and to localhost on the bound port, and to each --gateway-allowed-host NAME[:PORT] given (repeatable, at most 16, needs --gateway-listen; the name is an ASCII DNS name or an IP literal, IPv6 in brackets, matched exactly and case-insensitively with no wildcards; an omitted port is the bound port; a malformed value stops the start); any other Host gets 403. /sync checks only that Host is present and well formed, and refuses any browser Origin. --gateway-max-connections N (default 32) and --gateway-handshake-timeout-ms N (default 5000) bound it, and the handshake timeout covers the TLS handshake. Per principal (the account the token verified, or the one development principal): --gateway-max-connections-per-principal N (default 8, 1..=1024) is the most connections, WebSocket and POST /mcp together, one principal holds, and --gateway-reserved-connections N (default 4) keeps that many of the --gateway-max-connections places for principals that hold none, so a principal that already holds a connection is refused while more than max-connections minus reserved are open; --gateway-max-long-polls-per-principal N (default 4) and --gateway-max-long-polls N (default 16) cap the lattice_subscribe calls with a wait_ms above zero that wait at once. A connection or long poll over a limit gets 503 with Retry-After: 1 (before the WebSocket upgrade, or without waiting) and is counted. Optional --startup-timeout-ms N bounds startup/TLS/authentication. SIGTERM and SIGINT stop it cleanly (also while it is still starting or recovering: that ends the process at once with status 2, before the listening line is printed); a second signal, or --stop-timeout-ms N (default 30000) elapsing, abandons a stop that does not finish. Stdin control is --stdin-control on|off (default on): with on, the line 'shutdown' on stdin stops the server and so does end-of-file, so run it with stdin held open; under a supervisor or container pass --stdin-control off, which never reads stdin. Exit status: 0 clean stop, 1 failure, 2 forced stop or a stop signal during startup. Without --idle-timeout-ms the read timeout also disconnects idle sessions. With scram-tls, new TLS starts are limited to --tls-starts-per-second N on the whole listener (default 64) and --tls-starts-per-second-per-address N from one client address, IPv6 by /64 (default 16), each 1..=10000; every client behind one NAT, proxy or container bridge shares the per-address budget, so raise it for a development stack or a CI runner. A start over a limit is answered before any handshake with FATAL 53300 (the reply to the SSLRequest) and counted; it is no longer a silent close. The sync gateway has its own limits, not these. The TLS key, SCRAM verifier, decoy secret and account policy files must not be accessible to group or others (mode 0600), and their directory must not be writable by group or others (mode 0700 or 0755); a symlink or a FIFO in their place is refused."
             );
             return Ok(Exit::Clean);
         }
@@ -201,6 +214,15 @@ fn run() -> Result<Exit, String> {
                         .map_err(|e| format!("invalid response timeout: {e}"))?,
                 )
             }
+            "--tls-starts-per-second" => {
+                tls_limit_given = true;
+                config.tls_starts_per_second = tls_start_limit(&value, "--tls-starts-per-second")?
+            }
+            "--tls-starts-per-second-per-address" => {
+                tls_limit_given = true;
+                config.tls_starts_per_second_per_address =
+                    tls_start_limit(&value, "--tls-starts-per-second-per-address")?
+            }
             "--write-timeout-ms" => {
                 config.write_timeout = Duration::from_millis(
                     value
@@ -210,6 +232,11 @@ fn run() -> Result<Exit, String> {
             }
             _ => return Err(format!("unknown option {option}")),
         }
+    }
+    if tls_limit_given && auth_mode != "scram-tls" {
+        eprintln!(
+            "latticed: warning: --tls-starts-per-second and --tls-starts-per-second-per-address are ignored without --auth scram-tls, the only mode that starts TLS on the PostgreSQL listener"
+        );
     }
     if (gateway_listen || gateway_tokens.is_some()) && data_dir.is_none() {
         return Err("--gateway-listen and --gateway-tokens require --data-dir".into());

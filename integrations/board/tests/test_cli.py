@@ -712,7 +712,10 @@ class ConnectErrorClasses(Cli):
 
     def test_transient_messages_are_retried_up_to_the_limit(self):
         for msg in ("server closed the connection unexpectedly", "Connection reset by peer",
-                    "Connection refused", "timeout expired"):
+                    "Connection refused", "timeout expired",
+                    "server sent an error response during SSL exchange",
+                    "FATAL:  too many new connections, retry shortly",
+                    "FATAL:  sorry, too many clients already"):
             self.setUp()
             n, r = self.attempts(drop(msg)["err"])
             self.assertEqual((n, r.returncode), (4, 1), msg)
@@ -724,6 +727,7 @@ class ConnectErrorClasses(Cli):
                     "SSL error: certificate verify failed",
                     'server certificate for "x" does not match host name',
                     "TLS handshake failed: Connection reset by peer",
+                    'FATAL:  password authentication failed for user "x"',
                     'FATAL:  database "lattice" does not exist',
                     "some message nobody has seen before",
                     'could not translate host name "nope" to address: Name or service not known'):

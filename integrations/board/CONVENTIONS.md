@@ -565,9 +565,15 @@ These are the gaps that matter to you.
   poll. A task with a dead blocker stays blocked until a person acts.
 - A server that drops a new connection (alpha.1 does, about a quarter to a half of rapid sequential
   connects, [#867](https://github.com/moncifem/latticedb/issues/867)) would make every multi-statement
-  command flaky. Every `psql` call runs with `-w`, so a missing password is an error and never a
-  prompt. `board` retries a failed connect only when psql exits 2 with "connection to server ..." and
-  one of "server closed the connection unexpectedly", "Connection reset", "Connection refused" or
+  command flaky. The cause is latticed's limit of 16 new TLS starts per second from one client
+  address, which one `psql` connection per statement uses up; a build with
+  `--tls-starts-per-second-per-address` answers it with FATAL 53300 (`too many new connections, retry
+  shortly`) as the reply to the SSLRequest (psql prints "server sent an error response during SSL
+  exchange", and the same for the `sorry, too many clients already` refusal) and the dev stack raises
+  the limit when the image has the flag. Every `psql` call runs with `-w`, so a missing password is an error and
+  never a prompt. `board` retries a failed connect only when psql exits 2 with "connection to server ..."
+  and one of "server closed the connection unexpectedly", "server sent an error response during SSL
+  exchange", the two refusal texts above (a libpq that prints the server's FATAL line), "Connection reset", "Connection refused" or
   "timeout expired", never on "no password supplied", `FATAL`, SSL, TLS or certificate errors or any
   other message, and never after a statement may have been sent. The wait grows 0.1, 0.2, 0.4, 0.8 s
   and stays at 1 s, plus up to 0.1 s of jitter, for at most 12 attempts (`BOARD_CONNECT_TRIES`

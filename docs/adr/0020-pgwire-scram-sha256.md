@@ -45,11 +45,14 @@ password authentication, establish measured constant-time behavior on every targ
 The host registers a cancel key only after SCRAM succeeds, so unauthenticated clients occupy no
 registry slot, and cancel PIDs come from a wrapping counter that skips active PIDs. TLS handshake
 starts are limited globally (64 per second) and per client address (16 per second per IPv4 address or
-IPv6 /64, with IPv4-mapped peers treated as IPv4; at most 1024 tracked addresses).
+IPv6 /64, with IPv4-mapped peers treated as IPv4; at most `max(1024, global limit)` tracked
+addresses). Both limits are settable (`--tls-starts-per-second`,
+`--tls-starts-per-second-per-address`, `1..=10000`), and a start over a limit is answered with
+FATAL 53300 and a neutral fixed text as the reply to the SSLRequest instead of a silent close.
 Residual risks: a client controlling many source addresses can still exhaust the global budget and
-block TLS for others; a proxy or NAT in front of many clients shares one address and is capped at 16
-new TLS starts per second; and unauthenticated clients still hold worker threads (`max_connections`
-plus 8 control slots) until their deadline. Operators needing stronger protection should rate limit in
+block TLS for others; a proxy or NAT in front of many clients shares one address and is capped at
+16 new TLS starts per second unless the limit is raised; and unauthenticated clients still hold
+worker threads (`max_connections` plus 8 control slots) until their deadline. Operators needing stronger protection should rate limit in
 front of the listener. Pre-authentication startup packets are capped at 10000 bytes. A 5 second
 pre-startup limit applies only to startup-phase packets (SASL frames use the read timeout) and drops
 clients that connect and then wait longer than that before sending, a deliberate behaviour change. The

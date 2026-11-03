@@ -232,6 +232,15 @@ class ConnectRetryTests(unittest.TestCase):
     def test_classifier(self):
         self.assertTrue(source.transient_connect_error(DROPPED))
         self.assertTrue(source.transient_connect_error('psql: error: connection to server at "h", port 1 failed: Connection refused'))
+        self.assertTrue(source.transient_connect_error(
+            'psql: error: connection to server at "h", port 1 failed: server sent an error response during SSL exchange'))
+        for text in ("server sent an error response during SSL exchange",
+                     "FATAL:  too many new connections, retry shortly",
+                     "FATAL:  sorry, too many clients already"):
+            self.assertTrue(source.transient_connect_error(
+                'psql: error: connection to server at "h", port 1 failed: ' + text), text)
+        self.assertFalse(source.transient_connect_error(
+            'psql: error: connection to server at "h", port 1 failed: FATAL:  password authentication failed'))
         self.assertFalse(source.transient_connect_error("psql: error: could not translate host name"))
         self.assertFalse(source.transient_connect_error(""))
 

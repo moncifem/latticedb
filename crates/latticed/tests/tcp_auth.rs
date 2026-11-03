@@ -675,3 +675,110 @@ fn startup_timeout_over_tls_still_ends_with_close_notify() {
     assert_eq!(client.read(&mut byte).unwrap(), 0);
     server.shutdown().unwrap();
 }
+
+/// The ErrorResponse the server must send in answer to an SSLRequest over its TLS start limit,
+/// written out byte by byte from the protocol layout, not taken from the server's encoder.
+fn expected_start_refusal() -> Vec<u8> {
+    let text = "too many new connections, retry shortly";
+    let mut fields = Vec::new();
+    for (tag, value) in [
+        (b'S', "FATAL"),
+        (b'V', "FATAL"),
+        (b'C', "53300"),
+        (b'M', text),
+    ] {
+        fields.push(tag);
+        fields.extend_from_slice(value.as_bytes());
+        fields.push(0);
+    }
+    fields.push(0);
+    frame(b'E', &fields)
+}
+
+/// Sends an SSLRequest and returns everything the server writes before it closes, or the one byte
+/// `S` after which it waits for a handshake (then the socket is dropped and the read is cut short).
+fn ssl_reply(mut socket: TcpStream) -> Vec<u8> {
+    socket.write_all(&[0, 0, 0, 8, 4, 210, 22, 47]).unwrap();
+    let mut first = [0];
+    socket.read_exact(&mut first).unwrap();
+    if first == *b"S" {
+        return first.to_vec();
+    }
+    let mut bytes = first.to_vec();
+    socket.read_to_end(&mut bytes).unwrap();
+    bytes
+}
+
+/// Longest the requests of one burst may take. The limit windows are one second wide, so a burst
+/// that finishes well inside this cannot have had a window roll over between its first and last
+/// request; a slower one is run again on a fresh server.
+const BURST_BUDGET: Duration = Duration::from_millis(500);
+
+/// Sends `count` SSLRequests from this host, all sockets connected first, and returns the replies
+/// with the server still running. Retries on a fresh server when the burst took longer than
+/// `BURST_BUDGET`, because only a burst inside one window says anything about the limit.
+fn burst(configure: impl Fn(&mut ServerConfig), count: usize) -> (ServerHandle, Vec<Vec<u8>>) {
+    for _ in 0..10 {
+        let (mut config, _client) = fixture(GENEROUS_BUDGET);
+        configure(&mut config);
+        let server = ServerHandle::start(config).unwrap();
+        let sockets: Vec<TcpStream> = (0..count).map(|_| raw(server.local_addr())).collect();
+        let started = Instant::now();
+        let replies: Vec<Vec<u8>> = sockets.into_iter().map(ssl_reply).collect();
+        if started.elapsed() <= BURST_BUDGET {
+            return (server, replies);
+        }
+        server.shutdown().unwrap();
+    }
+    panic!("no burst of {count} SSLRequests finished within {BURST_BUDGET:?} in ten tries");
+}
+
+#[test]
+fn a_tls_start_over_the_per_address_limit_gets_53300_before_any_handshake() {
+    let (server, replies) = burst(|c| c.tls_starts_per_second_per_address = 2, 3);
+    assert_eq!(replies[0], b"S");
+    assert_eq!(replies[1], b"S");
+    assert_eq!(replies[2], expected_start_refusal());
+    assert_eq!(server.tls_start_refusals(), 1);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn a_tls_start_over_the_global_limit_gets_the_same_explicit_refusal() {
+    let (server, replies) = burst(|c| c.tls_starts_per_second = 1, 2);
+    assert_eq!(replies[0], b"S");
+    assert_eq!(replies[1], expected_start_refusal());
+    assert_eq!(server.tls_start_refusals(), 1);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn starts_under_the_default_limits_complete_and_are_not_counted_as_refusals() {
+    let (config, client_config) = fixture(GENEROUS_BUDGET);
+    let server = ServerHandle::start(config).unwrap();
+    for _ in 0..3 {
+        let mut client = tls(server.local_addr(), client_config.clone());
+        let first = begin(&mut client, "user");
+        assert!(first.starts_with("r="));
+    }
+    assert_eq!(server.tls_start_refusals(), 0);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn a_raised_per_address_limit_admits_more_than_sixteen_starts_from_one_address() {
+    // Admitting more is what a window rolling over would also do, so this needs no time bound; the
+    // burst helper is used for its fresh server only.
+    let (server, replies) = burst(
+        |c| {
+            c.tls_starts_per_second_per_address = 40;
+            c.tls_starts_per_second = 100;
+        },
+        20,
+    );
+    for reply in replies {
+        assert_eq!(reply, b"S");
+    }
+    assert_eq!(server.tls_start_refusals(), 0);
+    server.shutdown().unwrap();
+}

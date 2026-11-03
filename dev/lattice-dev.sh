@@ -21,6 +21,13 @@
 #                         dir, so later commands keep it. 0 turns it off and forgets the port. Default:
 #                         off. The image must serve the gateway over TLS; the script checks that before
 #                         it restarts latticed with the gateway.
+#   LATTICE_DEV_TLS_STARTS_PER_SECOND  new TLS connections per second latticed admits, in total and from
+#                         one address (--tls-starts-per-second and --tls-starts-per-second-per-address).
+#                         Every client of this stack arrives from one address (the docker bridge gateway),
+#                         and latticed's own limit of 16 per address refuses the 17th connection within a
+#                         second, which tools that open one connection per statement, like `board`, hit.
+#                         Default 1000, 1 to 10000; 0 keeps the server's own limits. An image whose
+#                         latticed lacks the flags keeps its limits, and the script says so.
 #   LATTICE_DEV_DRAIN_SECS  seconds an account add or remove waits for open connections to latticed to
 #                         close before it restarts the server. Default 15, the compose stop grace.
 #
@@ -47,8 +54,9 @@ DRAIN_SECS=${LATTICE_DEV_DRAIN_SECS:-15}
 GATEWAY_PORT=${LATTICE_DEV_GATEWAY_PORT:-}
 # The port latticed binds inside its container when the gateway is on. Only the published port varies.
 GATEWAY_CONTAINER_PORT=7070
-GATEWAY_OVERRIDE=""
+OVERRIDE=""
 GATEWAY_STATE=""
+TLS_STARTS=${LATTICE_DEV_TLS_STARTS_PER_SECOND:-1000}
 GATEWAY_OFF=""
 GATEWAY_REMEMBERED=""
 partial_file=""
@@ -99,6 +107,16 @@ check_settings() {
   if ! [[ $PORT =~ ^[0-9]{1,5}$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
     die "LATTICE_DEV_PORT must be a port number"
   fi
+  if ! [[ $TLS_STARTS =~ ^[0-9]{1,5}$ ]]; then
+    die "LATTICE_DEV_TLS_STARTS_PER_SECOND must be a number from 1 to 10000 (0 keeps the server's own limits)"
+  fi
+  # Leading zeros are not octal and not part of the value: 0010 is 10, and 00 is 0 (the server's own
+  # limits), never the string "00", which latticed would refuse and crash-loop on.
+  TLS_STARTS=$((10#$TLS_STARTS))
+  if [ "$TLS_STARTS" -gt 10000 ]; then
+    die "LATTICE_DEV_TLS_STARTS_PER_SECOND must be a number from 1 to 10000 (0 keeps the server's own limits)"
+  fi
+  OVERRIDE=$HOME_DIR/compose.override.yaml
   if ! [[ $DRAIN_SECS =~ ^[0-9]{1,3}$ ]] || [ "$DRAIN_SECS" -gt 600 ]; then
     die "LATTICE_DEV_DRAIN_SECS must be a number of seconds from 0 to 600"
   fi
@@ -119,7 +137,6 @@ check_settings() {
       die "LATTICE_DEV_GATEWAY_PORT must be a port number (0 turns the gateway off)"
     fi
     [ "$GATEWAY_PORT" != "$PORT" ] || die "LATTICE_DEV_GATEWAY_PORT must differ from LATTICE_DEV_PORT"
-    GATEWAY_OVERRIDE=$HOME_DIR/compose.gateway.yaml
     GATEWAY_STATE=$HOME_DIR/gateway.port
   fi
   export LATTICE_DEV_HOME=$HOME_DIR LATTICE_DEV_PROJECT=$PROJECT LATTICE_DEV_PORT=$PORT
@@ -134,28 +151,39 @@ need_tools() {
 }
 
 # Every compose call names the project, the file and the tools profile. The tools services are only
-# started by `docker compose run`. With the gateway on, the override file written by ensure_state_dir
-# goes after the base file, so latticed runs with the gateway in every restart.
+# started by `docker compose run`. The override file written by ensure_state_dir (the gateway, the TLS
+# start limits) goes after the base file, so latticed runs with them in every restart.
 compose() {
   local override=()
-  if [ -n "$GATEWAY_OVERRIDE" ] && [ -f "$GATEWAY_OVERRIDE" ]; then
-    override=(-f "$GATEWAY_OVERRIDE")
+  if [ -n "$OVERRIDE" ] && [ -f "$OVERRIDE" ]; then
+    override=(-f "$OVERRIDE")
   fi
   docker compose --profile tools -p "$PROJECT" -f "$COMPOSE_FILE" ${override[@]+"${override[@]}"} "$@"
 }
 
-# With LATTICE_DEV_GATEWAY_PORT set, latticed also serves the sync gateway and POST /mcp on its port
-# 7070, with the TLS files it already has and the bearer tokens of the config volume. Compose cannot
-# add list items on a condition, so this override replaces latticed's command and ports. Its command
-# repeats the list in compose.yaml, and the Host the gateway accepts is the published port on
-# 127.0.0.1: the bound address is 0.0.0.0, so the default Host values do not match it.
-write_gateway_override() {
-  [ -n "$GATEWAY_OVERRIDE" ] || return 0
-  local tmp=$GATEWAY_OVERRIDE.tmp
+# The override file changes latticed's command, and the ports when the gateway is on. Compose cannot
+# add list items on a condition, so the file replaces the whole command list: it repeats the list in
+# compose.yaml (keep the two in step) and appends what is switched on.
+#   TLS start limits ($1 is their value, empty for none): --tls-starts-per-second and
+#     --tls-starts-per-second-per-address.
+#   LATTICE_DEV_GATEWAY_PORT: latticed also serves the sync gateway and POST /mcp on its port 7070,
+#     with the TLS files it already has and the bearer tokens of the config volume. The Host the
+#     gateway accepts is the published port on 127.0.0.1: the bound address is 0.0.0.0, so the default
+#     Host values do not match it.
+# With neither on there is no override file.
+write_override() {
+  local limits=$1
+  if [ -z "$GATEWAY_PORT" ] && [ -z "$limits" ]; then
+    rm -f -- "$OVERRIDE" "$OVERRIDE.tmp"
+    return 0
+  fi
+  local tmp=$OVERRIDE.tmp
   umask 077
-  cat > "$tmp" <<YAML
-# Written by dev/lattice-dev.sh for LATTICE_DEV_GATEWAY_PORT=$GATEWAY_PORT. It is rewritten on every
-# run that sets the variable, and reset removes it. Its command list repeats dev/compose.yaml.
+  {
+    cat <<YAML
+# Written by dev/lattice-dev.sh (gateway port: ${GATEWAY_PORT:-off}, TLS starts per second: ${limits:-server default}).
+# It is rewritten on every up and account command, and reset removes it. Its command list repeats
+# dev/compose.yaml.
 services:
   latticed:
     command:
@@ -177,6 +205,17 @@ services:
       - /etc/lattice/account-policies
       - --stdin-control
       - "off"
+YAML
+    if [ -n "$limits" ]; then
+      cat <<YAML
+      - --tls-starts-per-second
+      - "$limits"
+      - --tls-starts-per-second-per-address
+      - "$limits"
+YAML
+    fi
+    if [ -n "$GATEWAY_PORT" ]; then
+      cat <<YAML
       - --gateway-listen
       - "0.0.0.0:$GATEWAY_CONTAINER_PORT"
       - --gateway-tokens
@@ -191,7 +230,19 @@ services:
         published: "$GATEWAY_PORT"
         host_ip: 127.0.0.1
 YAML
-  mv -- "$tmp" "$GATEWAY_OVERRIDE"
+    fi
+  } > "$tmp"
+  mv -- "$tmp" "$OVERRIDE"
+}
+
+# Succeeds (0) when the image's latticed has the TLS start limit flags, and returns 1 when it runs but
+# lacks them (an older image would not start with flags it does not know, so the limits are skipped
+# there) and 2 when `latticed --help` could not be run at all.
+image_has_tls_limits() {
+  local help rc=0
+  help=$(compose run --rm --no-deps -T --entrypoint /usr/local/bin/latticed lattice-cli --help 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  grep -qF -- "--tls-starts-per-second-per-address" <<<"$help" || return 1
 }
 
 # The image must serve the gateway over TLS. This runs before latticed restarts with the gateway: a
@@ -212,16 +263,27 @@ ensure_state_dir() {
   fi
   mkdir -p "$HOME_DIR/tls" "$HOME_DIR/accounts"
   chmod 0700 "$HOME_DIR" "$HOME_DIR/tls" "$HOME_DIR/accounts"
+  rm -f -- "$HOME_DIR/compose.gateway.yaml"
+  local limits=""
+  if [ "$TLS_STARTS" != 0 ]; then
+    local probe=0
+    image_has_tls_limits || probe=$?
+    case "$probe" in
+      0) limits=$TLS_STARTS ;;
+      1) echo "lattice-dev: this image's latticed has no --tls-starts-per-second-per-address, so it admits only 16 new TLS connections per second from one address (the docker bridge gateway) and refuses the rest, so clients must retry; use an image built after the flag was added, or set LATTICE_DEV_TLS_STARTS_PER_SECOND=0 to silence this" >&2 ;;
+      *) echo "lattice-dev: could not run latticed --help in the image, so the TLS start limits are not set and latticed keeps its own (16 per second per address); check the image (LATTICE_DEV_IMAGE) and that docker can run it" >&2 ;;
+    esac
+  fi
   if [ -n "$GATEWAY_PORT" ]; then
     require_gateway_image
     if [ "$GATEWAY_REMEMBERED" = 1 ]; then
       echo "lattice-dev: the gateway stays on at 127.0.0.1:$GATEWAY_PORT, remembered in $GATEWAY_STATE; LATTICE_DEV_GATEWAY_PORT=0 turns it off" >&2
     fi
     printf '%s\n' "$GATEWAY_PORT" > "$GATEWAY_STATE"
-    write_gateway_override
   elif [ -n "$GATEWAY_OFF" ]; then
-    rm -f -- "$HOME_DIR/gateway.port" "$HOME_DIR/compose.gateway.yaml"
+    rm -f -- "$HOME_DIR/gateway.port"
   fi
+  write_override "$limits"
 }
 
 # Creates the CA and the server certificate on first use, and renews the server certificate when it
@@ -489,7 +551,7 @@ EOF
   docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | while IFS= read -r v; do
     docker volume rm "$v" >/dev/null
   done
-  rm -f "$HOME_DIR/ca-key.pem" "$HOME_DIR/ca.pem" "$HOME_DIR/ca.srl" "$HOME_DIR/gateway.port" "$HOME_DIR/compose.gateway.yaml" "$HOME_DIR/compose.gateway.yaml.tmp"
+  rm -f "$HOME_DIR/ca-key.pem" "$HOME_DIR/ca.pem" "$HOME_DIR/ca.srl" "$HOME_DIR/gateway.port" "$HOME_DIR/compose.gateway.yaml" "$HOME_DIR/compose.override.yaml" "$HOME_DIR/compose.override.yaml.tmp"
   rm -rf "$HOME_DIR/tls" "$HOME_DIR/accounts"
   release_lock
   rmdir "$HOME_DIR" 2>/dev/null || true

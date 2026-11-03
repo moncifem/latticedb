@@ -136,6 +136,43 @@ fn a_timeout_too_large_to_add_to_the_clock_is_refused() {
 }
 
 #[test]
+fn each_tls_start_limit_is_one_to_ten_thousand_on_its_own() {
+    for ok in [1usize, 10_000] {
+        let handle = start(ServerConfig {
+            tls_starts_per_second: ok,
+            tls_starts_per_second_per_address: ok,
+            ..base()
+        })
+        .unwrap();
+        handle.shutdown().unwrap();
+    }
+    // The per-address limit may exceed the global one.
+    let handle = start(ServerConfig {
+        tls_starts_per_second: 1,
+        tls_starts_per_second_per_address: 10_000,
+        ..base()
+    })
+    .unwrap();
+    handle.shutdown().unwrap();
+    for bad in [0usize, 10_001] {
+        refused(
+            ServerConfig {
+                tls_starts_per_second: bad,
+                ..base()
+            },
+            "global TLS start limit",
+        );
+        refused(
+            ServerConfig {
+                tls_starts_per_second_per_address: bad,
+                ..base()
+            },
+            "per-address TLS start limit",
+        );
+    }
+}
+
+#[test]
 fn development_trust_refuses_a_non_loopback_address() {
     refused(
         ServerConfig {

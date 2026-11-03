@@ -249,6 +249,35 @@ fix rereview are complete; the owner accepted the integration and waived its com
   the peer is gone or does not accept the bytes within the cap, and a plaintext connection has
   nothing to send.
 - Each socket write is capped at 16 KiB so the response deadline is rechecked while a peer drains.
+- New TLS starts (with `--auth scram-tls`) are limited on the whole listener and per client address:
+
+  | Flag | Default | Meaning |
+  |---|---|---|
+  | `--tls-starts-per-second N` | 64 | SSLRequests admitted per second on the whole listener, `1..=10000`. |
+  | `--tls-starts-per-second-per-address N` | 16 | SSLRequests admitted per second from one client address (IPv6 by /64), `1..=10000`. It may be larger than the global limit, which then binds first. |
+
+  The windows are one second wide and slide. Every client behind one NAT, proxy, CI runner or
+  container bridge gateway shares the per-address budget: a tool that opens one connection per
+  statement can use it up, so raise it for such a setup (the dev stack does). A start over a limit is
+  answered with FATAL `53300` and the fixed, neutral text `too many new connections, retry shortly`,
+  as the reply to the SSLRequest, before any handshake and without a count, an address, a flag name
+  or another client in it (earlier builds closed the socket without a word). The text does not say
+  which limit was hit, since any remote client can read it. A client should wait about a second and
+  retry. libpq (psql 17.11, checked) reports "server sent an error response during SSL exchange" and
+  does not retry or fall back to plaintext; it does not print the server's text, which a raw client
+  or a driver that reads the message does see. The refusal of a connection over `--max-connections`
+  (`sorry, too many clients already`) is written before the client's first packet and gives libpq
+  the same message. `ServerHandle::tls_start_refusals()` counts the refused SSLRequests, and an
+  admitted start is never counted. The refusal cannot be a TLS alert, because the limit is checked
+  before TLS exists. The limits apply only with `--auth scram-tls`, the only mode that starts TLS
+  on this listener; with another mode the flags are accepted, ignored, and a warning is printed.
+  The sync gateway does not use these limits (it has the `--gateway-*` ones below), and the cancel
+  budget (16 per address, 256 global) is fixed. The limiter keeps one timestamp (16 bytes) per
+  admitted start, in the global queue and in its address's queue, and an address's queue is expired
+  when that address connects or when the table is swept, at most once per second. At most
+  `global limit` starts are admitted in any second, so it holds at most three times the global limit
+  in timestamps (about 480 KB at `10000`), and tracks `max(1024, global limit)` addresses, so a
+  high global limit is never refused for lack of table space.
 - Startup secrets are read through one private-file rule: `--tls-key`, `--scram-verifiers`,
   `--scram-decoy-secret` and `--account-policies`. Each must be a regular file with no group or other
   permission bits (mode 0600 or 0400; 0440 and 0444 are refused), in a directory that group and others

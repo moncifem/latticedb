@@ -19,6 +19,7 @@
 #   5b2. board bench (integrations/board/board-bench) against the same board, no model: the example suite with fake
 #       agents through two `board run` workers, an agent that rewrites its tests, a zombie worker refused by the
 #       fence, the hand-computed report, and the console serving the same numbers.
+#   1c. the TLS start limit flags are set when the image has them, and reported when it does not.
 #   6.  down, then up on the same volumes; the rows are read back.
 #   6a. remove alice: her token is revoked, her env file goes, an old copy of it no longer logs in,
 #       bob still reads, and the name can be added again.
@@ -31,6 +32,8 @@
 #       http; a writer and a reader share a key; a principal without grants is refused; the published
 #       port is 127.0.0.1 only; a removed account's token stops working; the setting is remembered
 #       across a command that does not name it, and LATTICE_DEV_GATEWAY_PORT=0 turns it off.
+#   6e. TLS start limits, with an image that has the flags: sixty rapid connections from one address
+#       all succeed. Otherwise a skip with the reason.
 #   7.  reset without a yes is refused.
 #   7b. a failed rename leaves no temp file holding a password.
 #   8.  reset, answered yes at the prompt, removes every container, volume and file the test made.
@@ -157,6 +160,19 @@ if [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$LATTICE_DEV_
   fail "latticed started before any account exists"
 fi
 ok "up_without_accounts_prepares_the_stack_and_does_not_start_the_server"
+
+# The TLS start limits (issues 867 and 870) go on the command line only when the image has the flags.
+# Whatever the image, the stack says which case it is in: an override file with the flags and no note,
+# or no file and the note.
+if [ -f "$LATTICE_DEV_HOME/compose.override.yaml" ]; then
+  grep -q -- '--tls-starts-per-second-per-address' "$LATTICE_DEV_HOME/compose.override.yaml" \
+    || fail "the override file has no TLS start limit flag"
+  ! grep -q 'has no --tls-starts-per-second-per-address' "$work/up.err" || fail "the stack warned about a flag the image has"
+else
+  grep -q -e 'has no --tls-starts-per-second-per-address' -e 'could not run latticed --help' "$work/up.err" \
+    || fail "an image without the TLS start limit flags was not reported"
+fi
+ok "tls_start_limits_are_set_when_the_image_has_the_flags_and_reported_when_it_does_not"
 
 [ "$(mode_of "$LATTICE_DEV_HOME")" = 700 ] || fail "state dir is not mode 700"
 for f in ca-key.pem tls/server-key.pem; do
@@ -490,7 +506,11 @@ gw_post() {
   local args=(-sS --max-time 10 --cacert "$LATTICE_DEV_HOME/ca.pem" -H "Content-Type: application/json"
     --data "$body" -o "$work/$name.body" -w '%{http_code}')
   if [ -n "$auth" ]; then args+=(-H "@$auth"); fi
-  curl "${args[@]}" "$gw_url" >"$work/$name.code" 2>"$work/$name.err" || true
+  # The exit status is recorded, not hidden: a refused or reset connection shows as a non-zero
+  # NAME.rc with curl's message in NAME.err, and the caller decides what that means.
+  local rc=0
+  curl "${args[@]}" "$gw_url" >"$work/$name.code" 2>"$work/$name.err" || rc=$?
+  printf '%s\n' "$rc" >"$work/$name.rc"
 }
 
 gw_status() {
@@ -598,12 +618,27 @@ assert d["error"]["code"] == 40301, d
 ' "$work/gw-deny-b.body" || fail "gate-b without a write grant was not refused with 40301"
   ok "reader_without_a_write_grant_is_refused_the_tool"
 
-  gw_post gw-deny-c "$work/gate-c.auth" "$read_body"
-  python3 -c '
+  # gate-c's token was created seconds ago, so the first call can meet a gateway that has not
+  # reloaded the token file yet (issue 870). Ask again a few times; every failed attempt is kept.
+  denied_c=0
+  for i in 1 2 3 4 5; do
+    gw_post "gw-deny-c-$i" "$work/gate-c.auth" "$read_body"
+    if python3 -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["error"]["code"] == 40301, d
-' "$work/gw-deny-c.body" || fail "gate-c without any grant was not refused with 40301"
+' "$work/gw-deny-c-$i.body" 2>/dev/null; then
+      denied_c=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$denied_c" != 1 ]; then
+    for i in 1 2 3 4 5; do
+      echo "gate-c attempt $i: curl exit $(cat "$work/gw-deny-c-$i.rc"), HTTP $(cat "$work/gw-deny-c-$i.code"), stderr: $(head -c 300 "$work/gw-deny-c-$i.err"), body: $(head -c 300 "$work/gw-deny-c-$i.body" 2>/dev/null)" >&2
+    done
+    fail "gate-c without any grant was not refused with 40301"
+  fi
   ok "principal_without_grants_is_refused_the_tool"
 
   gw_cid=$(docker ps -q --filter "label=com.docker.compose.project=$LATTICE_DEV_PROJECT" --filter label=com.docker.compose.service=latticed)
@@ -655,6 +690,29 @@ elif ! gateway_probe "$gateway_image"; then
   echo "skip    gateway: $gateway_reason; step 6d did not run"
 else
   run_gateway_steps
+fi
+
+# --- 6e. TLS start limits. With an image that has the flags the stack raises them, so many rapid
+# connections from this one address all succeed (the server's own 16 per second per address would
+# refuse them). The image comes from LATTICE_DEV_IMAGE like step 6d; the pinned default and an image
+# built before the flags are a skip with the reason.
+limits_image_has_flag() {
+  docker run --rm "$1" --help 2>/dev/null | grep -qF -- "--tls-starts-per-second-per-address"
+}
+if [ -z "$gateway_image" ]; then
+  echo "skip    tls start limits: LATTICE_DEV_IMAGE is not set"
+elif ! limits_image_has_flag "$gateway_image"; then
+  echo "skip    tls start limits: $gateway_image does not list --tls-starts-per-second-per-address"
+else
+  export LATTICE_DEV_IMAGE=$gateway_image
+  expect_ok lim-add "$dev" account add burst
+  for i in $(seq 1 60); do
+    "$dev" psql burst -X -q -t -A -c "SELECT 1" >"$work/lim-$i.out" 2>"$work/lim-$i.err" \
+      || { tail -n 5 "$work/lim-$i.err" >&2; fail "connection $i of 60 in a row was refused"; }
+  done
+  expect_ok lim-remove "$dev" account remove burst
+  unset LATTICE_DEV_IMAGE
+  ok "sixty_rapid_connections_from_one_address_all_succeed_with_the_raised_limit"
 fi
 
 # --- 7. reset asks first; a no leaves everything in place

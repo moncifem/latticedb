@@ -232,6 +232,13 @@ def build_select(columns: tuple, table: str, order: str, desc: bool, limit: int,
 CONNECT_TRIES = 6
 _TRANSIENT = ("server closed the connection unexpectedly", "connection reset", "connection refused", "timeout expired")
 _NOT_TRANSIENT = ("fatal", "no password supplied", "ssl", "tls", "certificate", "password authentication")
+# A latticed over its TLS start limit or connection limit answers the SSLRequest with an error. libpq
+# prints the first line for it; one that prints the server's FATAL text shows one of the others.
+_RATE_LIMITED = (
+    "server sent an error response during ssl exchange",
+    "too many new connections, retry shortly",
+    "sorry, too many clients already",
+)
 
 
 def transient_connect_error(stderr: str) -> bool:
@@ -239,6 +246,8 @@ def transient_connect_error(stderr: str) -> bool:
     low = stderr.lower()
     if "connection to server" not in low:
         return False
+    if any(x in low for x in _RATE_LIMITED):
+        return True
     if any(x in low for x in _NOT_TRANSIENT):
         return False
     return any(x in low for x in _TRANSIENT)
