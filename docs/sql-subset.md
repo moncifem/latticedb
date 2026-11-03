@@ -114,7 +114,7 @@ those inside `options`, are ignored.
 | `bytea` | Yes |
 | `timestamptz`, `date` | Microsecond precision, UTC storage |
 | `uuid` | Yes; entity ids render as the 26-character id or `uuid`, per column |
-| `jsonb` | Stored, compared and indexed as a whole; operators `->`, `->>`, `@>` only |
+| `jsonb` | Validated JSON kept as the text it was written as: no canonical form (key order, spacing, duplicate keys and number spelling are preserved), so equality compares text. The operators `->`, `->>` and `@>` are planned but give `0A000` today ([https://github.com/moncifem/latticedb/issues/719](https://github.com/moncifem/latticedb/issues/719)) |
 | Arrays, ranges, `interval`, geometric, `inet`, `money`, `xml` | Not supported |
 
 `NULL` follows the three-valued logic of PostgreSQL.
