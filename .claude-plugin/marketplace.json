@@ -1,0 +1,14 @@
+{
+  "name": "lattice",
+  "description": "Tools for working with the Lattice database. Alpha.",
+  "owner": {
+    "name": "Lattice maintainers"
+  },
+  "plugins": [
+    {
+      "name": "board",
+      "source": "./integrations/board",
+      "description": "The Lattice agent board as MCP tools: tasks with leases and fences, notes, heartbeats, retries. Alpha."
+    }
+  ]
+}

@@ -45,6 +45,7 @@ Status: alpha. This is a dogfooding tool, not a product. Test it before you rely
 | `board cancel ID [TEXT]` | Cancel a task that is not done. |
 | `board get ID` | One task as one tab separated line for programs: id, state, owner, fence, attempts, max attempts, title, body. Read only. |
 | `board run [OPTIONS] -- COMMAND` | A worker: take tasks with `next` and run COMMAND for each (see "`board run`: a worker for any command or agent"). |
+| `board queue` | Read only. The database time, every task that is not done or cancelled, its lease row and the state of its blockers, as tagged tab separated lines (`now`, `task`, `lease`, `blocker`), at most 200 tasks. For programs: `board-mcp` and the SessionStart hook sort it into the console's queue sections. |
 
 `note` and `done` also take `--fence N`. Exit codes: 0 ok, 1 error (bad input, no such task, task
 dead or cancelled, database down), 2 claim not won, 3 lease lost (the fence refused the write), 4
@@ -339,6 +340,128 @@ idempotency key in a note before an external call. The runner does not fence the
 pushed branch, a deploy); it only stops marking the task. A lost heartbeat kills the group, but a
 grandchild that left the group (`setsid`) survives. After the child ends the runner SIGKILLs anything
 left in the group.
+
+## `board-mcp`: the board as MCP tools
+
+`integrations/board/board-mcp` is a stdio [Model Context Protocol](https://modelcontextprotocol.io) server, Python 3.10+
+from the standard library. An agent that speaks MCP (Claude Code, for one) then takes work, heartbeats and finishes it
+with tool calls instead of shell commands. It contains no SQL: every operation runs the `board` helper from the same
+directory (an argv list, no shell), so the fence and retry rules exist in one place. `board queue` (above) exists for it.
+Status: alpha.
+
+**Start it.** Set `BOARD_AUTHOR` (this agent's unique name) and the connection (`LATTICE_BOARD_URL` or `PGHOST` and friends,
+a password in `PGPASSWORD` or `~/.pgpass`), then register the server with your client. For Claude Code without the plugin:
+
+```sh
+claude mcp add --scope user board -e BOARD_AUTHOR=claude-1 -- python3 "$PWD/integrations/board/board-mcp"
+```
+
+`claude mcp add` is confirmed by `claude mcp add --help` (2.1.314). Claude Code gave a server it started the environment
+of the shell that started it (observed with a stdio probe), so the `PG*` settings reach it that way; the server passes
+the helper only `PATH`, `HOME`, `LANG`, `TMPDIR`, `PG*`, `LC_*`, `LATTICE_BOARD_URL`, `BOARD_STATE_DIR`, `BOARD_PSQL`,
+`BOARD_CONNECT_TRIES`, its own `BOARD_AUTHOR`, and the names in `BOARD_MCP_PASS_ENV` (comma separated; never `LD_*`,
+`DYLD_*`, `PYTHON*`, `BOARD_AUTHOR`). Other settings: `BOARD_MCP_BOARD` (the helper to run), `BOARD_MCP_TIMEOUT` (seconds
+per helper call, default 30), `BOARD_MCP_HELPERS` (helpers at once, default 4).
+
+**Protocol.** Newline delimited JSON-RPC on stdin and stdout, logs on stderr only. Both eras, with the same rules as the
+gateway (`docs/mcp-v0.md`): the 2026-07-28 revision (`_meta` on every request, `server/discover`; a request without it is
+`-32602`, another version `-32022`) and the 2025-11-25 handshake (`initialize`, then `_meta` is optional; `ping`).
+Claude Code 2.1.314 opens with `server/discover` and `tools/list` carrying `_meta` (read from the bytes it sent to a
+probe server), and `claude mcp list` showed the server `Connected`. An inbound line over 1 MiB is refused (`-32600`) and
+skipped; batches, duplicate keys and bad ids are refused; a notification is never answered; `notifications/cancelled`
+kills the helper's process group and the request gets no answer. A call that runs past the timeout is killed and
+answered with the error `timeout` (the outcome of a write is then unknown). Input problems and refusals by the board are
+results with `isError: true` and a `structuredContent` with `ok: false` and `error: {code, exit_code, message}`; protocol
+problems are JSON-RPC errors.
+
+**Tools.** Names, `inputSchema` (closed, every string and array bounded) and `outputSchema` come from `tools/list`.
+
+| Tool | Reads or writes | Does |
+|---|---|---|
+| `board_list` | read | Tasks by state or owner, at most 100. |
+| `board_show` | read | One task with its newest 50 events, 20 decisions and lease timing. |
+| `board_queue` | read | Runnable, blocked (for ever when a blocker is dead or cancelled, or in a cycle), claimed (lease time left, expired), retrying, dead, awaiting approval, the same meaning as the console, plus the newest event id. |
+| `board_since` | read | Events after a cursor, oldest first, with `next_cursor`. |
+| `board_leases` | read | The leases this server holds for this agent, with their `lease_id`. |
+| `board_add` | write | A task: title, body, priority, parent, blockers. It cannot ask for approval. |
+| `board_next` | write | Claims the best runnable task for this agent; returns it and a `lease_id`. Nothing runnable is a normal answer. |
+| `board_claim` | write | Claims one task. Refused (`not_won`, exit 2) when held, blocked, in a retry delay or awaiting approval. |
+| `board_heartbeat` | write | Extends the lease, by `lease_id`. |
+| `board_note` | write | Appends a one-line note, by `lease_id`. |
+| `board_done` | write | Finishes the task, by `lease_id`. |
+| `board_fail` | write | Gives the task back as failed (retry later, or dead), by `lease_id`. |
+| `board_release` | write | Gives the task back without a failure, by `lease_id`. |
+
+Every tool carries `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` (hints only: a client must not
+trust them). Reads are read only and idempotent; `board_done` is the one marked destructive; `openWorldHint` is true for the
+tools that return other agents' text. **Not offered, on purpose:** `approve`, `cancel`, `migrate`, `reap`, `block`, force
+release of another agent's lease, raw SQL, anything that takes a fence, anything that edits another agent's task. Those
+stay on the command line, for a person.
+
+**Leases.** `board_next` and `board_claim` return an opaque `lease_id` (`ls_` and 20 hex digits). The server keeps the
+fence behind it and passes it to the helper with `--fence`. Every write takes the `lease_id`, never the task id or a
+fence. The fence is not a secret: in this board it is the id of the claim event, so `board_since` can show the number
+and the helper's own `fenced` events name it. The guarantee is narrower: no tool accepts a fence, and the server never
+returns one as a field (the number is also replaced by `(fence hidden)` in any board text it passes on, though a title
+that happens to say "fence 12" is hidden too).
+
+A `lease_id` belongs to the server process that handed it out (one session). Another session is refused
+(`unknown_lease`, nothing reaches the helper) even if it uses the same `BOARD_AUTHOR` and state directory; it does not
+list it, and `board_claim` of a task that another session holds under the same author name is `not_won`, not
+`already_yours`. The board itself cannot tell two sessions of one name apart (names are the identity), so **give each
+concurrent session its own `BOARD_AUTHOR`** (for example `claude-` and a per-session suffix) or its own
+`BOARD_STATE_DIR`. `board_next` also counts claims by author name, so two sessions of one name block each other with
+`at_capacity`.
+
+A lease the board no longer honours is refused by the board (`lease_lost`, exit 3, nothing written) and forgotten.
+Claiming a task again gives a new `lease_id` and voids the old one. The state file
+`$BOARD_STATE_DIR/mcp-leases.AUTHOR.json` (mode 0600, in the private directory the helper uses; a symbolic link, a
+directory that is not yours or one open to others is refused) exists for crash recovery only. Each entry records the
+pid of the server that took it. A starting server adopts the entries whose pid is no longer running and ignores the
+entries of servers that are still running; a clean exit leaves its entries too. The file is read and written under an
+exclusive `flock` (`mcp-leases.AUTHOR.lock`) and a save keeps the entries of other live servers. Limits: a pid can be
+reused by an unrelated process, so a dead server's leases may then not be recovered; a recovered lease that the board
+reaped meanwhile is refused with exit 3. The helper keeps its own fence files (`AUTHOR.TASK`, mode 0600) in the same
+directory. Anything that can read your files can read them, so the isolation above holds against tool calls, not
+against a model that has a shell or file tools. A call that is cancelled or times out after the claim was written
+leaves a claim the server does not know; it runs out with its lease.
+
+**Identity.** The author of every write is `BOARD_AUTHOR` in the server's environment. No argument can set it (the schemas
+have no such member and unknown members are refused). Names are self-declared, as everywhere on this board.
+
+**Untrusted text.** Titles, bodies, notes and the helper's own complaints were written by others. They come back as data: ANSI
+sequences, control, format, separator and bidirectional characters removed, length bounded, under an `untrusted` member of
+`structuredContent`, and in the text content only inside a block marked `UNTRUSTED BOARD TEXT begin TOKEN` and `end TOKEN`
+with a fresh random token per result. The summary line above the block is fixed text. Input text must be one line without
+tabs, control characters or backslashes (the helper's rule; refused here first), at most 4096 bytes. Credentials, connection
+URLs, hosts, ports and fence numbers are removed from anything the helper says and from every piece of board text (events,
+decisions, `last_error`); a message that looks like database trouble is replaced by a fixed one, and the details go
+nowhere a client can read. A task id, owner, state or event kind that the board returns is accepted only if it has the
+shape the board writes (an id of letters, digits, `_` and `-`, at most 64; a known state or kind); otherwise it is shown
+as `?`, and the queue (and so the SessionStart digest) drops the row. Ids and states appear outside the marked block, in
+summaries and in the hook, so they are checked rather than cleaned. A request id that is a string is limited to 256
+characters, and a `notifications/cancelled` with an odd `requestId` is ignored.
+
+**Error codes** (`error.code`, with the helper's exit status in `error.exit_code`): `invalid_input` (0), `not_configured`
+(0; `BOARD_AUTHOR` missing or invalid, bad state directory; reads still work), `unknown_lease` (0), `lease_lost` (3),
+`not_won` (2), `at_capacity` (4: you hold a task; `board next` allows one), `refused` (1), `unavailable` (1 or 127),
+`timeout` (124), `internal`.
+
+**The Claude Code plugin.** `integrations/board` is also a Claude Code plugin (`.claude-plugin/plugin.json`, `.mcp.json`,
+`commands/`, `agents/`, `hooks/`), and `.claude-plugin/marketplace.json` at the repository root lists it. The plugin root is
+`integrations/board` itself, not a subdirectory, because an install copies only the plugin directory and the server needs
+the `board` helper beside it. It adds `/board:status`, `/board:next`, `/board:add`, the `board-worker` agent (it has no shell tool, but its Write and Edit are limited only by Claude Code's permission system), a SessionStart
+hook (`board-mcp --digest`: counts and task ids, never a title) and a PreToolUse hook that makes Claude Code ask before
+`board_add`, `board_done` and `board_fail`. See `docs/quickstart-agents.md` for the install and the permission allow-list.
+
+**Tests.** `tests/test_mcp_protocol.py` and `tests/test_mcp_tools.py` run the server against a fake helper
+(`tests/fakehelper.py`): both eras, framing and caps, annotations and strict schemas on every tool, `structuredContent`
+checked against each `outputSchema`, no fence field or credential in any result or log, leases and sessions, races, poisoned text and hostile ids.
+`tests/test_mcp_mutations.py` plants faults in a copy of the server (the author from an argument, a fence in a result, an
+unscrubbed complaint, interpreted text, no deadline, a write without a lease check, and more) and requires a test to fail
+for each (about 65 faults; the harness requires the named tests themselves to fail). `tests/test_mcp_plugin.py` checks the plugin files and that every tool is documented and every documented tool
+exists. `tests/mcp_devstack.py` drives the server against a real `latticed` (the `dev-stack` job runs it). CI does not run
+`claude plugin validate` (the CLI is not on the runner); the plugin test checks the JSON structure instead.
 
 ## `swarm`: a demo and a soak test
 

@@ -6,7 +6,8 @@ name: tools-tests
 # of the swarm's invariant checker, and the commands named in docs/quickstart-agents.md. The tests use
 # PATH shims for git, gh and psql, so they need no network, no token and no database. Tests that need a
 # built lattice-cli skip themselves. integrations/board/test.sh and the swarm itself need a latticed;
-# the dev-stack job runs them.
+# the dev-stack job runs them. The board MCP server (board-mcp) and the plugin files are tested here too,
+# against a fake helper, with planted faults; `claude plugin validate` needs the CLI and is not run here.
 on:
   pull_request:
     paths:
@@ -14,6 +15,7 @@ on:
       - "integrations/console/**"
       - "integrations/board/**"
       - "docs/quickstart-agents.md"
+      - ".claude-plugin/**"
       - ".github/workflows/**"
   push:
     branches: [main]

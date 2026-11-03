@@ -2,7 +2,8 @@ name: dev-stack
 # Runs tests/dev/dev-stack.sh on the runner's Docker daemon: the published image, compose v2, SCRAM over
 # TLS and libpq, driven through dev/lattice-dev.sh. Step 5b also runs integrations/board/test.sh against
 # the stack (the board helper's SQL: leases, fences, retries, dependencies), after two swarm runs
-# (integrations/board/swarm: `board run` workers with scripted agents, about two minutes). The script picks its own compose project, state dir
+# (integrations/board/swarm: `board run` workers with scripted agents, about two minutes) and
+# integrations/board/tests/mcp_devstack.py (the board MCP server driven against the stack). The script picks its own compose project, state dir
 # and loopback port, so it does not touch a stack on the runner. Not a required check yet (#737).
 on:
   pull_request:

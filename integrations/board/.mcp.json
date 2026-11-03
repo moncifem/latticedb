@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "board": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/board-mcp"],
+      "env": {
+        "BOARD_AUTHOR": "${BOARD_AUTHOR:-}",
+        "LATTICE_BOARD_URL": "${LATTICE_BOARD_URL:-}",
+        "PGHOST": "${PGHOST:-}",
+        "PGPORT": "${PGPORT:-}",
+        "PGUSER": "${PGUSER:-}",
+        "PGDATABASE": "${PGDATABASE:-}",
+        "PGSSLMODE": "${PGSSLMODE:-}",
+        "PGSSLROOTCERT": "${PGSSLROOTCERT:-}",
+        "PGPASSFILE": "${PGPASSFILE:-}",
+        "BOARD_STATE_DIR": "${BOARD_STATE_DIR:-}"
+      }
+    }
+  }
+}

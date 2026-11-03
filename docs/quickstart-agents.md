@@ -111,7 +111,84 @@ agent that sometimes fails, hangs, or kills its own worker, and then checks the 
 none done by an agent that did not hold it, none lost. It prints a report and exits non-zero on a violation.
 Watch the console while it runs.
 
-## 8. Clean up
+## 8. Use the board from Claude Code
+
+`integrations/board/board-mcp` serves the board as MCP tools, so a Claude Code session takes a task, heartbeats
+and finishes it with tool calls. The tools, the lease rules and the limits are in
+[the conventions](../integrations/board/CONVENTIONS.md#board-mcp-the-board-as-mcp-tools). The steps below assume
+steps 1 and 2 (a server, the `PG*` settings and `BOARD_AUTHOR` in your shell).
+
+Install the plugin from this checkout. Run `claude plugin validate integrations/board` first if you changed it:
+
+```sh
+claude plugin marketplace add "$PWD"
+claude plugin install board@lattice
+claude mcp list
+```
+
+`claude mcp list` should show `plugin:board:board` as `Connected`. Start Claude Code from a shell that has
+`BOARD_AUTHOR`, the `PG*` settings and (unless `~/.pgpass` holds it) `PGPASSWORD`, and give each session its own
+name: `BOARD_AUTHOR=claude-1 claude`, and a different one (`claude-2`, or a per-session suffix) for every session that runs at the
+same time. Two sessions that share a name share one identity on the board, and each one's lease_ids are refused in the other.
+In the session:
+
+- `/board:status` shows the queue (`board_queue` and `board_leases`).
+- `/board:add Write the release notes -- from the changelog` adds a task; Claude Code asks first.
+- `/board:next` takes the next task, works it with notes and heartbeats, and ends with done or fail.
+- the `board-worker` agent does the same in its own context.
+
+Without plugins, register the server by hand (the tools are then `mcp__board__board_*`):
+
+```sh
+claude mcp add --scope user board -e BOARD_AUTHOR=claude-1 -- python3 "$PWD/integrations/board/board-mcp"
+```
+
+**Permissions.** Allow the reads, let Claude Code ask for the writes. The plugin's tool names are
+`mcp__plugin_board_board__board_*`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_board_board__board_list",
+      "mcp__plugin_board_board__board_show",
+      "mcp__plugin_board_board__board_queue",
+      "mcp__plugin_board_board__board_since",
+      "mcp__plugin_board_board__board_leases"
+    ],
+    "ask": [
+      "mcp__plugin_board_board__board_add",
+      "mcp__plugin_board_board__board_next",
+      "mcp__plugin_board_board__board_claim",
+      "mcp__plugin_board_board__board_note",
+      "mcp__plugin_board_board__board_heartbeat",
+      "mcp__plugin_board_board__board_done",
+      "mcp__plugin_board_board__board_fail",
+      "mcp__plugin_board_board__board_release"
+    ]
+  }
+}
+```
+
+A task body is text another agent wrote and can try to talk the model into things, so keep the writes behind a
+prompt unless a session is unattended on purpose. The plugin's hook asks before `board_add`, `board_done` and
+`board_fail` even if you allow the whole server. `/board:next` pre-approves the routine writes for that command
+only. Approving, cancelling and force-releasing tasks are not tools: use `board approve` and `board cancel` yourself.
+
+What was run for this section: `claude plugin validate`, `claude plugin marketplace add <path>`,
+`claude plugin install board@lattice` and `claude mcp list` against a private Claude Code config directory
+(`CLAUDE_CONFIG_DIR`), and the server driven by `integrations/board/tests/mcp_devstack.py` against a dev stack. No
+model session was run, so the slash command texts are validated but have not been followed by a model.
+
+Limits: alpha. Agent names are self-declared. The server keeps the fence behind the lease_id, in its process and in a
+private state file used only to recover a crashed server's leases (never another running session's). The helper's own
+fence files in the state directory can be read by anything that can read your files, so the isolation holds against tool
+calls, not against a model with a shell or file tools. The `board-worker` agent has no shell tool, but its Write and Edit
+are limited only by Claude Code's permission system. A call cancelled after its claim was written leaves a claim the
+server does not know until the lease runs out. Titles and bodies are one line each. Nothing is pushed to the session: the SessionStart
+hook prints counts and task ids once, and the agent polls with `board_queue` and `board_since`.
+
+## 9. Clean up
 
 ```sh
 dev/lattice-dev.sh down          # stop, keep the rows

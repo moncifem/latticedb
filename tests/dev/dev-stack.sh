@@ -15,6 +15,7 @@
 #   5.  status names the accounts and shows no password.
 #   5b. the board account runs two swarms (`board run` workers with scripted agents: a killed worker, failing
 #       and hanging attempts, tasks cancelled while running) and then integrations/board/test.sh.
+#   5b1. the board MCP server (board-mcp) driven against the same board: races, a lost lease, a poisoned body.
 #   6.  down, then up on the same volumes; the rows are read back.
 #   6a. remove alice: her token is revoked, her env file goes, an old copy of it no longer logs in,
 #       bob still reads, and the name can be added again.
@@ -289,6 +290,30 @@ grep -Eq '[1-9][0-9]* zombies replaced' "$work/swarm-main.out" || fail "the main
 grep -Eq 'expired +[1-9]' "$work/swarm-main.out" || fail "no expired lease was reaped in the main swarm"
 run_swarm swarm-cancel --workers 2 --tasks 6 --fail-rate 0 --zombie-rate 0 --cancel-rate 0.3 --work-max 4 --seed 11 --timeout 120
 ok "board_run_swarm_keeps_its_invariants_against_the_dev_stack"
+
+# --- 5b1. the board MCP server (integrations/board/board-mcp) driven against this server: two agents race
+# board_next, a lost lease refuses a heartbeat and a zombie done, a task awaiting approval cannot be claimed, a
+# poisoned body comes back inert, a cancelled call kills its helper, and the console lists the lease. The
+# swarm above left no open task; --cancel-leftovers closes any that remain so the driver sees a scratch board.
+mcp_state=$(mktemp -d "$work/mcp-state.XXXXXX")
+chmod 700 "$mcp_state"
+if ! (
+  set -a
+  # shellcheck source=/dev/null
+  . "$LATTICE_DEV_HOME/accounts/board.env"
+  set +a
+  BOARD_STATE_DIR="$mcp_state" TMPDIR="$mcp_state" \
+    python3 "$root/integrations/board/tests/mcp_devstack.py" --cancel-leftovers
+) >"$work/board-mcp.out" 2>"$work/board-mcp.err"; then
+  tail -n 40 "$work/board-mcp.out" >&2
+  tail -n 20 "$work/board-mcp.err" >&2
+  fail "integrations/board/tests/mcp_devstack.py failed against the dev stack"
+fi
+grep -q '^mcp-devstack: all checks passed$' "$work/board-mcp.out" || fail "the board MCP driver did not report that all checks passed"
+if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/board-mcp.out" "$work/board-mcp.err"; then
+  fail "the board MCP driver output contains the board account's password"
+fi
+ok "board_mcp_server_keeps_its_rules_against_the_dev_stack"
 
 if ! (
   set -a

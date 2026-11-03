@@ -71,6 +71,9 @@ usage: board <command> [arguments]
   since [EVENT_ID] [--task ID]  print events after EVENT_ID (default 0), oldest first
   watch ID [--after EVENT_ID]   print one task's events after EVENT_ID (default 0), oldest first
   head                         print the newest event id (0 when there is none)
+  queue                        read only: the database time, every task that is not done or
+                                cancelled, its lease row and the state of its blockers, as tagged
+                                tab separated lines (for programs; see CONVENTIONS.md)
   run [OPTIONS] -- COMMAND     take tasks with `next` and run COMMAND for each (board run --help)
 
 Every write needs BOARD_AUTHOR set to this agent's unique name.
@@ -1512,6 +1515,41 @@ cmd_head() {
   printf '%s\n' "${OUT:-0}"
 }
 
+# queue: everything a program needs to sort tasks into runnable, blocked, claimed, retrying, dead
+# and awaiting approval (the console's queue, integrations/console/console/model.py), in single-table
+# single-table queries and in a fixed shape. Read only. Lines, tab separated, first word is the tag:
+#   now TIME                                        the database clock, epoch seconds
+#   task ID STATE PRIORITY OWNER CREATED_AT CREATED_SEQ TITLE
+#   lease TASK_ID LEASE_UNTIL HEARTBEAT_AT ATTEMPTS MAX_ATTEMPTS NOT_BEFORE LAST_ERROR BLOCKED_BY
+#   blocker ID STATE                                the state of a task some task waits for
+# At most 200 tasks (highest priority first, then oldest); a program that gets 200 knows the list
+# was cut. Titles and last_error are one line without tabs, so the split is exact.
+cmd_queue() {
+  [ $# -eq 0 ] || die "queue takes no arguments"
+  db_now
+  printf 'now\t%s\n' "$DBNOW"
+  psql_run tuples "SELECT id, state, priority, coalesce(owner, ''), created_at, created_seq, title FROM tasks
+WHERE state <> 'done' AND state <> 'cancelled' ORDER BY priority DESC, created_seq LIMIT 200;" || fail_db
+  q_tasks=$OUT
+  [ -n "$q_tasks" ] || return 0
+  printf '%s\n' "$q_tasks" | awk -F"$TAB" '{ print "task\t" $0 }'
+  q_pages=$(printf '%s\n' "$q_tasks" | cut -f1 | awk 'NF { s = s (s == "" ? "" : ",") $1; n++; if (n % 50 == 0) { print s; s = "" } } END { if (s != "") print s }')
+  q_blk=
+  for q_page in $q_pages; do
+    psql_in "SELECT task_id, lease_until, heartbeat_at, attempts, max_attempts, not_before, last_error, blocked_by FROM task_leases WHERE task_id IN" "$q_page" ";" \
+      || fail_db
+    [ -z "$OUT" ] || printf '%s\n' "$OUT" | awk '{ print "lease\t" $0 }'
+    q_blk="$q_blk
+$(printf '%s\n' "$OUT" | awk -F"$TAB" '{ print $8 }')"
+  done
+  q_blk_pages=$(printf '%s\n' "$q_blk" | tr ',' '\n' | grep . | sort -u | head -100 \
+    | awk 'NF { s = s (s == "" ? "" : ",") $1; n++; if (n % 50 == 0) { print s; s = "" } } END { if (s != "") print s }')
+  for q_page in $q_blk_pages; do
+    psql_in "SELECT id, state FROM tasks WHERE id IN" "$q_page" ";" || fail_db
+    [ -z "$OUT" ] || printf '%s\n' "$OUT" | awk '{ print "blocker\t" $0 }'
+  done
+}
+
 [ $# -ge 1 ] || { usage >&2; exit 1; }
 command -v "${BOARD_PSQL:-psql}" >/dev/null 2>&1 || die "psql is not on PATH"
 
@@ -1567,6 +1605,7 @@ case $cmd in
   since) cmd_since "$@" ;;
   watch) cmd_watch "$@" ;;
   head) cmd_head "$@" ;;
+  queue) cmd_queue "$@" ;;
   help | -h | --help) usage ;;
   *) usage >&2; exit 1 ;;
 esac

@@ -1,0 +1,12 @@
+{
+  "name": "board",
+  "version": "0.1.0",
+  "description": "The Lattice agent board as native tools: take a task with a lease, note progress, heartbeat, finish or fail it, and see the queue. Alpha.",
+  "author": {
+    "name": "Lattice maintainers"
+  },
+  "homepage": "https://github.com/moncifem/latticedb/tree/main/integrations/board",
+  "repository": "https://github.com/moncifem/latticedb",
+  "license": "Apache-2.0",
+  "keywords": ["lattice", "task-board", "agents", "mcp", "leases"]
+}

@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/board-mcp\" --digest",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_board_board__board_add|mcp__plugin_board_board__board_done|mcp__plugin_board_board__board_fail",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ask-write.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -16,6 +16,9 @@ harness text is one source, shared by every future pack.
 | `hooks/session-start.sh` | hook | Prints a bounded digest of open tasks and the board head at session start. |
 | `hooks/prompt-submit.sh` | hook | Prints the board events since the saved cursor on each prompt. |
 
+The agent board has its own Claude Code plugin, `integrations/board` (MCP tools, commands, a worker agent and hooks); see
+`integrations/board/CONVENTIONS.md`, "board-mcp". It does not use the files in this directory.
+
 Regenerate after a source edit, and check for drift:
 
 ```bash
