@@ -297,6 +297,12 @@ pub enum ExprKind {
         expr: Box<Expr>,
         negated: bool,
     },
+    /// `CASE [operand] WHEN a THEN b [WHEN ..] [ELSE c] END`; there is at least one `WHEN`.
+    Case {
+        operand: Option<Box<Expr>>,
+        branches: Vec<(Expr, Expr)>,
+        otherwise: Option<Box<Expr>>,
+    },
     /// `expr [NOT] IN (a, b, ..)`; the list is never empty.
     InList {
         expr: Box<Expr>,

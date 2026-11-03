@@ -90,6 +90,10 @@ pub lattice_sql::ast::ExprKind::Binary
 pub lattice_sql::ast::ExprKind::Binary::left: alloc::boxed::Box<lattice_sql::ast::Expr>
 pub lattice_sql::ast::ExprKind::Binary::op: lattice_sql::ast::BinaryOp
 pub lattice_sql::ast::ExprKind::Binary::right: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::Case
+pub lattice_sql::ast::ExprKind::Case::branches: alloc::vec::Vec<(lattice_sql::ast::Expr, lattice_sql::ast::Expr)>
+pub lattice_sql::ast::ExprKind::Case::operand: core::option::Option<alloc::boxed::Box<lattice_sql::ast::Expr>>
+pub lattice_sql::ast::ExprKind::Case::otherwise: core::option::Option<alloc::boxed::Box<lattice_sql::ast::Expr>>
 pub lattice_sql::ast::ExprKind::Cast
 pub lattice_sql::ast::ExprKind::Cast::data_type: lattice_sql::ast::DataType
 pub lattice_sql::ast::ExprKind::Cast::expr: alloc::boxed::Box<lattice_sql::ast::Expr>

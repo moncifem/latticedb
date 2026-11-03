@@ -1698,6 +1698,49 @@ impl Parser {
         }
     }
 
+    /// `CASE [operand] WHEN a THEN b [WHEN ..] [ELSE c] END`, with the `CASE` keyword peeked.
+    fn case_expr(&mut self, start: Span) -> PResult<Expr> {
+        self.bump();
+        let mut depth = 0;
+        let operand = if self.is_kw("when") {
+            None
+        } else {
+            let e = self.expr()?;
+            depth = depth.max(self.td);
+            Some(Box::new(e))
+        };
+        let mut branches = Vec::new();
+        while self.eat_kw("when") {
+            let when = self.expr()?;
+            depth = depth.max(self.td);
+            self.expect_kw("then")?;
+            let then = self.expr()?;
+            depth = depth.max(self.td);
+            branches.push((when, then));
+        }
+        if branches.is_empty() {
+            return Err(self.unexpected("WHEN"));
+        }
+        let otherwise = if self.eat_kw("else") {
+            let e = self.expr()?;
+            depth = depth.max(self.td);
+            Some(Box::new(e))
+        } else {
+            None
+        };
+        self.expect_kw("end")?;
+        let span = start.join(self.prev_span());
+        self.grow(
+            depth,
+            ExprKind::Case {
+                operand,
+                branches,
+                otherwise,
+            },
+            span,
+        )
+    }
+
     fn word_prefix(&mut self, word: &str, span: Span) -> PResult<Expr> {
         match word {
             "true" | "false" => {
@@ -1721,7 +1764,7 @@ impl Parser {
                     span,
                 )
             }
-            "case" => Err(ParseError::unsupported("CASE expressions", span)),
+            "case" => self.case_expr(span),
             "exists" => Err(ParseError::unsupported("EXISTS subqueries", span)),
             "any" | "some" | "all" => Err(ParseError::unsupported("ANY, SOME and ALL", span)),
             "array" => Err(ParseError::unsupported("arrays", span)),

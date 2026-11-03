@@ -121,7 +121,7 @@ those inside `options`, are ignored.
 
 ## Functions and operators
 
-Arithmetic and comparison operators, `||` for text, `coalesce`, `nullif`, `lower`, `upper`, `length`,
+Arithmetic and comparison operators, `||` for text, `CASE` (searched and simple), `coalesce`, `nullif`, `lower`, `upper`, `length`,
 `substring`, `position`, `trim`, `abs`, `round`, `now()`, `date_trunc` (`second` to `year`),
 `extract`, `cast` / `::`. Anything else is `0A000`.
 
@@ -207,6 +207,7 @@ with its reason.
 | `ORDER BY name` where two outputs share the name | `42702` unless they are the same expression | `42702` unless they are the same expression | same |
 | Constant integer arithmetic | evaluated while planning, so overflow and division by zero fail the statement | folded while binding: `2147483647 + 1` is `22003`, `1 / 0` is `22012`, even inside a branch that a function such as `coalesce(1, 1 / 0)` would never evaluate | cheap and deterministic; PostgreSQL also folds constants, but the cases a short-circuit skips are not matched and are not tested |
 | `CAST` to `numeric(p, s)` or `varchar(n)` | applies the modifier | refused with `0A000` | the plan does not carry type modifiers yet |
+| A `CASE` branch that is a constant integer expression that fails (`CASE WHEN true THEN 1 ELSE 1 / 0 END`) | only the chosen branch is evaluated, so no error | `22012`, from the constant folding above | same cause as the constant arithmetic row; a failing branch that reads a column is evaluated lazily and matches |
 | Parameter typing | a parameter takes the type of its first use; a conflicting later use is `42P08` | same, and a parameter that already has a type is an operand of that type in later comparisons, arithmetic and `coalesce` | |
 | `CREATE TABLE t ()` | creates a table with no columns | refused with `42601` (a table needs at least one column) | a zero-column row has no use in the subset ([#657](https://github.com/moncifem/latticedb/issues/657)) |
 | Identifier longer than 63 bytes | truncated to 63 bytes with a notice | refused with `54001` | refusing instead of truncating looks intended; two long names could otherwise collide |

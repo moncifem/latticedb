@@ -442,6 +442,23 @@ impl Display for Expr {
             ExprKind::Binary { op, left, right } => {
                 write!(f, "({left} {} {right})", binary_op(*op))
             }
+            ExprKind::Case {
+                operand,
+                branches,
+                otherwise,
+            } => {
+                f.write_str("CASE")?;
+                if let Some(operand) = operand {
+                    write!(f, " {operand}")?;
+                }
+                for (when, then) in branches {
+                    write!(f, " WHEN {when} THEN {then}")?;
+                }
+                if let Some(otherwise) = otherwise {
+                    write!(f, " ELSE {otherwise}")?;
+                }
+                f.write_str(" END")
+            }
             ExprKind::IsNull { expr, negated } => {
                 write!(f, "({expr} IS {}NULL)", if *negated { "NOT " } else { "" })
             }

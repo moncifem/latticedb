@@ -638,6 +638,54 @@ impl Binder<'_> {
                 let r = self.expr(right, scope)?;
                 self.binary(*op, l, r, span)
             }
+            ExprKind::Case {
+                operand,
+                branches,
+                otherwise,
+            } => {
+                let operand = match operand {
+                    Some(o) => {
+                        let o = self.expr(o, scope)?;
+                        Some(self.finish(o, span)?)
+                    }
+                    None => None,
+                };
+                let mut conditions = Vec::with_capacity(branches.len());
+                let mut results = Vec::with_capacity(branches.len() + 1);
+                for (when, then) in branches {
+                    let w = self.expr(when, scope)?;
+                    let condition = match &operand {
+                        // `CASE x WHEN v` tests `x = v`, once per branch.
+                        Some(o) => self.binary(BinaryOp::Eq, o.clone(), w, when.span)?,
+                        None => self.coerce_or_expect(w, SqlType::Boolean, when.span)?,
+                    };
+                    conditions.push(condition);
+                    results.push(self.expr(then, scope)?);
+                }
+                results.push(match otherwise {
+                    Some(e) => self.expr(e, scope)?,
+                    None => konst(Value::Null, SqlType::Unknown),
+                });
+                let (results, ty) = self.unify(results, span)?;
+                // The plan carries the call as `case(cond1, result1, cond2, result2, .., else)`; the
+                // executor evaluates it lazily, like coalesce.
+                let mut args = Vec::with_capacity(results.len() * 2);
+                let mut results = results.into_iter();
+                for condition in conditions {
+                    args.push(condition);
+                    if let Some(r) = results.next() {
+                        args.push(r);
+                    }
+                }
+                args.extend(results);
+                Ok(typed(
+                    ExprNode::Function {
+                        name: "case".to_string(),
+                        args,
+                    },
+                    ty,
+                ))
+            }
             ExprKind::IsNull { expr, negated } => {
                 let inner = self.expr(expr, scope)?;
                 let inner = self.finish(inner, span)?;
