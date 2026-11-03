@@ -26,7 +26,8 @@ FORBIDDEN_JS = [
     ("WebSocket / EventSource", re.compile(r"new\s+(WebSocket|EventSource)\b")),
     ("sendBeacon", re.compile(r"sendBeacon")),
     ("XMLHttpRequest", re.compile(r"XMLHttpRequest")),
-    ("absolute URL", re.compile(r"https?://", re.I)),
+    # The one allowed URL-shaped string is the SVG namespace constant (it names a namespace, nothing is fetched).
+    ("absolute URL", re.compile(r"https?://(?!www\.w3\.org/2000/svg[\"'])", re.I)),
     ("localStorage", re.compile(r"localStorage|sessionStorage|document\.cookie")),
     ("location assignment", re.compile(r"(?<![\w$.])location\s*=[^=]|\blocation\s*\.\s*(href|assign|replace|hash|search|pathname)\s*=[^=]|\blocation\s*\.\s*(assign|replace)\s*\(")),
     ("window.open", re.compile(r"\bopen\s*\(\s*[\"'`]|\b(window|self|top|parent)\s*\.\s*open\s*\(|\bdocument\s*\.\s*open\s*\(")),
@@ -215,7 +216,8 @@ class ShippedFilesTests(unittest.TestCase):
         self.assertTrue(tags)
         self.assertLessEqual(tags, {"div", "span", "p", "a", "h2", "h3", "ul", "ol", "li", "table", "thead",
                                     "tbody", "tr", "th", "td", "b", "strong", "label", "select", "option",
-                                    "input", "button", "section", "details", "summary"})
+                                    "input", "button", "section", "details", "summary",
+                                    "svg", "rect", "title"})  # the last three: the sparkline, made by h() in the SVG namespace
         self.assertIsNone(re.search(r"\bh\(\s*[^\"\s)]", js.replace("function h(tag", "")))  # no computed tag
 
     def test_polling_intervals_match_the_spec(self):

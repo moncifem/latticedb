@@ -19,6 +19,9 @@
 #   5b2. board bench (integrations/board/board-bench) against the same board, no model: the example suite with fake
 #       agents through two `board run` workers, an agent that rewrites its tests, a zombie worker refused by the
 #       fence, the hand-computed report, and the console serving the same numbers.
+#   5b3. live agent activity (integrations/board/tests/activity_devstack.py): 500 synthetic hook payloads become a
+#       handful of database connections and the counters add up, hostile fields are stored as clean labels, the log
+#       ring stays bounded, `board run` publishes a row for its child, the console reads the rows, purge deletes them.
 #   1c. the TLS start limit flags are set when the image has them, and reported when it does not.
 #   6.  down, then up on the same volumes; the rows are read back.
 #   6a. remove alice: her token is revoked, her env file goes, an old copy of it no longer logs in,
@@ -271,7 +274,7 @@ ok "status_lists_the_accounts_without_passwords"
 # and its password is never printed. The checks that need a server of their own (password in a URL,
 # restart and durability) are skipped by that mode and say so in the output. The account is removed
 # afterwards so the later steps see the accounts they expect.
-board_tables=counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts
+board_tables=counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log
 expect_ok add-board "$dev" account add board --read "$board_tables" --write "$board_tables" --ddl "$board_tables"
 board_state=$(mktemp -d "$work/board-state.XXXXXX")
 chmod 700 "$board_state"
@@ -358,6 +361,30 @@ if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/bo
   fail "the board bench driver output contains the board account's password"
 fi
 ok "board_bench_keeps_its_rules_against_the_dev_stack"
+
+# --- 5b3. live agent activity (integrations/board/tests/activity_devstack.py): a burst of 500 hook calls from 10 parallel
+# workers must be a handful of database connections (counted by a wrapper around psql), the counters must add up, hostile
+# payload fields must arrive as clean labels, the ring must stay bounded, `board run` must publish a row for its child, the
+# read-only console must show the rows, and purge must delete them. Synthetic payloads only: no model, no Claude Code session.
+activity_state=$(mktemp -d "$work/activity-state.XXXXXX")
+chmod 700 "$activity_state"
+if ! (
+  set -a
+  # shellcheck source=/dev/null
+  . "$LATTICE_DEV_HOME/accounts/board.env"
+  set +a
+  BOARD_STATE_DIR="$activity_state" TMPDIR="$activity_state" \
+    python3 "$root/integrations/board/tests/activity_devstack.py" --cancel-leftovers
+) >"$work/board-activity.out" 2>"$work/board-activity.err"; then
+  tail -n 40 "$work/board-activity.out" >&2
+  tail -n 20 "$work/board-activity.err" >&2
+  fail "integrations/board/tests/activity_devstack.py failed against the dev stack"
+fi
+grep -q '^activity-devstack: all checks passed$' "$work/board-activity.out" || fail "the activity driver did not report that all checks passed"
+if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/board-activity.out" "$work/board-activity.err"; then
+  fail "the activity driver output contains the board account's password"
+fi
+ok "agent_activity_keeps_its_rules_against_the_dev_stack"
 
 if ! (
   set -a

@@ -10,7 +10,11 @@
   var FEED_PAGE = 100;
   var FEED_KEEP = 500;
   var FEED_POLL_MAX = 500;
-  var PLAIN_ATTRS = { id: 1, title: 1, type: 1, name: 1, colspan: 1, scope: 1, role: 1, placeholder: 1, "for": 1 };
+  var PLAIN_ATTRS = { id: 1, title: 1, type: 1, name: 1, colspan: 1, scope: 1, role: 1, placeholder: 1, "for": 1,
+    "class": 1, x: 1, y: 1, width: 1, height: 1, viewBox: 1, preserveAspectRatio: 1 };
+  // The sparkline is the only SVG: three element names, made in the SVG namespace by h() and nowhere else.
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var SVG_TAGS = { svg: 1, rect: 1, title: 1 };
 
   var view = document.getElementById("view");
   var statusEl = document.getElementById("status");
@@ -35,14 +39,15 @@
   // h(tag, props, ...children). props: class, text, on {event: fn}, value/checked/disabled/
   // selected (as properties), href (only "#/..."), and a short list of plain attributes.
   function h(tag, props) {
-    var el = document.createElement(tag);
+    var isSvg = SVG_TAGS[tag] === 1;
+    var el = isSvg ? document.createElementNS(SVG_NS, tag) : document.createElement(tag);
     if (props) {
       var keys = Object.keys(props);
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i];
         var v = props[k];
         if (v === null || v === undefined || v === false) continue;
-        if (k === "class") el.className = v;
+        if (k === "class" && !isSvg) el.className = v;
         else if (k === "text") el.textContent = String(v);
         else if (k === "on") {
           var evs = Object.keys(v);
@@ -126,7 +131,58 @@
   }
 
   function agentLink(name) {
+    return h("a", { href: "#/agent/" + encodeURIComponent(name) }, name);
+  }
+
+  function agentFeedLink(name) {
     return h("a", { href: "#/feed?agent=" + encodeURIComponent(name) }, name);
+  }
+
+  // ------------------------------------------------------------------ activity helpers
+
+  // Calls per minute for the last hour as 60 bars. The label says what the bars are and the busiest minute.
+  function sparkline(buckets, label) {
+    var w = 3, gap = 1, ht = 24;
+    var max = 0;
+    for (var i = 0; i < buckets.length; i++) if (buckets[i] > max) max = buckets[i];
+    var bars = [];
+    for (var j = 0; j < buckets.length; j++) {
+      var v = buckets[j];
+      var bh = v > 0 ? Math.max(3, Math.round(ht * v / max)) : 1;
+      bars.push(h("rect", { x: j * (w + gap), y: ht - bh, width: w, height: bh, "class": v > 0 ? "bar" : "bar0" }));
+    }
+    var total = buckets.length * (w + gap);
+    return h("svg", { viewBox: "0 0 " + total + " " + ht, width: total, height: ht, "class": "spark", role: "img", "aria-label": label },
+      h("title", { text: label }), bars);
+  }
+
+  function activityBadge(state) {
+    return badge(state, state === "stuck?" ? "stuckq" : state);
+  }
+
+  function toolText(x) {
+    if (!x) return "";
+    return x.tool + (x.target ? " " + x.target : "") + (x.outcome && x.outcome !== "ok" ? " (" + x.outcome + ")" : "");
+  }
+
+  // One honest line about what the hook reported. It never says an agent is stuck: it says what stopped.
+  function doingText(a) {
+    if (a.session_state === "ended") return "session ended " + fmtAge(a.age_s);
+    if (a.session_state === "idle" && a.last_call) return "turn ended " + fmtAge(a.age_s) + "; last tool " + toolText(a.last_call);
+    if (a.session_state === "idle") return "waiting since " + fmtAge(a.age_s);
+    if (a.doing) return toolText(a.doing) + ", " + fmtAge(a.age_s);
+    return "reported " + fmtAge(a.age_s);
+  }
+
+  function ageNote(a) {
+    if (a.state === "quiet" || a.state === "stuck?") return "no tool activity for " + fmtDur(a.age_s);
+    return "";
+  }
+
+  function stripLabel(a) {
+    var total = 0, mx = 0;
+    for (var i = 0; i < a.strip.length; i++) { total += a.strip[i]; if (a.strip[i] > mx) mx = a.strip[i]; }
+    return "Tool calls per minute, last 60 minutes: " + total + " calls, busiest minute " + mx + ". Sampled by the hook.";
   }
 
   // ------------------------------------------------------------------ network
@@ -203,6 +259,10 @@
         attnList("Owner differs from the last claim", r.owner_mismatch, a.owner_mismatch, function (x) {
           return [taskLink(x.task_id, x.title), ": owner ", x.owner, ", last claim by ", x.last_claim_by];
         }),
+        attnList("Claimed but no tool activity (heartbeat alive)", r.quiet_claims, a.quiet_claims || [], function (x) {
+          return [taskLink(x.task_id, x.title), " held by ", x.owner, ", no tool activity for ", fmtDur(x.quiet_s),
+            x.heartbeat_age_s === null || x.heartbeat_age_s === undefined ? "" : ", last heartbeat " + fmtAge(x.heartbeat_age_s)];
+        }),
         attnList("Open for too long", r.open_too_long, a.open_too_long, function (x) {
           return [taskLink(x.task_id, x.title), ", open for ", fmtDur(x.age_s)];
         }),
@@ -217,15 +277,22 @@
         })
       ].filter(Boolean);
       var total = a.stale.length + a.double_claims.length + a.owner_mismatch.length + a.open_too_long.length +
-        (a.expired_leases || []).length + (a.dead_tasks || []).length + (a.blocked_forever || []).length;
+        (a.expired_leases || []).length + (a.dead_tasks || []).length + (a.blocked_forever || []).length +
+        (a.quiet_claims || []).length;
       var attn = h("section", { class: "attn" + (total ? " has" : ""), "aria-label": "Needs attention" },
         h("h2", { text: total ? "Needs attention (" + total + ")" : "Needs attention: nothing" }),
         sections.length ? sections : h("p", { class: "muted", text: "No stale claims, double claims, old open tasks, expired leases, dead tasks or tasks blocked for ever under the current rules (stale after " + d.meta.stale_minutes + " min, open for more than " + d.meta.open_hours + " h)." }));
 
+      var act = d.activity || { available: false };
       var rows = d.agents.map(function (g) {
+        var ga = g.activity;
         return h("tr", null,
           h("td", null, agentLink(g.name)),
           h("td", null, badge(g.state, g.state)),
+          h("td", null, ga ? [activityBadge(ga.state), ageNote(ga) ? h("div", { class: "muted", text: ageNote(ga) }) : null]
+            : h("span", { class: "muted", text: act.available ? "no activity reported" : "off" })),
+          h("td", { class: "doing", text: ga ? doingText(ga) : "" }),
+          h("td", null, ga ? sparkline(ga.strip, stripLabel(ga)) : null),
           h("td", null, g.current_task ? taskLink(g.current_task.id, g.current_task.title) : h("span", { class: "muted", text: "none" })),
           h("td", null, g.last_event ? [g.last_event.kind + " ", fmtAge(g.last_event.age_s)] : h("span", { class: "muted", text: "no events" })),
           h("td", { class: "num", text: g.tasks_done }),
@@ -234,6 +301,8 @@
       var table = h("div", { class: "scroll" }, h("table", null,
         h("thead", null, h("tr", null,
           h("th", { scope: "col", text: "Agent" }), h("th", { scope: "col", text: "State" }),
+          h("th", { scope: "col", text: "Tool activity" }), h("th", { scope: "col", text: "Doing now" }),
+          h("th", { scope: "col", text: "Last 60 min" }),
           h("th", { scope: "col", text: "Current task" }), h("th", { scope: "col", text: "Last event" }),
           h("th", { scope: "col", class: "num", text: "Tasks done" }), h("th", { scope: "col", class: "num", text: "Events" }))),
         h("tbody", null, rows)));
@@ -254,6 +323,9 @@
         h("h2", { text: "Agents" }),
         d.agents.length ? table : h("p", { class: "muted", text: "No agents yet: the board has no events and no owners." }),
         h("p", { class: "muted", text: "Agents are every event author and task owner. working: holds a claimed task with an event in the last " + d.meta.stale_minutes + " min. stale: holds claimed tasks and none has. idle: holds none." }),
+        act.available
+          ? h("p", { class: "muted", text: "Tool activity is what each agent's own hook reported (BOARD_ACTIVITY=1), sampled every few seconds. working: a report in the last " + act.working_s + " s. quiet: a task is held and the last report is older. stuck?: older than " + act.quiet_minutes + " min while the lease is alive; it only says what stopped being reported. Names and tools are self-declared." })
+          : h("p", { class: "muted", text: act.note || "Tool activity is off: no agent reports it (set BOARD_ACTIVITY=1 in the agent's hook; see the conventions)." }),
         note.length ? h("p", { class: "note-line", text: note.join(" ") }) : null
       ]);
     }
@@ -321,6 +393,107 @@
           d.children_total > d.children.length ? h("p", { class: "note-line", text: "Showing " + d.children.length + " of " + d.children_total + " child tasks." }) : null,
           d.events_complete ? null : h("p", { class: "note-line", text: "Only the newest events are loaded; older events of this task may be missing." })
         ]);
+      }
+    };
+  }
+
+  // ------------------------------------------------------------------ AGENT
+
+  function makeAgentScreen(name) {
+    var q = new URLSearchParams((location.hash.split("?")[1]) || "");
+    var st = { tool: q.get("tool") || "", outcome: q.get("outcome") || "", task: q.get("task") || "" };
+    var last = null;
+
+    function persist() {
+      var p = new URLSearchParams();
+      ["tool", "outcome", "task"].forEach(function (k) { if (st[k]) p.set(k, st[k]); });
+      var s2 = p.toString();
+      history.replaceState(null, "", "#/agent/" + encodeURIComponent(name) + (s2 ? "?" + s2 : ""));
+    }
+
+    function pick(label, options, current, key) {
+      var sel = h("select", { "aria-label": label, on: { change: function () { st[key] = sel.value; persist(); draw(last); } } },
+        h("option", { value: "", text: "all" }));
+      var seen = {};
+      options.concat(current ? [current] : []).forEach(function (o) {
+        if (seen[o]) return;
+        seen[o] = true;
+        var opt = h("option", { value: o, text: o });
+        if (o === current) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      return h("label", null, label, sel);
+    }
+
+    function rowItem(r) {
+      return h("li", null,
+        h("div", { class: "meta" }, fmtTime(r.at), " ", fmtAge(r.age_s), " ",
+          h("span", { class: "badge kind " + (r.outcome === "ok" ? "note" : "fail"), text: r.outcome })),
+        h("div", { class: "text" }, r.tool + (r.target ? " " + r.target : ""),
+          r.calls > 1 ? " (" + r.calls + " calls: " + (r.mix || r.tool) + ")" : (r.calls === 0 ? " (no tool call)" : ""),
+          r.task_id ? [" on ", taskLink(r.task_id)] : ""));
+    }
+
+    function draw(d) {
+      if (!d) return;
+      last = d;
+      var a = d.activity;
+      var crumbs = h("div", { class: "crumbs" }, h("a", { href: "#/now", text: "Now" }), h("span", { class: "sep", text: "/" }),
+        h("strong", { text: name }));
+      var filtered = d.rows.filter(function (r) {
+        return (!st.tool || r.tool === st.tool || r.mix.indexOf(st.tool + "=") >= 0) && (!st.outcome || r.outcome === st.outcome) &&
+          (!st.task || r.task_id === st.task);
+      });
+      var taskIds = [];
+      d.rows.forEach(function (r) { if (r.task_id && taskIds.indexOf(r.task_id) < 0) taskIds.push(r.task_id); });
+      var mix = d.mix.length ? qTable(["Tool", "Calls"], d.mix, function (m) {
+        return [h("td", { class: "mono", text: m[0] }), h("td", { class: "num", text: m[1] })];
+      }) : h("p", { class: "muted", text: "No tool calls in the rows held." });
+      var sessions = d.sessions.length ? qTable(["Session", "State", "Last report", "Tool calls", "Task"], d.sessions, function (x) {
+        return [h("td", { class: "mono", text: x.session }), td(x.state), td(fmtAge(x.age_s) + ": " + toolText(x)),
+          h("td", { class: "num", text: x.tool_calls }), td(x.task_id ? taskLink(x.task_id) : "none")];
+      }) : h("p", { class: "muted", text: "No session rows." });
+      var timeline = filtered.length ? h("ol", { class: "tl" }, filtered.map(rowItem))
+        : h("p", { class: "muted", text: d.rows.length ? "No row matches the filter." : "No activity rows held for this agent." });
+      show([
+        crumbs,
+        h("h2", null, name, " ", a ? activityBadge(a.state) : null),
+        d.available ? null : h("p", { class: "note-line", text: d.note || "Tool activity is not available on this board." }),
+        a ? h("p", { text: doingText(a) + (ageNote(a) ? " (" + ageNote(a) + ")" : "") }) : null,
+        a ? h("div", { class: "panel" }, sparkline(a.strip, stripLabel(a)), h("div", { class: "muted", text: stripLabel(a) })) : null,
+        h("table", null, h("tbody", null,
+          h("tr", null, h("th", { scope: "row", text: "Holds" }), td(d.claimed.length ? d.claimed.map(function (t) { return [taskLink(t.id, t.title), " "]; }) : "no claimed task")),
+          h("tr", null, h("th", { scope: "row", text: "Active time (estimate)" }), td(fmtDur(d.active_s) + " over the " + d.rows_held + " rows held")),
+          h("tr", null, h("th", { scope: "row", text: "Events by this agent" }), td(agentFeedLink(name))))),
+        h("p", { class: "muted", text: d.estimate_note }),
+        h("h3", { text: "Sessions" }), sessions,
+        h("h3", { text: "Tool mix" }), mix,
+        h("h3", { text: "Timeline, newest first" }),
+        h("div", { class: "filters" }, pick("Tool", d.tools, st.tool, "tool"), pick("Outcome", ["ok", "error", "denied"], st.outcome, "outcome"),
+          pick("Task", taskIds, st.task, "task")),
+        timeline,
+        d.rows_total > d.rows.length ? h("p", { class: "note-line", text: "Showing the newest " + d.rows.length + " of " + d.rows_total + " rows held." }) : null,
+        h("p", { class: "muted", text: "Everything here was reported by the agent's own hook: a row is one write that stands for the calls since the one before. Only the tool name and a short label are stored, never a command line, a file's content or a prompt. A compromised agent can report anything." })
+      ]);
+    }
+
+    return {
+      name: "agent",
+      start: function () { return this.poll(); },
+      poll: async function () {
+        var gen = navGen;
+        var d;
+        try {
+          d = await api("/api/agent", { name: name, limit: 200 });
+        } catch (e) {
+          if (gen !== navGen) return;
+          show([h("p", { class: "crumbs" }, h("a", { href: "#/now", text: "Back to now" })),
+            h("h2", { text: "Agent " + name }), h("p", { class: "note-line", text: "Not found or not readable: " + e.message })]);
+          return;
+        }
+        if (gen !== navGen) return;
+        applyMeta(d.meta);
+        draw(d);
       }
     };
   }
@@ -428,7 +601,7 @@
       st.events.forEach(function (e) {
         listEl.appendChild(h("li", { class: st.fresh[e.id] ? "fresh" : "" },
           h("span", { class: "when", text: "#" + e.id + " " + fmtTime(e.created_at) }),
-          h("span", null, agentLink(e.author)),
+          h("span", null, agentFeedLink(e.author)),
           h("span", null, h("span", { class: "badge kind " + e.kind, text: e.kind })),
           h("span", { class: "body" }, taskLink(e.task_id, e.task_title), e.body ? [" ", h("span", { class: "text", text: e.body })] : null)));
       });
@@ -607,6 +780,19 @@
           h("table", null, h("tbody", null, rows)));
       }
 
+      var actp = null;
+      if (d.activity) {
+        var ao = d.activity.overall;
+        actp = h("div", { class: "panel" }, h("h3", { text: "Active time per done task (diagnostic)" }),
+          h("p", { class: "muted", text: d.activity.note }),
+          h("p", { text: ao.status === "ok"
+            ? "Median " + fmtDur(ao.median_s) + ", shortest " + fmtDur(ao.min_s) + ", longest " + fmtDur(ao.max_s) + " (n = " + ao.n + " of " + d.activity.done_tasks + " done tasks)."
+            : ao.message + " (n = " + ao.n + " of " + d.activity.done_tasks + " done tasks watched)." }),
+          d.activity.agents.length ? h("table", null, h("tbody", d.activity.agents.map(function (x) {
+            return h("tr", null, h("th", { scope: "row", text: x.agent }),
+              h("td", { text: x.status === "ok" ? "median " + fmtDur(x.median_s) + " (n = " + x.n + ")" : x.message + " (n = " + x.n + ")" }));
+          }))) : null);
+      }
       var scoped = [];
       if (st.agent && !names.length) scoped.push(h("p", { class: "note-line", text: "That agent claimed no task in this window." }));
 
@@ -621,6 +807,7 @@
         h("p", { class: "muted", text: d.note + " Windows select tasks by creation time. Click a metric name for its definition." }),
         h("div", { class: "scroll" }, h("table", null, h("thead", null, head), h("tbody", null, body))),
         cmp,
+        actp,
         nm,
         h("p", { class: "muted", text: "These numbers describe how the board was used, not whether the work is correct. With few tasks the intervals are wide; below the minimum n no number is shown." })
       ]);
@@ -881,6 +1068,10 @@
       try { return { name: "experiment", id: decodeURIComponent(me[1]) }; } catch (e) { return { name: "experiments" }; }
     }
     if (path === "#/experiments") return { name: "experiments" };
+    var ma = /^#\/agent\/(.+)$/.exec(path);
+    if (ma) {
+      try { return { name: "agent", id: decodeURIComponent(ma[1]) }; } catch (e) { return { name: "now" }; }
+    }
     var m = /^#\/task\/(.+)$/.exec(path);
     if (m) {
       try { return { name: "task", id: decodeURIComponent(m[1]) }; } catch (e) { return { name: "now" }; }
@@ -915,10 +1106,11 @@
     var r = parseRoute();
     var links = document.querySelectorAll("nav a");
     for (var i = 0; i < links.length; i++) {
-      var on = links[i].getAttribute("data-nav") === (r.name === "task" ? "now" : (r.name === "experiment" ? "experiments" : r.name));
+      var on = links[i].getAttribute("data-nav") === (r.name === "task" || r.name === "agent" ? "now" : (r.name === "experiment" ? "experiments" : r.name));
       links[i].className = on ? "current" : "";
     }
     if (r.name === "task") screen = makeTaskScreen(r.id);
+    else if (r.name === "agent") screen = makeAgentScreen(r.id);
     else if (r.name === "feed") screen = makeFeedScreen();
     else if (r.name === "scorecard") screen = makeScorecardScreen();
     else if (r.name === "queue") screen = queueScreen;

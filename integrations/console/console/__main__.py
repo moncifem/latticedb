@@ -28,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="serve generated DEMO data; no database is contacted")
     s.add_argument("--stale-minutes", type=int, default=30,
                    help="a claimed task with no event for this long is stale (default 30)")
+    s.add_argument("--quiet-minutes", type=int, default=10,
+                   help="an agent holding a task with a live lease and no tool activity for this long is "
+                        "flagged (default 10)")
     s.add_argument("--open-hours", type=int, default=24,
                    help="an open task older than this needs attention (default 24)")
     return p
@@ -43,7 +46,7 @@ def main(argv=None) -> int:
             source = DemoSource()
         else:
             source = PsqlSource(connection_url(args.url))
-        service = BoardService(source, args.stale_minutes, args.open_hours)
+        service = BoardService(source, args.stale_minutes, args.open_hours, quiet_minutes=args.quiet_minutes)
         server = ConsoleServer(service, args.port, BIND_HOST)
     except (ConfigError, ValueError) as e:
         print("console: %s" % e, file=sys.stderr)

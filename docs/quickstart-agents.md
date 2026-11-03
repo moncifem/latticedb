@@ -11,13 +11,14 @@ agent in step 6 can be your own script; `claude` or `codex` is optional.
 ```sh
 dev/lattice-dev.sh up
 dev/lattice-dev.sh account add board \
-  --read counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts \
-  --write counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts \
-  --ddl counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts
+  --read counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log \
+  --write counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log \
+  --ddl counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts,agent_activity,agent_activity_log
 ```
 
-The first five tables are the board; the last four are used only by `board-bench` (step 9) and can be left out
-if you will not run experiments.
+The first five tables are the board; the next four are used only by `board-bench` (step 9) and the last two only by
+agent activity (step 8b). `board init` creates every table in `schema.sql`, so the account needs all eleven unless you
+edit the schema.
 
 `up` prepares the stack: a certificate authority and the volumes (its output says the server starts with the
 first account). `account add` creates the `board` account, starts the server (it listens on `127.0.0.1:5432`
@@ -190,6 +191,30 @@ calls, not against a model with a shell or file tools. The `board-worker` agent 
 are limited only by Claude Code's permission system. A call cancelled after its claim was written leaves a claim the
 server does not know until the lease runs out. Titles and bodies are one line each. Nothing is pushed to the session: the SessionStart
 hook prints counts and task ids once, and the agent polls with `board_queue` and `board_since`.
+
+### 8b. See what each agent is doing right now (optional)
+
+The Now screen can show, per agent, the last tool it used, a short label, whether it looks quiet, and a sparkline of
+the last hour. This is recorded only if you turn it on, because it stores tool usage; read
+[what is and is not stored](../integrations/board/CONVENTIONS.md#agent-activity-what-is-each-agent-doing-right-now)
+first. The two activity tables were created by `board init` in step 2 (an older board needs `board migrate`, and
+an account made before this feature needs `--read/--write/--ddl` on `agent_activity,agent_activity_log` too).
+
+```sh
+export BOARD_ACTIVITY=1                    # off unless this is 1
+board activity --tool Edit --target src/main.rs --flush   # a manual row, to see it appear
+board activity-list
+board activity-purge                       # delete your own rows again
+```
+
+For Claude Code, start the session from a shell that has `BOARD_ACTIVITY=1`, `BOARD_AUTHOR` and the `PG*` settings.
+The board plugin from step 8 registers the hook; without the plugin, merge
+`integrations/board/hooks/settings.activity.example.json` into your project's settings. The hook is rate limited by
+the helper (one database write per session per 5 seconds), blocks a tool call for at most 3 seconds (only when the
+database host does not answer, and then once per wait, not once per call) and never fails one. `board run` also
+publishes a row for the agent it supervises when `BOARD_ACTIVITY=1` is set for the runner. What it cannot tell you:
+the rows are what the agent's own hook reported, so a compromised agent can lie, and "no tool activity for 12
+minutes" does not mean the agent is stuck.
 
 ## 9. Compare two agent configurations
 

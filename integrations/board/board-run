@@ -385,9 +385,10 @@ class Heartbeat(threading.Thread):
     the lease is lost. Failures of another kind are tolerated until a whole lease passes without one
     success, because after that the task may already have been reaped."""
 
-    def __init__(self, board, task, fence, lease):
+    def __init__(self, board, task, fence, lease, on_beat=None):
         super().__init__(daemon=True)
         self.board, self.task, self.fence, self.lease = board, task, fence, lease
+        self.on_beat = on_beat
         self.stop_event = threading.Event()
         self.lost = None
         self.beats = 0
@@ -405,6 +406,8 @@ class Heartbeat(threading.Thread):
             if rc == 0:
                 self.beats += 1
                 last_ok = time.monotonic()
+                if self.on_beat and not self.stop_event.is_set():
+                    self.on_beat()
             elif rc == 3:
                 self.lost = "the fence refused the heartbeat"
                 return
@@ -547,6 +550,28 @@ class Runner:
     def retry_delay(self, attempts_before):
         return int(min(self.cfg.retry_max, self.cfg.retry_base * (2 ** min(attempts_before, 20))))
 
+    # -- live activity (BOARD_ACTIVITY=1): one row for the child this runner supervises, so an agent that has
+    # no hook still shows on the console. The helper owns the rate limit; a failure here never matters.
+    def activity_label(self):
+        name = self.cfg.agent or os.path.basename((self.cfg.command or ["command"])[0])
+        return re.sub(r"[^A-Za-z0-9._-]", "", name)[:48] or "command"
+
+    def activity(self, state, task_id=None, outcome="ok", flush=False):
+        if os.environ.get("BOARD_ACTIVITY") != "1":
+            return
+        args = ["activity", "--tool", "agent-run", "--target", self.activity_label(), "--outcome", outcome,
+                "--state", state, "--session", "run-%d" % os.getpid()]
+        if task_id:
+            args += ["--task", task_id]
+        if flush:
+            args.append("--flush")
+        rc, _, err = self.board.call(*args, timeout=15)
+        if rc != 0 and not self.activity_warned:
+            self.activity_warned = True
+            log("could not record activity (%d): %s" % (rc, one_line(err, 200)))
+
+    activity_warned = False
+
     # -- one task
     def run_task(self, task_id):
         cfg = self.cfg
@@ -590,7 +615,7 @@ class Runner:
         body_path = os.path.join(tdir, "body.txt")
         stdin_path = os.path.join(tdir, "prompt.txt") if cfg.agent else None
         # The lease is kept alive from here on, also while a worktree is made.
-        beat = Heartbeat(self.board, task_id, fence, cfg.lease)
+        beat = Heartbeat(self.board, task_id, fence, cfg.lease, lambda: self.activity("working", task_id))
         beat.start()
         try:
             self.run_child(task_id, title, body, fence, attempt, attempts_before, tdir, beat)
@@ -636,6 +661,7 @@ class Runner:
 
         env = self.child_env(task_id, title, fence, attempt, body_path, result_path, cwd, home)
         started = time.monotonic()
+        self.activity("working", task_id, flush=True)
 
         r, w = os.pipe()
         stdin = None
@@ -749,6 +775,7 @@ class Runner:
         print("%s %s %s attempt=%d %s rc=%s %.1fs%s" % (
             time.strftime("%H:%M:%S"), cfg.owner, task_id, attempt, outcome, rc, elapsed,
             (" log=" + log_path) if cfg.show_log_path else ""), flush=True)
+        self.activity("idle", outcome="ok" if outcome in ("done", "released on shutdown") else "error", flush=True)
 
     fatal = False
 
@@ -1021,6 +1048,7 @@ def main(argv):
     try:
         status = runner.loop()
     finally:
+        runner.activity("ended", flush=True)
         c = runner.counts
         log("%s finished: claimed=%d done=%d failed=%d retried=%d lost=%d released=%d errors=%d" % (
             cfg.owner, c["claimed"], c["done"], c["failed"], c["retried"], c["lost"], c["released"], c["errors"]))

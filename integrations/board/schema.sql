@@ -141,3 +141,46 @@ CREATE TABLE IF NOT EXISTS bench_attempts (
     created_at bigint NOT NULL,
     recorded_at bigint NOT NULL DEFAULT 0
 );
+
+-- Live agent activity (`board activity`, hooks/activity-hook.py, the console's Now and Agent screens). Only
+-- written when BOARD_ACTIVITY=1. Two tables, read one at a time (the subset has no joins).
+--
+-- agent_activity: one row per agent and session, id = agent '/' session, upserted by the helper. It answers
+-- "what is each agent doing right now": the last tool (name only), a short sanitised target, the outcome
+-- class (ok, error or denied), the task the agent holds a lease on ('' when none), the count of tool calls
+-- seen, and state (working, idle or ended). last_seen and started_at are DATABASE-clock epoch seconds. Rows
+-- of an agent older than seven days are deleted by that agent's own next write, so the table does not grow
+-- without bound; `board activity-purge` deletes on request. task_id is '' rather than NULL on purpose: the
+-- console treats both as "none" and the helper never has to write a typed NULL.
+CREATE TABLE IF NOT EXISTS agent_activity (
+    id text PRIMARY KEY,
+    agent text NOT NULL,
+    session text NOT NULL,
+    task_id text NOT NULL DEFAULT '',
+    tool text NOT NULL,
+    target text NOT NULL DEFAULT '',
+    outcome text NOT NULL DEFAULT 'ok',
+    state text NOT NULL DEFAULT 'working',
+    tool_calls bigint NOT NULL DEFAULT 0,
+    last_seen bigint NOT NULL,
+    started_at bigint NOT NULL
+);
+
+-- agent_activity_log: the timeline, a ring of the newest rows of each agent (200 by default; the helper
+-- deletes older ones in the write that adds a row). One row is one WRITE, not one tool call: the helper
+-- coalesces the calls seen since its last write, so calls says how many that row stands for and mix says
+-- which tools ("Bash=3,Edit=2"; at most 200 characters). tool, target and outcome are those of the newest
+-- call. The id comes from counters('activity'), which rises in commit order, so a reader that polls
+-- "id > last seen" misses nothing. at is the DATABASE clock.
+CREATE TABLE IF NOT EXISTS agent_activity_log (
+    id bigint PRIMARY KEY,
+    agent text NOT NULL,
+    session text NOT NULL,
+    task_id text NOT NULL DEFAULT '',
+    tool text NOT NULL,
+    target text NOT NULL DEFAULT '',
+    outcome text NOT NULL DEFAULT 'ok',
+    calls bigint NOT NULL DEFAULT 0,
+    mix text NOT NULL DEFAULT '',
+    at bigint NOT NULL
+);

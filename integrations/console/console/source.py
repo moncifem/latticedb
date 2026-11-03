@@ -171,15 +171,22 @@ LEASE_COLUMNS = ("task_id", "lease_until", "heartbeat_at", "attempts", "max_atte
 LEASE_INTS = ("lease_until", "heartbeat_at", "attempts", "max_attempts", "not_before")
 TASK_INTS = ("priority", "created_at", "updated_at", "claim_seq", "done_seq", "created_seq")
 TASK_NULLS = ("owner", "parent_id")
+ACTIVITY_COLUMNS = ("id", "agent", "session", "task_id", "tool", "target", "outcome", "state", "tool_calls",
+                    "last_seen", "started_at")
+ACTIVITY_INTS = ("tool_calls", "last_seen", "started_at")
+ACTIVITY_LOG_COLUMNS = ("id", "agent", "session", "task_id", "tool", "target", "outcome", "calls", "mix", "at")
+ACTIVITY_LOG_INTS = ("id", "calls", "at")
 EVENT_INTS = ("id", "created_at")
 DECISION_INTS = ("id", "created_at")
 
 # The only statements the console may send. Anything else is refused before psql starts.
 # Used with fullmatch: "$" would also accept a trailing newline.
 _SQL_ALLOWED = re.compile(
-    r"SELECT [a-z_]+(?:, [a-z_]+)* FROM (?:tasks|events|decisions|task_leases)"
+    r"SELECT [a-z_]+(?:, [a-z_]+)* FROM (?:tasks|events|decisions|task_leases|agent_activity_log)"
     r"(?: WHERE id > [0-9]{1,18})?"
     r" ORDER BY [a-z_]+(?: DESC)? LIMIT [0-9]{1,6};"
+    # The session rows of the live activity feature: the newest by last_seen, no filter.
+    r"|SELECT [a-z_]+(?:, [a-z_]+)* FROM agent_activity ORDER BY [a-z_]+(?: DESC)? LIMIT [0-9]{1,6};"
     # The experiment tables of `board bench`: the experiment list, or the rows of one experiment, whose
     # name is checked again against BENCH_NAME before it reaches the statement.
     r"|SELECT [a-z_]+(?:, [a-z_]+)* FROM bench_(?:experiments|arms|tasks|attempts)"
@@ -363,6 +370,32 @@ class PsqlSource:
     def decisions_after(self, after: int, limit: int) -> list:
         return self._rows(build_select(DECISION_COLUMNS, "decisions", "id", False, limit, after),
                           DECISION_COLUMNS, DECISION_INTS)
+
+    # -- live agent activity (BOARD_ACTIVITY=1 writers; the tables may not exist on an older board, or this
+    # account may not be allowed to read them: both give available=False, never an error for the whole board)
+
+    def _activity_missing(self, e: SourceError) -> bool:
+        text = str(e)
+        return "agent_activity" in text and any(x in text for x in ("exist", "42P01", "42501", "permission"))
+
+    def activity_sessions(self, limit: int) -> tuple:
+        sql = build_select(ACTIVITY_COLUMNS, "agent_activity", "last_seen", True, limit)
+        try:
+            return self._rows(sql, ACTIVITY_COLUMNS, ACTIVITY_INTS), True
+        except SourceError as e:
+            if self._activity_missing(e):
+                return [], False
+            raise
+
+    def activity_latest(self, limit: int) -> list:
+        rows = self._rows(build_select(ACTIVITY_LOG_COLUMNS, "agent_activity_log", "id", True, limit),
+                          ACTIVITY_LOG_COLUMNS, ACTIVITY_LOG_INTS)
+        rows.reverse()
+        return rows
+
+    def activity_after(self, after: int, limit: int) -> list:
+        return self._rows(build_select(ACTIVITY_LOG_COLUMNS, "agent_activity_log", "id", False, limit, after),
+                          ACTIVITY_LOG_COLUMNS, ACTIVITY_LOG_INTS)
 
     # -- board bench
 

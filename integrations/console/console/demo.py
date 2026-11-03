@@ -18,6 +18,7 @@ SPAN = 5 * 24 * 3600
 AGENTS = ["maintainer", "impl-a", "impl-b", "impl-c", "reviewer", "tester", "docs-bot"]
 WORKERS = ["impl-a", "impl-b", "impl-c", "reviewer", "tester", "docs-bot"]
 STALE_AGENT = "docs-bot"
+LIVE_HOLDERS = ["impl-a", "impl-b", "impl-c", "reviewer", "tester"]
 SPEED = {"impl-a": 100, "impl-b": 140, "impl-c": 70, "reviewer": 60, "tester": 90, "docs-bot": 50}
 
 VERBS = ["Add", "Fix", "Document", "Test", "Refactor", "Measure", "Review", "Bound", "Trim", "Pin"]
@@ -98,6 +99,7 @@ def generate(seed: int = 7) -> dict:
         order += 1
         raw.append((ts, order, tid, author, kind, body))
 
+    used_order = {s["id"]: i for i, s in enumerate(specs)}
     abandoned = {specs[n // 3]["id"], specs[n // 2]["id"]}
     old_open = {specs[3]["id"], specs[7]["id"], specs[11]["id"]}
     live_claims = {s["id"] for s in specs[-9:-4]}
@@ -111,8 +113,9 @@ def generate(seed: int = 7) -> dict:
         # The stale agent is always the same one and holds nothing else, so the demo shows it.
         if tid in abandoned:
             agent = STALE_AGENT
-        elif agent == STALE_AGENT and tid in live_claims:
-            agent = "impl-a"
+        elif tid in live_claims:
+            # one live claim per worker (the random pick is still drawn, so the rest of the data is unchanged)
+            agent = LIVE_HOLDERS[sorted(live_claims, key=lambda x: used_order[x]).index(tid)]
         claim_at = s["created"] + 300 + rng.below(3600) * (1 + rng.below(3))
         if tid in abandoned:
             claim_at = final_now - 3 * 3600
@@ -282,6 +285,8 @@ class DemoSource:
         self.started = clock()
         self.initial = max(1, len(self.events) - 10) if reveal_every else len(self.events)
         self.bench = generate_bench(seed)
+        self._act_cache = (None, None)
+        self.act_profiles = activity_profiles(self.data)
 
     def visible(self) -> int:
         if not self.reveal_every:
@@ -325,6 +330,26 @@ class DemoSource:
         k = self.visible()
         return [dict(d) for d in self.decisions if after < d["id"] <= k][:limit]
 
+    # -- live activity: generated from the clock the demo shows, so the same moment always gives the same rows
+
+    def _activity(self):
+        now = self.now()
+        if self._act_cache[0] != now:
+            self._act_cache = (now, generate_activity(self.act_profiles, now, self.data))
+        return self._act_cache[1]
+
+    def activity_sessions(self, limit: int) -> tuple:
+        sessions, _ = self._activity()
+        return sorted(sessions, key=lambda r: (-r["last_seen"], r["id"]))[:limit], True
+
+    def activity_latest(self, limit: int) -> list:
+        _, rows = self._activity()
+        return [dict(r) for r in rows[-limit:]]
+
+    def activity_after(self, after: int, limit: int) -> list:
+        _, rows = self._activity()
+        return [dict(r) for r in rows if r["id"] > after][:limit]
+
     def bench_experiments(self) -> tuple:
         rows = []
         for d in self.bench.values():
@@ -338,6 +363,113 @@ class DemoSource:
     def bench_data(self, name: str):
         d = self.bench.get(name)
         return None if d is None else copy.deepcopy(d)
+
+
+# ---------------------------------------------------------------- live activity
+
+ACT_SLOT_S = 5
+ACT_HOUR = 3600
+ACT_RING = 200
+ACT_TOOLS = [("Read", 30), ("Edit", 25), ("Bash", 24), ("Grep", 10), ("Write", 5), ("Glob", 4), ("Task", 2)]
+ACT_FILES = ["src/main.rs", "src/lib.rs", "tests/api.rs", "docs/alpha.md", "README.md", "Cargo.toml",
+             "crates/lattice-exec/src/session.rs", "integrations/board/board", "CHANGELOG.md", "src/store.rs"]
+ACT_COMMANDS = ["cargo [test]", "git", "ls", "cargo [build]", "rg", "python3", "sed", "make [build]", "pytest [test]"]
+# (seconds before "now" of the agent's last tool call, percent of five second slots with a write) by profile.
+# working is recent; quiet is a few minutes ago; stuck is older than the quiet threshold while the lease is
+# alive; idle ended its session. The numbers are made up.
+ACT_PROFILES = {"working": (3, 70), "working2": (11, 45), "quiet": (260, 60), "stuck": (720, 55), "idle": (2900, 40)}
+
+
+def activity_profiles(data: dict) -> dict:
+    """{agent: profile}. The agents that hold the live claims get the interesting profiles in a fixed order
+    (working, stuck, quiet, quiet, working), every other agent that ever claimed something is idle, and the
+    stale agent has no rows at all: it never ran the hook."""
+    roles = overlay_roles(data["specs"])
+    claimant = {}
+    for e in data["events"]:
+        if e["kind"] == "claim":
+            claimant.setdefault(e["task_id"], e["author"])
+    order = ["working", "stuck", "quiet", "quiet", "working2"]
+    out: dict = {}
+    for tid, profile in zip(roles["live"], order):
+        who = claimant.get(tid)
+        if who and who != STALE_AGENT and who not in out:
+            out[who] = profile
+    for name in sorted({e["author"] for e in data["events"]}):
+        if name not in out and name != STALE_AGENT:
+            out[name] = "idle"
+    return out
+
+
+def _slot_hash(slot: int, idx: int) -> int:
+    return Lcg(slot * 977 + idx * 131 + 17).next()
+
+
+def _pick_tool(h: int) -> str:
+    total = sum(w for _, w in ACT_TOOLS)
+    r = h % total
+    for name, w in ACT_TOOLS:
+        if r < w:
+            return name
+        r -= w
+    return ACT_TOOLS[0][0]
+
+
+def generate_activity(profiles: dict, now: int, data: dict) -> tuple:
+    """(session rows, log rows) as the helper would have written them, up to `now` (seconds). Rows are on
+    five second slots; ids are slot * 64 + agent index, so they rise with time and never change."""
+    roles = overlay_roles(data["specs"])
+    claimant = {}
+    for e in data["events"]:
+        if e["kind"] == "claim":
+            claimant.setdefault(e["task_id"], e["author"])
+    held = {}
+    for tid in roles["live"]:
+        if claimant.get(tid):
+            held.setdefault(claimant[tid], tid)
+    sessions, log = [], []
+    for idx, name in enumerate(sorted(profiles)):
+        profile = profiles[name]
+        last_off, density = ACT_PROFILES[profile]
+        end_slot = (now - last_off) // ACT_SLOT_S
+        start_slot = (now - ACT_HOUR) // ACT_SLOT_S
+        rows = []
+        for slot in range(start_slot, end_slot + 1):
+            h = _slot_hash(slot, idx)
+            if slot != end_slot and h % 100 >= density:
+                continue
+            tool = _pick_tool(h >> 8)
+            calls = 1 + (h >> 20) % 4
+            if tool == "Bash":
+                target = ACT_COMMANDS[(h >> 24) % len(ACT_COMMANDS)]
+            elif tool in ("Read", "Edit", "Write"):
+                target = ACT_FILES[(h >> 24) % len(ACT_FILES)]
+            else:
+                target = ""
+            outcome = "error" if (h >> 40) % 100 < 4 else "ok"
+            if calls == 1 or tool == "Read":
+                mix = "%s=%d" % (tool, calls)
+            else:
+                mix = "%s=%d,Read=1" % (tool, calls - 1)
+            rows.append({"id": slot * 64 + idx, "agent": name, "session": "demo-1", "task_id": held.get(name, ""),
+                         "tool": tool, "target": target, "outcome": outcome, "calls": calls, "mix": mix,
+                         "at": slot * ACT_SLOT_S + 1})
+        rows = rows[-ACT_RING:]
+        if not rows:
+            continue
+        last = rows[-1]
+        state = "ended" if profile == "idle" else "working"
+        if profile == "idle":
+            last = dict(last, id=(end_slot + 1) * 64 + idx, at=last["at"] + 1, tool="session-end", target="",
+                        outcome="ok", calls=0, mix="")
+            rows.append(last)  # the end-of-session mark
+        sessions.append({"id": "%s/demo-1" % name, "agent": name, "session": "demo-1", "task_id": held.get(name, ""),
+                         "tool": last["tool"], "target": last["target"], "outcome": last["outcome"],
+                         "state": state, "tool_calls": sum(r["calls"] for r in rows),
+                         "last_seen": last["at"], "started_at": rows[0]["at"]})
+        log.extend(rows)
+    log.sort(key=lambda r: r["id"])
+    return sessions, log
 
 
 # ---------------------------------------------------------------- experiments (board bench)

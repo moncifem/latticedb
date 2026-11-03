@@ -90,14 +90,16 @@ class Structure(unittest.TestCase):
 
     def test_the_hooks_use_known_events_and_match_real_tools(self):
         hooks = self.hooks["hooks"]
-        self.assertEqual(set(hooks), {"SessionStart", "PreToolUse"})
+        self.assertEqual(set(hooks), {"SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied",
+                                      "UserPromptSubmit", "Stop", "SessionEnd"})
         for group in hooks["PreToolUse"]:
             for name in group["matcher"].split("|"):
                 self.assertTrue(name.startswith(PREFIX), name)
                 self.assertIn(name[len(PREFIX):], self.tools)
         gated = {n[len(PREFIX):] for g in hooks["PreToolUse"] for n in g["matcher"].split("|")}
         self.assertEqual(gated, {"board_add", "board_done", "board_fail"})
-        for group in hooks["SessionStart"] + hooks["PreToolUse"]:
+        every = [g for groups in hooks.values() for g in groups]
+        for group in every:
             for h in group["hooks"]:
                 self.assertEqual(h["type"], "command")
                 self.assertLessEqual(h["timeout"], 30)

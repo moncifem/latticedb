@@ -106,6 +106,9 @@ if cmd == "heartbeat":
     print("lease extended")
     sys.exit(0)
 
+if cmd == "activity":
+    sys.exit(conf.get("activity_rc", 0))
+
 if cmd in ("note", "done", "fail", "release"):
     rc = conf.get(cmd + "_rc", 0)
     if rc == 0 and cmd != "note":

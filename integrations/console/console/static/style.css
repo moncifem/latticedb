@@ -175,3 +175,11 @@ td.gridcell.empty { background: var(--idle-bg); color: var(--muted); }
 .mark.flaky { border-color: var(--warn); color: var(--warn); }
 .mark.error, .mark.tampered { border-color: var(--bad); color: var(--bad); }
 .mark.pending { color: var(--muted); }
+
+/* live agent activity */
+.badge.quiet { background: var(--warn-bg); color: var(--warn); }
+.badge.stuckq { background: var(--bad-bg); color: var(--bad); text-transform: none; }
+.spark { display: block; max-width: 100%; height: auto; min-width: 8rem; }
+.spark .bar { fill: var(--accent); }
+.spark .bar0 { fill: var(--line); }
+td.doing { max-width: 22rem; overflow-wrap: anywhere; }

@@ -108,6 +108,24 @@ FEED_PARAMS = {
     "task": v_regex(_ID_RE, "letters, digits, '_' or '-' (up to 64)"),
 }
 TASK_PARAMS = {"id": v_regex(_ID_RE, "letters, digits, '_' or '-' (up to 64)")}
+_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+AGENT_LIMIT_DEFAULT = 200
+
+
+def v_outcome(name, v):
+    if v not in ("ok", "error", "denied"):
+        raise BadRequest("outcome must be ok, error or denied")
+    return v
+
+
+AGENT_PARAMS = {
+    "name": v_regex(_NAME_RE, "letters, digits, '.', '_' or '-' (up to 64)"),
+    "tool": v_regex(_TOOL_RE, "letters, digits, '.', '_' or '-' (up to 64)"),
+    "outcome": v_outcome,
+    "task": v_regex(_ID_RE, "letters, digits, '_' or '-' (up to 64)"),
+    "after": v_int(0, MAX_CURSOR),
+    "limit": v_int(1, AGENT_LIMIT_DEFAULT),
+}
 _EXP_RE = re.compile(r"[A-Za-z0-9_-]{1,48}")
 
 
@@ -219,6 +237,16 @@ def make_handler(service, allowed_hosts_ref):
                     payload = service.task_payload(q["id"])
                     if payload is None:
                         self._error(404, "no such task in the loaded data")
+                    else:
+                        self._json(200, payload)
+                elif path == "/api/agent":
+                    q = parse_query(parts.query, AGENT_PARAMS)
+                    if "name" not in q:
+                        raise BadRequest("name is required")
+                    payload = service.agent_payload(q["name"], q.get("tool"), q.get("outcome"), q.get("task"),
+                                                    q.get("limit", AGENT_LIMIT_DEFAULT), q.get("after"))
+                    if payload is None:
+                        self._error(404, "no such agent in the loaded data")
                     else:
                         self._json(200, payload)
                 elif path == "/api/experiments":

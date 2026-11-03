@@ -5,7 +5,8 @@ name: dev-stack
 # (integrations/board/swarm: `board run` workers with scripted agents, about two minutes) and
 # integrations/board/tests/mcp_devstack.py (the board MCP server driven against the stack) and
 # integrations/board/tests/bench_devstack.py (board bench with fake agents, about three minutes; its console check reads
-# integrations/console, so that path starts the job too). The script picks its own compose project, state dir
+# integrations/console, so that path starts the job too) and integrations/board/tests/activity_devstack.py (live agent
+# activity: 500 synthetic hook calls, hostile fields, the ring, `board run`, the console, purge; about one minute). The script picks its own compose project, state dir
 # and loopback port, so it does not touch a stack on the runner. Not a required check yet (#737).
 on:
   pull_request:

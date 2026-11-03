@@ -28,7 +28,7 @@ esac
 SCHEMA="$HERE/schema.sql"
 TMP_ERR=$(mktemp "${TMPDIR:-/tmp}/board.XXXXXX") || exit 1
 TMP_LST=$(mktemp "${TMPDIR:-/tmp}/board.XXXXXX") || exit 1
-trap 'rm -f "$TMP_ERR" "$TMP_LST"' EXIT HUP INT TERM
+trap 'rm -f "$TMP_ERR" "$TMP_LST" "$TMP_LST.act"' EXIT HUP INT TERM
 LC_MESSAGES=C
 export LC_MESSAGES
 # The longest text a title, body, note, decision or closing text may have, in bytes. Bytes, not
@@ -78,6 +78,16 @@ usage: board <command> [arguments]
   bench-experiment, bench-arm, bench-task, bench-plan, bench-record, bench-rows, bench-list
                                 the tables of `board-bench` (experiments that compare agent
                                 configurations); programs use these, see CONVENTIONS.md, "board bench"
+  activity --tool T [--target X] [--outcome ok|error|denied] [--task ID] [--session S]
+           [--state working|idle|ended] [--flush]
+                                note what this agent is doing now (only with BOARD_ACTIVITY=1). At most
+                                one database write per agent and session per BOARD_ACTIVITY_INTERVAL
+                                seconds (default 5); the calls in between are counted locally
+  activity-list [--agent NAME] [--after ID] [--limit N]
+                                read only: the database time, the sessions and the newest log rows, as
+                                tagged tab separated lines (for programs; see CONVENTIONS.md)
+  activity-purge [--agent NAME | --all] [--yes]
+                                delete activity rows (your own by default) and the local counters
 
 Every write needs BOARD_AUTHOR set to this agent's unique name.
 USAGE
@@ -607,9 +617,15 @@ apply_schema() {
       *) fail_db ;;
     esac
   done
-  psql_run tuples "SELECT n FROM counters WHERE name = 'events';" || fail_db
+  seed_counter events
+  seed_counter activity
+}
+
+# seed_counter NAME: make sure counters has a row NAME (starting at 0).
+seed_counter() {
+  psql_run tuples "SELECT n FROM counters WHERE name = :'name';" -v name="$1" || fail_db
   if [ -z "$OUT" ]; then
-    if ! psql_run tuples "INSERT INTO counters (name, n) VALUES ('events', 0);"; then
+    if ! psql_run tuples "INSERT INTO counters (name, n) VALUES (:'name', 0);" -v name="$1"; then
       # Another init seeded the counter first: that is the state we want.
       case $(cat "$TMP_ERR") in
         *23505:*) ;;
@@ -1821,6 +1837,379 @@ cmd_bench_list() {
   [ -z "$OUT" ] || printf '%s\n' "$OUT"
 }
 
+# ---- agent activity -------------------------------------------------------------------------
+# What is each agent doing right now. See CONVENTIONS.md, "Agent activity", for the rules and the
+# privacy statement. The write path is rate limited HERE, so every caller (the Claude Code hook, board
+# run, a person) shares one limit: calls are appended to a small local file and one database write
+# carries all of them. A caller that makes 500 calls in 10 seconds causes two writes, not 500.
+
+# act_now: the local clock in epoch seconds (the rate limit compares this machine's clock with itself,
+# never with the database). BOARD_ACTIVITY_NOW replaces it only in test mode.
+act_now() {
+  if [ "${BOARD_TEST_MODE:-}" = 1 ] && [ -n "${BOARD_ACTIVITY_NOW:-}" ]; then
+    printf '%s' "$BOARD_ACTIVITY_NOW"
+  else
+    date +%s
+  fi
+}
+
+# act_clean_target TEXT: the label that is stored, whatever the caller passed. Control characters go,
+# a backslash becomes a slash, the user part of a URL and everything from the first ? or # on go (a
+# query string can carry a token), a byte outside printable ASCII becomes _, and 64 bytes are kept.
+# shellcheck disable=SC1003
+act_clean_target() {
+  printf '%s' "$1" | LC_ALL=C tr -d '\001-\037\177' | LC_ALL=C tr '\\' '/' \
+    | LC_ALL=C sed -e 's#^\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@#\1#' -e 's/[?#].*$//' \
+    | LC_ALL=C tr -c ' -~' '_' | LC_ALL=C cut -c1-64 | LC_ALL=C sed -e 's/^ *//' -e 's/ *$//'
+}
+
+# act_dir_trusted DIR: DIR exists (it is made with mode 0700), is a real directory, is yours and is 0700.
+act_dir_trusted() {
+  ( umask 077 && mkdir -p "$1" ) 2>/dev/null || return 1
+  [ ! -L "$1" ] && [ -d "$1" ] || return 1
+  adt_ls=$(ls -ldn "$1" 2>/dev/null) || return 1
+  [ "$(printf '%s\n' "$adt_ls" | awk '{ print $3 }')" = "$(id -u)" ] || return 1
+  [ "$(printf '%s\n' "$adt_ls" | cut -c1-10)" = 'drwx------' ]
+}
+
+# act_find_dir: ACT_DIR is the directory for the local counters, ACT_FLOOR the smallest number of
+# seconds between two database writes for it. The state directory (BOARD_STATE_DIR) is the first
+# choice. When it cannot be used, a private directory under TMPDIR is tried and writes are limited
+# to one per 30 seconds. When neither works nothing is written at all. Returns 1 for "neither".
+act_find_dir() {
+  ACT_FLOOR=0
+  afd_base=$(fence_dir)
+  if [ ! -L "$afd_base" ] && act_dir_trusted "$afd_base" && act_dir_trusted "$afd_base/activity"; then
+    ACT_DIR=$afd_base/activity
+    return 0
+  fi
+  ACT_FLOOR=30
+  ACT_DIR=${TMPDIR:-/tmp}/lattice-board-activity-$(id -u)
+  act_dir_trusted "$ACT_DIR"
+}
+
+# act_stamp_write FILE TEXT: replace FILE with TEXT in one step, so no reader sees a half written stamp.
+act_stamp_write() {
+  asw_tmp=$1.tmp.$$
+  if printf '%s\n' "$2" >"$asw_tmp" && mv "$asw_tmp" "$1"; then return 0; fi
+  rm -f "$asw_tmp"
+  return 1
+}
+
+# act_adopt PENDING PREFIX: put back the calls of a writer that was killed before it finished (its
+# work file is named PREFIX.work.PID and the process no longer runs).
+act_adopt() {
+  for aa_f in "$2".work.*; do
+    [ -f "$aa_f" ] && [ ! -L "$aa_f" ] || continue
+    aa_pid=${aa_f##*.}
+    case $aa_pid in '' | *[!0-9]*) continue ;; esac
+    if ! kill -0 "$aa_pid" 2>/dev/null; then
+      cat "$aa_f" >>"$1" 2>/dev/null && rm -f "$aa_f"
+    fi
+  done
+}
+
+# act_summarise FILE: the fields of the database row for the calls in FILE (one call per line:
+# tool, target, outcome, task, state, tab separated). Sets A_CALLS A_TOOL A_TARGET A_OUTCOME A_TASK
+# A_STATE A_MIX. Lines that are not a whole record are ignored; at most the newest 5000 are read.
+act_summarise() {
+  as_tmp=$TMP_LST.act
+  LC_ALL=C tail -n 5000 "$1" | LC_ALL=C awk -F'\t' 'NF == 5' >"$as_tmp"
+  A_CALLS=$(LC_ALL=C awk -F'\t' '$1 != "session-start" && $1 != "session-end" && $1 != "stop" && $1 != "prompt"' "$as_tmp" | wc -l | tr -d ' ')
+  as_last=$(tail -n 1 "$as_tmp")
+  A_TOOL=$(printf '%s\n' "$as_last" | cut -f1)
+  A_TARGET=$(printf '%s\n' "$as_last" | cut -f2)
+  A_OUTCOME=$(printf '%s\n' "$as_last" | cut -f3)
+  A_STATE=$(printf '%s\n' "$as_last" | cut -f5)
+  A_TASK=$(LC_ALL=C awk -F'\t' '$4 != "" { t = $4 } END { print t }' "$as_tmp")
+  A_MIX=$(LC_ALL=C awk -F'\t' '$1 != "session-start" && $1 != "session-end" && $1 != "stop" && $1 != "prompt" { c[$1]++ } END { for (k in c) print c[k] "\t" k }' "$as_tmp" \
+    | LC_ALL=C sort -k1,1nr -k2,2 | head -n 12 \
+    | LC_ALL=C awk -F'\t' '{ s = $2 "=" $1; if (length(out) + length(s) + 1 > 200) exit; out = out (out == "" ? "" : ",") s } END { print out }')
+  rm -f "$as_tmp"
+  [ -n "$A_TOOL" ] || return 1
+}
+
+# act_sql: the one script of a database write. Counter bump, database time, the session row (UPDATE when
+# this machine knows the row exists, INSERT when not), one log row, this agent's session rows older than
+# seven days deleted, then three reads that tell the helper about the ring and the row (see act_prune). A
+# read that can return no row is never \gset: psql treats that as an error. Every value is a psql variable.
+act_sql() {
+  cat <<'SQL'
+BEGIN;
+UPDATE counters SET n = n + 1 WHERE name = 'activity';
+SELECT n AS seq FROM counters WHERE name = 'activity' \gset
+SELECT CAST(extract(epoch FROM now()) AS bigint) AS dbnow \gset
+\if :known
+UPDATE agent_activity SET task_id = :'task', tool = :'tool', target = :'target', outcome = :'outcome',
+  state = :'state', tool_calls = tool_calls + :calls, last_seen = :dbnow WHERE id = :'key';
+\else
+INSERT INTO agent_activity (id, agent, session, task_id, tool, target, outcome, state, tool_calls, last_seen, started_at)
+  VALUES (:'key', :'author', :'session', :'task', :'tool', :'target', :'outcome', :'state', :calls, :dbnow, :dbnow);
+\endif
+INSERT INTO agent_activity_log (id, agent, session, task_id, tool, target, outcome, calls, mix, at)
+  VALUES (:seq, :'author', :'session', :'task', :'tool', :'target', :'outcome', :calls, :'mix', :dbnow);
+DELETE FROM agent_activity WHERE agent = :'author' AND last_seen < :dbnow - 604800;
+COMMIT;
+SELECT 'ring-over', id FROM agent_activity_log WHERE agent = :'author' ORDER BY id DESC LIMIT 1 OFFSET :over;
+SELECT 'ring-cut', id FROM agent_activity_log WHERE agent = :'author' ORDER BY id DESC LIMIT 1 OFFSET :keep;
+SELECT 'row', id FROM agent_activity WHERE id = :'key';
+SQL
+}
+
+# act_prune: the ring. act_sql printed "ring-over ID" when the agent's log holds more than KEEP + 50 rows and
+# "ring-cut ID" for the KEEP-th newest; the oldest rows go in one more statement. Pruning in steps of 50 keeps
+# the extra connection to one write in fifty. A failure here is harmless: the next write tries again.
+act_prune() {
+  ap_over=$(printf '%s\n' "$OUT" | awk -F"$TAB" '$1 == "ring-over" { print $2 }')
+  [ -n "$ap_over" ] || return 0
+  ap_cut=$(printf '%s\n' "$OUT" | awk -F"$TAB" '$1 == "ring-cut" { print $2 }')
+  case $ap_cut in '' | *[!0-9]*) return 0 ;; esac
+  psql_run tuples "DELETE FROM agent_activity_log WHERE agent = :'author' AND id <= :cut;" -v author="$AUTHOR" -v cut="$ap_cut" || :
+}
+
+# activity --tool T [--target X] [--outcome O] [--task ID] [--session S] [--state S] [--flush]
+cmd_activity() {
+  act_flush=0
+  act_n=$#
+  while [ "$act_n" -gt 0 ]; do
+    act_a=$1
+    shift
+    act_n=$((act_n - 1))
+    if [ "$act_a" = --flush ]; then act_flush=1; else set -- "$@" "$act_a"; fi
+  done
+  if [ "${BOARD_ACTIVITY:-0}" != 1 ]; then
+    printf 'board: activity recording is off; set BOARD_ACTIVITY=1 to turn it on (CONVENTIONS.md, "Agent activity")\n' >&2
+    return 0
+  fi
+  bench_opts "tool target outcome task session state" "$@"
+  [ "$BO_N" -eq 0 ] || die "activity takes options only"
+  # shellcheck disable=SC2154
+  act_tool=$BO_tool
+  case $act_tool in
+    '' | *[!A-Za-z0-9_.-]*) die "--tool must be 1 to 64 characters of letters, digits, '_', '.' and '-'" ;;
+  esac
+  [ ${#act_tool} -le 64 ] || die "--tool must be 1 to 64 characters of letters, digits, '_', '.' and '-'"
+  # shellcheck disable=SC2154
+  act_outcome=${BO_outcome:-ok}
+  case $act_outcome in ok | error | denied) ;; *) die "--outcome must be ok, error or denied" ;; esac
+  # shellcheck disable=SC2154
+  act_state=${BO_state:-working}
+  case $act_state in working | idle | ended) ;; *) die "--state must be working, idle or ended" ;; esac
+  # shellcheck disable=SC2154
+  act_task=$BO_task
+  if [ -n "$act_task" ]; then need_id "$act_task"; fi
+  # shellcheck disable=SC2154
+  act_session=${BO_session:-${BOARD_SESSION:-main}}
+  case $act_session in
+    '' | *[!A-Za-z0-9._-]*) die "--session may use only letters, digits, '.', '_' and '-' (up to 64)" ;;
+  esac
+  [ ${#act_session} -le 64 ] || die "--session may use only letters, digits, '.', '_' and '-' (up to 64)"
+  # shellcheck disable=SC2154
+  act_target=$(act_clean_target "$BO_target")
+  act_interval=${BOARD_ACTIVITY_INTERVAL:-5}
+  need_range BOARD_ACTIVITY_INTERVAL "$act_interval" 1 3600
+  act_keep=${BOARD_ACTIVITY_KEEP:-200}
+  need_range BOARD_ACTIVITY_KEEP "$act_keep" 1 10000
+
+  if ! act_find_dir; then
+    printf 'board: warning: no private directory for the activity counters; nothing recorded\n' >&2
+    return 0
+  fi
+  # "@" is in neither name: a+b.c and a.b+c must not share files (an author and a session may both contain dots).
+  act_prefix=$ACT_DIR/$AUTHOR@$act_session
+  act_pending=$act_prefix.pending
+  act_stamp=$act_prefix.last
+  [ ! -L "$act_pending" ] || die "$act_pending is a symbolic link; refusing it"
+  [ ! -L "$act_stamp" ] || die "$act_stamp is a symbolic link; refusing it"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$act_tool" "$act_target" "$act_outcome" "$act_task" "$act_state" >>"$act_pending" \
+    || die "cannot write $act_pending"
+  # A pending file that a dead process left grows without bound if the database stays away: keep the newest lines.
+  if [ "$(wc -c <"$act_pending" | tr -d ' ')" -gt 262144 ]; then
+    tail -n 2000 "$act_pending" >"$act_pending.cut.$$" && mv "$act_pending.cut.$$" "$act_pending"
+  fi
+  act_adopt "$act_pending" "$act_prefix"
+
+  act_now_s=$(act_now)
+  case $act_now_s in '' | *[!0-9]*) die "the clock gave no usable time" ;; esac
+  act_last=0 act_fails=0 act_known=0
+  if [ -f "$act_stamp" ]; then
+    read -r act_last act_fails act_known <"$act_stamp" || :
+    case $act_last in '' | *[!0-9]*) act_last=0 ;; esac
+    case $act_fails in '' | *[!0-9]*) act_fails=0 ;; esac
+    case $act_known in 1) ;; *) act_known=0 ;; esac
+  fi
+  # The wait grows with every failed write (2x each time, at most 300 s): a database that is away must not
+  # make every tool call of the agent pay for a connection attempt.
+  act_wait=$act_interval
+  [ "$act_wait" -ge "$ACT_FLOOR" ] || act_wait=$ACT_FLOOR
+  act_f=$act_fails
+  while [ "$act_f" -gt 0 ] && [ "$act_wait" -lt 300 ]; do
+    act_wait=$((act_wait * 2))
+    act_f=$((act_f - 1))
+  done
+  [ "$act_wait" -le 300 ] || act_wait=300
+  act_age=$((act_now_s - act_last))
+  if { [ "$act_flush" = 0 ] || [ "$act_fails" -gt 0 ]; } && [ "$act_age" -ge 0 ] && [ "$act_age" -lt "$act_wait" ]; then
+    printf 'activity noted; the next write is due in %s s\n' "$((act_wait - act_age))"
+    return 0
+  fi
+  act_work=$act_prefix.work.$$
+  # The stamp goes first, with the failure counted already, and as a whole file (a temporary file moved into
+  # place): a caller that arrives while this one talks to the database finds a complete stamp and waits, and a
+  # writer that is killed in the middle (the hook gives up after 3 seconds) has still left the backoff behind.
+  # A success resets the count below.
+  act_stamp_write "$act_stamp" "$act_now_s $((act_fails + 1)) $act_known" || die "cannot write $act_stamp"
+  # Whoever moves the pending file owns its calls. A second caller that got here at the same moment finds
+  # no file and leaves.
+  mv "$act_pending" "$act_work" 2>/dev/null || { printf 'activity noted\n'; return 0; }
+  if ! act_summarise "$act_work"; then
+    rm -f "$act_work"
+    return 0
+  fi
+
+  act_sql_text=$(act_sql)
+  act_try=0
+  act_ok=0
+  CONN_TRIES_SAVED=${BOARD_CONNECT_TRIES:-}
+  BOARD_CONNECT_TRIES=${BOARD_ACTIVITY_CONNECT_TRIES:-1}
+  PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-2}
+  export PGCONNECT_TIMEOUT
+  while :; do
+    act_try=$((act_try + 1))
+    act_known_v=f
+    if [ "$act_known" = 1 ]; then act_known_v=t; fi
+    if psql_run tuples "$act_sql_text" -v author="$AUTHOR" -v key="$AUTHOR/$act_session" -v session="$act_session" \
+      -v task="$A_TASK" -v tool="$A_TOOL" -v target="$A_TARGET" -v outcome="$A_OUTCOME" -v state="$A_STATE" \
+      -v calls="$A_CALLS" -v mix="$A_MIX" -v keep="$act_keep" -v over="$((act_keep + 50))" -v known="$act_known_v"; then
+      act_ok=1
+      # No "row" line: the session row is missing although this machine thought it was there (purged, or
+      # older than a week). The next write inserts it again.
+      if printf '%s\n' "$OUT" | awk -F"$TAB" '$1 == "row" { f = 1 } END { exit f ? 0 : 1 }'; then act_known=1; else act_known=0; fi
+      break
+    fi
+    case $(cat "$TMP_ERR") in
+      *40001:*)
+        [ "$act_try" -lt 3 ] || break
+        sleep "0.0$((($(od -An -N1 -tu1 /dev/urandom) + act_try) % 9 + 1))"
+        ;;
+      *23505:*)
+        # The INSERT found the session row (another machine or a lost stamp wrote it): update it instead.
+        if [ "$act_known" = 0 ] && [ "$act_try" -lt 3 ]; then act_known=1; else break; fi
+        ;;
+      *) break ;;
+    esac
+  done
+  if [ -z "$CONN_TRIES_SAVED" ]; then unset BOARD_CONNECT_TRIES; else BOARD_CONNECT_TRIES=$CONN_TRIES_SAVED; fi
+  if [ "$act_ok" = 1 ]; then
+    act_prune
+    rm -f "$act_work"
+    act_stamp_write "$act_stamp" "$act_now_s 0 $act_known" || :
+    printf 'activity written (%s calls)\n' "$A_CALLS"
+    return 0
+  fi
+  # Nothing is lost: the calls go back to the pending file for the next attempt.
+  cat "$act_work" >>"$act_pending" 2>/dev/null && rm -f "$act_work"
+  act_stamp_write "$act_stamp" "$act_now_s $((act_fails + 1)) $act_known" || :
+  case $(cat "$TMP_ERR") in
+    *42P01:*) die "the activity tables do not exist: run board init (or board migrate) once" ;;
+  esac
+  fail_db
+}
+
+# activity-list [--agent NAME] [--after ID] [--limit N]: read only, tagged tab separated lines:
+#   now SECONDS                                           the database clock
+#   session ID AGENT SESSION TASK TOOL TARGET OUTCOME STATE CALLS LAST_SEEN STARTED_AT    newest 200 by last_seen
+#   log ID AGENT SESSION TASK TOOL TARGET OUTCOME CALLS MIX AT      rows with id above ID, oldest first
+# Written by the helper, the text fields are one line without tabs; rows written by hand may break that.
+cmd_activity_list() {
+  bench_opts "agent after limit" "$@"
+  [ "$BO_N" -eq 0 ] || die "activity-list takes options only"
+  # shellcheck disable=SC2154
+  al_agent=$BO_agent
+  [ -z "$al_agent" ] || need_name --agent "$al_agent"
+  # shellcheck disable=SC2154
+  al_after=${BO_after:-0}
+  need_int after "$al_after"
+  # shellcheck disable=SC2154
+  al_limit=${BO_limit:-100}
+  need_range --limit "$al_limit" 1 1000
+  db_now
+  printf 'now\t%s\n' "$DBNOW"
+  if [ -n "$al_agent" ]; then
+    al_where="WHERE agent = :'agent'"
+    al_and="AND agent = :'agent'"
+  else
+    al_where=''
+    al_and=''
+  fi
+  act_list_read "SELECT id, agent, session, task_id, tool, target, outcome, state, tool_calls, last_seen, started_at
+FROM agent_activity $al_where ORDER BY last_seen DESC LIMIT 200;" session -v agent="$al_agent"
+  act_list_read "SELECT id, agent, session, task_id, tool, target, outcome, calls, mix, at
+FROM agent_activity_log WHERE id > :after $al_and ORDER BY id LIMIT :lim;" log -v agent="$al_agent" -v after="$al_after" -v lim="$al_limit"
+}
+
+# act_list_read SQL TAG VARS...: run a read and print its rows with the tag in front.
+act_list_read() {
+  alr_sql=$1
+  alr_tag=$2
+  shift 2
+  if ! psql_run tuples "$alr_sql" "$@"; then
+    case $(cat "$TMP_ERR") in
+      *42P01:*) die "the activity tables do not exist: run board init (or board migrate) once" ;;
+    esac
+    fail_db
+  fi
+  [ -z "$OUT" ] || printf '%s\n' "$OUT" | awk -F"$TAB" -v tag="$alr_tag" '{ print tag "\t" $0 }'
+}
+
+# activity-purge [--agent NAME | --all] [--yes]: delete the activity rows of this agent (BOARD_AUTHOR) or of
+# another one or of everybody, and this machine's local counters of the agent. Other agents and --all need --yes.
+cmd_activity_purge() {
+  ap_yes=0 ap_all=0 ap_agent=$AUTHOR
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --yes) ap_yes=1; shift ;;
+      --all) ap_all=1; shift ;;
+      --agent) [ $# -ge 2 ] || die "--agent needs a value"; ap_agent=$2; shift 2 ;;
+      *) die "unknown argument for activity-purge: $1" ;;
+    esac
+  done
+  need_name --agent "$ap_agent"
+  if [ "$ap_all" = 1 ] && [ "$ap_agent" != "$AUTHOR" ]; then
+    die "--all and --agent exclude each other: --all means every agent, --agent names one"
+  fi
+  if [ "$ap_all" = 1 ] || [ "$ap_agent" != "$AUTHOR" ]; then
+    [ "$ap_yes" = 1 ] || die "deleting the activity of other agents needs --yes"
+  fi
+  if [ "$ap_all" = 1 ]; then
+    psql_run tuples "SELECT id FROM agent_activity_log ORDER BY id LIMIT 100000;" || act_list_read_fail
+    ap_n=$(count_lines "$OUT")
+    psql_run tuples "DELETE FROM agent_activity_log WHERE id >= 0;" || fail_db
+    psql_run tuples "DELETE FROM agent_activity WHERE last_seen >= 0;" || fail_db
+  else
+    psql_run tuples "SELECT id FROM agent_activity_log WHERE agent = :'agent' ORDER BY id LIMIT 100000;" -v agent="$ap_agent" || act_list_read_fail
+    ap_n=$(count_lines "$OUT")
+    psql_run tuples "DELETE FROM agent_activity_log WHERE agent = :'agent';" -v agent="$ap_agent" || fail_db
+    psql_run tuples "DELETE FROM agent_activity WHERE agent = :'agent';" -v agent="$ap_agent" || fail_db
+  fi
+  # The local counters of the agents purged here. A file this machine does not hold is simply absent.
+  if act_find_dir; then
+    if [ "$ap_all" = 1 ]; then
+      rm -f "$ACT_DIR"/*.pending "$ACT_DIR"/*.last "$ACT_DIR"/*.work.* 2>/dev/null
+    else
+      rm -f "$ACT_DIR/$ap_agent"@*.pending "$ACT_DIR/$ap_agent"@*.last "$ACT_DIR/$ap_agent"@*.work.* 2>/dev/null
+    fi
+  fi
+  printf 'activity purged: %s log rows deleted\n' "${ap_n:-0}"
+}
+
+act_list_read_fail() {
+  case $(cat "$TMP_ERR") in
+    *42P01:*) die "the activity tables do not exist: run board init (or board migrate) once" ;;
+  esac
+  fail_db
+}
+
 [ $# -ge 1 ] || { usage >&2; exit 1; }
 command -v "${BOARD_PSQL:-psql}" >/dev/null 2>&1 || die "psql is not on PATH"
 
@@ -1849,7 +2238,7 @@ cmd=$1
 shift
 case $cmd in
   add | claim | note | done | decide | heartbeat | fail | release | reap | block | unblock | approve | cancel \
-    | bench-experiment | bench-arm | bench-task | bench-plan | bench-record)
+    | bench-experiment | bench-arm | bench-task | bench-plan | bench-record | activity | activity-purge)
     need_author
     ;;
 esac
@@ -1885,6 +2274,9 @@ case $cmd in
   bench-record) cmd_bench_record "$@" ;;
   bench-rows) cmd_bench_rows "$@" ;;
   bench-list) cmd_bench_list "$@" ;;
+  activity) cmd_activity "$@" ;;
+  activity-list) cmd_activity_list "$@" ;;
+  activity-purge) cmd_activity_purge "$@" ;;
   help | -h | --help) usage ;;
   *) usage >&2; exit 1 ;;
 esac

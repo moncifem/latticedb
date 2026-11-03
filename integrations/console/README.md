@@ -51,6 +51,21 @@ Tests: `python3 -m unittest discover -s integrations/console/tests` (about four 
   lease ran out and was not reaped yet, a task that is `dead` (out of attempts), and an open task that
   waits for a blocker that is dead, cancelled, missing, or for a dependency cycle, so it can never run.
   Each rule is printed on the page.
+- **Live activity on Now and the Agent screen.** When agents report what they do (`BOARD_ACTIVITY=1`, see
+  "Agent activity" in `integrations/board/CONVENTIONS.md`), the agents table gains three columns: tool activity,
+  doing now and a sparkline of the last hour. An agent that reports but never touched the board is listed too.
+  States, from the last report of the agent's newest session: `working` (a report in the last 120 s), `quiet`
+  (the agent holds a task and the last report is older), `stuck?` (older than `--quiet-minutes`, default 10,
+  while a task the agent holds has a live lease; the page says "no tool activity for 12 min", never that the
+  agent is stuck), `idle` (holds no task). The needs-attention strip gains "claimed but no tool activity
+  (heartbeat alive)". `#/agent/NAME` shows the agent's sessions, its timeline (the newest 200 rows, filtered by
+  tool, outcome or task, each linked to its task), a tool mix, and an active time estimate (the sum of gaps under
+  60 seconds between the writes the hook made, labelled as an estimate). `/api/agent?name=...` takes `tool`,
+  `outcome`, `task`, `limit` (up to 200) and `after` (an activity log id: the rows after it). The scorecard gains
+  a diagnostic, active time per done task, for the tasks whose whole span the console watched, with n and
+  "not enough data" under 5 tasks; it is listed by name and not ranked. The demo has a working, a quiet, a
+  stuck-looking and an idle agent. A board without the activity tables, or an account that may not read them,
+  shows a note and every other screen works.
 - **Queue** (`#/queue`). Six sections built from `tasks` and `task_leases`: runnable now (what
   `board next` would take, highest priority and oldest first), blocked (with each blocker and its state;
   "for ever" when a blocker can never finish), claimed (owner, lease time left or overdue, age of the last
@@ -112,7 +127,9 @@ used. They do not say whether the finished work is correct.
 
 ## What it reads
 
-Fixed `SELECT` statements over `tasks`, `events`, `decisions` and `task_leases` through `psql`, one
+Fixed `SELECT` statements over `tasks`, `events`, `decisions` and `task_leases` (and, for live activity,
+`agent_activity` and `agent_activity_log`: the newest 500 sessions by `last_seen`, then the log newest first
+once and `id` above the last one it holds after that, at most 20000 rows kept) through `psql`, one
 table per statement (the alpha subset has no joins) and no aggregates (the board conventions say there
 are none), so counts and statistics are computed in Python. The one other statement is the database
 clock, `SELECT CAST(extract(epoch FROM now()) AS bigint);`. The Experiments screen reads `bench_experiments`,
@@ -183,7 +200,13 @@ The console does not authenticate users and does not use TLS. Do not forward its
   the decisions metric when the decisions window is full (the source cannot say exactly, so a full window
   is reported as possibly cut). The completion-rate warning compares time since the first claim with the
   median claim-to-done time, and counts open tasks separately.
-- No history of its own: stale and "now" figures are snapshots, and nothing is stored.
+- No history of its own: stale and "now" figures are snapshots, and nothing is stored. The activity log is a
+  ring of 200 writes per agent in the database, so the sparkline and the active time cover what the console
+  watched or the ring still holds, not a full hour for a busy agent that the console just started to watch.
+- Activity is self-reported by the agent's own hook and sampled (one write per session per 5 seconds by default):
+  a compromised agent can report anything, names are self-declared, the newest calls wait for the next write, and
+  only Claude Code hooks are verified; other agents appear through `board run` only. No real model session was
+  run against it. The Now and Agent screens were looked at in a browser with the demo data.
 - Needs `psql` on `PATH`; there is no direct pgwire client.
 - No push channel; the page polls.
 - The scorecard windows select tasks by creation time, so a task created before a window and finished

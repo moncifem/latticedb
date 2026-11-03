@@ -47,6 +47,7 @@ Status: alpha. This is a dogfooding tool, not a product. Test it before you rely
 | `board run [OPTIONS] -- COMMAND` | A worker: take tasks with `next` and run COMMAND for each (see "`board run`: a worker for any command or agent"). |
 | `board queue` | Read only. The database time, every task that is not done or cancelled, its lease row and the state of its blockers, as tagged tab separated lines (`now`, `task`, `lease`, `blocker`), at most 200 tasks. For programs: `board-mcp` and the SessionStart hook sort it into the console's queue sections. |
 | `board bench-experiment`, `bench-arm`, `bench-task`, `bench-plan`, `bench-record`, `bench-rows`, `bench-list` | The tables of `board-bench` (see "`board bench`" below). Written for programs; `bench-record` is fenced. |
+| `board activity --tool T [--target X] ...`, `board activity-list`, `board activity-purge` | What each agent is doing right now (see "Agent activity" below). Off unless `BOARD_ACTIVITY=1`; writes are rate limited by the helper. |
 
 `note` and `done` also take `--fence N`. Exit codes: 0 ok, 1 error (bad input, no such task, task
 dead or cancelled, database down), 2 claim not won, 3 lease lost (the fence refused the write), 4
@@ -508,6 +509,133 @@ The rules it adds to the board:
 - Read side: `board bench-rows NAME` (tagged tab separated lines: `experiment`, `arm`, `task`, `attempt`) and
   `board bench-list`; the console reads the same tables with fixed `SELECT`s.
 
+## Agent activity: what is each agent doing right now
+
+The board shows tasks and events; while an agent works for an hour on one task it shows "claimed, last note 14
+minutes ago". Agent activity adds what the agent's own tooling can report cheaply: the last tool, a short label,
+a sampled count of calls. It is **off unless `BOARD_ACTIVITY=1`** because it records tool usage.
+
+**What is stored.** Two tables, created by `board init` and `board migrate` (an older board keeps working without
+them; the console says so):
+
+- `agent_activity`, one row per agent and session, replaced in place: `tool` (a name of up to 64 characters of
+  `A-Za-z0-9_.-`), `target` (a label of up to 64 printable ASCII characters, see below), `outcome` (`ok`, `error`
+  or `denied`), `state` (`working`, `idle` or `ended`), `task_id` (the task this agent holds a lease on, or empty),
+  `tool_calls` (a counter), `last_seen` and `started_at` (the database clock).
+- `agent_activity_log`, the timeline: the newest 200 writes of each agent (up to 250 between prunes;
+  `BOARD_ACTIVITY_KEEP` sets the 200). One row is one write, not one tool call: `calls` says how many calls the
+  write stands for and `mix` says which (`Bash=3,Edit=2`).
+
+The schema is the smallest that supports the console's views. `tool_calls`, `calls` and `mix` exist so the
+sparkline and the tool mix are not a guess from sampled rows; `state` exists to tell a finished turn (`idle`) from a
+running one; `task_id` is `''` rather than NULL so no writer needs a typed NULL. Rows of an agent older than seven
+days are deleted by that agent's next write.
+
+**What is never stored.** No file content, no command line (only the first word, see below), no prompt, no tool
+output, no search pattern, no URL, no model text, no path above the last two components, no environment value. The
+helper cleans the label itself, whatever the caller sends: control characters (ANSI escapes included) are dropped, a
+backslash becomes `/`, the user part of a URL and everything from the first `?` or `#` are dropped, every byte
+outside printable ASCII becomes `_`, and 64 bytes are kept.
+
+**Commands.**
+
+```
+board activity --tool T [--target X] [--outcome ok|error|denied] [--task ID] [--session S]
+               [--state working|idle|ended] [--flush]
+board activity-list [--agent NAME] [--after ID] [--limit N]
+board activity-purge [--agent NAME | --all] [--yes]
+```
+
+`activity` is authored by `BOARD_AUTHOR` like every write: the name is self-declared, and so is everything else. The
+session defaults to `$BOARD_SESSION`, then `main`. `activity-list` is read only and prints tagged tab separated lines
+for programs: `now SECONDS`, `session ID AGENT SESSION TASK TOOL TARGET OUTCOME STATE CALLS LAST_SEEN STARTED_AT`
+(newest 200), `log ID AGENT SESSION TASK TOOL TARGET OUTCOME CALLS MIX AT` (rows with an id above `--after`, oldest
+first, at most `--limit`, default 100). `activity-purge` deletes your own rows (or another agent's with `--agent NAME
+--yes`, or everyone's with `--all --yes`; the two options exclude each other) and this machine's local counters of
+that agent; it prints how many log rows it deleted. There is no authority behind it: the board trusts every client's
+self-declared name, so any client that can write can purge anyone's rows. A running console drops purged rows from
+its copy on its next refresh (it compares its rows with the session rows it reads each time).
+
+**The rate limit is in the helper, so every caller shares it.** `board activity` first appends the call to a small
+file in `$BOARD_STATE_DIR/activity/` (mode 0700, owned by you; a symbolic link or a looser mode is refused; the files
+are named `AUTHOR@SESSION.pending`, `.last` and `.work.PID`, and `@` is in neither name). It
+writes to the database only when `BOARD_ACTIVITY_INTERVAL` seconds (default 5) have passed since this agent and
+session last wrote, or with `--flush`, and then one write carries every call held back. A burst of 500 calls in 10
+seconds is two writes. Two callers at the same moment do not write the same calls twice (whoever moves the pending
+file owns its calls); a writer that was killed leaves its calls for the next one. A failed write puts the calls
+back, and the wait doubles with every failure (up to 300 seconds; `--flush` honours the wait too once a write has
+failed), so a database that is away costs one connection attempt per wait, not one per tool call. The failure is
+counted in the local stamp (written as a whole file, atomically) BEFORE the attempt, so a writer that is killed in the
+middle still leaves the backoff behind. When the state directory cannot be used the helper tries a private
+directory under `$TMPDIR` and writes at most once per 30 seconds; when that fails too it writes nothing. A write is
+one `psql` connection and gives up after one connection try (`BOARD_ACTIVITY_CONNECT_TRIES`, default 1) and 2 s of
+connect time (`PGCONNECT_TIMEOUT`), which fits the hook's 3 second budget; a host that drops packets therefore blocks
+a tool call for at most about 3 seconds, once per wait, not once per call.
+
+Load against the alpha limit: `latticed` drops new TLS connections above 16 per second per address
+([alpha.md](../../docs/alpha.md)). In the steady state one address with N active sessions makes about N/5 connections
+per second for activity, so roughly 80 sessions reach the limit by themselves. That is a floor, not a ceiling: the
+`--flush` writes (`Stop`, `SessionStart`, `SessionEnd`), the prune connection (about 1 write in 50 of an agent), and the
+retries after a conflict (`40001`, up to 3 tries per write) or a duplicate row (`23505`) add connections, and the board's
+own commands and the console (several short connections per refresh) come on top. All activity writes bump the one
+`counters` row named `activity`, so many agents can conflict with each other (`40001`); the helper retries 3 times, and
+a write that still fails puts its calls back in the pending file, so nothing is lost, but the wait doubles. The dev
+stack lifts the limit to 1000. The trade-off of sampling: the newest calls are not visible until the next write, which
+happens at the next call after the interval, or at the end of the turn (`Stop`) or session. A `SessionEnd` hook gets
+1.5 s unless it declares a longer `timeout` (the plugin sets 5), and the hook's own budget is 3 s, so the `ended` write
+can be lost; the row then simply ages (quiet or idle by the usual rules, `ended` is never guessed).
+
+**The Claude Code hook.** `hooks/activity-hook.py` is registered by the board plugin (`hooks/hooks.json`) for
+`PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`,
+and by `hooks/settings.activity.example.json` for a project without the plugin. It does nothing unless
+`BOARD_ACTIVITY=1` and `BOARD_AUTHOR` are in the environment of the Claude Code process (a hook inherits it), plus the
+connection settings the helper needs. It reads the JSON on stdin with a size cap (1 MiB) and a deadline, derives the
+label, links the task, and runs `board activity` with a hard budget of 3 seconds, killing the helper's whole process
+group after that. It always exits 0, prints nothing on stdout (Claude Code adds the stdout of some events to the
+model's context) and writes only fixed one-line messages to stderr, never the helper's own messages (they can name a
+host or a user).
+
+- File tools (`Read`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`): the last two components of `file_path` (or
+  `notebook_path`), such as `src/main.rs`; `.`, `..` and empty components do not count, so `../../etc/passwd` is
+  `etc/passwd`, and everything from the first `?` or `#` is cut first (in the hook and again in the helper).
+  **A secret in a directory name is stored** (`secrets-prod/key.pem` is stored as it is): the last two components are
+  the price of telling two files called `README.md` apart, and the hook cannot know which names are sensitive. Where
+  that matters, do not enable the hook (leave `BOARD_ACTIVITY` unset) or purge afterwards.
+- `Bash`: the first word of the command (its base name, at most 16 characters, starting with a letter or digit), plus
+  ` [test]` or ` [build]` when the first words are a test or build command (`cargo test`, `pytest`, `npm run build`,
+  `make`). Anything else is `shell`: a first word that is not a plain program name or is longer than 16 characters (a
+  pasted token), a subshell, and every command that starts with `NAME=value` (its value can be a secret, and an
+  escaped space would otherwise leak the rest of it). Nothing after the first word is read into the label beyond that
+  class. A short secret typed as the program name itself cannot be told from a program and is stored.
+- Every other tool: its name, no label. `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd` are the pseudo
+  tools `prompt`, `stop`, `session-start` and `session-end` and are not counted as tool calls.
+- The task: if the state directory holds `AUTHOR.TASKID` (the file `board claim` leaves; only the name is read, never the
+  fence in it) or `board-mcp`'s `mcp-leases.AUTHOR.json` (only the `task` fields), the newest one within a week is
+  linked. A leftover file from a crashed agent can link a task the agent no longer holds.
+
+Payload fields used, from the client's hook reference (fetched 2026-11-03): `session_id`, `hook_event_name`,
+`tool_name`, `tool_input.file_path`, `tool_input.notebook_path`, `tool_input.command`; `PostToolUseFailure` fires for a
+tool that failed and `PostToolUse` for one that succeeded; the `SessionEnd` input has a `reason` (not used); a
+`SessionEnd` hook gets 1.5 s unless it declares a longer `timeout` (the plugin sets 5). Not verified: the input
+fields of `PermissionDenied` (the hook assumes `tool_name` and records `unknown` without it) and the exact `tool_response`
+shapes (not used). `claude plugin validate` accepts the plugin's hooks file. No real Claude Code session was run.
+
+**Disable and purge.** Unset `BOARD_ACTIVITY` (or remove the hooks): nothing more is written. To delete what was
+written, `board activity-purge` (yours) or `board activity-purge --all --yes`. Rows of an agent older than a week
+also go on their own. The local counters are in `$BOARD_STATE_DIR/activity/` and are removed by the purge.
+
+**`board run` publishes a row for its child** when `BOARD_ACTIVITY=1` is set for the runner: tool `agent-run`,
+target the agent template name (`claude`, `codex`) or the command's base name, session `run-PID`, `working` with the
+task while the child runs (refreshed at each heartbeat) and `idle` with outcome `ok` or `error` when it ends, `ended`
+when the runner stops. This is how an agent without a hook shows up. The child itself does not get the variable.
+
+**Limits, said plainly.** The rows are self-reported by the agent's own hook: a compromised or careless agent can
+report anything, and names are self-declared like everywhere on the board. Sampling means gaps: a row stands for the
+calls since the one before, and the newest calls wait for the next write. Only Claude Code hooks are verified
+(by their documented payload and by driving the hook with synthetic payloads, not with a real session); every other
+agent appears only through `board run`. "No tool activity for 12 minutes" is what the rows show, not a diagnosis:
+the agent may be thinking, waiting for a person, or running a long command.
+
 ## Maintainer: follow the board
 
 1. Start a cursor: `CURSOR=$(board head)`.
@@ -526,7 +654,7 @@ skips every event it has not yet handled.
 
 `integrations/console` is a read-only web console for this board: agents and what needs attention, the
 queue (runnable, blocked, leases, retries, dead letter, approvals), a live event feed, one task with its
-parents and children, and a scorecard per agent. It reads the
+parents and children, a scorecard per agent, and, when agents report it, what each one is doing now. It reads the
 tables above through `psql` with the same connection settings as this helper and never writes. It is
 alpha and local only. See `integrations/console/README.md`; `lattice-console serve --demo` shows it
 with generated data and no database.

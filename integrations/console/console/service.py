@@ -14,7 +14,9 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 
+from . import activity as act
 from . import bench, metrics, model
+from .source import SourceError, scrub
 
 TASK_LIMIT = 5000
 EVENT_WINDOW = 20000
@@ -25,6 +27,10 @@ FAIL_BACKOFF_S = 2.0  # after a failed read, answer from the failure instead of 
 SCORECARD_CACHE = 16
 BENCH_CACHE = 8
 BENCH_TTL_S = 5.0  # an experiment report costs a bootstrap per pair of arms; reuse it for a few seconds
+ACTIVITY_SESSIONS = 500  # session rows read per refresh (newest by last_seen)
+ACTIVITY_WINDOW = 5000  # log rows read the first time; the board keeps a ring of 200 per agent
+ACTIVITY_PAGE = 2000
+ACTIVITY_RETRY_S = 30.0  # after "no activity tables" or a refusal, ask again this often
 WINDOW_ROUND_S = 60  # scorecard window edges are rounded to a minute so varying them cannot flood the CPU
 
 
@@ -41,6 +47,12 @@ class Snapshot:
     leases: list = field(default_factory=list)
     leases_available: bool = False
     clock: str = "database"
+    activity_sessions: list = field(default_factory=list)
+    activity_log: list = field(default_factory=list)
+    activity_available: bool = False
+    activity_note: str = ""
+    quiet_s: int = 600
+    _activity: Optional[dict] = None
     _queue: Optional[dict] = None
     _facts: Optional[list] = None
     _by_id: Optional[dict] = None
@@ -68,6 +80,20 @@ class Snapshot:
     def head(self) -> int:
         return self.events[-1]["id"] if self.events else 0
 
+    @property
+    def activity_head(self) -> int:
+        return self.activity_log[-1]["id"] if self.activity_log else 0
+
+    @property
+    def activity(self) -> dict:
+        """{agent: activity block or None} for every agent the board knows."""
+        if self._activity is None:
+            names = sorted({e["author"] for e in self.events} | {t["owner"] for t in self.tasks if t.get("owner")}
+                           | {x["agent"] for x in self.activity_sessions})
+            self._activity = act.activity_for_agents(names, self.activity_sessions, self.activity_log, self.tasks,
+                                                     self.queue, self.now, self.quiet_s)
+        return self._activity
+
 
 def _round_window(w: tuple) -> tuple:
     r = WINDOW_ROUND_S
@@ -76,11 +102,16 @@ def _round_window(w: tuple) -> tuple:
 
 class BoardService:
     def __init__(self, source, stale_minutes: int = 30, open_hours: int = 24, ttl: float = 1.0,
-                 clock=time.monotonic):
+                 clock=time.monotonic, quiet_minutes: int = 10):
         if not 1 <= stale_minutes <= 60 * 24 * 30:
             raise ValueError("stale_minutes must be between 1 and 43200")
         if not 1 <= open_hours <= 24 * 365:
             raise ValueError("open_hours must be between 1 and 8760")
+        if not 1 <= quiet_minutes <= 60 * 24:
+            raise ValueError("quiet_minutes must be between 1 and 1440")
+        self.quiet_s = quiet_minutes * 60
+        self._activity_retry_at = 0.0
+        self._activity_cursor = 0  # the newest log id read; rows dropped from the copy must not be read again
         self.source = source
         self.stale_s = stale_minutes * 60
         self.open_s = open_hours * 3600
@@ -154,9 +185,52 @@ class BoardService:
         leases, available = read_leases(TASK_LIMIT) if read_leases else ([], False)
         now = src.now()  # after the reads: the source learns which clock answered
         clock = getattr(src, "clock_source", "database")
+        a_sessions, a_log, a_ok, a_note = self._refresh_activity(old)
         self._snap = Snapshot(old.version + 1, tasks, events, decisions, now, tr, trunc_ev, trunc_dec,
-                              leases, available, clock)
+                              leases, available, clock, a_sessions, a_log, a_ok, a_note, self.quiet_s)
         self._cache = OrderedDict()
+
+    def _refresh_activity(self, old: Snapshot) -> tuple:
+        """(sessions, log rows, available, note). Never raises: a board without the activity tables, or an
+        account that may not read them, still gets every other screen."""
+        src = self.source
+        if not hasattr(src, "activity_sessions"):
+            return [], [], False, ""
+        if not old.activity_available and old.version and self.clock() < self._activity_retry_at:
+            return [], [], False, old.activity_note
+        try:
+            raw, available = src.activity_sessions(ACTIVITY_SESSIONS)
+            if not available:
+                self._activity_retry_at = self.clock() + ACTIVITY_RETRY_S
+                return [], [], False, "The activity tables are not there or this account may not read them (board init creates them)."
+            sessions = [r for r in (act.clean_session(x) for x in raw) if r is not None]
+            log_rows = list(old.activity_log) if old.activity_available else []
+            judged_up_to = self._activity_cursor  # rows above it arrive in this refresh and are judged in the next
+            if not log_rows:
+                log_rows = [r for r in (act.clean_log(x) for x in src.activity_latest(ACTIVITY_WINDOW)) if r]
+                log_rows.sort(key=lambda r: r["id"])
+                self._activity_cursor = log_rows[-1]["id"] if log_rows else 0
+            else:
+                for _ in range(MAX_PAGES_PER_REFRESH):
+                    new = src.activity_after(self._activity_cursor, ACTIVITY_PAGE)
+                    fresh = sorted((r for r in (act.clean_log(x) for x in new) if r), key=lambda r: r["id"])
+                    log_rows = act.merge_log(log_rows, fresh)
+                    if fresh:
+                        self._activity_cursor = max(self._activity_cursor, fresh[-1]["id"])
+                    if len(new) < ACTIVITY_PAGE:
+                        break
+            # Rows the board no longer holds (board activity-purge) must not stay in this copy.
+            # A session can start between the two reads (or write its log row before its session row exists), so a row
+            # that arrived just now may have no session row yet: only the rows held before this refresh are judged.
+            held = [r for r in log_rows if r["id"] <= judged_up_to]
+            fresh_rows = [r for r in log_rows if r["id"] > judged_up_to]
+            log_rows = act.drop_purged(held, sessions, len(raw) >= ACTIVITY_SESSIONS) + fresh_rows
+            return sessions, log_rows, True, ""
+        except SourceError as e:
+            self._activity_retry_at = self.clock() + ACTIVITY_RETRY_S
+            # Keep what was read before: a hiccup must not blank the screens.
+            return (old.activity_sessions, old.activity_log, old.activity_available,
+                    "Activity could not be read: " + scrub(str(e))[:200])
 
     # ---------------------------------------------------------------- answers
 
@@ -167,6 +241,7 @@ class BoardService:
             "now": snap.now,
             "clock": snap.clock,
             "leases_available": snap.leases_available,
+            "activity_available": snap.activity_available,
             "stale_minutes": self.stale_s // 60,
             "open_hours": self.open_s // 3600,
             "truncated": {"tasks": snap.truncated_tasks, "events": snap.truncated_events,
@@ -176,6 +251,17 @@ class BoardService:
     def now_payload(self) -> dict:
         s = self.snapshot()
         agents = model.build_agents(s.tasks, s.events, s.facts, s.now, self.stale_s)
+        for a in agents:
+            a["activity"] = s.activity.get(a["name"]) if s.activity_available else None
+        if s.activity_available:
+            # An agent that reports activity but never touched the board (a plain session with a BOARD_AUTHOR)
+            # is still an agent worth seeing.
+            known = {a["name"] for a in agents}
+            for name in sorted({x["agent"] for x in s.activity_sessions} - known):
+                agents.append({"name": name, "state": "idle", "current_task": None, "claimed": [], "last_event": None,
+                               "events": 0, "tasks_done": 0, "activity": s.activity.get(name)})
+            order = {"stale": 0, "working": 1, "idle": 2}
+            agents.sort(key=lambda a: (order[a["state"]], a["name"]))
         return {
             "meta": self.meta(s),
             "counts": model.counts_by_state(s.tasks),
@@ -184,6 +270,10 @@ class BoardService:
             "attention": self._attention(s),
             "queue_totals": s.queue["totals"],
             "head": s.head,
+            "activity": {"available": s.activity_available, "head": s.activity_head, "note": s.activity_note,
+                         "working_s": act.WORKING_S, "quiet_minutes": self.quiet_s // 60,
+                         "strip_minutes": act.STRIP_MINUTES,
+                         "states": act.STATE_TEXT},
         }
 
     def _attention(self, s: Snapshot) -> dict:
@@ -192,6 +282,8 @@ class BoardService:
         rules = dict(a["rules"])
         rules.update(extra.pop("queue_rules"))
         a.update(extra)
+        a["quiet_claims"] = (act.quiet_claims(s.activity, s.by_id, s.queue, s.now) if s.activity_available else [])
+        rules["quiet_claims"] = act.QUIET_RULE % (self.quiet_s // 60)
         a["rules"] = rules
         return a
 
@@ -245,6 +337,23 @@ class BoardService:
             "has_more": has_more,
         }
 
+    def agent_payload(self, name: str, tool, outcome, task, limit: int, after) -> Optional[dict]:
+        """The agent screen: its sessions, its timeline (newest first, or the rows after a cursor), the tool
+        mix, the active time estimate. None when nothing in the loaded data knows the agent."""
+        s = self.snapshot()
+        known = ({e["author"] for e in s.events} | {t["owner"] for t in s.tasks if t.get("owner")}
+                 | {x["agent"] for x in s.activity_sessions} | {x["agent"] for x in s.activity_log})
+        if name not in known:
+            return None
+        d = act.agent_detail(name, s.activity_sessions, s.activity_log, s.tasks, s.now, tool, outcome, task,
+                             limit, after)
+        d["meta"] = self.meta(s)
+        d["available"] = s.activity_available
+        d["note"] = s.activity_note
+        d["activity"] = s.activity.get(name) if s.activity_available else None
+        d["head"] = s.activity_head
+        return d
+
     def scorecard_payload(self, win_a: tuple, win_b: Optional[tuple], agent: Optional[str]) -> dict:
         s = self.snapshot()
         win_a = _round_window(win_a)
@@ -274,6 +383,7 @@ class BoardService:
             "task_time_range": {"min": min(created) if created else None,
                                 "max": max(created) if created else None},
             "compare": (metrics.compare_windows(facts, win_a, win_b, agent, te) if win_b else None),
+            "activity": (act.active_per_task(facts, s.activity_log) if s.activity_available else None),
             "note": "Computed from the %d tasks and %d events loaded; every metric shows n and a "
                     "'not enough data' label under its minimum." % (len(s.tasks), len(s.events)),
         }
