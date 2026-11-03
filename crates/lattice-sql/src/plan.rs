@@ -237,6 +237,44 @@ pub enum InsertSource {
     Query(Box<LogicalPlan>),
 }
 
+/// An aggregate function without `GROUP BY`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AggFunc {
+    /// `count(*)`: every row.
+    CountStar,
+    /// `count(x)`: rows where `x` is not `NULL`.
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+impl AggFunc {
+    /// The SQL name.
+    pub fn name(self) -> &'static str {
+        match self {
+            AggFunc::CountStar | AggFunc::Count => "count",
+            AggFunc::Sum => "sum",
+            AggFunc::Avg => "avg",
+            AggFunc::Min => "min",
+            AggFunc::Max => "max",
+        }
+    }
+}
+
+/// One aggregate computed over all the rows of the input.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AggCall {
+    pub func: AggFunc,
+    /// The argument, `None` for `count(*)`.
+    pub arg: Option<TypedExpr>,
+    /// The type of the result.
+    pub ty: SqlType,
+    /// `count(DISTINCT x)`: each distinct non-`NULL` value of the argument counts once.
+    pub distinct: bool,
+}
+
 /// The relational and write operators of the single-table subset.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LogicalPlan {
@@ -259,6 +297,21 @@ pub enum LogicalPlan {
     Sort {
         input: Box<LogicalPlan>,
         keys: Vec<SortKey>,
+    },
+    /// The rows of `input` without repeats: two rows are the same when every column is equal, with
+    /// `NULL` equal to `NULL`. The first of equal rows is kept, in input order. `SELECT DISTINCT`
+    /// puts it directly above the `Project`.
+    Distinct { input: Box<LogicalPlan> },
+    /// Aggregates over the rows of `input`. Without `group_by` it yields exactly one row, even when
+    /// `input` is empty. With it, one row per distinct value of the `group_by` expressions (`NULL`s
+    /// group together) and none when `input` is empty, in the order of the keys. Each row holds the
+    /// key values and then the results of `calls`: columns `0..group_by.len()` are the keys and
+    /// column `group_by.len() + i` is `calls[i]`. A [`LogicalPlan::Project`] above names and orders
+    /// them.
+    Aggregate {
+        input: Box<LogicalPlan>,
+        group_by: Vec<TypedExpr>,
+        calls: Vec<AggCall>,
     },
     Limit {
         input: Box<LogicalPlan>,
@@ -309,6 +362,8 @@ impl LogicalPlan {
             LogicalPlan::Project { columns, .. } => Some(columns),
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Aggregate { input, .. }
+            | LogicalPlan::Distinct { input }
             | LogicalPlan::Limit { input, .. } => input.output(),
             LogicalPlan::Insert { returning, .. }
             | LogicalPlan::Update { returning, .. }
@@ -355,6 +410,36 @@ impl LogicalPlan {
                     })
                     .collect();
                 writeln!(out, "{pad}Sort [{}]", keys.join(", "))?;
+                input.write_tree(out, depth + 1)?;
+            }
+            LogicalPlan::Distinct { input } => {
+                writeln!(out, "{pad}Distinct")?;
+                input.write_tree(out, depth + 1)?;
+            }
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                calls,
+            } => {
+                let keys: Vec<String> = group_by.iter().map(ToString::to_string).collect();
+                let c: Vec<String> = calls
+                    .iter()
+                    .map(|c| match &c.arg {
+                        Some(a) if c.distinct => format!("{}(DISTINCT {a})", c.func.name()),
+                        Some(a) => format!("{}({a})", c.func.name()),
+                        None => format!("{}(*)", c.func.name()),
+                    })
+                    .collect();
+                if keys.is_empty() {
+                    writeln!(out, "{pad}Aggregate [{}]", c.join(", "))?;
+                } else {
+                    writeln!(
+                        out,
+                        "{pad}Aggregate by [{}] [{}]",
+                        keys.join(", "),
+                        c.join(", ")
+                    )?;
+                }
                 input.write_tree(out, depth + 1)?;
             }
             LogicalPlan::Limit {

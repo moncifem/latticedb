@@ -1897,8 +1897,10 @@ impl Parser {
             FunctionArgs::Star
         } else {
             if self.is_kw("distinct") {
-                if name != "count" {
-                    return Err(self.unsupported_here("DISTINCT in aggregates other than count"));
+                if !matches!(name, "count" | "sum" | "avg" | "min" | "max") {
+                    return Err(
+                        self.unsupported_here("DISTINCT in a function that is not an aggregate")
+                    );
                 }
                 self.bump();
                 distinct = true;

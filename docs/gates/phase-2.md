@@ -21,7 +21,7 @@ a completed Phase 2 gate. Requirements and exit criteria are in
 - RFC 0012 and ADR 0028 are accepted (Option A, 2026-10-30). The seven-day comment hold was first kept (commit 705d7cb9, 2026-10-30 15:51 UTC: "not waived"). The owner then waived it in chat on 2026-10-30. The waiver is recorded in `docs/gates/phase-1-review.md` (475acb62, 16:00 UTC), in RFC 0012 and in ADR 0028 (375716bf, 20:01 UTC). The repository does not record the time of the chat answer. Code that writes the format merged on 2026-10-30 (475acb62, 0aa405ce, 375716bf, 7ef7a76d). The sequence is tracked in #712.
 - Executor: single-table `SELECT` with `ORDER BY`, `LIMIT` and `OFFSET`, `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `DROP TABLE`, transaction control, and index scans for primary key and `UNIQUE` predicates. Known differences from PostgreSQL are listed in `tests/drivers/psql/known` and `docs/sql-subset.md`.
 - Server: PostgreSQL wire v3 with simple and extended query and text results; SCRAM-SHA-256 over TLS and loopback trust; cancellation; a SIGTERM and SIGINT stop (service mode, #584); the container image with its smoke test (#587); the `lattice account` credential tool (#582).
-- Not on `main`: joins, aggregates, `GROUP BY`, `DISTINCT`, subqueries (#380, #592 to #597); `ALTER TABLE` and online schema change (#609, #610); SQL `AS OF` and branches (#598 to #601); checkpoints (#602 to #605); binary formats (#608); the driver matrix (#413, #576, #607, #710); the `kill -9` proof with the real binary (#574).
+- Not on `main`: joins and subqueries (#380, #595 to #597; `SELECT DISTINCT` runs, #594; `count`, `sum`, `avg`, `min`, `max`, `GROUP BY` and `HAVING` run, #592 and #593); `ALTER TABLE` and online schema change (#609, #610); SQL `AS OF` and branches (#598 to #601); checkpoints (#602 to #605); binary formats (#608); the driver matrix (#413, #576, #607, #710); the `kill -9` proof with the real binary (#574).
 
 ## Verification for the index slice (P2-07)
 
@@ -430,14 +430,16 @@ failing `53200` where each step alone fits); smaller ones are not, so peak memor
 budget only up to 4 KiB per nesting level. `LIKE` stays O(text x pattern); no
 `repeat`/`lpad` functions exist.
 
-**What does not run.** Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, `ALTER TABLE`, indexes
+**Ungrouped aggregates (issue 592, part).** `count`, `sum`, `avg`, `min` and `max` without `GROUP BY` run through a new `Aggregate` plan operator that yields one row. Evidence: 111 statements compared with PostgreSQL 16 in `crates/lattice-exec/tests/aggregates_pg.rs`, and 62 PostgreSQL-verified sqllogictest records that were listed as failing now pass. Planted bug `AggregateSkipsNull` (group `Bug::EXEC_AGGREGATE`, `NULL` arguments reach the fold) is caught by a witness in the same file. Not run locally: mutation testing. Expressions over aggregates (`sum(i) + 1`) and `ORDER BY` an aggregate bind too. `GROUP BY` and `HAVING` run too (issue 593, part): the `Aggregate` operator takes key expressions and yields one row per group in key order, each group charged to the statement memory budget; 66 statements compared with PostgreSQL 16 in `crates/lattice-exec/tests/group_by_pg.rs` agree, and 16 more PostgreSQL-verified sqllogictest records pass. Planted bug `GroupKeyTruncated` (group `Bug::EXEC_AGGREGATE`, grouping by the first key only) is caught by a two-key witness, and a test shows the groups are charged to the statement memory budget (200 groups refused with `53200` where the 200 scanned rows fit). Not run locally: mutation testing. `DISTINCT` inside an aggregate (`count(DISTINCT x)`, `sum(DISTINCT x)`) runs too (26 statements compared with PostgreSQL 16; the surviving spelling of equal numerics is not pinned). `SELECT DISTINCT` runs through a `Distinct` operator above the projection (47 statements compared with PostgreSQL 16 in `crates/lattice-exec/tests/distinct_pg.rs`; 6 more PostgreSQL-verified slt records pass). Not built: `DISTINCT ON` and an aggregate in `WHERE`.
+
+**What does not run.** Joins, `DISTINCT ON`, subqueries, an aggregate in `WHERE`, `ALTER TABLE`, indexes
 (`CREATE INDEX`, and no scan uses an index), the `jsonb` operators, and DDL inside a transaction block.
 Column definitions are recovered after a restart from the definition `CREATE TABLE` stores with the table
 (RFC 0012 / ADR 0028, issue 573; see "SQL definitions in the executor" below); `ALTER TABLE` and column names
 with ASCII capitals are not supported, and the stored row layout is not a frozen format.
 
 **sqllogictest.** All 21 scripts in `crates/lattice-testkit/tests/slt/` (669 records) run unchanged through
-the executor: **486 pass and 183 fail** (read from a local run of the executor-side test, `cargo test -p
+the executor: **575 pass and 94 fail** (read from a local run of the executor-side test, `cargo test -p
 lattice-exec --test slt`; the CI run on the pull request confirms it; the PostgreSQL reference job is
 separate and was not run). `SELECT` without `FROM` now runs (a one-row source in the plan), which moved
 `arithmetic_errors.test` to 43 of 44 (every overflow `22003`, division by zero `22012` and cast `22P02` record
@@ -448,8 +450,8 @@ except one aggregate), `nulls_functions.test` to 20 of 26, `strings.test` to 35 
 refuses (26 records, 28 with `constraints.test`); a Lattice-side variant of that script or enforcing
 `numeric(p, s)` is still open (#466).
 The failures are listed one by one, with a reason, in `crates/lattice-exec/tests/slt_expected_failures.txt`.
-150 are statements refused with `0A000` (aggregates 66, joins 25, `GROUP BY` and `HAVING` 16, subqueries 12,
-`DISTINCT` 6, `ALTER TABLE`/`CREATE INDEX` 6, `numeric(p, s)` 2, and 17 whose expected error is not reached
+61 are statements refused with `0A000` (aggregates 0, joins 25, `GROUP BY` and `HAVING` 1, subqueries 12,
+`DISTINCT` 0, `ALTER TABLE`/`CREATE INDEX` 6, `numeric(p, s)` 2, and 15 whose expected error is not reached
 because an earlier part of the statement is refused). The other 33 are not `0A000`: they depend on a
 `CREATE TABLE` with `numeric(p, s)` (refused with `0A000`, so the table does not exist, 28 of them in
 `types_and_casts.test` and `constraints.test`) or on `ALTER TABLE` or `CREATE UNIQUE INDEX` having run. Each of

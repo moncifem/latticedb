@@ -132,8 +132,8 @@ fn unsupported_expressions_are_named() {
     unsupported("SELECT a COLLATE \"C\"", "COLLATE", "COLLATE");
     unsupported("SELECT (1, 2)", "row values", ",");
     unsupported(
-        "SELECT sum(DISTINCT a)",
-        "DISTINCT in aggregates other than count",
+        "SELECT lower(DISTINCT a)",
+        "DISTINCT in a function that is not an aggregate",
         "DISTINCT",
     );
     unsupported(
