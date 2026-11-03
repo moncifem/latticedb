@@ -2,7 +2,8 @@
 
 A read-only web page for the agent board in [`integrations/board`](../board/CONVENTIONS.md): which
 agents are active, what needs attention, the work queue (what can be claimed, what is blocked, which
-leases are running out, what is dead), a live event feed, and a scorecard per agent.
+leases are running out, what is dead), a live event feed, a scorecard per agent, and the experiments of
+`board-bench` (agent configurations compared on the same tasks).
 
 Status: alpha. It only reads. It listens on `127.0.0.1` and nowhere else. It has no login, so anyone
 who can open a connection to that port on your machine can read the board through it.
@@ -93,12 +94,32 @@ window has at least 30 values, and says so otherwise. The two windows contain di
 comparison is unpaired; a paired comparison does not apply. These numbers describe how the board was
 used. They do not say whether the finished work is correct.
 
+- **Experiments** (`#/experiments`, `#/experiment/NAME`). The experiments made with
+  [`board-bench`](../board/bench/README.md): a list, and for one experiment an arm table, the paired comparison of
+  every two arms, a task-by-arm grid and the harness errors. The numbers are computed by the same code as
+  `board-bench report` (`integrations/board/benchlib`, which must sit next to the console; without it the screen
+  says so), so the page and the command cannot disagree. The honesty rules are part of the page. Every rate is
+  printed from one string the server builds, with its interval and n (`23% (95% CI 13% to 38%), n = 39 tasks,
+  113 attempts`); the page script formats no percentage of its own. pass@1's interval counts tasks, not attempts,
+  and the page says when counting attempts would have been too narrow. A comparison is **inconclusive** unless the
+  interval of the paired difference excludes zero, the exact McNemar test agrees and at least 30 tasks are paired, and "inconclusive" is shown as
+  a result, not hidden. The grid marks cells with flaky grader runs, attempts not recorded yet, timeouts and
+  protected files the agent changed; harness errors (a fixture that did not match its digest, a grader that could
+  not run) are listed apart and are in no rate. `?rule=any` on the API changes the rule that decides when a task
+  counts as solved. The demo has an experiment where one arm looks 20 points better and the report says
+  inconclusive, a clear difference on 40 tasks with flaky rows, errors and unrecorded attempts, and one that has
+  not started.
+
 ## What it reads
 
 Fixed `SELECT` statements over `tasks`, `events`, `decisions` and `task_leases` through `psql`, one
 table per statement (the alpha subset has no joins) and no aggregates (the board conventions say there
 are none), so counts and statistics are computed in Python. The one other statement is the database
-clock, `SELECT CAST(extract(epoch FROM now()) AS bigint);`. At the first request it loads the newest 5000
+clock, `SELECT CAST(extract(epoch FROM now()) AS bigint);`. The Experiments screen reads `bench_experiments`,
+`bench_arms`, `bench_tasks` and `bench_attempts` the same way (at most 20000 attempts of one experiment, filtered
+by an experiment name checked against `[A-Za-z0-9_-]{1,48}`); a board without those tables shows a note to run
+`board init`. Every statement is a SELECT, so a connect-phase failure that the alpha server causes
+([#867](https://github.com/moncifem/latticedb/issues/867)) is asked again, up to six times. At the first request it loads the newest 5000
 tasks, their lease rows and the newest 20000 events, then asks only for events with `id` above the last
 one it holds. The cache refreshes at most once a second however many browsers poll. When a limit cuts
 data off, the page says so. Times are shown in UTC. "Now" is the database clock when it answers (the
@@ -149,6 +170,9 @@ Board text is written by agents and is untrusted.
 The console does not authenticate users and does not use TLS. Do not forward its port.
 
 ## Known gaps
+
+- The Experiments screen was run against a real `latticed` (the dev stack) by `integrations/board/tests/bench_devstack.py`,
+  which compares its numbers with `board-bench report`; the screen itself was looked at in a browser with the demo data only.
 
 - Not yet run against a real `latticed` in CI. The unit tests use a fake `psql`. `test.sh` is the
   end-to-end check and no workflow runs it yet (the board's own `test.sh` has no CI job either). The

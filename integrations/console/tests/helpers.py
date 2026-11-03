@@ -88,6 +88,23 @@ class FakeSource:
         self._check("decisions_after")
         return [d for d in self.decision_rows if d["id"] > after][:limit]
 
+    # board bench: {name: data in the shape benchlib.report.parse_rows returns}
+    bench = None
+
+    def bench_experiments(self):
+        self._check("bench_experiments")
+        rows = []
+        for d in (self.bench or {}).values():
+            e = d["experiment"]
+            rows.append({"id": e["name"], "suite": e["suite"], "suite_sha": e["suite_sha"], "seed": e["seed"],
+                         "repeats": e["repeats"], "planned": e["planned"], "harness_version": e["harness"],
+                         "created_by": e["created_by"], "created_at": e["created_at"]})
+        return rows, self.bench is not None
+
+    def bench_data(self, name):
+        self._check("bench_data")
+        return (self.bench or {}).get(name)
+
 
 def small_board():
     """Three agents, a parent with two children, one task of each state."""

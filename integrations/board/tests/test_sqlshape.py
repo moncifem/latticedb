@@ -101,6 +101,21 @@ MUTATIONS = [
      lambda s: drop_if_blocks(s, "cmd_heartbeat")),
     ("the guard block around reap",
      lambda s: drop_if_blocks(s, "reap_one")),
+    ("the fence compare of bench-record",
+     lambda s: mutate(s, "AND claim_seq = :fence) AS ok\n  FROM tasks WHERE id = :'task' \\gset\n\\if :ok\nUPDATE bench_attempts",
+                      ") AS ok\n  FROM tasks WHERE id = :'task' \\gset\n\\if :ok\nUPDATE bench_attempts")),
+    ("the owner compare of bench-record",
+     lambda s: mutate(s, "SELECT (state = 'claimed' AND coalesce(owner, '') = :'author' AND claim_seq = :fence) AS ok\n  FROM tasks WHERE id = :'task' \\gset\n\\if :ok\nUPDATE bench_attempts",
+                      "SELECT (state = 'claimed' AND claim_seq = :fence) AS ok\n  FROM tasks WHERE id = :'task' \\gset\n\\if :ok\nUPDATE bench_attempts")),
+    ("the state compare of bench-record",
+     lambda s: mutate(s, "SELECT (state = 'claimed' AND coalesce(owner, '') = :'author' AND claim_seq = :fence) AS ok\n  FROM tasks WHERE id = :'task' \\gset\n\\if :ok\nUPDATE bench_attempts",
+                      "SELECT (coalesce(owner, '') = :'author' AND claim_seq = :fence) AS ok\n  FROM tasks WHERE id = :'task' \\gset\n\\if :ok\nUPDATE bench_attempts")),
+    ("the guard block around bench-record",
+     lambda s: drop_if_blocks(s, "cmd_bench_record")),
+    ("the once-only condition of bench-record",
+     lambda s: mutate(s, "AND task_key = :'key' AND outcome = 'planned';", "AND task_key = :'key';")),
+    ("the identity condition of bench-record",
+     lambda s: mutate(s, "AND experiment_id = :'exp' AND arm = :'arm' AND task_key = :'key' AND outcome = 'planned';", "AND outcome = 'planned';")),
 ]
 
 
@@ -111,7 +126,7 @@ class RealHelper(unittest.TestCase):
     def test_every_write_path_is_covered(self):
         self.assertEqual(sorted(sqlshape.PATHS),
                          sorted(["heartbeat", "note", "done", "fail", "release", "cancel", "approve",
-                                 "block", "reap", "claim"]))
+                                 "block", "reap", "claim", "bench-record"]))
 
 
 class Mutations(unittest.TestCase):

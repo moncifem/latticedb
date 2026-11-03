@@ -46,6 +46,7 @@ Status: alpha. This is a dogfooding tool, not a product. Test it before you rely
 | `board get ID` | One task as one tab separated line for programs: id, state, owner, fence, attempts, max attempts, title, body. Read only. |
 | `board run [OPTIONS] -- COMMAND` | A worker: take tasks with `next` and run COMMAND for each (see "`board run`: a worker for any command or agent"). |
 | `board queue` | Read only. The database time, every task that is not done or cancelled, its lease row and the state of its blockers, as tagged tab separated lines (`now`, `task`, `lease`, `blocker`), at most 200 tasks. For programs: `board-mcp` and the SessionStart hook sort it into the console's queue sections. |
+| `board bench-experiment`, `bench-arm`, `bench-task`, `bench-plan`, `bench-record`, `bench-rows`, `bench-list` | The tables of `board-bench` (see "`board bench`" below). Written for programs; `bench-record` is fenced. |
 
 `note` and `done` also take `--fence N`. Exit codes: 0 ok, 1 error (bad input, no such task, task
 dead or cancelled, database down), 2 claim not won, 3 lease lost (the fence refused the write), 4
@@ -243,7 +244,7 @@ a timeout, signal handling and a scrubbed environment. Prefer it to the shell lo
 ```sh
 board run [--owner NAME] [--max-tasks N] [--idle-exit SECONDS | --forever] [--lease SECONDS]
           [--task-timeout SECONDS] [--env-allow VAR[,VAR]] [--cwd DIR | --worktree-per-task REPO]
-          [--result-dir DIR] -- COMMAND [ARGS...]
+          [--result-dir DIR] [--after-cmd CMD] -- COMMAND [ARGS...]
 board run --agent claude|codex [agent options]
 ```
 
@@ -297,6 +298,15 @@ If the child writes `TASK_RESULT_PATH` as JSON `{"status": "done|retry|fail", "s
 it refines the outcome: on exit 0 `retry` and `fail` override `done`, the summary becomes the closing text
 and up to five notes are posted first. An invalid file is ignored and said so on stderr. The exit code stays
 authoritative for failure: exit 1 with `"status": "done"` is a failure.
+
+**After-command.** `--after-cmd CMD` (split like a shell would, run without one, at most `--after-timeout` seconds,
+default 120) runs after a child that ended well (exit 0, status `done`) and before `board done`, while the lease is
+still held, in the runner's **own** environment (the database settings the child never has) plus `TASK_ID`,
+`TASK_FENCE`, `TASK_ATTEMPT`, `TASK_RESULT_PATH` and `BOARD_AUTHOR`, in the task's run directory, with stdin closed
+and in its own process group. Exit 0 lets the task be marked done; exit 3 means the fence refused (the lease is lost:
+nothing is marked); any other exit, or a timeout, fails the task like a failing child (it is retried, its output
+redacted into the error). `board-bench` uses it to record an attempt in the database under the fence, so the agent
+never needs a credential. It is your own command: the runner does not judge it.
 
 **Logs.** The child's stdout and stderr go to `RESULT_DIR/TASK.FENCE/run.log` (default `RESULT_DIR` is
 `$BOARD_STATE_DIR/runs`; mode 0600 in a 0700 directory, refused when it is a symlink or not yours), at most
@@ -472,6 +482,31 @@ twice, done or failed by an agent that did not hold the claim, claimed while hel
 were done, lost, or when a killed worker's lease was never reaped. Point `integrations/console` at the same
 board to watch it. Workers take any runnable task, so run it on a scratch board: it refuses a board that
 holds tasks it did not create. The `dev-stack` CI job runs a small one against a real latticed.
+
+## `board bench`: compare agent configurations
+
+`integrations/board/board-bench` runs the same tasks with several configurations of an agent (arms), several times
+each, grades the end state with your own program, and reports pass rates with intervals, a paired comparison and a
+verdict that is "inconclusive" unless the data support more. The suite file, the attempt, the statistics and the
+limits are in [`bench/README.md`](bench/README.md); the walkthrough is in the
+[agents quickstart](../../docs/quickstart-agents.md#9-compare-two-agent-configurations).
+
+The rules it adds to the board:
+
+- Attempts are ordinary board tasks, made `awaiting_approval` by `board-bench start`: nothing runs and nothing is
+  spent until `board-bench approve`. The task body holds ids, the suite's path and its sha256, never a prompt.
+- `board run --after-cmd "board-bench record" -- board-bench attempt --suite-dir DIR` is the worker (`attempt` reads suites only from DIR: the task body is untrusted, and a suite file can name any command). The attempt command gets the
+  runner's scrubbed environment (no database setting) and writes a result file; the after-command records it with
+  `board bench-record TASK --fence N --experiment E --arm A --task K ...`, which is fenced like `done` (only the holder of the claim may record, once) and refuses a result whose experiment, arm and task differ from the planned row.
+  A zombie worker's record is refused (exit 3) and leaves a `fenced` event.
+- Four tables (`bench_experiments`, `bench_arms`, `bench_tasks`, `bench_attempts`), single-table SQL, created by
+  `board init` and `board migrate`. `bench_attempts` starts `planned` and is filled in once. Cost, tokens and duration
+  are NULL unless the agent reported them.
+- A harness problem (a fixture that does not match its digest, a grader that exits 125, a full disk) is the
+  outcome `error` and is in no rate (126 and 127 are failures: an agent can cause them); a timeout counts as a failure; a protected file the agent changed is restored
+  before grading and counted as `tampered`; a grader whose reruns disagree is `flaky`.
+- Read side: `board bench-rows NAME` (tagged tab separated lines: `experiment`, `arm`, `task`, `attempt`) and
+  `board bench-list`; the console reads the same tables with fixed `SELECT`s.
 
 ## Maintainer: follow the board
 

@@ -14,7 +14,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import metrics, model
+from . import bench, metrics, model
 
 TASK_LIMIT = 5000
 EVENT_WINDOW = 20000
@@ -23,6 +23,8 @@ PAGE = 2000
 MAX_PAGES_PER_REFRESH = 10
 FAIL_BACKOFF_S = 2.0  # after a failed read, answer from the failure instead of starting psql again
 SCORECARD_CACHE = 16
+BENCH_CACHE = 8
+BENCH_TTL_S = 5.0  # an experiment report costs a bootstrap per pair of arms; reuse it for a few seconds
 WINDOW_ROUND_S = 60  # scorecard window edges are rounded to a minute so varying them cannot flood the CPU
 
 
@@ -91,6 +93,8 @@ class BoardService:
         self._cache: OrderedDict = OrderedDict()
         self._failed_until = 0.0
         self._failure: Optional[BaseException] = None
+        self._bench: OrderedDict = OrderedDict()
+        self._bench_gates: dict = {}
 
     @property
     def demo(self) -> bool:
@@ -276,4 +280,44 @@ class BoardService:
         self._cache[key] = out
         while len(self._cache) > SCORECARD_CACHE:
             self._cache.popitem(last=False)
+        return out
+
+    # ---------------------------------------------------------------- experiments
+
+    def _bench_meta(self) -> dict:
+        """The meta block for the experiment screen, which needs the clock and the demo flag but not the
+        board's tasks, events or decisions."""
+        return {"demo": self.demo, "banner": "DEMO DATA, not your board" if self.demo else None,
+                "now": self.source.now(), "clock": getattr(self.source, "clock_source", "database"),
+                "bench_available": bench.available()}
+
+    def _bench_cached(self, key, make):
+        """The answer for KEY, recomputed at most once per BENCH_TTL_S however many requests arrive together: a
+        lock per key makes concurrent requests wait for the first one's bootstrap instead of repeating it."""
+        with self._lock:
+            hit = self._bench.get(key)
+            if hit is not None and self.clock() - hit[0] < BENCH_TTL_S:
+                self._bench.move_to_end(key)
+                return hit[1]
+            gate = self._bench_gates.setdefault(key, threading.Lock())
+        with gate:
+            with self._lock:
+                hit = self._bench.get(key)
+                if hit is not None and self.clock() - hit[0] < BENCH_TTL_S:
+                    return hit[1]
+            value = make()  # outside the service lock: it may run psql
+            with self._lock:
+                self._bench[key] = (self.clock(), value)
+                self._bench.move_to_end(key)
+                while len(self._bench) > BENCH_CACHE:
+                    old_key, _ = self._bench.popitem(last=False)
+                    self._bench_gates.pop(old_key, None)
+            return value
+
+    def bench_list_payload(self) -> dict:
+        return self._bench_cached(("list",), lambda: bench.list_payload(self.source, self._bench_meta()))
+
+    def bench_payload(self, name: str, rule: str = "majority") -> Optional[dict]:
+        out = self._bench_cached(("exp", name, rule),
+                                 lambda: bench.experiment_payload(self.source, name, self._bench_meta(), rule))
         return out

@@ -8,6 +8,10 @@ name: tools-tests
 # built lattice-cli skip themselves. integrations/board/test.sh and the swarm itself need a latticed;
 # the dev-stack job runs them. The board MCP server (board-mcp) and the plugin files are tested here too,
 # against a fake helper, with planted faults; `claude plugin validate` needs the CLI and is not run here.
+# board bench (integrations/board/board-bench, benchlib, the Experiments screen of the console) is tested here with
+# statistics checked against hand-computed values, real attempts with fake agents, `board run --after-cmd`, the
+# helper's bench SQL against a fake psql, and a copy of the code with one planted fault at a time (about three
+# minutes in all, mostly the mutation copies). tests/bench_devstack.py runs in the dev-stack job.
 on:
   pull_request:
     paths:
@@ -31,7 +35,7 @@ jobs:
   tools-tests:
     name: tools-tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

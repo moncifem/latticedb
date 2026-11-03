@@ -75,3 +75,69 @@ CREATE TABLE IF NOT EXISTS task_leases (
     last_error text NOT NULL DEFAULT '',
     blocked_by text NOT NULL DEFAULT ''
 );
+
+-- board bench (integrations/board/board-bench): an experiment compares agent configurations (arms) on a
+-- suite of tasks, several repeats each. Four tables, all read and written one table at a time (the
+-- subset has no joins), with the labels repeated in each row so a reader needs no join.
+--
+-- bench_experiments: one row per experiment. id is the experiment name. seed is the seed of the
+-- randomised attempt order (recorded so the order can be reproduced). planned is the number of attempts
+-- the matrix asked for. suite_sha is the sha256 of the suite file the attempts read.
+CREATE TABLE IF NOT EXISTS bench_experiments (
+    id text PRIMARY KEY,
+    suite text NOT NULL,
+    suite_sha text NOT NULL,
+    seed bigint NOT NULL,
+    repeats integer NOT NULL,
+    planned integer NOT NULL,
+    harness_version text NOT NULL,
+    created_by text NOT NULL,
+    created_at bigint NOT NULL
+);
+
+-- bench_arms: one row per arm. id is experiment.arm. config_sha is the sha256 of the arm's definition.
+CREATE TABLE IF NOT EXISTS bench_arms (
+    id text PRIMARY KEY,
+    experiment_id text NOT NULL,
+    arm text NOT NULL,
+    agent text NOT NULL,
+    config_sha text NOT NULL,
+    created_at bigint NOT NULL
+);
+
+-- bench_tasks: one row per suite task of an experiment, with the digest of its fixture tree.
+CREATE TABLE IF NOT EXISTS bench_tasks (
+    id text PRIMARY KEY,
+    experiment_id text NOT NULL,
+    task_key text NOT NULL,
+    fixture_digest text NOT NULL,
+    created_at bigint NOT NULL
+);
+
+-- bench_attempts: one row per attempt, made as 'planned' when the experiment starts and filled in once
+-- by `board bench-record`, which only the holder of the board task's lease may call. board_task_id is
+-- the board task that runs the attempt. outcome is planned, pass, fail, timeout or error; error means
+-- the harness failed (not the agent) and is never counted against an arm. flaky is 1 when the grader's
+-- reruns disagreed, tampered is the number of protected files the agent had changed. duration_ms, cost_usd
+-- and tokens stay NULL unless the agent reported them. The table has no fence column on purpose: the
+-- fence guards the write, it is not data.
+CREATE TABLE IF NOT EXISTS bench_attempts (
+    board_task_id text PRIMARY KEY,
+    experiment_id text NOT NULL,
+    arm text NOT NULL,
+    task_key text NOT NULL,
+    repeat_idx integer NOT NULL,
+    order_idx integer NOT NULL,
+    outcome text NOT NULL DEFAULT 'planned',
+    flaky integer NOT NULL DEFAULT 0,
+    tampered integer NOT NULL DEFAULT 0,
+    duration_ms bigint,
+    cost_usd double precision,
+    tokens bigint,
+    grader_exit integer,
+    grader_runs text NOT NULL DEFAULT '',
+    summary text NOT NULL DEFAULT '',
+    harness_version text NOT NULL,
+    created_at bigint NOT NULL,
+    recorded_at bigint NOT NULL DEFAULT 0
+);

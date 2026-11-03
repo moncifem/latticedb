@@ -17,6 +17,11 @@ Contract with the child (see integrations/board/CONVENTIONS.md, "board run"):
   stdin is /dev/null (built-in agents read their prompt from a private file instead).
   exit 0 = done, 75 = try again later, anything else = failed.
   TASK_RESULT_PATH may hold {"status": "done|retry|fail", "summary": "...", "notes": ["..."]}.
+  --after-cmd CMD runs in the runner's own environment (with the board credentials, which the child
+  never sees) after a child that ended well and before the task is marked done, while the lease is
+  still held. It gets TASK_ID, TASK_FENCE, TASK_ATTEMPT, TASK_RESULT_PATH and BOARD_AUTHOR. Exit 0
+  lets the task be marked done, 3 means the fence refused (the lease is lost), anything else fails the
+  task (it is retried like any failure). board-bench uses it to record an attempt under the fence.
 """
 
 import argparse
@@ -27,6 +32,7 @@ import random
 import re
 import secrets
 import select
+import shlex
 import shutil
 import signal
 import socket
@@ -504,6 +510,27 @@ class Runner:
                     return out, doc.get("is_error") is True
         return "", False
 
+    # -- the after-cmd hook
+    def run_after(self, task_id, fence, attempt, result_path, tdir):
+        """(exit status, one line of its output). Runs --after-cmd with the runner's environment plus the
+        task variables, in its own process group, stdin closed, at most --after-timeout seconds."""
+        env = dict(os.environ)
+        env.update({"BOARD_AUTHOR": self.cfg.owner, "TASK_ID": task_id, "TASK_FENCE": str(fence),
+                    "TASK_ATTEMPT": str(attempt), "TASK_RESULT_PATH": result_path})
+        try:
+            proc = subprocess.Popen(self.cfg.after_argv, env=env, cwd=tdir, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **{"start_new_session": True})
+        except (OSError, ValueError) as e:
+            return 127, "cannot start the after-cmd: %s" % (getattr(e, "strerror", None) or e)
+        try:
+            out, _ = proc.communicate(timeout=self.cfg.after_timeout)
+        except subprocess.TimeoutExpired:
+            signal_group(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            return 124, "the after-cmd did not end in %ds" % self.cfg.after_timeout
+        text = one_line(redact(out[-4096:].decode("utf-8", "replace"), self.secrets), 300)
+        return proc.returncode, text
+
     # -- the board marks
     def mark(self, *args):
         """done / fail / note / release with a few tries for transient errors. Returns the exit
@@ -688,7 +715,18 @@ class Runner:
                 status = "retry"
             else:
                 status = "fail"
-            if status == "done":
+            hook_lost = False
+            if status == "done" and cfg.after_argv:
+                hook_rc, hook_text = self.run_after(task_id, fence, attempt, result_path, tdir)
+                if hook_rc == 3:
+                    hook_lost = True
+                elif hook_rc != 0:
+                    status = "fail"
+                    summary = "the after-cmd failed (exit %d): %s" % (hook_rc, hook_text or "no output")
+            if hook_lost:
+                self.counts["lost"] += 1
+                outcome = "lost at the after-cmd; the fence refused"
+            elif status == "done":
                 for note in (res or {}).get("notes", []):
                     text = one_line(redact(note, self.secrets), 300)
                     if text and self.mark("note", task_id, *fence_args, "--", text) == 3:
@@ -809,6 +847,10 @@ def parse_args(argv):
                     help="allow what removes a built-in agent's safety checks (a permission mode, a sandbox, an "
                          "argument outside --model/-m/--effort, an unrestricted shell tool) and loader variables "
                          "in --env-allow; it does not constrain COMMAND after --, which is your own command")
+    ap.add_argument("--after-cmd", metavar="CMD",
+                    help="a command (split like a shell would, run without a shell) to run after a child that ended "
+                         "well and before the task is marked done, with the runner's own environment")
+    ap.add_argument("--after-timeout", type=int, default=120, metavar="SECONDS", help="longest --after-cmd run")
     ap.add_argument("--scratch-home", action="store_true",
                     help="give each task an empty HOME (0700) instead of yours, so the agent cannot read ~ ")
     args = ap.parse_args(argv)
@@ -861,6 +903,16 @@ def validate(ap, a):
             log("warning: --env-allow passes %s to the child; anything the child prints may include it "
                 "(it is redacted only from what is sent to the board)" % n)
     a.env_allow = list(dict.fromkeys(list(DEFAULT_ENV_ALLOW) + names))
+    a.after_argv = []
+    if a.after_cmd is not None:
+        try:
+            a.after_argv = shlex.split(a.after_cmd)
+        except ValueError as e:
+            bad("--after-cmd: %s" % e)
+        if not a.after_argv:
+            bad("--after-cmd is empty")
+    if not 1 <= a.after_timeout <= 3600:
+        bad("--after-timeout must be from 1 to 3600 seconds")
     if a.cwd and not os.path.isdir(a.cwd):
         bad("--cwd %s is not a directory" % a.cwd)
     if a.worktree_per_task and not os.path.isdir(a.worktree_per_task):
@@ -942,6 +994,9 @@ def main(argv):
     prog = (cfg.agent_bin or cfg.agent) if cfg.agent else cfg.command[0]
     if resolve_program(prog, os.environ["PATH"]) is None:
         log("cannot find the program to run: %s" % prog)
+        return 2
+    if cfg.after_argv and resolve_program(cfg.after_argv[0], os.environ["PATH"]) is None:
+        log("cannot find the after-cmd program: %s" % cfg.after_argv[0])
         return 2
 
     state = os.environ.get("BOARD_STATE_DIR") or os.path.join(

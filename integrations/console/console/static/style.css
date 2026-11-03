@@ -159,3 +159,19 @@ ol.feed li.fresh { animation: fresh 1.5s ease-out; }
   .count { min-width: 5rem; }
 }
 .cell { min-width: 8.5rem; }
+
+/* experiments */
+.verdict { border: 1px solid var(--line); border-left: 4px solid var(--warn); background: var(--panel); border-radius: 6px; padding: .6rem .9rem; margin: .6rem 0; }
+.verdict.inconclusive { border-left-color: var(--warn); }
+.verdict.better { border-left-color: var(--ok); }
+.verdict .label { font-weight: 700; }
+td.gridcell { min-width: 7rem; font-variant-numeric: tabular-nums; }
+td.gridcell .frac { font-weight: 700; }
+td.gridcell.allpass { background: var(--ok-bg); }
+td.gridcell.nopass { background: var(--bad-bg); }
+td.gridcell.mixed { background: var(--warn-bg); }
+td.gridcell.empty { background: var(--idle-bg); color: var(--muted); }
+.mark { display: inline-block; font-size: .7rem; font-weight: 700; padding: 0 .35rem; margin-left: .25rem; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+.mark.flaky { border-color: var(--warn); color: var(--warn); }
+.mark.error, .mark.tampered { border-color: var(--bad); color: var(--bad); }
+.mark.pending { color: var(--muted); }

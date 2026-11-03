@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""board-bench: experiments that compare agent configurations on the same tasks, and report the result
+without overstating it. Python 3.10+, standard library only. Documentation: integrations/board/bench/README.md.
+
+  board-bench plan SUITE                      check the suite and print the matrix and the power warning
+  board-bench start SUITE --experiment NAME   register the experiment and make one board task per attempt
+  board-bench approve NAME                    let the workers take the attempts (they start awaiting approval)
+  board run --after-cmd "board-bench record" -- board-bench attempt --suite-dir DIR     the worker side
+  board-bench report NAME [--json]            numbers with intervals, paired comparisons, the verdict
+  board-bench list | cancel NAME | digest DIR | record ...
+
+Every database operation is a call to the `board` helper; this program knows no SQL.
+"""
+
+import argparse
+import json
+import os
+import re
+import secrets
+import sys
+
+if sys.version_info < (3, 10):
+    sys.stderr.write("board-bench: Python 3.10 or newer is required\n")
+    sys.exit(2)
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from benchlib import attempt as attemptmod  # noqa: E402
+from benchlib import report as reportmod  # noqa: E402
+from benchlib import stats, store, suite as suitemod  # noqa: E402
+
+
+def die(msg, rc=1):
+    sys.stderr.write("board-bench: %s\n" % msg)
+    sys.exit(rc)
+
+
+def load(path):
+    try:
+        return suitemod.load_suite(path)
+    except suitemod.SuiteError as e:
+        die("%s: %s" % (path, e), 2)
+
+
+def check_fixtures(suite, suite_path):
+    """{task id: status text}; also the list of problems. Each fixture tree is hashed and compared with the
+    digest the suite declares."""
+    base = os.path.dirname(suite_path)
+    status, problems = {}, []
+    for t in suite["tasks"]:
+        try:
+            got = suitemod.tree_digest(suitemod.fixture_root(base, t["fixture"]["dir"]))
+        except suitemod.SuiteError as e:
+            status[t["id"]] = "PROBLEM: %s" % e
+            problems.append("task %s: %s" % (t["id"], e))
+            continue
+        for problem in suitemod.verify_pins(base, t["grader"]["files"]):
+            status[t["id"]] = "PROBLEM: %s" % problem
+            problems.append("task %s: %s" % (t["id"], problem))
+        if got == t["fixture"]["digest"]:
+            if not t["id"] in status:
+                status[t["id"]] = "ok (sha256:%s)" % got[:12]
+        else:
+            status[t["id"]] = "DIGEST MISMATCH: the tree hashes to sha256:%s" % got
+            problems.append("task %s: the fixture tree hashes to sha256:%s but the suite says sha256:%s"
+                            % (t["id"], got, t["fixture"]["digest"]))
+    return status, problems
+
+
+def cmd_plan(a):
+    suite, sha, path = load(a.suite)
+    status, problems = check_fixtures(suite, path)
+    print(suitemod.plan_text(suite, sha, status))
+    if problems:
+        die("%d fixture problem%s; fix them before `start`" % (len(problems), "" if len(problems) == 1 else "s"), 2)
+    return 0
+
+
+def cmd_start(a):
+    if not suitemod.EXPERIMENT_NAME.fullmatch(a.experiment):
+        die("--experiment may use only letters, digits, '_' and '-' (up to 48 characters)", 2)
+    suite, sha, path = load(a.suite)
+    _, problems = check_fixtures(suite, path)
+    if problems:
+        die("; ".join(problems[:3]), 2)
+    seed = a.seed if a.seed is not None else secrets.randbits(31)
+    matrix = suitemod.build_matrix(suite, seed)
+    board = store.Board()
+    made = 0
+    try:
+        # Check the body first: a suite path the board cannot hold would fail after the experiment exists.
+        attemptmod.make_body(a.experiment, suite["arms"][0]["id"], suite["tasks"][0]["id"], 0, 0, path, sha)
+        board.register(a.experiment, suite["suite"], sha, seed, suite["repeats"], len(matrix), suitemod.HARNESS_VERSION)
+        for arm in suite["arms"]:
+            board.add_arm(a.experiment, arm["id"], arm["agent"], suitemod.arm_config_sha(arm))
+        for t in suite["tasks"]:
+            board.add_task(a.experiment, t["id"], t["fixture"]["digest"])
+        for m in matrix:
+            body = attemptmod.make_body(a.experiment, m["arm"], m["task"], m["repeat"], m["order"], path, sha)
+            title = "bench %s %s/%s #%d" % (a.experiment, m["arm"], m["task"], m["repeat"])
+            tid = board.add_board_task(title, body)
+            board.plan(a.experiment, m["arm"], m["task"], tid, m["repeat"], m["order"], suitemod.HARNESS_VERSION)
+            made += 1
+            if a.approve:
+                board.approve(tid)
+    except (store.BoardError, suitemod.SuiteError) as e:
+        die("%s\nThe experiment %s may be partly made (%d of %d attempts). Run `board-bench cancel %s`, "
+            "then start again under a new name." % (e, a.experiment, made, len(matrix), a.experiment))
+    print("experiment %s: %d attempts planned (seed %d, suite sha256 %s)" % (a.experiment, len(matrix), seed, sha[:12]))
+    print(stats.power_note(len(suite["tasks"]), suite["repeats"]))
+    if a.approve:
+        print("the attempts are approved; start workers with:")
+    else:
+        print("the attempts wait for approval (nothing runs and nothing is spent until then): board-bench approve %s" % a.experiment)
+        print("then start workers with:")
+    print("  board run --after-cmd 'board-bench record' --env-allow NAMES -- board-bench attempt --suite-dir %s" % os.path.dirname(path))
+    return 0
+
+
+def cmd_approve(a):
+    board = store.Board()
+    try:
+        rows = board.rows(a.experiment)
+    except (store.BoardError, reportmod.RowsError) as e:
+        die(str(e))
+    ids = [r["board_task_id"] for r in rows["attempts"] if r["outcome"] == "planned"]
+    done = sum(1 for tid in ids if board.approve(tid))
+    print("approved %d of %d unrecorded attempts of %s%s" % (done, len(ids), a.experiment,
+                                                            "" if done == len(ids) else " (the others are not awaiting approval any more)"))
+    return 0
+
+
+def cmd_cancel(a):
+    board = store.Board()
+    try:
+        rows = board.rows(a.experiment)
+    except (store.BoardError, reportmod.RowsError) as e:
+        die(str(e))
+    ids = [r["board_task_id"] for r in rows["attempts"] if r["outcome"] == "planned"]
+    done = sum(1 for tid in ids if board.cancel(tid))
+    print("cancelled %d of %d unrecorded attempts of %s" % (done, len(ids), a.experiment))
+    return 0
+
+
+def cmd_digest(a):
+    try:
+        print("sha256:" + suitemod.tree_digest(os.path.realpath(a.dir)))
+    except (suitemod.SuiteError, OSError) as e:
+        die(str(e), 2)
+    return 0
+
+
+def cmd_attempt(a):
+    return attemptmod.main_attempt(a.suite_dir, a.work_dir, a.keep)
+
+
+def cmd_record(a):
+    """Put an attempt's result in the database. Used as `board run --after-cmd 'board-bench record'`, where
+    TASK_ID, TASK_FENCE and TASK_RESULT_PATH come from the runner, or by hand with --outcome."""
+    task = a.task or os.environ.get("TASK_ID")
+    fence = a.fence if a.fence is not None else os.environ.get("TASK_FENCE")
+    if not task or fence is None or not str(fence).isdigit():
+        die("record needs a task id and a fence (TASK_ID and TASK_FENCE, or --task and --fence)", 2)
+    if a.outcome:
+        if not (a.experiment and a.arm and a.bench_task):
+            die("record by hand needs --experiment, --arm and --bench-task (the attempt it is about)", 2)
+        fields = {"exp": a.experiment, "arm": a.arm, "task": a.bench_task, "outcome": a.outcome, "flaky": a.flaky, "tampered": a.tampered, "duration_ms": a.duration_ms,
+                  "cost_usd": a.cost, "tokens": a.tokens, "grader_exit": a.grader_exit, "grader_runs": a.grader_runs,
+                  "summary": a.summary}
+    else:
+        path = a.from_result or os.environ.get("TASK_RESULT_PATH")
+        if not path:
+            die("record needs --outcome or --from-result (or TASK_RESULT_PATH)", 2)
+        fields = read_bench_result(path)
+    rc, msg = store.Board().record(task, fence, fields)
+    (sys.stdout if rc == 0 else sys.stderr).write("%s\n" % msg)
+    return rc
+
+
+def read_bench_result(path):
+    raw, problem = attemptmod.R.read_regular(path, attemptmod.R.MAX_RESULT_BYTES)
+    if raw is None:
+        die("the result file %s is %s" % (path, problem or "missing"), 2)
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+        bench = doc["bench"]
+        fields = {"outcome": bench["outcome"]}
+    except (ValueError, KeyError, TypeError):
+        die("the result file has no bench record", 2)
+    if fields["outcome"] not in attemptmod.OUTCOMES:
+        die("the bench record has an unknown outcome", 2)
+    for k in ("exp", "arm", "task"):
+        v = bench.get(k)
+        if not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", v):
+            die("the bench record has no valid %s (the result must say which attempt it is about)" % k, 2)
+        fields[k] = v
+    for k in ("flaky", "tampered", "duration_ms", "cost_usd", "tokens", "grader_exit", "grader_runs", "summary"):
+        fields[k] = bench.get(k)
+    ints = ("tampered", "duration_ms", "tokens", "grader_exit")
+    for k in ints:
+        v = fields[k]
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 0):
+            die("the bench record has a bad %s" % k, 2)
+    c = fields["cost_usd"]
+    if c is not None and (not isinstance(c, (int, float)) or isinstance(c, bool) or not 0 <= c <= 100000):
+        die("the bench record has a bad cost_usd", 2)
+    for k in ("grader_runs", "summary"):
+        if fields[k] is not None and not isinstance(fields[k], str):
+            die("the bench record has a bad %s" % k, 2)
+    return fields
+
+
+def cmd_report(a):
+    board = store.Board()
+    try:
+        rows = board.rows(a.experiment)
+    except (store.BoardError, reportmod.RowsError) as e:
+        die(str(e))
+    rep = reportmod.build_report(rows, a.rule, a.min_tasks)
+    if a.json:
+        json.dump(rep, sys.stdout, indent=1, sort_keys=True)
+        sys.stdout.write("\n")
+    else:
+        sys.stdout.write(reportmod.render_text(rep))
+    return 0
+
+
+def cmd_list(a):
+    try:
+        exps = store.Board().list_experiments()
+    except store.BoardError as e:
+        die(str(e))
+    for e in exps:
+        print("%-32s suite %-20s repeats %-3d attempts %-5d" % (e["name"], e["suite"], e["repeats"], e["planned"]))
+    if not exps:
+        print("no experiments")
+    return 0
+
+
+def parser():
+    ap = argparse.ArgumentParser(prog="board-bench", description="Experiments that compare agent configurations.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("plan", help="validate a suite and print the matrix")
+    p.add_argument("suite")
+    p.set_defaults(fn=cmd_plan)
+    p = sub.add_parser("start", help="register an experiment and make its board tasks")
+    p.add_argument("suite")
+    p.add_argument("--experiment", required=True, metavar="NAME")
+    p.add_argument("--seed", type=int, default=None, help="seed of the attempt order (default: random, recorded)")
+    p.add_argument("--approve", action="store_true", help="approve the attempts at once instead of waiting for `approve`")
+    p.set_defaults(fn=cmd_start)
+    p = sub.add_parser("approve", help="approve the unrecorded attempts of an experiment")
+    p.add_argument("experiment")
+    p.set_defaults(fn=cmd_approve)
+    p = sub.add_parser("cancel", help="cancel the unrecorded attempts of an experiment")
+    p.add_argument("experiment")
+    p.set_defaults(fn=cmd_cancel)
+    p = sub.add_parser("attempt", help="run one attempt (the command `board run` executes)")
+    p.add_argument("--suite-dir", metavar="DIR", required=True,
+                   help="the only directory suites may be read from: a task body is untrusted and a suite can name any command")
+    p.add_argument("--work-dir", metavar="DIR", help="where attempt directories are made (default: the temp dir)")
+    p.add_argument("--keep", action="store_true", help="keep the attempt directory for inspection")
+    p.set_defaults(fn=cmd_attempt)
+    p = sub.add_parser("record", help="write an attempt's result (the runner's --after-cmd; or by hand)")
+    p.add_argument("--task", help="board task id (default TASK_ID)")
+    p.add_argument("--fence", type=int, help="the fence of the claim (default TASK_FENCE)")
+    p.add_argument("--from-result", metavar="PATH", help="read the bench record from this result file (default TASK_RESULT_PATH)")
+    p.add_argument("--outcome", choices=attemptmod.OUTCOMES)
+    p.add_argument("--experiment", help="by hand: the experiment of the attempt")
+    p.add_argument("--arm", help="by hand: the arm of the attempt")
+    p.add_argument("--bench-task", help="by hand: the suite task of the attempt")
+    p.add_argument("--flaky", action="store_true")
+    p.add_argument("--tampered", type=int, default=0)
+    p.add_argument("--duration-ms", type=int)
+    p.add_argument("--cost", type=float)
+    p.add_argument("--tokens", type=int)
+    p.add_argument("--grader-exit", type=int)
+    p.add_argument("--grader-runs")
+    p.add_argument("--summary")
+    p.set_defaults(fn=cmd_record)
+    p = sub.add_parser("report", help="the honest report of an experiment")
+    p.add_argument("experiment")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--rule", choices=("majority", "any"), default="majority",
+                   help="when a task counts as solved by an arm, for the paired test (default majority)")
+    p.add_argument("--min-tasks", type=int, default=reportmod.MIN_PAIRED_TASKS,
+                   help="fewest paired tasks for which an arm may be called better (default %d)" % reportmod.MIN_PAIRED_TASKS)
+    p.set_defaults(fn=cmd_report)
+    p = sub.add_parser("digest", help="print the digest of a fixture directory, for the suite file")
+    p.add_argument("dir")
+    p.set_defaults(fn=cmd_digest)
+    p = sub.add_parser("list", help="list the experiments")
+    p.set_defaults(fn=cmd_list)
+    return ap
+
+
+def main(argv):
+    a = parser().parse_args(argv)
+    if a.cmd == "report" and a.min_tasks < 1:
+        die("--min-tasks must be at least 1", 2)
+    if a.cmd in ("approve", "cancel", "report") and not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", a.experiment):
+        die("not an experiment name: %s" % a.experiment[:60], 2)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

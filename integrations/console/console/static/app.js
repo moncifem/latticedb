@@ -716,11 +716,171 @@
     }
   };
 
+  // ------------------------------------------------------------------ EXPERIMENTS
+
+  // Every rate on these screens is printed from a string the server built (a value, its interval and n
+  // together). This file never formats a percentage on its own, so a bare percentage cannot appear.
+
+  function hrefExp(name) {
+    return "#/experiment/" + encodeURIComponent(name);
+  }
+
+  var experimentsScreen = {
+    name: "experiments",
+    start: function () { return this.poll(); },
+    poll: async function () {
+      var gen = navGen;
+      var d = await api("/api/experiments");
+      if (gen !== navGen) return;
+      applyMeta(d.meta);
+      var rows = d.experiments;
+      show([
+        h("h2", { text: "Experiments" }),
+        h("p", { class: "muted", text: "Comparisons of agent configurations (arms) on the same tasks, made with `board-bench`. Small samples are inconclusive by design: the page says so and always shows n and the interval." }),
+        d.note ? h("p", { class: "note-line", text: d.note }) : null,
+        d.available && !rows.length ? h("p", { class: "muted", text: "No experiments yet. `board-bench plan SUITE` shows what one would run." }) : null,
+        rows.length ? qTable(["Experiment", "Suite", "Repeats", "Attempts planned", "Started", "By"], rows, function (e) {
+          return [td(h("a", { href: hrefExp(e.name) }, e.name)), td(e.suite), h("td", { class: "num", text: e.repeats }),
+            h("td", { class: "num", text: e.planned }), td(fmtTime(e.created_at)), td(e.created_by)];
+        }) : null
+      ]);
+    }
+  };
+
+  function cellMarks(c) {
+    var marks = [];
+    if (c.flaky) marks.push(h("span", { class: "mark flaky", title: "the grader's reruns disagreed", text: c.flaky + " flaky" }));
+    if (c.errors) marks.push(h("span", { class: "mark error", title: "harness errors, left out of every rate", text: c.errors + " error" }));
+    if (c.pending) marks.push(h("span", { class: "mark pending", title: "not recorded yet", text: c.pending + " pending" }));
+    if (c.tampered) marks.push(h("span", { class: "mark tampered", title: "protected files the agent changed were restored", text: c.tampered + " tampered" }));
+    if (c.timeouts) marks.push(h("span", { class: "mark", title: "the agent did not finish; counted as a failure", text: c.timeouts + " timeout" }));
+    return marks;
+  }
+
+  function gridCell(c) {
+    var cls = "gridcell";
+    if (!c.n) cls += " empty";
+    else if (c.passes === c.n) cls += " allpass";
+    else if (c.passes === 0) cls += " nopass";
+    else cls += " mixed";
+    return h("td", { class: cls },
+      c.n ? [h("span", { class: "frac", text: c.passes + "/" + c.n }), " passed"] : h("span", { text: "no counted attempt" }),
+      cellMarks(c));
+  }
+
+  function fmtMs(ms) {
+    return typeof ms === "number" ? fmtDur(ms / 1000) : "n/a";
+  }
+
+  function tooNarrow(a) {
+    var n = a.naive_ci, c = a.pass_at_1.ci;
+    return !!(n && c && (n[1] - n[0]) < (c[1] - c[0]) - 0.001);
+  }
+
+  function armTable(rep) {
+    var atK = "pass@" + rep.k;
+    var powK = "pass^" + rep.k;
+    var head = ["Arm", "Pass@1 (task-level interval)", atK, powK, "Duration", "Cost", "Left out or flagged"];
+    return qTable(head, rep.arms, function (a) {
+      var cost = a.cost.n ? "mean $" + a.cost.mean.toFixed(4) + ", total $" + a.cost.total.toFixed(2) + " (n = " + a.cost.n + " of " + a.attempts + " counted attempts)" : "not reported by the agent";
+      var dur = a.duration.n ? "mean " + fmtMs(a.duration.mean) + " (n = " + a.duration.n + ")" : "not reported";
+      var flags = [a.errors + " harness error" + (a.errors === 1 ? "" : "s") + " (not counted)", a.pending + " pending",
+        a.flaky + " flaky", a.timeouts + " timed out (counted as failures)", a.tampered + " with restored protected files"].join(", ");
+      return [td([h("strong", { text: a.arm }), h("div", { class: "muted", text: a.agent })]),
+        td([a.pass_at_1.text, tooNarrow(a) ? h("div", { class: "warnline", text: "Counting every attempt as independent would show a narrower, misleading interval." }) : null]),
+        td(a.pass_at_k.text), td(a.pass_pow_k.text), td(dur), td(cost), td(flags)];
+    });
+  }
+
+  function comparisonBlock(c) {
+    var t = c.table;
+    var cls = "verdict " + (c.verdict.label === "inconclusive" ? "inconclusive" : "better");
+    return h("section", { class: "qsec" },
+      h("h3", { text: c.b + " compared with " + c.a }),
+      h("div", { class: cls },
+        h("div", { class: "label", text: c.verdict.label === "inconclusive" ? "Inconclusive" : (c.verdict.label === "b_better" ? c.b + " is better" : c.a + " is better") }),
+        h("div", { class: "text", text: c.verdict.text })),
+      h("p", { class: "muted", text: "Paired on " + c.paired_tasks + " tasks both arms have counted attempts for. " + c.rule_text.charAt(0).toUpperCase() + c.rule_text.slice(1) + "." }),
+      h("table", null, h("tbody", null,
+        h("tr", null, h("th", { scope: "row", text: "Solved by both" }), h("td", { class: "num", text: t.both })),
+        h("tr", null, h("th", { scope: "row", text: "Solved only by " + c.a }), h("td", { class: "num", text: t.a_only })),
+        h("tr", null, h("th", { scope: "row", text: "Solved only by " + c.b }), h("td", { class: "num", text: t.b_only })),
+        h("tr", null, h("th", { scope: "row", text: "Solved by neither" }), h("td", { class: "num", text: t.neither })),
+        h("tr", null, h("th", { scope: "row", text: "Exact McNemar p" }),
+          h("td", { text: fmtP(c.mcnemar_p) + (c.comparisons > 1 ? " (" + fmtP(c.mcnemar_p_adjusted) + " adjusted for " + c.comparisons + " comparisons)" : "") })))));
+  }
+
+  function fmtP(p) {
+    if (typeof p !== "number") return "n/a";
+    return p < 0.001 ? "below 0.001" : p.toFixed(3);
+  }
+
+  function makeExperimentScreen(name) {
+    return {
+      name: "experiment",
+      start: function () { return this.poll(); },
+      poll: async function () {
+        var gen = navGen;
+        var rep;
+        try {
+          rep = await api("/api/experiment", { name: name });
+        } catch (e) {
+          if (gen !== navGen) return;
+          show([h("p", { class: "crumbs" }, h("a", { href: "#/experiments", text: "Experiments" })),
+            h("h2", { text: "Experiment " + name }), h("p", { class: "note-line", text: "Not found or not readable: " + e.message })]);
+          return;
+        }
+        if (gen !== navGen) return;
+        applyMeta(rep.meta);
+        var e = rep.experiment;
+        var recorded = rep.arms.reduce(function (n, a) { return n + a.recorded; }, 0);
+        var head = h("table", null, h("tbody", null,
+          h("tr", null, h("th", { scope: "row", text: "Suite" }), td(e.suite)),
+          h("tr", null, h("th", { scope: "row", text: "Repeats" }), td(String(e.repeats))),
+          h("tr", null, h("th", { scope: "row", text: "Attempts" }), td(recorded + " recorded of " + e.planned + " planned, " + rep.pending + " not recorded yet")),
+          h("tr", null, h("th", { scope: "row", text: "Order seed" }), td(e.seed + " (arms alternate inside each task and repeat; the order is reproducible from the seed)")),
+          h("tr", null, h("th", { scope: "row", text: "Started" }), td(fmtTime(e.created_at) + " by " + e.created_by)),
+          h("tr", null, h("th", { scope: "row", text: "Harness" }), td(e.harness))));
+        var rules = h("details", null, h("summary", { text: "How the numbers are made" }),
+          Object.keys(rep.rules).map(function (k) { return h("p", { class: "text" }, h("strong", { text: k.replace(/_/g, " ") + ": " }), rep.rules[k]); }));
+        var grid = qTable(["Task"].concat(rep.arms.map(function (a) { return a.arm; })), rep.tasks, function (t) {
+          return [h("td", { class: "mono", text: t })].concat(rep.arms.map(function (a) { return gridCell(rep.grid[t][a.arm]); }));
+        });
+        var errs = rep.errors.length ? qTable(["Board task", "Arm", "Task", "Repeat", "What went wrong"], rep.errors, function (x) {
+          return [h("td", { class: "mono" }, taskLink(x.board_task_id)), td(x.arm), td(x.task), h("td", { class: "num", text: x.repeat }), td(x.summary)];
+        }) : h("p", { class: "muted", text: "None." });
+        show([
+          h("div", { class: "crumbs" }, h("a", { href: "#/experiments", text: "Experiments" }), h("span", { class: "sep", text: "/" }), h("strong", { text: e.name })),
+          h("h2", { text: e.name }),
+          head,
+          rep.notes.map(function (n) { return h("p", { class: "note-line", text: n }); }),
+          h("h2", { text: "Arms" }),
+          h("p", { class: "muted", text: "Every rate is shown with its n and a 95% interval over tasks. Harness errors and attempts not recorded yet are in no rate." }),
+          rep.arms.length ? armTable(rep) : h("p", { class: "muted", text: "No arms registered." }),
+          h("h2", { text: "Comparison of arms" }),
+          rep.comparisons.length ? rep.comparisons.map(comparisonBlock) : h("p", { class: "muted", text: "Only one arm: there is nothing to compare it with." }),
+          h("p", { class: "muted", text: "A result is called inconclusive unless the interval of the paired difference excludes zero, the exact McNemar test agrees and at least " + rep.min_tasks + " tasks are paired. Inconclusive is a result, not a failure of the experiment." }),
+          h("h2", { text: "Per task and arm" }),
+          rep.tasks.length ? grid : h("p", { class: "muted", text: "No tasks." }),
+          h("h2", { text: "Harness errors (" + rep.errors.length + ")" }),
+          h("p", { class: "muted", text: "The harness failed here, not the agent: a fixture that did not match its digest, a grader that could not run, a full disk. These attempts are in no rate." }),
+          errs,
+          rules
+        ]);
+      }
+    };
+  }
+
   // ------------------------------------------------------------------ routing and polling
 
   function parseRoute() {
     var hash = location.hash || "#/now";
     var path = hash.split("?")[0];
+    var me = /^#\/experiment\/(.+)$/.exec(path);
+    if (me) {
+      try { return { name: "experiment", id: decodeURIComponent(me[1]) }; } catch (e) { return { name: "experiments" }; }
+    }
+    if (path === "#/experiments") return { name: "experiments" };
     var m = /^#\/task\/(.+)$/.exec(path);
     if (m) {
       try { return { name: "task", id: decodeURIComponent(m[1]) }; } catch (e) { return { name: "now" }; }
@@ -755,13 +915,15 @@
     var r = parseRoute();
     var links = document.querySelectorAll("nav a");
     for (var i = 0; i < links.length; i++) {
-      var on = links[i].getAttribute("data-nav") === (r.name === "task" ? "now" : r.name);
+      var on = links[i].getAttribute("data-nav") === (r.name === "task" ? "now" : (r.name === "experiment" ? "experiments" : r.name));
       links[i].className = on ? "current" : "";
     }
     if (r.name === "task") screen = makeTaskScreen(r.id);
     else if (r.name === "feed") screen = makeFeedScreen();
     else if (r.name === "scorecard") screen = makeScorecardScreen();
     else if (r.name === "queue") screen = queueScreen;
+    else if (r.name === "experiments") screen = experimentsScreen;
+    else if (r.name === "experiment") screen = makeExperimentScreen(r.id);
     else screen = nowScreen;
     var s = screen;
     try {

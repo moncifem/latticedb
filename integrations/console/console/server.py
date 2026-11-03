@@ -108,6 +108,16 @@ FEED_PARAMS = {
     "task": v_regex(_ID_RE, "letters, digits, '_' or '-' (up to 64)"),
 }
 TASK_PARAMS = {"id": v_regex(_ID_RE, "letters, digits, '_' or '-' (up to 64)")}
+_EXP_RE = re.compile(r"[A-Za-z0-9_-]{1,48}")
+
+
+def v_rule(name, v):
+    if v not in ("majority", "any"):
+        raise BadRequest("rule must be majority or any")
+    return v
+
+
+EXPERIMENT_PARAMS = {"name": v_regex(_EXP_RE, "letters, digits, '_' or '-' (up to 48)"), "rule": v_rule}
 SCORE_PARAMS = {"from": EPOCH, "to": EPOCH, "from2": EPOCH, "to2": EPOCH,
                 "agent": v_regex(_NAME_RE, "letters, digits, '.', '_' or '-' (up to 64)")}
 
@@ -209,6 +219,18 @@ def make_handler(service, allowed_hosts_ref):
                     payload = service.task_payload(q["id"])
                     if payload is None:
                         self._error(404, "no such task in the loaded data")
+                    else:
+                        self._json(200, payload)
+                elif path == "/api/experiments":
+                    parse_query(parts.query, {})
+                    self._json(200, service.bench_list_payload())
+                elif path == "/api/experiment":
+                    q = parse_query(parts.query, EXPERIMENT_PARAMS)
+                    if "name" not in q:
+                        raise BadRequest("name is required")
+                    payload = service.bench_payload(q["name"], q.get("rule", "majority"))
+                    if payload is None:
+                        self._error(404, "no such experiment")
                     else:
                         self._json(200, payload)
                 elif path == "/api/feed":

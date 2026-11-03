@@ -1,0 +1,64 @@
+{
+  "suite": "example-fake",
+  "version": 1,
+  "repeats": 2,
+  "tasks": [
+    {
+      "id": "calc-add",
+      "prompt": "calc.py: add() subtracts. Make the tests in tests/ pass.",
+      "fixture": {"dir": "fixtures/calc", "digest": "sha256:71ef44373260081d06e98624c88ea75613625d798c7ae7861faa27251d71905a"},
+      "grader": {
+        "cmd": ["python3", "-m", "unittest", "discover", "-s", "tests"],
+        "timeout_s": 60,
+        "protected": ["tests/**"]
+      },
+      "timeout_s": 60
+    },
+    {
+      "id": "greet-hello",
+      "prompt": "greet.py leaves out the comma after Hello. Make the tests in tests/ pass.",
+      "fixture": {"dir": "fixtures/greet", "digest": "sha256:6b9a345640291c5c90672f8b54c283b3dc92eb7827b9b29e7c5da22025505f2f"},
+      "grader": {
+        "cmd": ["python3", "-m", "unittest", "discover", "-s", "tests"],
+        "timeout_s": 60,
+        "protected": ["tests/**"]
+      },
+      "timeout_s": 60
+    },
+    {
+      "id": "calc-flaky",
+      "prompt": "Same bug as calc-add, graded by a grader that disagrees with itself (it passes on odd runs only).",
+      "fixture": {"dir": "fixtures/calc", "digest": "sha256:71ef44373260081d06e98624c88ea75613625d798c7ae7861faa27251d71905a"},
+      "grader": {
+        "cmd": ["python3", "{suite_dir}/graders/flaky.py"],
+        "files": {"graders/flaky.py": "sha256:64ce48ce50cf6fe8f4fdfdb64fadb941361bcb65665a098c50d1ea012f980fa4"},
+        "timeout_s": 60,
+        "protected": ["tests/**"],
+        "reruns": 2
+      },
+      "timeout_s": 60
+    },
+    {
+      "id": "calc-infra",
+      "prompt": "Same bug as calc-add, but the grader reports that it cannot run (exit 125): an infrastructure error.",
+      "fixture": {"dir": "fixtures/calc", "digest": "sha256:71ef44373260081d06e98624c88ea75613625d798c7ae7861faa27251d71905a"},
+      "grader": {
+        "cmd": ["python3", "-c", "import sys; sys.exit(125)"],
+        "timeout_s": 60
+      },
+      "timeout_s": 60
+    }
+  ],
+  "arms": [
+    {
+      "id": "baseline",
+      "agent": "cmd",
+      "args": {"argv": ["python3", "{suite_dir}/agents/solver.py", "--skip", "greet"]}
+    },
+    {
+      "id": "candidate",
+      "agent": "cmd",
+      "args": {"argv": ["python3", "{suite_dir}/agents/solver.py"]}
+    }
+  ]
+}

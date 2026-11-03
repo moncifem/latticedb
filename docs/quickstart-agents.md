@@ -11,10 +11,13 @@ agent in step 6 can be your own script; `claude` or `codex` is optional.
 ```sh
 dev/lattice-dev.sh up
 dev/lattice-dev.sh account add board \
-  --read counters,tasks,events,decisions,task_leases \
-  --write counters,tasks,events,decisions,task_leases \
-  --ddl counters,tasks,events,decisions,task_leases
+  --read counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts \
+  --write counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts \
+  --ddl counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts
 ```
+
+The first five tables are the board; the last four are used only by `board-bench` (step 9) and can be left out
+if you will not run experiments.
 
 `up` prepares the stack: a certificate authority and the volumes (its output says the server starts with the
 first account). `account add` creates the `board` account, starts the server (it listens on `127.0.0.1:5432`
@@ -34,7 +37,7 @@ export BOARD_STATE_DIR="$HOME/.local/state/lattice-board"
 board init
 ```
 
-`board init` creates the five tables and is safe to run again. The password never goes on a command line.
+`board init` creates the tables and is safe to run again. The password never goes on a command line.
 
 ## 3. Watch it
 
@@ -188,7 +191,69 @@ are limited only by Claude Code's permission system. A call cancelled after its 
 server does not know until the lease runs out. Titles and bodies are one line each. Nothing is pushed to the session: the SessionStart
 hook prints counts and task ids once, and the agent polls with `board_queue` and `board_since`.
 
-## 9. Clean up
+## 9. Compare two agent configurations
+
+`integrations/board/board-bench` runs the same tasks with two agent configurations (arms), several times each, grades
+each attempt with a program you wrote, and reports the result with its uncertainty. The example suite uses fake
+agents and tiny fixtures, so this step needs no model and costs nothing. It assumes steps 1 and 2, and a board
+account that may write the four bench tables (`bench_experiments`, `bench_arms`, `bench_tasks`, `bench_attempts`,
+granted in step 1) and a `board init` that has run since they were added.
+
+```sh
+board init
+BENCH=$PWD/integrations/board/board-bench
+SUITE_DIR=$PWD/integrations/board/bench/examples
+SUITE=$SUITE_DIR/suite.json
+$BENCH plan $SUITE
+```
+
+`plan` checks the suite, hashes every fixture against the digest the suite declares, prints the arms and tasks and
+the number of attempts (16 here), and warns that with so few tasks a 10-point difference is usually inconclusive. It
+refuses a matrix that is too large and a fixture that was edited.
+
+```sh
+$BENCH start $SUITE --experiment try1 --seed 5
+board list awaiting_approval
+```
+
+`start` registers the experiment and makes one board task per attempt, in a seeded random order (the seed is
+recorded): the two arms of a task and repeat sit next to each other, so a slow hour touches both. Every attempt waits
+for approval; nothing runs until you say so.
+
+```sh
+$BENCH approve try1
+board run --owner bench-w1 --idle-exit 5 --after-cmd "$BENCH record" -- $BENCH attempt --suite-dir $SUITE_DIR
+```
+
+The task body is untrusted text, and a suite file can name any command, so `attempt` only reads suites from the
+directory you give it with `--suite-dir`; a task that points anywhere else is recorded as an error.
+
+Start a second worker in another terminal if you like. For each task the worker copies the fixture to a fresh
+directory (after checking its digest), runs the arm's agent there, puts the files the grader protects back as they
+were, runs the grader, and records the outcome under the task's fence: a worker that lost its lease cannot record.
+The agent never sees a database setting. The example suite also has a grader that disagrees with itself and a grader
+that reports it cannot run, so the report has a flaky attempt and a harness error to show.
+
+```sh
+$BENCH report try1
+$BENCH report try1 --json
+```
+
+Reading the report: per arm, the tasks and attempts counted, pass@1 with an interval whose n is the number of tasks
+(attempts of one task are not independent), pass@k and pass^k, the mean duration and cost with the number of attempts
+they cover (the cost only where the agent reports one). Harness errors are listed apart and are in no rate; attempts
+not recorded yet are in no rate either. Then, for the two arms, the tasks solved by both, by one, by neither, an exact
+McNemar p, an interval for the difference, and a verdict. With 3 counted tasks the verdict here is "Inconclusive", and
+it will be for any suite under 30 paired tasks, however large the gap looks; above that it needs the interval and the exact test to agree. The console shows the same on its
+Experiments screen (`#/experiments`).
+
+Write your own suite from [`integrations/board/bench/README.md`](../integrations/board/bench/README.md): a directory
+per fixture, `board-bench digest DIR` for its digest, a grader command, the globs the agent may not change, and arms
+of `claude`, `codex` or any command. What it does not do: it is not a sandbox (the agent runs as you), a grader can be
+gamed by a wrong answer that passes it, and a small sample is inconclusive by design. No real model was run for this
+feature; the `claude` and `codex` arms are tested with stand-in executables.
+
+## 10. Clean up
 
 ```sh
 dev/lattice-dev.sh down          # stop, keep the rows

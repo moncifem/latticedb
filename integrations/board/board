@@ -75,6 +75,9 @@ usage: board <command> [arguments]
                                 cancelled, its lease row and the state of its blockers, as tagged
                                 tab separated lines (for programs; see CONVENTIONS.md)
   run [OPTIONS] -- COMMAND     take tasks with `next` and run COMMAND for each (board run --help)
+  bench-experiment, bench-arm, bench-task, bench-plan, bench-record, bench-rows, bench-list
+                                the tables of `board-bench` (experiments that compare agent
+                                configurations); programs use these, see CONVENTIONS.md, "board bench"
 
 Every write needs BOARD_AUTHOR set to this agent's unique name.
 USAGE
@@ -1550,6 +1553,264 @@ $(printf '%s\n' "$OUT" | awk -F"$TAB" '{ print $8 }')"
   done
 }
 
+# ---- board bench ----------------------------------------------------------------------------
+# The tables of `board-bench` (see schema.sql and CONVENTIONS.md, "board bench"). Every command is
+# single-table SQL with bound variables. All options are --name value pairs after the positional words.
+
+# need_bname NAME VALUE: an experiment, arm or suite task name: 1 to 48 characters of A-Za-z0-9_-.
+need_bname() {
+  case $2 in
+    '' | *[!A-Za-z0-9_-]*) die "$1 may use only letters, digits, '_' and '-'" ;;
+  esac
+  [ ${#2} -le 48 ] || die "$1 is longer than 48 characters"
+}
+
+# need_sha NAME VALUE: 64 lower-case hex digits.
+need_sha() {
+  case $2 in
+    *[!0-9a-f]*) die "$1 must be 64 lower-case hex digits" ;;
+  esac
+  [ ${#2} -eq 64 ] || die "$1 must be 64 lower-case hex digits"
+}
+
+# bench_opts ALLOWED ARGS...: sets BO_<name> (name with '-' as '_') for each "--name value" in ALLOWED
+# (a space separated list) and BO_POS1..BO_POS3 for the words that are not options.
+# shellcheck disable=SC1007,SC2034
+bench_opts() {
+  bo_allowed=$1
+  shift
+  BO_N=0 BO_POS1= BO_POS2= BO_POS3= BO_POS4= BO_POS5=
+  for bo_name in $bo_allowed; do eval "BO_$(printf '%s' "$bo_name" | tr '-' '_')="; done
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --*)
+        bo_name=${1#--}
+        case " $bo_allowed " in *" $bo_name "*) ;; *) die "unknown option for $cmd: $1" ;; esac
+        [ $# -ge 2 ] || die "--$bo_name needs a value"
+        bo_var="BO_$(printf '%s' "$bo_name" | tr '-' '_')"
+        eval "$bo_var=\$2"
+        eval "${bo_var}_SET=1"
+        shift 2
+        ;;
+      *)
+        BO_N=$((BO_N + 1))
+        [ "$BO_N" -le 5 ] || die "too many arguments for $cmd"
+        eval "BO_POS$BO_N=\$1"
+        shift
+        ;;
+    esac
+  done
+}
+
+# bench_insert SQL VARS...: one INSERT; a duplicate key is reported as "already exists" (exit 1).
+bench_insert() {
+  bi_sql=$1
+  shift
+  if psql_run tuples "$bi_sql" "$@"; then
+    return 0
+  fi
+  case $(cat "$TMP_ERR") in
+    *23505:*) die "already exists (the name is taken)" ;;
+    *) fail_db ;;
+  esac
+}
+
+# bench-experiment EXP --suite NAME --suite-sha HEX --seed N --repeats N --planned N --harness TEXT
+# shellcheck disable=SC2154
+cmd_bench_experiment() {
+  bench_opts "suite suite-sha seed repeats planned harness" "$@"
+  [ "$BO_N" -eq 1 ] || die "bench-experiment takes an experiment name"
+  need_bname experiment "$BO_POS1"
+  need_bname suite "$BO_suite"
+  need_sha --suite-sha "$BO_suite_sha"
+  need_int seed "$BO_seed"
+  need_range --repeats "$BO_repeats" 1 100
+  need_range --planned "$BO_planned" 1 100000
+  need_line harness "$BO_harness" 1
+  bench_insert "INSERT INTO bench_experiments (id, suite, suite_sha, seed, repeats, planned, harness_version, created_by, created_at)
+VALUES (:'exp', :'suite', :'sha', :seed, :repeats, :planned, :'harness', :'author', :ts);" \
+    -v exp="$BO_POS1" -v suite="$BO_suite" -v sha="$BO_suite_sha" -v seed="$BO_seed" -v repeats="$BO_repeats" \
+    -v planned="$BO_planned" -v harness="$BO_harness" -v author="$AUTHOR" -v ts="$(now)"
+  printf 'experiment %s registered\n' "$BO_POS1"
+}
+
+# bench_need_experiment EXP: the experiment must exist.
+bench_need_experiment() {
+  psql_run tuples "SELECT id FROM bench_experiments WHERE id = :'exp';" -v exp="$1" || fail_db
+  [ -n "$OUT" ] || die "no such experiment: $1"
+}
+
+# bench-arm EXP ARM --agent TEXT --config-sha HEX
+# shellcheck disable=SC2154
+cmd_bench_arm() {
+  bench_opts "agent config-sha" "$@"
+  [ "$BO_N" -eq 2 ] || die "bench-arm takes an experiment and an arm name"
+  need_bname experiment "$BO_POS1"
+  need_bname arm "$BO_POS2"
+  need_bname agent "$BO_agent"
+  need_sha --config-sha "$BO_config_sha"
+  bench_need_experiment "$BO_POS1"
+  bench_insert "INSERT INTO bench_arms (id, experiment_id, arm, agent, config_sha, created_at)
+VALUES (:'id', :'exp', :'arm', :'agent', :'sha', :ts);" \
+    -v id="$BO_POS1.$BO_POS2" -v exp="$BO_POS1" -v arm="$BO_POS2" -v agent="$BO_agent" \
+    -v sha="$BO_config_sha" -v ts="$(now)"
+  printf 'arm %s added\n' "$BO_POS2"
+}
+
+# bench-task EXP TASKKEY --digest HEX
+# shellcheck disable=SC2154
+cmd_bench_task() {
+  bench_opts "digest" "$@"
+  [ "$BO_N" -eq 2 ] || die "bench-task takes an experiment and a task name"
+  need_bname experiment "$BO_POS1"
+  need_bname task "$BO_POS2"
+  need_sha --digest "$BO_digest"
+  bench_need_experiment "$BO_POS1"
+  bench_insert "INSERT INTO bench_tasks (id, experiment_id, task_key, fixture_digest, created_at)
+VALUES (:'id', :'exp', :'task', :'digest', :ts);" \
+    -v id="$BO_POS1.$BO_POS2" -v exp="$BO_POS1" -v task="$BO_POS2" -v digest="$BO_digest" -v ts="$(now)"
+  printf 'task %s added\n' "$BO_POS2"
+}
+
+# bench-plan EXP ARM TASKKEY BOARDTASK --repeat N --order N --harness TEXT: the planned attempt row of
+# a board task that was just made.
+# shellcheck disable=SC2154
+cmd_bench_plan() {
+  bench_opts "repeat order harness" "$@"
+  [ "$BO_N" -eq 4 ] || die "bench-plan takes an experiment, an arm, a task name and a board task id"
+  need_bname experiment "$BO_POS1"
+  need_bname arm "$BO_POS2"
+  need_bname task "$BO_POS3"
+  need_id "$BO_POS4"
+  need_range --repeat "$BO_repeat" 0 99
+  need_range --order "$BO_order" 0 99999
+  need_line harness "$BO_harness" 1
+  psql_run tuples "SELECT id FROM tasks WHERE id = :'task';" -v task="$BO_POS4" || fail_db
+  [ -n "$OUT" ] || die "no such task: $BO_POS4"
+  bench_need_experiment "$BO_POS1"
+  bench_insert "INSERT INTO bench_attempts (board_task_id, experiment_id, arm, task_key, repeat_idx, order_idx, harness_version, created_at)
+VALUES (:'task', :'exp', :'arm', :'key', :repeat, :order, :'harness', :ts);" \
+    -v task="$BO_POS4" -v exp="$BO_POS1" -v arm="$BO_POS2" -v key="$BO_POS3" -v repeat="$BO_repeat" \
+    -v order="$BO_order" -v harness="$BO_harness" -v ts="$(now)"
+  printf 'planned %s\n' "$BO_POS4"
+}
+
+# bench-record BOARDTASK --fence N --outcome O --experiment E --arm A --task K [--flaky 0|1] [--tampered N] [--duration-ms N] [--cost USD]
+#   [--tokens N] [--grader-exit N] [--grader-runs TEXT] [--summary TEXT]
+# Fills in the planned attempt row of a board task, once. Only the holder of the task's lease may call it
+# (claimed, owner = BOARD_AUTHOR, claim_seq = the fence; there is no "no fence known" shortcut), so a
+# zombie worker cannot record over the live one. A second call changes nothing and exits 0. Exit 3: the
+# fence refused.
+# shellcheck disable=SC2154
+cmd_bench_record() {
+  bench_opts "fence outcome experiment arm task flaky tampered duration-ms cost tokens grader-exit grader-runs summary" "$@"
+  [ "$BO_N" -eq 1 ] || die "bench-record takes a board task id"
+  need_id "$BO_POS1"
+  task=$BO_POS1
+  [ -n "$BO_fence" ] || die "bench-record needs --fence"
+  need_range --fence "$BO_fence" 0 999999999
+  case $BO_outcome in
+    pass | fail | timeout | error) ;;
+    *) die "--outcome must be pass, fail, timeout or error" ;;
+  esac
+  need_bname --experiment "${BO_experiment:-}"
+  need_bname --arm "${BO_arm:-}"
+  need_bname --task "${BO_task:-}"
+  br_flaky=${BO_flaky:-0}
+  case $br_flaky in 0 | 1) ;; *) die "--flaky must be 0 or 1" ;; esac
+  br_tampered=${BO_tampered:-0}
+  need_range --tampered "$br_tampered" 0 100000
+  br_duration=NULL
+  if [ -n "${BO_duration_ms:-}" ]; then need_int duration-ms "$BO_duration_ms"; br_duration=$BO_duration_ms; fi
+  br_tokens=NULL
+  if [ -n "${BO_tokens:-}" ]; then need_int tokens "$BO_tokens"; br_tokens=$BO_tokens; fi
+  br_gexit=NULL
+  if [ -n "${BO_grader_exit:-}" ]; then need_range --grader-exit "$BO_grader_exit" 0 255; br_gexit=$BO_grader_exit; fi
+  br_cost=NULL
+  if [ -n "${BO_cost:-}" ]; then
+    case $BO_cost in
+      *[!0-9.]* | . | .* | *. | *.*.*) die "--cost must be a number of dollars such as 0.0421" ;;
+    esac
+    [ ${#BO_cost} -le 16 ] || die "--cost is too long"
+    br_cost=$BO_cost
+  fi
+  need_line grader-runs "${BO_grader_runs:-}" 0
+  need_line summary "${BO_summary:-}" 0
+  [ ${#BO_grader_runs} -le 64 ] || die "--grader-runs is longer than 64 characters"
+  [ "$(printf '%s' "${BO_summary:-}" | wc -c | tr -d ' ')" -le 600 ] || die "--summary is longer than 600 bytes"
+  # The result must be about the attempt this board task was planned for: a worker (or a forged result) cannot
+  # fill another attempt's row, or this one with another arm's outcome. Nothing is written on a mismatch.
+  psql_run tuples "SELECT experiment_id, arm, task_key FROM bench_attempts WHERE board_task_id = :'task';" -v task="$task" || fail_db
+  [ -n "$OUT" ] || die "$task is not a bench attempt (no planned row)"
+  [ "$OUT" = "$BO_experiment$TAB$BO_arm$TAB$BO_task" ] \
+    || die "the result names $BO_experiment/$BO_arm/$BO_task but $task was planned for $(printf '%s' "$OUT" | tr "$TAB" '/'); nothing written"
+  sql=$(cat <<'SQL'
+BEGIN;
+\set ok f
+SELECT (state = 'claimed' AND coalesce(owner, '') = :'author' AND claim_seq = :fence) AS ok
+  FROM tasks WHERE id = :'task' \gset
+\if :ok
+UPDATE bench_attempts SET outcome = :'outcome', flaky = :flaky, tampered = :tampered, duration_ms = :duration,
+  cost_usd = :cost, tokens = :tokens, grader_exit = :gexit, grader_runs = :'runs', summary = :'summary',
+  recorded_at = :ts WHERE board_task_id = :'task' AND experiment_id = :'exp' AND arm = :'arm' AND task_key = :'key' AND outcome = 'planned';
+\endif
+SELECT :'ok' AS ok;
+COMMIT;
+SQL
+)
+  tx "$sql" -v author="$AUTHOR" -v task="$task" -v fence="$BO_fence" -v outcome="$BO_outcome" -v flaky="$br_flaky" \
+    -v tampered="$br_tampered" -v duration="$br_duration" -v cost="$br_cost" -v tokens="$br_tokens" \
+    -v gexit="$br_gexit" -v runs="${BO_grader_runs:-}" -v summary="${BO_summary:-}" -v ts="$(now)" \
+    -v exp="$BO_experiment" -v arm="$BO_arm" -v key="$BO_task" || exit 1
+  if [ "$OUT" != t ]; then
+    FENCE=$BO_fence
+    refused "bench-record"
+  fi
+  psql_run tuples "SELECT outcome FROM bench_attempts WHERE board_task_id = :'task';" -v task="$task" || fail_db
+  [ -n "$OUT" ] || die "$task is not a bench attempt (no planned row)"  # a row deleted between the two reads
+  if [ "$OUT" = "$BO_outcome" ]; then
+    printf 'recorded %s: %s\n' "$task" "$OUT"
+  else
+    printf 'already recorded %s: %s (nothing changed)\n' "$task" "$OUT"
+  fi
+}
+
+# bench-rows EXP: read only. Tagged tab separated lines:
+#   experiment ID SUITE SUITE_SHA SEED REPEATS PLANNED HARNESS CREATED_BY CREATED_AT
+#   arm ARM AGENT CONFIG_SHA
+#   task TASK_KEY FIXTURE_DIGEST
+#   attempt BOARD_TASK ARM TASK_KEY REPEAT ORDER OUTCOME FLAKY TAMPERED DURATION_MS COST_USD TOKENS GRADER_EXIT RUNS HARNESS RECORDED_AT SUMMARY
+# An empty duration, cost, tokens or grader exit is NULL. At most 64 arms, 1000 tasks and 20000 attempts;
+# a line "truncated attempts" follows when there were more.
+cmd_bench_rows() {
+  [ $# -eq 1 ] || die "bench-rows takes an experiment name"
+  need_bname experiment "$1"
+  br_exp=$1
+  psql_run tuples "SELECT id, suite, suite_sha, seed, repeats, planned, harness_version, created_by, created_at
+FROM bench_experiments WHERE id = :'exp';" -v exp="$br_exp" || fail_db
+  [ -n "$OUT" ] || die "no such experiment: $br_exp"
+  printf '%s\n' "$OUT" | awk -F"$TAB" '{ print "experiment\t" $0 }'
+  psql_run tuples "SELECT arm, agent, config_sha FROM bench_arms WHERE experiment_id = :'exp' ORDER BY arm LIMIT 64;" \
+    -v exp="$br_exp" || fail_db
+  [ -z "$OUT" ] || printf '%s\n' "$OUT" | awk -F"$TAB" '{ print "arm\t" $0 }'
+  psql_run tuples "SELECT task_key, fixture_digest FROM bench_tasks WHERE experiment_id = :'exp' ORDER BY task_key LIMIT 1000;" \
+    -v exp="$br_exp" || fail_db
+  [ -z "$OUT" ] || printf '%s\n' "$OUT" | awk -F"$TAB" '{ print "task\t" $0 }'
+  psql_run tuples "SELECT board_task_id, arm, task_key, repeat_idx, order_idx, outcome, flaky, tampered, duration_ms,
+  cost_usd, tokens, grader_exit, grader_runs, harness_version, recorded_at, summary
+FROM bench_attempts WHERE experiment_id = :'exp' ORDER BY order_idx LIMIT 20001;" -v exp="$br_exp" || fail_db
+  [ -z "$OUT" ] || printf '%s\n' "$OUT" | head -n 20000 | awk -F"$TAB" '{ print "attempt\t" $0 }'
+  if [ "$(count_lines "$OUT")" -gt 20000 ]; then printf 'truncated\tattempts\n'; fi
+}
+
+# bench-list: read only, one line per experiment, newest first: ID SUITE REPEATS PLANNED CREATED_AT
+cmd_bench_list() {
+  [ $# -eq 0 ] || die "bench-list takes no arguments"
+  psql_run tuples "SELECT id, suite, repeats, planned, created_at FROM bench_experiments ORDER BY created_at DESC LIMIT 100;" \
+    || fail_db
+  [ -z "$OUT" ] || printf '%s\n' "$OUT"
+}
+
 [ $# -ge 1 ] || { usage >&2; exit 1; }
 command -v "${BOARD_PSQL:-psql}" >/dev/null 2>&1 || die "psql is not on PATH"
 
@@ -1577,7 +1838,8 @@ AUTHOR=${BOARD_AUTHOR:-}
 cmd=$1
 shift
 case $cmd in
-  add | claim | note | done | decide | heartbeat | fail | release | reap | block | unblock | approve | cancel)
+  add | claim | note | done | decide | heartbeat | fail | release | reap | block | unblock | approve | cancel \
+    | bench-experiment | bench-arm | bench-task | bench-plan | bench-record)
     need_author
     ;;
 esac
@@ -1606,6 +1868,13 @@ case $cmd in
   watch) cmd_watch "$@" ;;
   head) cmd_head "$@" ;;
   queue) cmd_queue "$@" ;;
+  bench-experiment) cmd_bench_experiment "$@" ;;
+  bench-arm) cmd_bench_arm "$@" ;;
+  bench-task) cmd_bench_task "$@" ;;
+  bench-plan) cmd_bench_plan "$@" ;;
+  bench-record) cmd_bench_record "$@" ;;
+  bench-rows) cmd_bench_rows "$@" ;;
+  bench-list) cmd_bench_list "$@" ;;
   help | -h | --help) usage ;;
   *) usage >&2; exit 1 ;;
 esac

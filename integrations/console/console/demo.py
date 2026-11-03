@@ -9,6 +9,7 @@ something to show.
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import Optional
 
@@ -280,6 +281,7 @@ class DemoSource:
         self.clock = clock
         self.started = clock()
         self.initial = max(1, len(self.events) - 10) if reveal_every else len(self.events)
+        self.bench = generate_bench(seed)
 
     def visible(self) -> int:
         if not self.reveal_every:
@@ -322,6 +324,115 @@ class DemoSource:
     def decisions_after(self, after: int, limit: int) -> list:
         k = self.visible()
         return [dict(d) for d in self.decisions if after < d["id"] <= k][:limit]
+
+    def bench_experiments(self) -> tuple:
+        rows = []
+        for d in self.bench.values():
+            e = d["experiment"]
+            rows.append({"id": e["name"], "suite": e["suite"], "suite_sha": e["suite_sha"], "seed": e["seed"],
+                         "repeats": e["repeats"], "planned": e["planned"], "harness_version": e["harness"],
+                         "created_by": e["created_by"], "created_at": e["created_at"]})
+        rows.sort(key=lambda r: -r["created_at"])
+        return rows, True
+
+    def bench_data(self, name: str):
+        d = self.bench.get(name)
+        return None if d is None else copy.deepcopy(d)
+
+
+# ---------------------------------------------------------------- experiments (board bench)
+
+BENCH_T0 = T0 + SPAN + 3600
+FAIL_SUMMARIES = ["grader runs f; FAILED (failures=2)", "grader runs f; AssertionError in test_parse",
+                  "grader runs f; FAILED (errors=1)"]
+ERROR_SUMMARIES = ["the fixture does not match its digest (expected 3fa9c1d20b77, got 90be4417aa12)",
+                   "the grader could not run: no space left on device",
+                   "the grader could not run: no output"]
+
+
+def _attempt(rng, arm, task, rep, order, p, *, cost=None, slow=1.0, flaky_task=False):
+    """One generated attempt row in the shape benchlib.report.parse_rows returns."""
+    tid = "tb%08x" % (rng.next() & 0xFFFFFFFF)
+    row = {"board_task_id": tid, "arm": arm, "task_key": task, "repeat": rep, "order": order,
+           "outcome": "planned", "flaky": False, "tampered": 0, "duration_ms": None, "cost_usd": None,
+           "tokens": None, "grader_exit": None, "grader_runs": "", "harness": "board-bench/1",
+           "recorded_at": 0, "summary": ""}
+    roll = rng.below(1000) / 1000.0
+    row["recorded_at"] = BENCH_T0 + 600 + order * 40
+    row["duration_ms"] = int((20000 + rng.below(90000)) * slow)
+    if cost is not None:
+        row["cost_usd"] = round(cost * (0.5 + rng.below(100) / 100.0), 4)
+    if rng.below(100) < 3:  # the harness failed: not the agent's fault, never counted
+        row.update(outcome="error", summary=rng.pick(ERROR_SUMMARIES), grader_runs="e", grader_exit=None)
+        return row
+    if roll < p:
+        row.update(outcome="pass", grader_exit=0, grader_runs="p", summary="grader runs p; OK")
+    elif rng.below(100) < 8:
+        row.update(outcome="timeout", summary="the agent did not finish in 600s")
+        row["duration_ms"] = 600000
+    else:
+        row.update(outcome="fail", grader_exit=1, grader_runs="f", summary=rng.pick(FAIL_SUMMARIES))
+    if flaky_task and row["outcome"] in ("pass", "fail") and rng.below(100) < 35:
+        row.update(outcome="pass", flaky=True, grader_exit=0, grader_runs="pfp", summary="grader runs pfp; OK")
+    if rng.below(100) < 4 and row["outcome"] != "timeout":
+        row["tampered"] = 1 + rng.below(2)
+        row["summary"] = "restored %d protected path; " % row["tampered"] + row["summary"]
+    return row
+
+
+def _unrecord(row):
+    row.update(outcome="planned", flaky=False, tampered=0, duration_ms=None, cost_usd=None, grader_exit=None,
+               grader_runs="", summary="", recorded_at=0)
+
+
+def _experiment(rng, name, suite, n_tasks, repeats, arm_p, seed, *, pending_tail=0, cost_arm=None):
+    arms = sorted(arm_p)
+    tasks = ["t%02d" % i for i in range(1, n_tasks + 1)]
+    difficulty = {t: 0.15 + 0.7 * (rng.below(1000) / 1000.0) for t in tasks}
+    flaky = {t for t in tasks if rng.below(100) < 12}
+    rows = []
+    order = 0
+    for t in tasks:
+        for r in range(repeats):
+            for a in arms:
+                scale, shift, slow = arm_p[a]
+                p = min(0.97, max(0.03, difficulty[t] * scale + shift))
+                rows.append(_attempt(rng, a, t, r, order, p, cost=(0.04 if a == cost_arm else None),
+                                     slow=slow, flaky_task=t in flaky))
+                order += 1
+    if pending_tail:
+        for row in rows[len(rows) - pending_tail:]:
+            _unrecord(row)
+    return {"experiment": {"name": name, "suite": suite, "suite_sha": "%064x" % (rng.next() * rng.next()),
+                           "seed": seed, "repeats": repeats, "planned": len(rows), "harness": "board-bench/1",
+                           "created_by": "maintainer", "created_at": BENCH_T0},
+            "arms": [{"arm": a, "agent": "claude", "config_sha": "%064x" % (rng.next() * 7919)} for a in arms],
+            "tasks": [{"task": t, "fixture_digest": "%064x" % (rng.next() * 104729)} for t in tasks],
+            "attempts": rows, "truncated": False}
+
+
+def generate_bench(seed: int = 7) -> dict:
+    """{name: experiment data}. Three experiments on purpose:
+      demo-small-lift   candidate looks 20 points better on 8 tasks: the report must say inconclusive;
+      demo-clear-gap    a large difference on 40 tasks, with flaky graders, harness errors, timeouts,
+                        changed protected files and attempts not recorded yet;
+      demo-just-started every attempt still planned: no result yet."""
+    rng = Lcg(seed * 31 + 5)
+    out = {}
+    out["demo-small-lift"] = _experiment(rng, "demo-small-lift", "refactor-mini", 8, 3,
+                                         {"baseline": (1.0, 0.0, 1.0), "candidate": (1.0, 0.2, 1.1)}, 4242)
+    clear = _experiment(rng, "demo-clear-gap", "bugfix-40", 40, 3,
+                        {"baseline": (0.55, 0.0, 1.0), "candidate": (0.7, 0.30, 1.4)}, 99, pending_tail=6,
+                        cost_arm="candidate")
+    clear["experiment"]["created_at"] = BENCH_T0 + 3600
+    out["demo-clear-gap"] = clear
+    started = _experiment(rng, "demo-just-started", "refactor-mini", 4, 2,
+                          {"baseline": (1.0, 0.0, 1.0), "candidate": (1.0, 0.0, 1.0)}, 5)
+    for row in started["attempts"]:
+        _unrecord(row)
+    started["experiment"]["created_at"] = BENCH_T0 + 7200
+    out["demo-just-started"] = started
+    return out
 
 
 def make_demo(reveal_every: Optional[float] = 4.0) -> DemoSource:

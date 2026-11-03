@@ -180,7 +180,25 @@ _SQL_ALLOWED = re.compile(
     r"SELECT [a-z_]+(?:, [a-z_]+)* FROM (?:tasks|events|decisions|task_leases)"
     r"(?: WHERE id > [0-9]{1,18})?"
     r" ORDER BY [a-z_]+(?: DESC)? LIMIT [0-9]{1,6};"
+    # The experiment tables of `board bench`: the experiment list, or the rows of one experiment, whose
+    # name is checked again against BENCH_NAME before it reaches the statement.
+    r"|SELECT [a-z_]+(?:, [a-z_]+)* FROM bench_(?:experiments|arms|tasks|attempts)"
+    r"(?: WHERE experiment_id = '[A-Za-z0-9_-]{1,48}')?"
+    r" ORDER BY [a-z_]+(?: DESC)? LIMIT [0-9]{1,6};"
 )
+BENCH_NAME = re.compile(r"[A-Za-z0-9_-]{1,48}")
+BENCH_EXPERIMENT_COLUMNS = ("id", "suite", "suite_sha", "seed", "repeats", "planned", "harness_version",
+                            "created_by", "created_at")
+BENCH_EXPERIMENT_INTS = ("seed", "repeats", "planned", "created_at")
+BENCH_ARM_COLUMNS = ("arm", "agent", "config_sha")
+BENCH_TASK_COLUMNS = ("task_key", "fixture_digest")
+BENCH_ATTEMPT_COLUMNS = ("board_task_id", "arm", "task_key", "repeat_idx", "order_idx", "outcome", "flaky",
+                         "tampered", "duration_ms", "cost_usd", "tokens", "grader_exit", "grader_runs",
+                         "harness_version", "recorded_at", "summary")
+BENCH_ATTEMPT_INTS = ("repeat_idx", "order_idx", "flaky", "tampered", "recorded_at")
+BENCH_ATTEMPT_NULL_INTS = ("duration_ms", "tokens", "grader_exit")
+BENCH_ATTEMPT_LIMIT = 20000
+BENCH_EXPERIMENT_LIMIT = 200
 
 # The one other statement: the database clock, which leases and retry delays are measured on.
 _SQL_NOW = "SELECT CAST(extract(epoch FROM now()) AS bigint);"
@@ -197,14 +215,33 @@ def _int(name: str, value, lo: int, hi: int) -> int:
 
 
 def build_select(columns: tuple, table: str, order: str, desc: bool, limit: int,
-                 after: Optional[int] = None) -> str:
+                 after: Optional[int] = None, experiment: Optional[str] = None) -> str:
     sql = "SELECT %s FROM %s" % (", ".join(columns), table)
     if after is not None:
         sql += " WHERE id > %d" % _int("after", after, 0, MAX_INT)
+    if experiment is not None:
+        if not BENCH_NAME.fullmatch(experiment):
+            raise ValueError("not an experiment name")
+        sql += " WHERE experiment_id = '%s'" % experiment
     sql += " ORDER BY %s%s LIMIT %d;" % (order, " DESC" if desc else "", _int("limit", limit, 1, 100000))
     if not _SQL_ALLOWED.fullmatch(sql):
         raise ValueError("refusing to send a statement that is not a plain SELECT")
     return sql
+
+
+CONNECT_TRIES = 6
+_TRANSIENT = ("server closed the connection unexpectedly", "connection reset", "connection refused", "timeout expired")
+_NOT_TRANSIENT = ("fatal", "no password supplied", "ssl", "tls", "certificate", "password authentication")
+
+
+def transient_connect_error(stderr: str) -> bool:
+    """True for a connect-phase failure worth asking again about (see PsqlSource._run)."""
+    low = stderr.lower()
+    if "connection to server" not in low:
+        return False
+    if any(x in low for x in _NOT_TRANSIENT):
+        return False
+    return any(x in low for x in _TRANSIENT)
 
 
 class PsqlSource:
@@ -218,6 +255,10 @@ class PsqlSource:
         self.timeout = timeout
         self.max_bytes = max_bytes
         self.env = dict(os.environ if env is None else env)
+        # Messages in English whatever the user's locale: they are matched below. LC_ALL would win over
+        # LC_MESSAGES, so it goes.
+        self.env.pop("LC_ALL", None)
+        self.env["LC_MESSAGES"] = "C"
         # Ask the server for a read-only session and a statement deadline, keeping any options the
         # user already set. (latticed ignores startup options today; PostgreSQL honours them.)
         mine = "-c default_transaction_read_only=on -c statement_timeout=8000"
@@ -238,7 +279,15 @@ class PsqlSource:
     def _run(self, sql: str) -> bytes:
         if not (_SQL_ALLOWED.fullmatch(sql) or sql == _SQL_NOW):
             raise ValueError("refusing to send a statement that is not a plain SELECT")
-        rc, out, err = run_bounded(self.argv(), sql + "\n", self.timeout, self.max_bytes, self.env)
+        for attempt in range(1, CONNECT_TRIES + 1):
+            rc, out, err = run_bounded(self.argv(), sql + "\n", self.timeout, self.max_bytes, self.env)
+            # The alpha server drops a share of new connections (issue 867). Every statement the console
+            # sends is a SELECT, so asking again after a connect-phase failure cannot repeat a write. Never
+            # retried: a wrong password, TLS and certificate errors, SQL errors, anything else.
+            if rc == 2 and attempt < CONNECT_TRIES and transient_connect_error(err.decode("utf-8", "replace")):
+                time.sleep(min(0.1 * 2 ** (attempt - 1), 1.0))
+                continue
+            break
         if rc != 0:
             secrets = [self.env.get("PGPASSWORD", "")]
             line = scrub(first_line(err.decode("utf-8", "replace")), secrets)
@@ -306,6 +355,38 @@ class PsqlSource:
         return self._rows(build_select(DECISION_COLUMNS, "decisions", "id", False, limit, after),
                           DECISION_COLUMNS, DECISION_INTS)
 
+    # -- board bench
+
+    def bench_experiments(self) -> tuple:
+        """(rows, available): the experiments, newest first. A board made before `board bench` has no
+        bench tables: that is an empty answer (available False), not an error."""
+        sql = build_select(BENCH_EXPERIMENT_COLUMNS, "bench_experiments", "created_at", True, BENCH_EXPERIMENT_LIMIT)
+        try:
+            rows = self._rows(sql, BENCH_EXPERIMENT_COLUMNS, BENCH_EXPERIMENT_INTS)
+        except SourceError as e:
+            if "bench_experiments" in str(e) and ("exist" in str(e) or "42P01" in str(e)):
+                return [], False
+            raise
+        return rows, True
+
+    def bench_data(self, name: str):
+        """The rows of one experiment in the shape of benchlib.report.parse_rows, or None when there is no
+        such experiment."""
+        if not BENCH_NAME.fullmatch(name):
+            raise ValueError("not an experiment name")
+        rows, _ = self.bench_experiments()
+        exp = next((r for r in rows if r["id"] == name), None)
+        if exp is None:
+            return None
+        arms = self._rows(build_select(BENCH_ARM_COLUMNS, "bench_arms", "arm", False, 64, experiment=name),
+                          BENCH_ARM_COLUMNS)
+        tasks = self._rows(build_select(BENCH_TASK_COLUMNS, "bench_tasks", "task_key", False, 1000, experiment=name),
+                           BENCH_TASK_COLUMNS)
+        att = self._rows(build_select(BENCH_ATTEMPT_COLUMNS, "bench_attempts", "order_idx", False,
+                                      BENCH_ATTEMPT_LIMIT + 1, experiment=name),
+                         BENCH_ATTEMPT_COLUMNS, BENCH_ATTEMPT_INTS + BENCH_ATTEMPT_NULL_INTS, BENCH_ATTEMPT_NULL_INTS)
+        return bench_shape(exp, arms, tasks, att)
+
 
 def parse_rows(out: bytes, columns: tuple, int_columns=(), null_columns=()) -> list:
     """Parse psql -A -t -z -0 output: a flat run of NUL-terminated values, len(columns) per row.
@@ -326,10 +407,10 @@ def parse_rows(out: bytes, columns: tuple, int_columns=(), null_columns=()) -> l
     for i in range(0, len(tokens), n):
         row = {}
         for col, val in zip(columns, tokens[i:i + n]):
-            if col in int_columns:
-                row[col] = _to_int(col, val)
-            elif col in null_columns and val == "":
+            if col in null_columns and val == "":
                 row[col] = None
+            elif col in int_columns:
+                row[col] = _to_int(col, val)
             else:
                 row[col] = val
         rows.append(row)
@@ -341,3 +422,28 @@ def _to_int(col: str, val: str) -> int:
         return int(val)
     except ValueError:
         raise SourceError("unexpected psql output (column %s is not a number)" % col) from None
+
+
+def bench_shape(exp: dict, arms: list, tasks: list, attempts: list) -> dict:
+    """Rows from the bench tables in the shape benchlib.report.parse_rows returns."""
+    truncated = len(attempts) > BENCH_ATTEMPT_LIMIT
+    out = []
+    for a in attempts[:BENCH_ATTEMPT_LIMIT]:
+        cost = a["cost_usd"]
+        try:
+            cost = float(cost) if cost not in ("", None) else None
+        except ValueError:
+            raise SourceError("unexpected psql output (cost_usd is not a number)") from None
+        out.append({"board_task_id": a["board_task_id"], "arm": a["arm"], "task_key": a["task_key"],
+                    "repeat": a["repeat_idx"], "order": a["order_idx"], "outcome": a["outcome"],
+                    "flaky": bool(a["flaky"]), "tampered": a["tampered"], "duration_ms": a["duration_ms"],
+                    "cost_usd": cost, "tokens": a["tokens"], "grader_exit": a["grader_exit"],
+                    "grader_runs": a["grader_runs"], "harness": a["harness_version"],
+                    "recorded_at": a["recorded_at"], "summary": a["summary"]})
+    return {"experiment": {"name": exp["id"], "suite": exp["suite"], "suite_sha": exp["suite_sha"],
+                           "seed": exp["seed"], "repeats": exp["repeats"], "planned": exp["planned"],
+                           "harness": exp["harness_version"], "created_by": exp["created_by"],
+                           "created_at": exp["created_at"]},
+            "arms": [{"arm": r["arm"], "agent": r["agent"], "config_sha": r["config_sha"]} for r in arms],
+            "tasks": [{"task": r["task_key"], "fixture_digest": r["fixture_digest"]} for r in tasks],
+            "attempts": out, "truncated": truncated}

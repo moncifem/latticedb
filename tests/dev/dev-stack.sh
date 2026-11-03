@@ -16,6 +16,9 @@
 #   5b. the board account runs two swarms (`board run` workers with scripted agents: a killed worker, failing
 #       and hanging attempts, tasks cancelled while running) and then integrations/board/test.sh.
 #   5b1. the board MCP server (board-mcp) driven against the same board: races, a lost lease, a poisoned body.
+#   5b2. board bench (integrations/board/board-bench) against the same board, no model: the example suite with fake
+#       agents through two `board run` workers, an agent that rewrites its tests, a zombie worker refused by the
+#       fence, the hand-computed report, and the console serving the same numbers.
 #   6.  down, then up on the same volumes; the rows are read back.
 #   6a. remove alice: her token is revoked, her env file goes, an old copy of it no longer logs in,
 #       bob still reads, and the name can be added again.
@@ -252,7 +255,7 @@ ok "status_lists_the_accounts_without_passwords"
 # and its password is never printed. The checks that need a server of their own (password in a URL,
 # restart and durability) are skipped by that mode and say so in the output. The account is removed
 # afterwards so the later steps see the accounts they expect.
-board_tables=counters,tasks,events,decisions,task_leases
+board_tables=counters,tasks,events,decisions,task_leases,bench_experiments,bench_arms,bench_tasks,bench_attempts
 expect_ok add-board "$dev" account add board --read "$board_tables" --write "$board_tables" --ddl "$board_tables"
 board_state=$(mktemp -d "$work/board-state.XXXXXX")
 chmod 700 "$board_state"
@@ -314,6 +317,31 @@ if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/bo
   fail "the board MCP driver output contains the board account's password"
 fi
 ok "board_mcp_server_keeps_its_rules_against_the_dev_stack"
+
+# --- 5b2. board bench (integrations/board/board-bench) against this server. integrations/board/tests/bench_devstack.py
+# starts the example suite (fake agents, tiny fixtures, 16 attempts that wait for approval), approves them, runs two
+# `board run` workers with `--after-cmd "board-bench record"`, and compares the report with numbers worked out by hand;
+# then an agent that rewrites its tests (must fail and be counted as tampered), a zombie worker whose record the fence
+# refuses, and the read-only console against the same rows. --cancel-leftovers: the workers take any runnable task.
+bench_state=$(mktemp -d "$work/bench-state.XXXXXX")
+chmod 700 "$bench_state"
+if ! (
+  set -a
+  # shellcheck source=/dev/null
+  . "$LATTICE_DEV_HOME/accounts/board.env"
+  set +a
+  BOARD_STATE_DIR="$bench_state" TMPDIR="$bench_state" \
+    python3 "$root/integrations/board/tests/bench_devstack.py" --cancel-leftovers
+) >"$work/board-bench.out" 2>"$work/board-bench.err"; then
+  tail -n 40 "$work/board-bench.out" >&2
+  tail -n 20 "$work/board-bench.err" >&2
+  fail "integrations/board/tests/bench_devstack.py failed against the dev stack"
+fi
+grep -q '^bench-devstack: all checks passed$' "$work/board-bench.out" || fail "the board bench driver did not report that all checks passed"
+if grep -qF -- "$(password_of "$LATTICE_DEV_HOME/accounts/board.env")" "$work/board-bench.out" "$work/board-bench.err"; then
+  fail "the board bench driver output contains the board account's password"
+fi
+ok "board_bench_keeps_its_rules_against_the_dev_stack"
 
 if ! (
   set -a
