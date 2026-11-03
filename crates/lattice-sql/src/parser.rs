@@ -186,11 +186,26 @@ enum Infix {
     Unsupported(&'static str),
 }
 
+/// `lower(e)`, spanning `e`.
+fn lower_call(e: Expr) -> Expr {
+    let span = e.span;
+    Expr {
+        kind: ExprKind::Function(Function {
+            name: "lower".to_string(),
+            distinct: false,
+            args: FunctionArgs::List(vec![e]),
+        }),
+        span,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pred {
     In,
     Between,
     Like,
+    /// `ILIKE`: parsed as `lower(left) LIKE lower(pattern)`.
+    Ilike,
 }
 
 const BP_OR: u8 = 1;
@@ -1429,7 +1444,10 @@ impl Parser {
                     negated: false,
                     kind: Pred::Like,
                 },
-                "ilike" => Infix::Unsupported("ILIKE"),
+                "ilike" => Infix::Pred {
+                    negated: false,
+                    kind: Pred::Ilike,
+                },
                 "isnull" => Infix::Unsupported("ISNULL (write IS NULL)"),
                 "notnull" => Infix::Unsupported("NOTNULL (write IS NOT NULL)"),
                 "similar" => Infix::Unsupported("SIMILAR TO"),
@@ -1448,7 +1466,10 @@ impl Parser {
                         negated: true,
                         kind: Pred::Like,
                     },
-                    Some("ilike") => Infix::Unsupported("ILIKE"),
+                    Some("ilike") => Infix::Pred {
+                        negated: true,
+                        kind: Pred::Ilike,
+                    },
                     Some("similar") => Infix::Unsupported("SIMILAR TO"),
                     _ => Infix::None,
                 },
@@ -1623,13 +1644,26 @@ impl Parser {
                     span,
                 )
             }
-            Pred::Like => {
+            Pred::Like | Pred::Ilike => {
                 let pattern = self.expr_bp(BP_OTHER)?;
                 if self.is_kw("escape") {
                     return Err(self.unsupported_here("LIKE ... ESCAPE"));
                 }
-                let depth = left_depth.max(self.td);
+                let mut depth = left_depth.max(self.td);
                 let span = left.span.join(pattern.span);
+                let (left, pattern) = if kind == Pred::Ilike {
+                    // Case folding is `lower` on both sides, one level deeper.
+                    depth += 1;
+                    if depth + 1 > MAX_DEPTH {
+                        return Err(ParseError::too_large(
+                            format!("nesting is deeper than {MAX_DEPTH}"),
+                            span,
+                        ));
+                    }
+                    (lower_call(left), lower_call(pattern))
+                } else {
+                    (left, pattern)
+                };
                 self.grow(
                     depth,
                     ExprKind::Like {
