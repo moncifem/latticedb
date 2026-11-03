@@ -129,8 +129,11 @@ SELECT id FROM f WHERE count(*) > 1
 statement error 0A000
 SELECT count(*) FILTER (WHERE v > 5) FROM f
 
-statement error 0A000
+query II nosort
 SELECT count(DISTINCT v), sum(DISTINCT v) FROM f
+----
+2
+30
 
 statement error 0A000
 SELECT string_agg(g, ',') FROM f

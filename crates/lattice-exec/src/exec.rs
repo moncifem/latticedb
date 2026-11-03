@@ -33,7 +33,8 @@ use lattice_engines::rowops::{MAX_KEY_BYTES, RowKey};
 use lattice_engines::store::{RowStore, RowTx};
 use lattice_seams::{Clock, Io, Rng};
 use lattice_sql::plan::{
-    AsOfPlan, InsertSource, LogicalPlan, OutputColumn, SortKey, SqlType, TypedExpr,
+    AggCall, AggFunc, AsOfPlan, InsertSource, LogicalPlan, OutputColumn, SortKey, SqlType,
+    TypedExpr,
 };
 
 use crate::access::{self, Access};
@@ -41,7 +42,7 @@ use crate::db::Database;
 use crate::error::{ErrorKind, ExecError};
 use crate::eval::{EvalCtx, cast, eval, truthy};
 use crate::schema::{ColumnDef, TableDef, owning_table};
-use crate::value::{Datum, total_order};
+use crate::value::{Datum, compare, total_order};
 
 /// The policy a transaction is bound to: the actor's row policy, shared by the session.
 ///
@@ -145,9 +146,15 @@ impl ActorPolicy {
                         return Err(denied(table, "read"));
                     }
                 }
+                LogicalPlan::Join { left, right, .. } => {
+                    stack.push(left);
+                    stack.push(right);
+                }
                 LogicalPlan::Filter { input, .. }
                 | LogicalPlan::Project { input, .. }
                 | LogicalPlan::Sort { input, .. }
+                | LogicalPlan::Aggregate { input, .. }
+                | LogicalPlan::Distinct { input }
                 | LogicalPlan::Limit { input, .. } => stack.push(input),
                 LogicalPlan::Insert {
                     table,
@@ -517,6 +524,69 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 let rows = self.rel(input)?;
                 self.sort(rows, keys)
             }
+            LogicalPlan::Join {
+                left,
+                right,
+                on,
+                outer,
+                right_width,
+            } => {
+                let l = self.rel(left)?;
+                let r = self.rel(right)?;
+                let mut out = Vec::new();
+                for a in &l {
+                    let mut matched = false;
+                    for b in &r {
+                        self.gov.check()?;
+                        let mut vals = Vec::with_capacity(a.vals.len() + b.vals.len());
+                        vals.extend(a.vals.iter().cloned());
+                        vals.extend(b.vals.iter().cloned());
+                        if let Some(p) = on
+                            && !truthy(&eval(p, &vals, &self.ctx())?)
+                        {
+                            continue;
+                        }
+                        matched = true;
+                        self.gov.charge(row_cost(&vals))?;
+                        out.push(Tuple { key: None, vals });
+                    }
+                    if *outer && !matched {
+                        let mut vals = a.vals.clone();
+                        vals.extend(std::iter::repeat_n(Datum::Null, *right_width));
+                        self.gov.charge(row_cost(&vals))?;
+                        out.push(Tuple { key: None, vals });
+                    }
+                }
+                Ok(out)
+            }
+            LogicalPlan::Distinct { input } => {
+                let rows = self.rel(input)?;
+                let mut seen: std::collections::BTreeSet<GroupKey> =
+                    std::collections::BTreeSet::new();
+                let mut out = Vec::new();
+                for t in rows {
+                    self.gov.check()?;
+                    let key = GroupKey(t.vals.clone());
+                    if seen.insert(key) {
+                        self.gov.charge(row_cost(&t.vals))?;
+                        out.push(t);
+                    }
+                }
+                Ok(out)
+            }
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                calls,
+            } => {
+                let rows = self.rel(input)?;
+                if group_by.is_empty() {
+                    let all: Vec<&Tuple> = rows.iter().collect();
+                    let vals = self.aggregate(&all, calls)?;
+                    return Ok(vec![Tuple { key: None, vals }]);
+                }
+                self.grouped(&rows, group_by, calls)
+            }
             LogicalPlan::Limit {
                 input,
                 limit,
@@ -542,6 +612,70 @@ impl<I: Io, C: Clock + Clone, R: Rng> Exec<'_, '_, I, C, R> {
                 Err(ExecError::internal("a write operator inside a query"))
             }
         }
+    }
+
+    /// The aggregates of `calls` over `rows`: one value each. `NULL` arguments are skipped, an empty
+    /// input gives `0` for `count` and `NULL` for the rest, and a result outside its type is `22003`.
+    fn aggregate(&mut self, rows: &[&Tuple], calls: &[AggCall]) -> Result<Vec<Datum>, ExecError> {
+        let mut out = Vec::with_capacity(calls.len());
+        for call in calls {
+            let mut args: Vec<Datum> = Vec::with_capacity(rows.len());
+            if let Some(arg) = &call.arg {
+                for t in rows {
+                    self.gov.check()?;
+                    let v = eval(arg, &t.vals, &self.ctx())?;
+                    if !v.is_null() || bugs::active(Bug::AggregateSkipsNull) {
+                        args.push(v);
+                    }
+                }
+            }
+            if call.distinct {
+                // Each distinct value once, the first of equal values kept.
+                let mut seen = std::collections::BTreeSet::new();
+                args.retain(|v| seen.insert(GroupKey(vec![v.clone()])));
+            }
+            out.push(fold_aggregate(call, rows.len(), &args)?);
+        }
+        Ok(out)
+    }
+
+    /// One row per distinct value of the `group_by` expressions, in key order (`NULL`s sort first and
+    /// group together): the key values, then the aggregates of the rows that share them. The memory
+    /// charged is the group index (a position per input row) and the output rows.
+    fn grouped(
+        &mut self,
+        rows: &[Tuple],
+        group_by: &[TypedExpr],
+        calls: &[AggCall],
+    ) -> Result<Vec<Tuple>, ExecError> {
+        self.gov
+            .charge((rows.len() as u64).saturating_mul(std::mem::size_of::<usize>() as u64))?;
+        let mut groups: BTreeMap<GroupKey, Vec<usize>> = BTreeMap::new();
+        for (i, t) in rows.iter().enumerate() {
+            self.gov.check()?;
+            let mut key = Vec::with_capacity(group_by.len());
+            for g in group_by {
+                key.push(eval(g, &t.vals, &self.ctx())?);
+            }
+            if bugs::active(Bug::GroupKeyTruncated) {
+                key.truncate(1);
+            }
+            groups.entry(GroupKey(key)).or_default().push(i);
+        }
+        let mut out = Vec::with_capacity(groups.len());
+        for (key, members) in groups {
+            self.gov.check()?;
+            let group_rows: Vec<&Tuple> = members.iter().filter_map(|i| rows.get(*i)).collect();
+            let mut vals = key.0;
+            // Keep the row the width the plan says even with the planted defect.
+            while vals.len() < group_by.len() {
+                vals.push(Datum::Null);
+            }
+            vals.extend(self.aggregate(&group_rows, calls)?);
+            self.gov.charge(row_cost(&vals))?;
+            out.push(Tuple { key: None, vals });
+        }
+        Ok(out)
     }
 
     fn bounds(
@@ -1090,6 +1224,119 @@ fn duplicate(constraint: &str) -> ExecError {
         "23505",
         format!("duplicate key value violates unique constraint \"{constraint}\""),
     )
+}
+
+/// A `GROUP BY` key: equal when every value is equal, `NULL` equal to `NULL`, ordered with `NULL` first
+/// and the values by [`total_order`].
+struct GroupKey(Vec<Datum>);
+
+impl GroupKey {
+    fn compare(&self, other: &Self) -> Ordering {
+        for (a, b) in self.0.iter().zip(&other.0) {
+            let o = match (a.is_null(), b.is_null()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                (false, false) => total_order(a, b),
+            };
+            if o != Ordering::Equal {
+                return o;
+            }
+        }
+        Ordering::Equal
+    }
+}
+
+impl PartialEq for GroupKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.compare(other) == Ordering::Equal
+    }
+}
+
+impl Eq for GroupKey {}
+
+impl PartialOrd for GroupKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for GroupKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.compare(other)
+    }
+}
+
+/// One aggregate over its non-`NULL` arguments (`rows` is the input row count, for `count(*)`).
+fn fold_aggregate(call: &AggCall, rows: usize, args: &[Datum]) -> Result<Datum, ExecError> {
+    use crate::decimal::Decimal;
+    let count = i64::try_from(args.len()).unwrap_or(i64::MAX);
+    let too_big = || ExecError::eval("22003", "value out of range: overflow");
+    Ok(match call.func {
+        AggFunc::CountStar => Datum::Int(i64::try_from(rows).unwrap_or(i64::MAX)),
+        AggFunc::Count => Datum::Int(count),
+        _ if args.is_empty() => Datum::Null,
+        AggFunc::Min | AggFunc::Max => {
+            let want = if call.func == AggFunc::Min {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+            let mut values = args.iter();
+            let Some(mut best) = values.next() else {
+                return Ok(Datum::Null);
+            };
+            for v in values {
+                if compare(v, best) == Some(want) {
+                    best = v;
+                }
+            }
+            best.clone()
+        }
+        AggFunc::Sum | AggFunc::Avg => match call.ty {
+            SqlType::BigInt => {
+                let mut sum: i128 = 0;
+                for v in args {
+                    if let Datum::Int(i) = v {
+                        sum += i128::from(*i);
+                    }
+                }
+                Datum::Int(crate::value::check_int(sum, SqlType::BigInt)?)
+            }
+            SqlType::DoublePrecision => {
+                let mut sum = 0.0_f64;
+                let mut finite = true;
+                for v in args {
+                    if let Datum::Float(f) = v {
+                        finite &= f.is_finite();
+                        sum += f;
+                    }
+                }
+                if sum.is_infinite() && finite {
+                    return Err(too_big());
+                }
+                if call.func == AggFunc::Avg {
+                    Datum::Float(sum / count as f64)
+                } else {
+                    Datum::Float(sum)
+                }
+            }
+            _ => {
+                let mut sum = Decimal::from_i64(0);
+                for v in args {
+                    sum = sum.add(match v {
+                        Datum::Int(i) => Decimal::from_i64(*i),
+                        Datum::Numeric(n) => *n,
+                        _ => return Err(ExecError::bind_type("sum needs numbers")),
+                    })?;
+                }
+                if call.func == AggFunc::Avg {
+                    sum = sum.div(Decimal::from_i64(count))?;
+                }
+                Datum::Numeric(sum)
+            }
+        },
+    })
 }
 
 #[cfg(test)]

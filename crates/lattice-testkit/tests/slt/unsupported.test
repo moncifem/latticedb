@@ -94,9 +94,6 @@ statement error 0A000
 SELECT string_agg(b, ',') FROM ux
 
 statement error 0A000
-SELECT sum(DISTINCT a) FROM ux
-
-statement error 0A000
 SELECT count(*) FILTER (WHERE a > 1) FROM ux
 
 statement error 0A000

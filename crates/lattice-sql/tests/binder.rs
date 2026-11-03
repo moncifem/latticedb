@@ -454,27 +454,58 @@ fn bind_errors_carry_the_postgres_sqlstate_and_the_lattice_code() {
         ),
         ("SELECT extract(century FROM ts) FROM events", "22023", None),
         // outside what the binder handles yet
-        ("SELECT count(*) FROM notes", "0A000", Some("LSQL-0002")),
-        ("SELECT sum(score) FROM notes", "0A000", Some("LSQL-0002")),
+        ("SELECT sum(count(*)) FROM notes", "42803", None),
         (
-            "SELECT region FROM sales GROUP BY region",
+            "SELECT count(*) FROM notes WHERE count(*) > 1",
             "0A000",
             Some("LSQL-0002"),
         ),
-        ("SELECT DISTINCT rep FROM sales", "0A000", Some("LSQL-0002")),
+        ("SELECT id + count(*) FROM notes", "42803", None),
+        ("SELECT count(*) FROM notes ORDER BY id", "42803", None),
+        // a query that aggregates may select only aggregates and constants (PostgreSQL: 42803)
+        ("SELECT id, count(*) FROM notes", "42803", None),
+        ("SELECT title, sum(score) FROM notes", "42803", None),
+        ("SELECT *, count(*) FROM notes", "42803", None),
+        // aggregate argument types
+        ("SELECT sum(title) FROM notes", "42883", None),
+        ("SELECT avg(title) FROM notes", "42883", None),
+        // grouping errors (PostgreSQL: 42803)
+        ("SELECT rep FROM sales GROUP BY region", "42803", None),
         (
-            "SELECT t.name FROM teams t INNER JOIN members m ON m.team_id = t.id",
+            "SELECT region, count(*) FROM sales GROUP BY region HAVING rep = 'x'",
+            "42803",
+            None,
+        ),
+        (
+            "SELECT count(*) FROM sales GROUP BY count(*)",
             "0A000",
             Some("LSQL-0002"),
         ),
-        ("SELECT * FROM teams, members", "0A000", Some("LSQL-0002")),
+        ("SELECT region FROM sales GROUP BY 7", "42P10", None),
+        (
+            "SELECT region FROM sales GROUP BY nope",
+            "42703",
+            Some("LSQL-0003"),
+        ),
+        // DISTINCT sorts on the output rows, so an ORDER BY expression has to be an output column
+        (
+            "SELECT DISTINCT rep FROM sales ORDER BY amount",
+            "42P10",
+            None,
+        ),
+        (
+            "SELECT name FROM teams t INNER JOIN members m ON m.team_id = t.id",
+            "42702",
+            None,
+        ),
+        ("SELECT * FROM teams, teams", "42712", None),
         (
             "SELECT id FROM notes WHERE id IN (SELECT id FROM acct)",
             "0A000",
             Some("LSQL-0002"),
         ),
         ("SELECT (SELECT 1) FROM notes", "0A000", Some("LSQL-0002")),
-        ("SELECT a FROM notes, tags", "0A000", Some("LSQL-0002")),
+        ("SELECT a FROM notes, tags", "42P01", Some("LSQL-0003")),
         ("CREATE TABLE t (a INT)", "0A000", Some("LSQL-0002")),
         ("BEGIN", "0A000", Some("LSQL-0002")),
         ("SELECT a.b.c FROM notes", "0A000", Some("LSQL-0002")),
@@ -753,18 +784,7 @@ fn expected_bind(sql: &str, script_expects: &str) -> &'static str {
     ) {
         return "0A000";
     }
-    let unsupported = [
-        "COUNT(",
-        "SUM(",
-        "MIN(",
-        "MAX(",
-        "AVG(",
-        "GROUP BY",
-        "DISTINCT",
-        " JOIN ",
-        "CROSS JOIN",
-        "OVER (",
-    ];
+    let unsupported = ["OVER ("];
     if unsupported.iter().any(|u| upper.contains(u)) {
         return "0A000";
     }
@@ -774,6 +794,13 @@ fn expected_bind(sql: &str, script_expects: &str) -> &'static str {
         "23502" => "23502",
         _ => "ok",
     }
+}
+
+fn has_aggregate(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    ["COUNT(", "SUM(", "MIN(", "MAX(", "AVG("]
+        .iter()
+        .any(|a| upper.contains(a))
 }
 
 #[test]
@@ -799,11 +826,14 @@ fn script_records_bind_as_the_subset_says() {
                 assert_eq!(e.sqlstate(), state, "{}: `{}`: {e}", r.file, r.sql);
                 refused += 1;
             }
+            // An aggregate the subset runs, inside a form it does not (an expression around it,
+            // `DISTINCT`, an aggregate in `WHERE`): refused with 0A000 where the script expects PostgreSQL's answer.
+            (Err(e), "ok") if e.sqlstate() == "0A000" && has_aggregate(&r.sql) => refused += 1,
             (got, state) => panic!("{}: `{}` expected {state}, got {got:?}", r.file, r.sql),
         }
     }
     assert!(bound >= 25, "only {bound} records bound");
-    assert!(refused >= 20, "only {refused} records refused");
+    assert!(refused >= 15, "only {refused} records refused");
     assert_eq!(skipped, 7, "parser-refused records");
 }
 
@@ -852,6 +882,26 @@ fn plan_exprs(p: &LogicalPlan, f: &mut impl FnMut(&TypedExpr)) {
         }
         LogicalPlan::Sort { input, keys } => {
             keys.iter().for_each(|k| walk(&k.expr, f));
+            plan_exprs(input, f);
+        }
+        LogicalPlan::Join {
+            left, right, on, ..
+        } => {
+            on.iter().for_each(|x| walk(x, f));
+            plan_exprs(left, f);
+            plan_exprs(right, f);
+        }
+        LogicalPlan::Distinct { input } => plan_exprs(input, f),
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            calls,
+        } => {
+            group_by.iter().for_each(|x| walk(x, f));
+            calls
+                .iter()
+                .filter_map(|c| c.arg.as_ref())
+                .for_each(|x| walk(x, f));
             plan_exprs(input, f);
         }
         LogicalPlan::Limit {
