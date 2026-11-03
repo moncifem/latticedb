@@ -175,8 +175,7 @@ needs only the session itself; `WHERE`, `LIMIT` and `OFFSET` apply to that one r
 ## Not run
 
 Joins, `GROUP BY`, aggregates, `DISTINCT` and subqueries (refused by the binder with `0A000`);
-`ALTER TABLE`, `CREATE INDEX`, `DROP INDEX` (`0A000`); the `jsonb` operators `->`, `->>`, `@>` (bound,
-`0A000` at run time); `numeric(p)` and `numeric(p, s)` columns (`0A000`: the plan carries no type
+`ALTER TABLE`, `CREATE INDEX`, `DROP INDEX` (`0A000`); `numeric(p)` and `numeric(p, s)` columns (`0A000`: the plan carries no type
 modifiers, so the declaration could not be enforced); `round` with negative digits; `DDL` inside a transaction block (`25001`); keys on
 `numeric` or `jsonb` columns; more than 15 `UNIQUE` constraints on a table. Every scan reads the whole
 table unless the rules in **Access paths** above apply. See `docs/gates/phase-2.md` for the sqllogictest records that fail for these
@@ -185,7 +184,7 @@ reasons.
 ## Known differences from PostgreSQL
 
 `numeric` division chooses its scale as PostgreSQL does (about 16 significant digits) but keeps at most 38 fractional digits, and `numeric` values hold at most 38 digits in all; `double precision` prints with Rust's shortest form (with
-an exponent outside 1e-4..1e15); `jsonb` is validated and kept as written, so equality is textual;
+an exponent outside 1e-4..1e15); `jsonb` is validated and written back in PostgreSQL's canonical text (keys ordered by length then bytes, the last of a repeated key, `": "` separators, numbers without an exponent), so equality is textual on that form: documents that differ only in key order, spacing or number spelling of the same digits (`1e3` and `1000`) are equal, but `1.0` and `1` are not;
 timestamps accept `YYYY-MM-DD[ T]HH:MM[:SS[.ffffff]][Z|+hh[:mm]]` with years 1 to 9999; `now()` is the
 database clock at statement start; `AS OF TIMESTAMP` resolves to the newest commit at or before that
 millisecond.

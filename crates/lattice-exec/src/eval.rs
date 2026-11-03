@@ -386,9 +386,37 @@ fn binary(
                 "operator || is not defined for these types",
             )),
         },
-        JsonGet | JsonGetText | Contains => Err(ExecError::unsupported(
-            "jsonb operators (->, ->>, @>) are bound but not executed yet",
-        )),
+        JsonGet | JsonGetText => {
+            if l.is_null() || r.is_null() {
+                return Ok(Datum::Null);
+            }
+            let Datum::Json(doc) = &l else {
+                return Err(ExecError::bind_type("operator -> needs a jsonb value"));
+            };
+            let step = match &r {
+                Datum::Text(key) => crate::jsonb::Step::Key(key),
+                Datum::Int(i) => crate::jsonb::Step::Index(*i),
+                _ => return Err(ExecError::bind_type("jsonb key must be text or integer")),
+            };
+            let as_text = op == JsonGetText;
+            match crate::jsonb::get(doc, &step, as_text) {
+                Some(Some(text)) if as_text => Ok(Datum::Text(text)),
+                Some(Some(text)) => Ok(Datum::Json(text)),
+                Some(None) => Ok(Datum::Null),
+                None => Err(ExecError::corrupt()),
+            }
+        }
+        Contains => {
+            if l.is_null() || r.is_null() {
+                return Ok(Datum::Null);
+            }
+            match (&l, &r) {
+                (Datum::Json(a), Datum::Json(b)) => crate::jsonb::contains(a, b)
+                    .map(Datum::Bool)
+                    .ok_or_else(ExecError::corrupt),
+                _ => Err(ExecError::bind_type("operator @> needs jsonb values")),
+            }
+        }
         _ => Err(ExecError::internal("unexpected logical operator")),
     }
 }

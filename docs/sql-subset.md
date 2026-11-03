@@ -114,7 +114,7 @@ those inside `options`, are ignored.
 | `bytea` | Yes |
 | `timestamptz`, `date` | Microsecond precision, UTC storage |
 | `uuid` | Yes; entity ids render as the 26-character id or `uuid`, per column |
-| `jsonb` | Stored, compared and indexed as a whole; operators `->`, `->>`, `@>` only |
+| `jsonb` | Validated JSON written back in PostgreSQL's canonical text (keys ordered by length then bytes, the last of a repeated key, spaced separators, numbers without an exponent), compared as that text, so `1.0` and `1` differ; operators `->`, `->>`, `@>` ([#719](https://github.com/moncifem/latticedb/issues/719)). No key or index on a `jsonb` column |
 | Arrays, ranges, `interval`, geometric, `inet`, `money`, `xml` | Not supported |
 
 `NULL` follows the three-valued logic of PostgreSQL.
