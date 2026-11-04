@@ -13,7 +13,7 @@ publish = false
 tokio-postgres = "=0.7.18"
 # tokio is pinned below the 1.54 line: 1.54.1 was published on 2026-10-21, less than the two weeks that
 # docs/dependency-policy.md asks for. Cargo.lock holds the checksum of every crate.
-tokio = { version = "=1.53.3", features = ["rt", "macros"] }
+tokio = { version = "=1.54.1", features = ["rt", "macros"] }
 
 [[bin]]
 name = "smoke"
