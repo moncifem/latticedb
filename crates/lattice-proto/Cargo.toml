@@ -8,7 +8,7 @@ publish = false
 description = "Shared wire types and codecs of the sync protocol: frames, scopes, cursors, errors, limits and the WebSocket framing."
 
 [dependencies]
-base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
+base64 = { version = "=0.23.1", default-features = false, features = ["alloc"] }
 # sha1 only computes the RFC 6455 Sec-WebSocket-Accept value; it authenticates nothing.
 sha1 = { version = "=0.11.0", default-features = false }
 
