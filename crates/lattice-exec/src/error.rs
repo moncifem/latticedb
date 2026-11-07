@@ -57,7 +57,11 @@ impl ExecError {
     }
 
     pub(crate) fn unsupported(what: impl Into<String>) -> Self {
-        ExecError::new(ErrorKind::Unsupported, "0A000", what)
+        ExecError::new(
+            ErrorKind::Unsupported,
+            "0A000",
+            format!("LSQL-0002 unsupported feature: {}", what.into()),
+        )
     }
 
     pub(crate) fn eval(sqlstate: &'static str, message: impl Into<String>) -> Self {
