@@ -39,6 +39,14 @@ fn syntax(sql: &str, at: usize) -> ParseError {
     e
 }
 
+fn invalid_parameter(sql: &str, at: usize) {
+    let e = err(sql);
+    assert_eq!(e.kind(), ErrorKind::InvalidParameter, "`{sql}`: {e}");
+    assert_eq!(e.sqlstate(), "22023");
+    assert_eq!(e.lattice_code(), None);
+    assert_eq!(e.span().start, at, "`{sql}` position: {e}");
+}
+
 #[test]
 fn unsupported_queries_are_named() {
     unsupported(
@@ -320,9 +328,10 @@ fn syntax_errors_point_at_the_problem() {
     syntax("CREATE TABLE t (a)", 17);
     syntax("CREATE TABLE t (a int NOT)", 25);
     syntax("CREATE TABLE t (a int DEFAULT 1 DEFAULT 2)", 32);
-    syntax("CREATE TABLE t (a numeric(0))", 18);
+    invalid_parameter("CREATE TABLE t (a numeric(0))", 18);
+    invalid_parameter("CREATE TABLE t (a numeric(1001))", 18);
     syntax("CREATE TABLE t (a numeric(3, 4))", 18);
-    syntax("CREATE TABLE t (a varchar(0))", 26);
+    invalid_parameter("CREATE TABLE t (a varchar(0))", 26);
     syntax("SELECT count(*) FROM t WHERE count(DISTINCT a, b) = 1", 29);
     syntax("SELECT sum(*)", 7);
     syntax("SELECT a FROM t JOIN u", 22);

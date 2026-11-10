@@ -1329,9 +1329,9 @@ impl Parser {
             None
         };
         self.expect(&Tok::RParen, "`)`")?;
-        if p == 0 {
-            return Err(ParseError::syntax(
-                "numeric precision must be at least 1",
+        if p == 0 || p > 1000 {
+            return Err(ParseError::invalid_parameter(
+                "numeric precision must be between 1 and 1000",
                 span,
             ));
         }
@@ -1356,7 +1356,7 @@ impl Parser {
         let n = self.unsigned("a length")?;
         self.expect(&Tok::RParen, "`)`")?;
         if n == 0 || n > 10_485_760 {
-            return Err(ParseError::syntax(
+            return Err(ParseError::invalid_parameter(
                 "varchar length must be between 1 and 10485760",
                 span,
             ));

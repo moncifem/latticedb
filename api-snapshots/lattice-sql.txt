@@ -605,6 +605,7 @@ pub fn lattice_sql::binder::bind(&lattice_sql::ast::Statement, &dyn lattice_sql:
 pub fn lattice_sql::binder::bind_statement(&lattice_sql::ast::Statement, &dyn lattice_sql::plan::CatalogView) -> core::result::Result<lattice_sql::plan::BoundStatement, lattice_sql::binder::BindError>
 pub mod lattice_sql::error
 pub enum lattice_sql::error::ErrorKind
+pub lattice_sql::error::ErrorKind::InvalidParameter
 pub lattice_sql::error::ErrorKind::Syntax
 pub lattice_sql::error::ErrorKind::TooLarge
 pub lattice_sql::error::ErrorKind::Unsupported
@@ -893,6 +894,7 @@ pub trait lattice_sql::plan::CatalogView
 pub fn lattice_sql::plan::CatalogView::table(&self, &str) -> core::option::Option<lattice_sql::plan::TableInfo>
 pub fn lattice_sql::plan::CatalogView::version(&self) -> u64
 pub enum lattice_sql::ErrorKind
+pub lattice_sql::ErrorKind::InvalidParameter
 pub lattice_sql::ErrorKind::Syntax
 pub lattice_sql::ErrorKind::TooLarge
 pub lattice_sql::ErrorKind::Unsupported
