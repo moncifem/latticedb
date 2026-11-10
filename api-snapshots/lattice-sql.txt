@@ -106,9 +106,17 @@ pub lattice_sql::ast::ExprKind::InSubquery
 pub lattice_sql::ast::ExprKind::InSubquery::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
 pub lattice_sql::ast::ExprKind::InSubquery::negated: bool
 pub lattice_sql::ast::ExprKind::InSubquery::query: alloc::boxed::Box<lattice_sql::ast::Query>
+pub lattice_sql::ast::ExprKind::IsDistinct
+pub lattice_sql::ast::ExprKind::IsDistinct::left: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::IsDistinct::negated: bool
+pub lattice_sql::ast::ExprKind::IsDistinct::right: alloc::boxed::Box<lattice_sql::ast::Expr>
 pub lattice_sql::ast::ExprKind::IsNull
 pub lattice_sql::ast::ExprKind::IsNull::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
 pub lattice_sql::ast::ExprKind::IsNull::negated: bool
+pub lattice_sql::ast::ExprKind::IsTruth
+pub lattice_sql::ast::ExprKind::IsTruth::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
+pub lattice_sql::ast::ExprKind::IsTruth::negated: bool
+pub lattice_sql::ast::ExprKind::IsTruth::truth: lattice_sql::ast::Truth
 pub lattice_sql::ast::ExprKind::Like
 pub lattice_sql::ast::ExprKind::Like::expr: alloc::boxed::Box<lattice_sql::ast::Expr>
 pub lattice_sql::ast::ExprKind::Like::negated: bool
@@ -289,6 +297,19 @@ impl core::fmt::Debug for lattice_sql::ast::TrimSide
 pub fn lattice_sql::ast::TrimSide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for lattice_sql::ast::TrimSide
 impl core::marker::StructuralPartialEq for lattice_sql::ast::TrimSide
+pub enum lattice_sql::ast::Truth
+pub lattice_sql::ast::Truth::False
+pub lattice_sql::ast::Truth::True
+pub lattice_sql::ast::Truth::Unknown
+impl core::clone::Clone for lattice_sql::ast::Truth
+pub fn lattice_sql::ast::Truth::clone(&self) -> Self
+impl core::cmp::Eq for lattice_sql::ast::Truth
+impl core::cmp::PartialEq for lattice_sql::ast::Truth
+pub fn lattice_sql::ast::Truth::eq(&self, &Self) -> bool
+impl core::fmt::Debug for lattice_sql::ast::Truth
+pub fn lattice_sql::ast::Truth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for lattice_sql::ast::Truth
+impl core::marker::StructuralPartialEq for lattice_sql::ast::Truth
 pub enum lattice_sql::ast::UnaryOp
 pub lattice_sql::ast::UnaryOp::Minus
 pub lattice_sql::ast::UnaryOp::Not

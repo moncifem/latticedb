@@ -277,6 +277,14 @@ impl Expr {
     }
 }
 
+/// The truth value an `IS` test compares a boolean with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Truth {
+    True,
+    False,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
     Literal(Literal),
@@ -295,6 +303,18 @@ pub enum ExprKind {
     },
     IsNull {
         expr: Box<Expr>,
+        negated: bool,
+    },
+    /// `expr IS [NOT] TRUE | FALSE | UNKNOWN`.
+    IsTruth {
+        expr: Box<Expr>,
+        truth: Truth,
+        negated: bool,
+    },
+    /// `left IS [NOT] DISTINCT FROM right`.
+    IsDistinct {
+        left: Box<Expr>,
+        right: Box<Expr>,
         negated: bool,
     },
     /// `expr [NOT] IN (a, b, ..)`; the list is never empty.

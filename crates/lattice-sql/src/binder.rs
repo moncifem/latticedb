@@ -17,7 +17,7 @@ use std::fmt;
 use crate::MAX_DEPTH;
 use crate::ast::{
     self, AsOf, BinaryOp, Expr, ExprKind, FunctionArgs, Literal, ObjectName, Query, SelectItem,
-    Statement, TrimSide, UnaryOp,
+    Statement, TrimSide, Truth, UnaryOp,
 };
 use crate::error::Span;
 use crate::plan::{
@@ -649,6 +649,51 @@ impl Binder<'_> {
                     SqlType::Boolean,
                 ))
             }
+            ExprKind::IsTruth {
+                expr,
+                truth,
+                negated,
+            } => {
+                let inner = self.expr(expr, scope)?;
+                let inner = self.coerce_or_expect(inner, SqlType::Boolean, span)?;
+                let is = self.is_truth(inner, *truth, span);
+                Ok(if *negated { self.not(is) } else { is })
+            }
+            ExprKind::IsDistinct {
+                left,
+                right,
+                negated,
+            } => {
+                let l = self.expr(left, scope)?;
+                let r = self.expr(right, scope)?;
+                // NULL is never distinct from NULL, and a value is always distinct from NULL;
+                // otherwise the values are compared: coalesce(l <> r, (l IS NULL) <> (r IS NULL)).
+                let differ = self.binary(BinaryOp::NotEq, l.clone(), r.clone(), span)?;
+                let l = self.finish(l, span)?;
+                let r = self.finish(r, span)?;
+                let null_of = |e: TypedExpr| {
+                    typed(
+                        ExprNode::IsNull {
+                            expr: Box::new(e),
+                            negated: false,
+                        },
+                        SqlType::Boolean,
+                    )
+                };
+                let nulls_differ = self.binary(BinaryOp::NotEq, null_of(l), null_of(r), span)?;
+                let distinct = typed(
+                    ExprNode::Function {
+                        name: "coalesce".to_string(),
+                        args: vec![differ, nulls_differ],
+                    },
+                    SqlType::Boolean,
+                );
+                Ok(if *negated {
+                    self.not(distinct)
+                } else {
+                    distinct
+                })
+            }
             ExprKind::InList {
                 expr,
                 list,
@@ -781,6 +826,41 @@ impl Binder<'_> {
                     SqlType::Numeric,
                 ))
             }
+        }
+    }
+
+    fn not(&self, e: TypedExpr) -> TypedExpr {
+        typed(
+            ExprNode::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(e),
+            },
+            SqlType::Boolean,
+        )
+    }
+
+    /// `e IS TRUE | FALSE | UNKNOWN` over a boolean, written with the plan's own operators so the
+    /// executor needs nothing new: a test is never `NULL`.
+    fn is_truth(&self, e: TypedExpr, truth: Truth, _span: Span) -> TypedExpr {
+        let coalesce_to = |inner: TypedExpr, fallback: bool| {
+            typed(
+                ExprNode::Function {
+                    name: "coalesce".to_string(),
+                    args: vec![inner, konst(Value::Bool(fallback), SqlType::Boolean)],
+                },
+                SqlType::Boolean,
+            )
+        };
+        match truth {
+            Truth::True => coalesce_to(e, false),
+            Truth::False => coalesce_to(self.not(e), false),
+            Truth::Unknown => typed(
+                ExprNode::IsNull {
+                    expr: Box::new(e),
+                    negated: false,
+                },
+                SqlType::Boolean,
+            ),
         }
     }
 

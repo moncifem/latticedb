@@ -115,8 +115,6 @@ fn unsupported_expressions_are_named() {
     unsupported("SELECT a NOT ILIKE 'x'", "ILIKE", "NOT");
     unsupported("SELECT a SIMILAR TO 'x'", "SIMILAR TO", "SIMILAR");
     unsupported("SELECT a LIKE 'x' ESCAPE '!'", "LIKE ... ESCAPE", "ESCAPE");
-    unsupported("SELECT a IS TRUE", "IS TRUE", "TRUE");
-    unsupported("SELECT a IS DISTINCT FROM b", "IS DISTINCT", "DISTINCT");
     unsupported("SELECT a ~ 'x'", "operator `~`", "~");
     unsupported("SELECT # 1", "operator `#`", "#");
     unsupported("SELECT 1 ? 2", "operator `?`", "?");

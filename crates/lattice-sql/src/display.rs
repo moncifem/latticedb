@@ -10,7 +10,7 @@ use crate::ast::{
     AlterAction, AlterTable, AsOf, BinaryOp, ColumnDef, CreateIndex, CreateTable, DataType, Delete,
     Expr, ExprKind, Function, FunctionArgs, Ident, Insert, InsertSource, IsolationLevel, Join,
     JoinKind, Literal, ObjectName, OrderByItem, Query, SelectItem, SetValue, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TrimSide, UnaryOp, Update,
+    TableConstraint, TableFactor, TableWithJoins, TrimSide, Truth, UnaryOp, Update,
 };
 use crate::lexer::is_reserved;
 
@@ -445,6 +445,23 @@ impl Display for Expr {
             ExprKind::IsNull { expr, negated } => {
                 write!(f, "({expr} IS {}NULL)", if *negated { "NOT " } else { "" })
             }
+            ExprKind::IsTruth {
+                expr,
+                truth,
+                negated,
+            } => {
+                let word = match truth {
+                    Truth::True => "TRUE",
+                    Truth::False => "FALSE",
+                    Truth::Unknown => "UNKNOWN",
+                };
+                write!(f, "({expr} IS {}{word})", not(*negated))
+            }
+            ExprKind::IsDistinct {
+                left,
+                right,
+                negated,
+            } => write!(f, "({left} IS {}DISTINCT FROM {right})", not(*negated)),
             ExprKind::InList {
                 expr,
                 list,
