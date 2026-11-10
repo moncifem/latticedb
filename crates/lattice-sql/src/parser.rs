@@ -122,6 +122,7 @@ const FUNCTIONS: &[&str] = &[
     "lower",
     "max",
     "min",
+    "mod",
     "now",
     "nullif",
     "round",

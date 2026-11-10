@@ -178,9 +178,11 @@ SELECT 0.1 + 0.2
 ----
 0.3
 
-# DIFFERS FROM POSTGRESQL BY DESIGN: power() and mod() are not in the subset's function list.
+# DIFFERS FROM POSTGRESQL BY DESIGN: power() is not in the subset's function list.
 statement error 0A000
 SELECT power(2, 3)
 
-statement error 0A000
+query I nosort
 SELECT mod(7, 3)
+----
+1
