@@ -831,7 +831,17 @@ pub(crate) fn parse_text(s: &str, ty: SqlType) -> Result<Datum, ExecError> {
                     format!("invalid input syntax for type json: \"{s}\""),
                 ));
             }
-            Datum::Json(s.trim().to_string())
+            // The canonical text, as PostgreSQL prints a jsonb. A number too long to write out is
+            // refused as out of range.
+            match crate::jsonb::canonical(s) {
+                Some(text) => Datum::Json(text),
+                None => {
+                    return Err(ExecError::eval(
+                        "22003",
+                        "jsonb number is outside the range this server writes out",
+                    ));
+                }
+            }
         }
     })
 }
