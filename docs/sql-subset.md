@@ -212,7 +212,7 @@ with its reason.
 | Identifier longer than 63 bytes | truncated to 63 bytes with a notice | refused with `54001` | refusing instead of truncating looks intended; two long names could otherwise collide |
 | A table in a schema that does not exist, on a read | `42P01` | `3F000` | not matched; the lookup order differs |
 | A column default that does not fit its column (`a INT DEFAULT 2147483648`) | the table is created and the first insert that uses the default fails (`22003`) | `CREATE TABLE` fails with `22003` | the default is checked when the table is defined |
-| A numeric constant of more than 38 digits, and a float literal in exponent form that large (`1e308` into a `double precision` column) | exact `numeric` of any size; the literal then casts to double | `22003` | the decimal type holds 38 digits ([#691](https://github.com/moncifem/latticedb/issues/691)); `'1e308'::float8` works |
+| A numeric constant of more than 38 digits used as a number (`SELECT 99999999999999999999 * 99999999999999999999`) | exact `numeric` of any size | `22003` | the decimal type holds 38 digits ([#691](https://github.com/moncifem/latticedb/issues/691)). Stored into a `double precision` column the literal takes the double route and works (`1e308`) |
 | `double precision % integer` | `42883` (no such operator) | computed | the operator is accepted for any two numbers |
 | Joins, `GROUP BY`, aggregates, `DISTINCT`, subqueries, DDL, session statements | supported | `0A000` (`LSQL-0002`) until the plan has operators for them | staged delivery |
 
