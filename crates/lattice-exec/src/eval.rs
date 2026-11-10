@@ -693,6 +693,36 @@ fn function(name: &str, a: &[Datum], ty: SqlType, ctx: &EvalCtx<'_>) -> Result<D
             Datum::Numeric(d) => Ok(Datum::Numeric(d.abs()?)),
             _ => Err(ExecError::bind_type("abs needs a number")),
         },
+        "ceil" | "ceiling" | "floor" | "trunc" => {
+            let mode = match name {
+                "floor" => crate::decimal::Integral::Floor,
+                "trunc" => crate::decimal::Integral::Trunc,
+                _ => crate::decimal::Integral::Ceil,
+            };
+            match arg(0)? {
+                Datum::Numeric(d) => Ok(Datum::Numeric(d.to_integral(mode)?)),
+                Datum::Float(f) => Ok(Datum::Float(match mode {
+                    crate::decimal::Integral::Floor => f.floor(),
+                    crate::decimal::Integral::Ceil => f.ceil(),
+                    crate::decimal::Integral::Trunc => f.trunc(),
+                })),
+                Datum::Int(i) => Ok(Datum::Float(*i as f64)),
+                _ => Err(ExecError::bind_type("this function needs a number")),
+            }
+        }
+        "sign" => match arg(0)? {
+            Datum::Numeric(d) => Ok(Datum::Numeric(Decimal::from_i64(d.signum()))),
+            // PostgreSQL answers 0 for zero, negative zero and NaN.
+            Datum::Float(f) => Ok(Datum::Float(if *f > 0.0 {
+                1.0
+            } else if *f < 0.0 {
+                -1.0
+            } else {
+                0.0
+            })),
+            Datum::Int(i) => Ok(Datum::Float(i.signum() as f64)),
+            _ => Err(ExecError::bind_type("sign needs a number")),
+        },
         "round" => {
             let digits = a.get(1).map(int_arg).transpose()?.unwrap_or(0);
             if digits < 0 {

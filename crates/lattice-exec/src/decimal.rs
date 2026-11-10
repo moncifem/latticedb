@@ -31,6 +31,14 @@ pub struct Decimal {
     scale: u32,
 }
 
+/// How [`Decimal::to_integral`] rounds.
+#[derive(Clone, Copy)]
+pub(crate) enum Integral {
+    Floor,
+    Ceil,
+    Trunc,
+}
+
 fn pow10(n: u32) -> Option<i128> {
     10i128.checked_pow(n)
 }
@@ -187,6 +195,34 @@ impl Decimal {
             mantissa: valid(q)?,
             scale,
         })
+    }
+
+    /// The integer part rounded toward negative infinity (`Floor`), positive infinity (`Ceil`) or
+    /// zero (`Trunc`), with scale 0.
+    pub(crate) fn to_integral(self, mode: Integral) -> Result<Self, NumError> {
+        if self.scale == 0 {
+            return Ok(self);
+        }
+        // More than 38 fractional digits cannot occur, but a power past i128 would mean no integer part.
+        let Some(f) = pow10(self.scale) else {
+            return Err(NumError::Overflow);
+        };
+        let q = self.mantissa.checked_div(f).ok_or(NumError::Overflow)?;
+        let r = self.mantissa.checked_rem(f).ok_or(NumError::Overflow)?;
+        let q = match mode {
+            Integral::Floor if r < 0 => q - 1,
+            Integral::Ceil if r > 0 => q + 1,
+            _ => q,
+        };
+        Ok(Decimal {
+            mantissa: valid(q)?,
+            scale: 0,
+        })
+    }
+
+    /// -1, 0 or 1.
+    pub(crate) fn signum(self) -> i64 {
+        i64::from(self.mantissa.signum() as i8)
     }
 
     pub(crate) fn neg(self) -> Result<Self, NumError> {
@@ -417,6 +453,39 @@ mod tests {
 
     fn d(s: &str) -> Decimal {
         Decimal::parse(s).unwrap()
+    }
+
+    #[test]
+    fn to_integral_rounds_toward_the_named_direction() {
+        for (text, floor, ceil, trunc) in [
+            ("1.2", "1", "2", "1"),
+            ("-1.2", "-2", "-1", "-1"),
+            ("0.5", "0", "1", "0"),
+            ("-0.5", "-1", "0", "0"),
+            ("-0.0", "0", "0", "0"),
+            ("7", "7", "7", "7"),
+            ("-7.000", "-7", "-7", "-7"),
+            ("0.00000000000000000000000000000000000001", "0", "1", "0"),
+        ] {
+            assert_eq!(
+                d(text).to_integral(Integral::Floor).unwrap().to_string(),
+                floor,
+                "floor {text}"
+            );
+            assert_eq!(
+                d(text).to_integral(Integral::Ceil).unwrap().to_string(),
+                ceil,
+                "ceil {text}"
+            );
+            assert_eq!(
+                d(text).to_integral(Integral::Trunc).unwrap().to_string(),
+                trunc,
+                "trunc {text}"
+            );
+        }
+        assert_eq!(d("-3.4").signum(), -1);
+        assert_eq!(d("0.00").signum(), 0);
+        assert_eq!(d("0.1").signum(), 1);
     }
 
     #[test]

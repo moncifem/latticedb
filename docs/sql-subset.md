@@ -122,7 +122,7 @@ those inside `options`, are ignored.
 ## Functions and operators
 
 Arithmetic and comparison operators, `||` for text, `coalesce`, `nullif`, `lower`, `upper`, `length`,
-`substring`, `position`, `trim`, `abs`, `round`, `now()`, `date_trunc` (`second` to `year`),
+`substring`, `position`, `trim`, `abs`, `round`, `ceil` / `ceiling`, `floor`, `trunc` and `sign` (one argument; an integer argument gives a double, as in PostgreSQL), `now()`, `date_trunc` (`second` to `year`),
 `extract`, `cast` / `::`. Anything else is `0A000`.
 
 Limits on what an expression may build: a text or bytea value (from `||`, `lower`, `upper`, or a

@@ -1007,6 +1007,20 @@ impl Binder<'_> {
                 let ty = a.ty;
                 Ok(call(vec![a], ty))
             }
+            // PostgreSQL has these for `numeric` and `double precision`; an integer argument takes
+            // the double one.
+            "ceil" | "ceiling" | "floor" | "sign" | "trunc" => {
+                if n != 1 {
+                    return bad_arity("1");
+                }
+                let a = self.require_numeric(take(args), span)?;
+                let ty = if a.ty == SqlType::Numeric {
+                    SqlType::Numeric
+                } else {
+                    SqlType::DoublePrecision
+                };
+                Ok(call(vec![a], ty))
+            }
             "round" => {
                 if !(1..=2).contains(&n) {
                     return bad_arity("1 or 2");
