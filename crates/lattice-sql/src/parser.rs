@@ -114,7 +114,9 @@ const UNSUPPORTED_STATEMENTS: &[&str] = &[
 /// Functions the subset allows (`docs/sql-subset.md`, Functions and operators).
 const FUNCTIONS: &[&str] = &[
     "abs",
+    "ascii",
     "avg",
+    "chr",
     "coalesce",
     "count",
     "date_trunc",
@@ -124,7 +126,10 @@ const FUNCTIONS: &[&str] = &[
     "min",
     "now",
     "nullif",
+    "reverse",
     "round",
+    "starts_with",
+    "substr",
     "substring",
     "sum",
     "upper",

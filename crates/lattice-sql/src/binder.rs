@@ -985,7 +985,39 @@ impl Binder<'_> {
                 }
                 Ok(call(vec![a], SqlType::Integer))
             }
-            "substring" => {
+            "reverse" => {
+                if n != 1 {
+                    return bad_arity("1");
+                }
+                let a = self.require_text(take(args), span)?;
+                Ok(call(vec![a], SqlType::Text))
+            }
+            "ascii" => {
+                if n != 1 {
+                    return bad_arity("1");
+                }
+                let a = self.require_text(take(args), span)?;
+                Ok(call(vec![a], SqlType::Integer))
+            }
+            "chr" => {
+                if n != 1 {
+                    return bad_arity("1");
+                }
+                let a = self.require_integer(take(args), span)?;
+                Ok(call(vec![a], SqlType::Text))
+            }
+            "starts_with" => {
+                if n != 2 {
+                    return bad_arity("2");
+                }
+                let mut it = args.into_iter();
+                let mut out = Vec::with_capacity(2);
+                for a in it.by_ref() {
+                    out.push(self.require_text(a, span)?);
+                }
+                Ok(call(out, SqlType::Boolean))
+            }
+            "substring" | "substr" => {
                 if !(2..=3).contains(&n) {
                     return bad_arity("2 or 3");
                 }
