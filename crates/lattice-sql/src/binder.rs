@@ -985,6 +985,22 @@ impl Binder<'_> {
                 }
                 Ok(call(vec![a], SqlType::Integer))
             }
+            // Any argument types; the text of each is its output form, and NULLs are skipped.
+            "concat" | "concat_ws" => {
+                let min = if name == "concat" { 1 } else { 2 };
+                if n < min {
+                    return bad_arity(if min == 1 { "at least 1" } else { "at least 2" });
+                }
+                let mut out = Vec::with_capacity(n);
+                for (i, a) in args.into_iter().enumerate() {
+                    out.push(if a.ty == SqlType::Unknown || (i == 0 && min == 2) {
+                        self.require_text(a, span)?
+                    } else {
+                        a
+                    });
+                }
+                Ok(call(out, SqlType::Text))
+            }
             "substring" => {
                 if !(2..=3).contains(&n) {
                     return bad_arity("2 or 3");
