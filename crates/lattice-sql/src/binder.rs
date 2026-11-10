@@ -985,6 +985,28 @@ impl Binder<'_> {
                 }
                 Ok(call(vec![a], SqlType::Integer))
             }
+            "left" | "right" | "repeat" => {
+                if n != 2 {
+                    return bad_arity("2");
+                }
+                let mut it = args.into_iter();
+                let (Some(s), Some(count)) = (it.next(), it.next()) else {
+                    return bad_arity("2");
+                };
+                let s = self.require_text(s, span)?;
+                let count = self.require_integer(count, span)?;
+                Ok(call(vec![s, count], SqlType::Text))
+            }
+            "replace" => {
+                if n != 3 {
+                    return bad_arity("3");
+                }
+                let mut out = Vec::with_capacity(3);
+                for a in args {
+                    out.push(self.require_text(a, span)?);
+                }
+                Ok(call(out, SqlType::Text))
+            }
             "substring" => {
                 if !(2..=3).contains(&n) {
                     return bad_arity("2 or 3");

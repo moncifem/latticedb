@@ -620,6 +620,50 @@ fn function(name: &str, a: &[Datum], ty: SqlType, ctx: &EvalCtx<'_>) -> Result<D
     };
     match name {
         // Case mapping can lengthen a string (some characters expand), so admit three times its size.
+        "left" | "right" => {
+            let s = text_arg(arg(0)?)?;
+            let n = int_arg(arg(1)?)?;
+            let len = s.chars().count();
+            // A negative count drops that many characters from the other end.
+            let keep = if n >= 0 {
+                usize::try_from(n).unwrap_or(usize::MAX).min(len)
+            } else {
+                len.saturating_sub(usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX))
+            };
+            let out: String = if name == "left" {
+                s.chars().take(keep).collect()
+            } else {
+                s.chars().skip(len - keep).collect()
+            };
+            Ok(Datum::Text(out))
+        }
+        "repeat" => {
+            let s = text_arg(arg(0)?)?;
+            let n = int_arg(arg(1)?)?;
+            if n <= 0 || s.is_empty() {
+                return Ok(Datum::Text(String::new()));
+            }
+            let times = u64::try_from(n).unwrap_or(u64::MAX);
+            admit_value(ctx.bounds, (s.len() as u64).saturating_mul(times))?;
+            Ok(Datum::Text(
+                s.repeat(usize::try_from(times).unwrap_or(usize::MAX)),
+            ))
+        }
+        "replace" => {
+            let s = text_arg(arg(0)?)?;
+            let from = text_arg(arg(1)?)?;
+            let to = text_arg(arg(2)?)?;
+            if from.is_empty() {
+                return Ok(Datum::Text(s.to_string()));
+            }
+            // The result can be longer than the input by `to.len() - from.len()` per match.
+            let matches = s.matches(from).count() as u64;
+            let grown = (s.len() as u64).saturating_add(
+                matches.saturating_mul((to.len() as u64).saturating_sub(from.len() as u64)),
+            );
+            admit_value(ctx.bounds, grown)?;
+            Ok(Datum::Text(s.replace(from, to)))
+        }
         "lower" | "upper" => {
             let s = text_arg(arg(0)?)?;
             admit_value(ctx.bounds, (s.len() as u64).saturating_mul(3))?;
