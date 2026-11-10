@@ -121,7 +121,7 @@ those inside `options`, are ignored.
 
 ## Functions and operators
 
-Arithmetic and comparison operators, `||` for text, `coalesce`, `nullif`, `lower`, `upper`, `length`,
+Arithmetic and comparison operators, `||` for text, `coalesce`, `nullif`, `greatest`, `least`, `lower`, `upper`, `length`,
 `substring`, `position`, `trim`, `abs`, `round`, `now()`, `date_trunc` (`second` to `year`),
 `extract`, `cast` / `::`. Anything else is `0A000`.
 

@@ -949,7 +949,7 @@ impl Binder<'_> {
             )
         };
         match name {
-            "coalesce" => {
+            "coalesce" | "greatest" | "least" => {
                 if n == 0 {
                     return bad_arity("at least 1");
                 }

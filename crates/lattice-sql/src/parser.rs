@@ -118,6 +118,8 @@ const FUNCTIONS: &[&str] = &[
     "coalesce",
     "count",
     "date_trunc",
+    "greatest",
+    "least",
     "length",
     "lower",
     "max",
