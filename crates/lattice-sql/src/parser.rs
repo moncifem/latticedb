@@ -117,6 +117,7 @@ const FUNCTIONS: &[&str] = &[
     "avg",
     "coalesce",
     "count",
+    "date_part",
     "date_trunc",
     "length",
     "lower",

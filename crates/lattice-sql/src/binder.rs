@@ -255,6 +255,11 @@ fn int_range(ty: SqlType) -> Option<(i128, i128)> {
     }
 }
 
+/// The fields `extract` and `date_part` read.
+const EXTRACT_FIELDS: &[&str] = &[
+    "year", "quarter", "month", "week", "day", "dow", "doy", "hour", "minute", "second", "epoch",
+];
+
 fn is_integer(ty: SqlType) -> bool {
     int_range(ty).is_some()
 }
@@ -760,11 +765,7 @@ impl Binder<'_> {
                 ))
             }
             ExprKind::Extract { field, expr } => {
-                const FIELDS: &[&str] = &[
-                    "year", "quarter", "month", "week", "day", "dow", "doy", "hour", "minute",
-                    "second", "epoch",
-                ];
-                if !FIELDS.contains(&field.value.as_str()) {
+                if !EXTRACT_FIELDS.contains(&field.value.as_str()) {
                     return err(
                         BindErrorKind::InvalidParameterValue,
                         format!("unit \"{}\" not recognized for extract", field.value),
@@ -1030,6 +1031,39 @@ impl Binder<'_> {
                     return bad_arity("0");
                 }
                 Ok(call(Vec::new(), SqlType::Timestamptz))
+            }
+            "date_part" => {
+                if n != 2 {
+                    return bad_arity("2");
+                }
+                let mut it = args.into_iter();
+                let (Some(field), Some(ts)) = (it.next(), it.next()) else {
+                    return bad_arity("2");
+                };
+                let field = self.require_text(field, span)?;
+                // `extract` takes the field as a keyword; here it is a text value, which has to be a
+                // constant for the plan to name the field.
+                let ExprNode::Const(Value::Text(unit)) = &field.kind else {
+                    return unsupported("date_part with a field that is not a constant", span);
+                };
+                let unit = unit.to_ascii_lowercase();
+                if !EXTRACT_FIELDS.contains(&unit.as_str()) {
+                    return err(
+                        BindErrorKind::InvalidParameterValue,
+                        format!("unit \"{unit}\" not recognized for date_part"),
+                        span,
+                    );
+                }
+                let ts = self.require_time(ts, span)?;
+                let extracted = typed(
+                    ExprNode::Function {
+                        name: "extract".to_string(),
+                        args: vec![konst(Value::Text(unit), SqlType::Text), ts],
+                    },
+                    SqlType::Numeric,
+                );
+                // date_part returns double precision where extract returns numeric.
+                self.cast(extracted, SqlType::DoublePrecision, span)
             }
             "date_trunc" => {
                 if n != 2 {
