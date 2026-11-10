@@ -122,7 +122,7 @@ those inside `options`, are ignored.
 ## Functions and operators
 
 Arithmetic and comparison operators, `||` for text, `coalesce`, `nullif`, `lower`, `upper`, `length`,
-`substring`, `position`, `trim`, `abs`, `round`, `now()`, `date_trunc` (`second` to `year`),
+`substring`, `lpad`, `rpad`, `split_part`, `initcap` (full Unicode case mapping, so a few characters such as `ß` map differently from PostgreSQL), `position`, `trim`, `abs`, `round`, `now()`, `date_trunc` (`second` to `year`),
 `extract`, `cast` / `::`. Anything else is `0A000`.
 
 Limits on what an expression may build: a text or bytea value (from `||`, `lower`, `upper`, or a
