@@ -4,7 +4,7 @@
 # The image runs as the unprivileged user `lattice` (uid 10001). Its data directory and its
 # credential directory are created owned by that user, so a new named volume starts writable.
 # See docs/alpha.md#run-in-a-container for the commands; tests/image/smoke.sh runs them in CI.
-FROM ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
 
 ARG TARGETARCH
 RUN groupadd --system --gid 10001 lattice \
