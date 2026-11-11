@@ -63,7 +63,7 @@ jobs:
       - name: install the pg8000 driver from requirements.txt, hashes checked
         run: python3 -m pip install --require-hashes --no-deps -r requirements.txt
         working-directory: tests/drivers/python
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with: { distribution: temurin, java-version: "21" }
       - name: download the pgjdbc jar, sha256 checked
         id: jdbc
