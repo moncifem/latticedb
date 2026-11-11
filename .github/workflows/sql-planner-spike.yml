@@ -50,7 +50,7 @@ jobs:
           workspaces: experiments/sql-planner -> functional-target
           shared-key: sql-planner-functional
           cache-on-failure: true
-      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with: { tool: cargo-deny@0.20.2 }
       - name: record runner and source context
         run: |

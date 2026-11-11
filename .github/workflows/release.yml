@@ -37,7 +37,7 @@ jobs:
             || { echo "CHANGELOG.md has no section for $version" >&2; exit 1; }
       # No Rust cache in this workflow: the release gate and its rehearsal start from an empty cache,
       # so a poisoned cache cannot influence what gets published (zizmor cache-poisoning).
-      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with: { tool: cargo-deny@0.20.2 }
       - name: the release commit passes the full gate
         run: cargo xtask ci
