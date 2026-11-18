@@ -10,7 +10,7 @@ publish = false
 [workspace]
 
 [dependencies]
-loom = "=0.7.2"
+loom = "=0.7.3"
 lattice-seams = { path = "../../crates/lattice-seams" }
 
 [[test]]
