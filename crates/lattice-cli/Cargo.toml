@@ -20,7 +20,7 @@ lattice-lsl = { path = "../lattice-lsl" }
 lattice-api = { path = "../lattice-api" }
 latticed = { path = "../latticed" }
 serde_json.workspace = true
-zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+zeroize = { version = "=1.9.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 # Switches the planted credential-tool defects on in the unit tests of `account`.

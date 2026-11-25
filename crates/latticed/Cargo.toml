@@ -23,7 +23,7 @@ lattice-intel = { path = "../lattice-intel", optional = true }
 
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 libc = { version = "=0.2.191", default-features = false }
-zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+zeroize = { version = "=1.9.2", default-features = false, features = ["alloc"] }
 
 [features]
 default = []
